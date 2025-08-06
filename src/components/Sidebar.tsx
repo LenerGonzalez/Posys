@@ -1,4 +1,3 @@
-
 import React from "react";
 
 const Sidebar = ({ onNavigate }: { onNavigate: (section: string) => void }) => {
@@ -10,7 +9,7 @@ const Sidebar = ({ onNavigate }: { onNavigate: (section: string) => void }) => {
   ];
 
   return (
-    <div className="w-full sm:w-48 bg-gray-100 p-4 space-y-2">
+    <div className="w-48 min-h-screen bg-gray-100 p-4 space-y-2">
       <h2 className="font-bold mb-4">Menú</h2>
       {sections.map((s) => (
         <button

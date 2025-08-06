@@ -23,6 +23,9 @@ export default function SaleForm({ user }: { user: any }) {
   const [amountSuggested, setAmountSuggested] = useState<number>(0);
   const [amountCharged, setAmountCharged] = useState<number>(0);
   const [message, setMessage] = useState("");
+  const [clientName, setClientName] = useState("");
+  const [amountReceived, setAmountReceived] = useState<number>(0);
+  const [amountChange, setChange] = useState<string>("0");
 
   useEffect(() => {
     async function fetchProducts() {
@@ -32,7 +35,7 @@ export default function SaleForm({ user }: { user: any }) {
         const item = doc.data();
         data.push({
           id: doc.id,
-          productName: item.productName,
+          productName: item.name,
           price: item.price,
         });
       });
@@ -50,6 +53,13 @@ export default function SaleForm({ user }: { user: any }) {
     }
   }, [selectedProductId, quantity]);
 
+  useEffect(() => {
+    if (amountReceived && amountCharged > 0) {
+      const calculated = (amountReceived - amountCharged).toFixed(2);
+      setChange(calculated);
+    }
+  }, [amountReceived, amountCharged]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedProductId || quantity <= 0) {
@@ -66,8 +76,10 @@ export default function SaleForm({ user }: { user: any }) {
         quantity,
         amountSuggested,
         amountCharged,
+        amountReceived,
+        change: amountChange,
+        clientName,
         difference: +(amountCharged - amountSuggested).toFixed(2),
-        vendor: user.email || "sin usuario",
         timestamp: Timestamp.now(),
       });
       setMessage("✅ Venta registrada correctamente.");
@@ -75,6 +87,7 @@ export default function SaleForm({ user }: { user: any }) {
       setAmountSuggested(0);
       setAmountCharged(0);
       setSelectedProductId("");
+      setClientName("");
     } catch (err) {
       setMessage("❌ Error al registrar la venta.");
     }
@@ -114,10 +127,10 @@ export default function SaleForm({ user }: { user: any }) {
           value={selectedProductId}
           onChange={(e) => setSelectedProductId(e.target.value)}
         >
-          <option value="">Selecciona...</option>
+          <option value="">Selecciona un producto</option>
           {products.map((product) => (
             <option key={product.id} value={product.id}>
-              {product.productName} - C${product.price}/lb
+              {product.productName} - C$ {product.price}/lb
             </option>
           ))}
         </select>
@@ -125,7 +138,7 @@ export default function SaleForm({ user }: { user: any }) {
 
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
-          Cantidad (lbs)
+          Cantidad (Libras)
         </label>
         <input
           type="number"
@@ -138,7 +151,7 @@ export default function SaleForm({ user }: { user: any }) {
 
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
-          💡 Monto sugerido
+          💡 Monto total a pagar
         </label>
         <input
           type="text"
@@ -150,7 +163,7 @@ export default function SaleForm({ user }: { user: any }) {
 
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
-          💵 Monto cobrado
+          💵 Monto final cobrado
         </label>
         <input
           type="number"
@@ -161,6 +174,42 @@ export default function SaleForm({ user }: { user: any }) {
         />
       </div>
 
+      <div className="space-y-1">
+        <label className="block text-sm font-semibold text-gray-700">
+          💵 Cliente paga con:
+        </label>
+        <input
+          type="number"
+          step="0.01"
+          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+          value={amountReceived}
+          onChange={(e) => setAmountReceived(parseFloat(e.target.value))}
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="block text-sm font-semibold text-gray-700">
+          💵 Vuelto al cliente:
+        </label>
+        <input
+          type="text"
+          readOnly
+          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+          value={amountChange}
+          onChange={(e) => setChange(e.target.value)}
+        />
+        <div className="space-y-1">
+          <label className="block text-sm font-semibold text-gray-700">
+            💵 Nombre de cliente:
+          </label>
+          <input
+            type="text"
+            placeholder="Nombre del cliente"
+            className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+            value={clientName}
+            onChange={(e) => setClientName(e.target.value)}
+          />
+        </div>
+      </div>
       <button
         type="submit"
         className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition"

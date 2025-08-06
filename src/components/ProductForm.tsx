@@ -7,13 +7,14 @@ export default function ProductForm() {
   const [price, setPrice] = useState<number>(0);
   const [message, setMessage] = useState("");
   const [category, setCategory] = useState("");
+  const [measurement, setMeasurement] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
 
     if (!name || price <= 0) {
-      setMessage("❌ Completa nombre y precio válido.");
+      setMessage("❌ Completa nombre, precio válido y unidad de medida");
       return;
     }
 
@@ -22,11 +23,13 @@ export default function ProductForm() {
         name,
         price: parseFloat(price.toFixed(2)),
         category,
+        measurement,
       });
 
       setMessage("✅ Producto registrado.");
       setName("");
       setPrice(0);
+      setMeasurement("");
     } catch (err: any) {
       setMessage("❌ Error: " + err.message);
     }
@@ -85,6 +88,22 @@ export default function ProductForm() {
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+      </div>
+
+      <div className="space-y-1">
+        <label className="block text-sm font-semibold text-gray-700">
+          Tipo de unidad de medida
+        </label>
+        <select
+          value={measurement}
+          onChange={(e) => setMeasurement(e.target.value)}
+          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
+        >
+          <option value="">Selecciona</option>
+          <option value="lb">Libra</option>
+          <option value="kg">Kilogramo</option>
+          <option value="unidad">Unidad</option>
+        </select>
       </div>
 
       <div>
