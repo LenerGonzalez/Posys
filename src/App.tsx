@@ -11,9 +11,11 @@ import { auth, db } from "./firebase";
 import { doc, getDoc } from "firebase/firestore";
 
 import Login from "./components/Login";
-import DashboardAdmin from "./components/DashboardAdmin.tsx";
-import DashboardVendedor from "./components/DashboardVendedor.tsx";
+import DashboardAdmin from "./components/DashboardAdmin";
+import DashboardVendedor from "./components/DashboardVendedor";
 import PrivateRoute from "./PrivateRoute";
+import SaleForm from "./components/SaleForm";
+import CierreVentas from "./components/CierreVentas";
 
 export default function App() {
   const [user, setUser] = useState<any>(null);

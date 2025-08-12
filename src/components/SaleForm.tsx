@@ -1,42 +1,38 @@
 import React, { useEffect, useState } from "react";
 import { db } from "../firebase";
-import {
-  collection,
-  addDoc,
-  getDocs,
-  query,
-  where,
-  Timestamp,
-} from "firebase/firestore";
+import { collection, addDoc, getDocs, Timestamp } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
+import { format } from "date-fns";
+import { Role } from "../apis/apis";
 
 interface Product {
   id: string;
-  productName: string;
+  productName: string; // mapeamos desde item.name
   price: number;
 }
 
-export default function SaleForm({ user }: { user: any }) {
+export default function SaleForm({user }: { user: any }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState("");
   const [quantity, setQuantity] = useState<number>(0);
   const [amountSuggested, setAmountSuggested] = useState<number>(0);
   const [amountCharged, setAmountCharged] = useState<number>(0);
-  const [message, setMessage] = useState("");
-  const [clientName, setClientName] = useState("");
   const [amountReceived, setAmountReceived] = useState<number>(0);
   const [amountChange, setChange] = useState<string>("0");
+  const [clientName, setClientName] = useState("");
+  const [message, setMessage] = useState("");
 
+  // Cargar productos
   useEffect(() => {
     async function fetchProducts() {
       const querySnapshot = await getDocs(collection(db, "products"));
       const data: Product[] = [];
-      querySnapshot.forEach((doc) => {
-        const item = doc.data();
+      querySnapshot.forEach((docSnap) => {
+        const item = docSnap.data() as any;
         data.push({
-          id: doc.id,
-          productName: item.name,
-          price: item.price,
+          id: docSnap.id,
+          productName: item.name ?? item.productName ?? "(sin nombre)",
+          price: Number(item.price ?? 0),
         });
       });
       setProducts(data);
@@ -44,26 +40,38 @@ export default function SaleForm({ user }: { user: any }) {
     fetchProducts();
   }, []);
 
+  // Calcular monto sugerido al seleccionar producto o cambiar cantidad
   useEffect(() => {
     const product = products.find((p) => p.id === selectedProductId);
     if (product && quantity > 0) {
-      const calculated = +(product.price * quantity).toFixed(2);
-      setAmountSuggested(calculated);
-      setAmountCharged(calculated);
+      const calc = Number((product.price * quantity).toFixed(2));
+      setAmountSuggested(calc);
+      // Por defecto sugerimos cobrar lo calculado
+      setAmountCharged(calc);
+    } else {
+      setAmountSuggested(0);
+      setAmountCharged(0);
     }
-  }, [selectedProductId, quantity]);
+  }, [selectedProductId, quantity, products]);
 
+  // Calcular vuelto cuando cambie lo recibido o el cobrado
   useEffect(() => {
-    if (amountReceived && amountCharged > 0) {
-      const calculated = (amountReceived - amountCharged).toFixed(2);
-      setChange(calculated);
-    }
+    const validReceived = Number(amountReceived) || 0;
+    const validCharged = Number(amountCharged) || 0;
+    const change = (validReceived - validCharged).toFixed(2);
+    setChange(change);
   }, [amountReceived, amountCharged]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProductId || quantity <= 0) {
-      setMessage("Selecciona un producto y cantidad válida.");
+
+    const product = products.find((p) => p.id === selectedProductId);
+    const qty = Number(quantity) || 0;
+    const sug = Number(amountSuggested) || 0;
+    const chg = Number(amountCharged) || 0;
+
+    if (!product || qty <= 0) {
+      setMessage("Selecciona un producto y una cantidad válida.");
       return;
     }
 
@@ -71,25 +79,41 @@ export default function SaleForm({ user }: { user: any }) {
       await addDoc(collection(db, "sales"), {
         id: uuidv4(),
         productId: selectedProductId,
-        productName: products.find((p) => p.id === selectedProductId)
-          ?.productName,
-        quantity,
-        amountSuggested,
-        amountCharged,
-        amountReceived,
-        change: amountChange,
-        clientName,
-        difference: +(amountCharged - amountSuggested).toFixed(2),
+        productName: product.productName,
+
+        // Cantidad e importes
+        quantity: qty,
+        amountSuggested: sug,
+        amount: chg, // 👈 campo estándar que usa CierreVentas
+        amountCharged: chg, // 👈 compatibilidad con docs existentes
+
+        // Cliente y efectivo
+        amountReceived: Number(amountReceived) || 0,
+        change: amountChange, // string formateado
+        clientName: clientName.trim(),
+
+        // Auditoría
+        difference: Number((chg - sug).toFixed(2)),
         timestamp: Timestamp.now(),
-        date: new Date().toISOString().split("T")[0],
+        date: format(new Date(), "yyyy-MM-dd"), // 👈 fecha local (coincide con CierreVentas)
+        userEmail: user?.email ?? "sin usuario",
+        vendor: user?.email ?? "sin usuario", // compatibilidad
+
+        // Estado de flujo para cierre
+        status: "FLOTANTE", // 👈 requerido por el cierre
       });
+
       setMessage("✅ Venta registrada correctamente.");
+      // Reset de campos
+      setSelectedProductId("");
       setQuantity(0);
       setAmountSuggested(0);
       setAmountCharged(0);
-      setSelectedProductId("");
+      setAmountReceived(0);
+      setChange("0");
       setClientName("");
     } catch (err) {
+      console.error(err);
       setMessage("❌ Error al registrar la venta.");
     }
   };
@@ -128,7 +152,9 @@ export default function SaleForm({ user }: { user: any }) {
           value={selectedProductId}
           onChange={(e) => setSelectedProductId(e.target.value)}
         >
-          <option value="">Selecciona un producto</option>
+          <option value="" disabled>
+            Selecciona un producto
+          </option>
           {products.map((product) => (
             <option key={product.id} value={product.id}>
               {product.productName} - C$ {product.price}/lb
@@ -146,13 +172,13 @@ export default function SaleForm({ user }: { user: any }) {
           step="0.01"
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
           value={quantity}
-          onChange={(e) => setQuantity(parseFloat(e.target.value))}
+          onChange={(e) => setQuantity(parseFloat(e.target.value) || 0)}
         />
       </div>
 
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
-          💡 Monto total a pagar
+          💡 Monto total a pagar (sugerido)
         </label>
         <input
           type="text"
@@ -171,7 +197,7 @@ export default function SaleForm({ user }: { user: any }) {
           step="0.01"
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
           value={amountCharged}
-          onChange={(e) => setAmountCharged(parseFloat(e.target.value))}
+          onChange={(e) => setAmountCharged(parseFloat(e.target.value) || 0)}
         />
       </div>
 
@@ -184,9 +210,10 @@ export default function SaleForm({ user }: { user: any }) {
           step="0.01"
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
           value={amountReceived}
-          onChange={(e) => setAmountReceived(parseFloat(e.target.value))}
+          onChange={(e) => setAmountReceived(parseFloat(e.target.value) || 0)}
         />
       </div>
+
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
           💵 Vuelto al cliente:
@@ -194,23 +221,24 @@ export default function SaleForm({ user }: { user: any }) {
         <input
           type="text"
           readOnly
-          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+          className="w-full border border-gray-300 p-2 rounded bg-gray-100"
           value={amountChange}
-          onChange={(e) => setChange(e.target.value)}
         />
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            💵 Nombre de cliente:
-          </label>
-          <input
-            type="text"
-            placeholder="Nombre del cliente"
-            className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-            value={clientName}
-            onChange={(e) => setClientName(e.target.value)}
-          />
-        </div>
       </div>
+
+      <div className="space-y-1">
+        <label className="block text-sm font-semibold text-gray-700">
+          🧍 Nombre de cliente:
+        </label>
+        <input
+          type="text"
+          placeholder="Nombre del cliente"
+          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+          value={clientName}
+          onChange={(e) => setClientName(e.target.value)}
+        />
+      </div>
+
       <button
         type="submit"
         className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition"

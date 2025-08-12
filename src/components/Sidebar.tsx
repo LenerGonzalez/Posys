@@ -5,7 +5,6 @@ const Sidebar = ({ onNavigate }: { onNavigate: (section: string) => void }) => {
     { name: "Ventas", key: "ventas" },
     { name: "Inventario", key: "inventario" },
     { name: "Cierre", key: "cierre" },
-    { name: "PDF", key: "pdf" },
   ];
 
   return (

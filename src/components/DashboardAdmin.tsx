@@ -6,6 +6,8 @@ import CierreVentas from "./CierreVentas";
 import PDFGenerator from "./PDFGenerator";
 import Sidebar from "./Sidebar";
 import ProductForm from "./ProductForm";
+import SaleForm from "./SaleForm";
+import { Role } from "../apis/apis";
 
 export default function DashboardAdmin(): React.JSX.Element {
   return (
@@ -16,11 +18,12 @@ export default function DashboardAdmin(): React.JSX.Element {
         }}
       />
       <div className="flex-1 p-8 space-y-8">
-        <VentaForm user={null} />
+        
         <InventarioForm />
-        <CierreVentas />
+        <CierreVentas role={Role.ADMIN} />
+        <SaleForm user={""} />
         <ProductForm />
-        <PDFGenerator />
+    
       </div>
     </div>
   );
