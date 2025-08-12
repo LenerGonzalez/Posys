@@ -81,6 +81,7 @@ export default function SaleForm({ user }: { user: any }) {
         clientName,
         difference: +(amountCharged - amountSuggested).toFixed(2),
         timestamp: Timestamp.now(),
+        date: new Date().toISOString().split("T")[0],
       });
       setMessage("✅ Venta registrada correctamente.");
       setQuantity(0);

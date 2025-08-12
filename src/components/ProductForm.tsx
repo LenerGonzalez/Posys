@@ -114,6 +114,7 @@ export default function ProductForm() {
           className="w-full border p-2 rounded"
           value={price}
           onChange={(e) => setPrice(parseFloat(e.target.value))}
+          onFocus={(e) => (e.target.value === "0" ? setPrice(NaN) : null)}
         />
       </div>
 
