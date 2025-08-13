@@ -15,6 +15,7 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 import { format, subDays } from "date-fns";
+import html2canvas from "html2canvas";
 
 type ClosureDoc = {
   id: string;
@@ -106,15 +107,45 @@ export default function HistorialCierres() {
 
   const handleDownloadPDF = async () => {
     if (!detailRef.current || !selected) return;
-    const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-      import("html2canvas"),
-      import("jspdf"),
-    ]);
-    const canvas = await html2canvas(detailRef.current);
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF();
-    pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
-    pdf.save(`cierre_${selected.date}.pdf`);
+
+    const el = detailRef.current;
+    // 1) Forzar colores simples antes de rasterizar
+    el.classList.add("force-pdf-colors");
+
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf"),
+      ]);
+
+      const canvas = await html2canvas(el, {
+        backgroundColor: "#ffffff",
+        onclone: (clonedDoc) => {
+          // 2) Aplanar colores a rgb/rgba en el DOM clonado
+          const win = clonedDoc.defaultView!;
+          const root = clonedDoc.body;
+          root.querySelectorAll<HTMLElement>("*").forEach((n) => {
+            const cs = win.getComputedStyle(n);
+            if (cs.color) n.style.color = cs.color;
+            if (
+              cs.backgroundColor &&
+              cs.backgroundColor !== "rgba(0, 0, 0, 0)"
+            ) {
+              n.style.backgroundColor = cs.backgroundColor;
+            }
+            if (cs.borderColor) n.style.borderColor = cs.borderColor;
+          });
+        },
+      });
+
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF();
+      pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
+      pdf.save(`cierre_${selected.date}.pdf`);
+    } finally {
+      // 3) Restaurar estilos
+      el.classList.remove("force-pdf-colors");
+    }
   };
 
   return (

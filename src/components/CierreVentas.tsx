@@ -19,10 +19,7 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import { Role } from "../apis/apis"; // Importa el enum Role desde tu archivo de APIs
 
-
 type FireTimestamp = { toDate?: () => Date } | undefined;
-
-
 
 interface SaleDataRaw {
   id?: string;
@@ -99,11 +96,7 @@ const normalizeSale = (raw: SaleDataRaw, id: string): SaleData | null => {
   };
 };
 
-export default function CierreVentas({
-  role,
-}: {
-  role: Role;
-}): React.ReactElement {
+export default function CierreVentas(): React.ReactElement {
   const [sales, setSales] = useState<SaleData[]>([]);
   const [closure, setClosure] = useState<ClosureData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -258,6 +251,11 @@ export default function CierreVentas({
 
   // Revertir una venta a FLOTANTE
   const handleRevert = async (saleId: string) => {
+    if (
+      !window.confirm("¿Revertir esta venta? Esta acción no se puede deshacer.")
+    )
+      return;
+
     try {
       await updateDoc(doc(db, "sales", saleId), {
         status: "FLOTANTE",
@@ -318,11 +316,39 @@ export default function CierreVentas({
 
   const handleDownloadPDF = async () => {
     if (!pdfRef.current) return;
-    const canvas = await html2canvas(pdfRef.current);
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF();
-    pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
-    pdf.save(`cierre_${today}.pdf`);
+
+    // 1) Forzar colores simples en el bloque que vamos a rasterizar
+    pdfRef.current.classList.add("force-pdf-colors");
+
+    try {
+      const canvas = await html2canvas(pdfRef.current, {
+        backgroundColor: "#ffffff",
+        onclone: (clonedDoc) => {
+          // Refuerza: convierte colores calculados a rgb en el DOM clonado
+          const win = clonedDoc.defaultView!;
+          const root = clonedDoc.body;
+          root.querySelectorAll<HTMLElement>("*").forEach((el) => {
+            const cs = win.getComputedStyle(el);
+            if (cs.color) el.style.color = cs.color;
+            if (
+              cs.backgroundColor &&
+              cs.backgroundColor !== "rgba(0, 0, 0, 0)"
+            ) {
+              el.style.backgroundColor = cs.backgroundColor;
+            }
+            if (cs.borderColor) el.style.borderColor = cs.borderColor;
+          });
+        },
+      });
+
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF();
+      pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
+      pdf.save(`cierre_${today}.pdf`);
+    } finally {
+      // 2) Restaurar estilos normales de la página
+      pdfRef.current.classList.remove("force-pdf-colors");
+    }
   };
 
   return (
@@ -387,7 +413,7 @@ export default function CierreVentas({
                   <td className="border p-1">C${money(s.amountReceived)}</td>
                   <td className="border p-1">C${s.change}</td>
                   <td className="border p-1">
-                    {role === Role.ADMIN && s.status === "FLOTANTE" ? (
+                    {s.status === "FLOTANTE" ? (
                       <div className="flex gap-2 justify-center">
                         <button
                           onClick={() => openEdit(s)}
@@ -402,8 +428,17 @@ export default function CierreVentas({
                           Eliminar
                         </button>
                       </div>
+                    ) : s.status === "PROCESADA" ? (
+                      <div className="flex gap-2 justify-center">
+                        <button
+                          onClick={() => handleRevert(s.id)}
+                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                        >
+                          Revertir
+                        </button>
+                      </div>
                     ) : (
-                      <span className="text-gray-400 text-xs">—</span>
+                      <span className="text-gray-400 text-xs">No options</span>
                     )}
                   </td>
                 </tr>
@@ -486,7 +521,7 @@ export default function CierreVentas({
       {message && <p className="mt-2 text-sm">{message}</p>}
 
       {/* Panel simple de edición */}
-      {editing && role === Role.ADMIN && (
+      {editing && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4 space-y-3">
             <h4 className="font-semibold text-lg">Editar venta</h4>

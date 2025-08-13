@@ -1,6 +1,7 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+@import "tailwindcss";
 
 /* Estilos base para tu app React */
 body {
@@ -8,4 +9,14 @@ body {
   font-family: system-ui, sans-serif;
   background: #f8fafc;
   color: #222;
+}
+
+/* Fuerza colores simples (rgb/hex) dentro del bloque a exportar */
+.force-pdf-colors,
+.force-pdf-colors * {
+  color: #111 !important;
+  background: #fff !important;
+  border-color: #e5e7eb !important;
+  background-image: none !important;
+  box-shadow: none !important;
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../firebase";
 import {
   collection,
@@ -8,7 +8,6 @@ import {
   orderBy,
 } from "firebase/firestore";
 import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 
 interface Sale {
   id: string;

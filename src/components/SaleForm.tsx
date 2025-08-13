@@ -146,11 +146,11 @@ export default function SaleForm({ user }: { user: any }) {
       setAmountReceived(0);
       setChange("0");
       setClientName("");
+      setCategory("");
+      setMeasurement("");
     } catch (err) {
       console.error(err);
       setMessage("❌ Error al registrar la venta.");
-      setCategory("");
-      setMeasurement("");
     }
   };
 
@@ -189,7 +189,9 @@ export default function SaleForm({ user }: { user: any }) {
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
         >
           {" "}
-          <option value="selecciona">Seleccione</option>
+          <option value="" disabled>
+            Seleccione categoria
+          </option>
           <option value="pollo">Pollo</option>
           <option value="cerdo">Cerdo</option>
           <option value="huevo">Huevos</option>
@@ -227,7 +229,7 @@ export default function SaleForm({ user }: { user: any }) {
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
         >
           <option value="" disabled>
-            Selecciona
+            Selecciona una medida
           </option>
           <option value="lb">Libra</option>
           <option value="kg">Kilogramo</option>
@@ -242,9 +244,18 @@ export default function SaleForm({ user }: { user: any }) {
         <input
           type="number"
           step="0.01"
+          inputMode="decimal"
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={quantity}
-          onChange={(e) => setQuantity(parseFloat(e.target.value) || 0)}
+          value={quantity === 0 ? "" : quantity}
+          onFocus={(e) => {
+            if (e.target.value === "0") e.target.value = "";
+          }}
+          onChange={(e) => {
+            const value = e.target.value.replace(",", ".");
+            const num = value === "" ? 0 : parseFloat(value);
+            const truncated = Math.floor(num * 100) / 100;
+            setQuantity(truncated);
+          }}
         />
       </div>
 
@@ -267,9 +278,18 @@ export default function SaleForm({ user }: { user: any }) {
         <input
           type="number"
           step="0.01"
+          inputMode="decimal"
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={amountCharged}
-          onChange={(e) => setAmountCharged(parseFloat(e.target.value) || 0)}
+          value={amountCharged === 0 ? "" : amountCharged}
+          onFocus={(e) => {
+            if (e.target.value === "0") e.target.value = "";
+          }}
+          onChange={(e) => {
+            const value = e.target.value.replace(",", ".");
+            const num = value === "" ? 0 : parseFloat(value);
+            const truncated = Math.floor(num * 100) / 100;
+            setAmountCharged(truncated);
+          }}
         />
       </div>
 
@@ -280,9 +300,18 @@ export default function SaleForm({ user }: { user: any }) {
         <input
           type="number"
           step="0.01"
+          inputMode="decimal"
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={amountReceived}
-          onChange={(e) => setAmountReceived(parseFloat(e.target.value) || 0)}
+          value={amountReceived === 0 ? "" : amountReceived}
+          onFocus={(e) => {
+            if (e.target.value === "0") e.target.value = "";
+          }}
+          onChange={(e) => {
+            const value = e.target.value.replace(",", ".");
+            const num = value === "" ? 0 : parseFloat(value);
+            const truncated = Math.floor(num * 100) / 100;
+            setAmountReceived(truncated);
+          }}
         />
       </div>
 
