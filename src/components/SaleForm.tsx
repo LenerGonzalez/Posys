@@ -9,9 +9,17 @@ interface Product {
   id: string;
   productName: string; // mapeamos desde item.name
   price: number;
+  measurement: string;
+  category: string;
 }
 
-export default function SaleForm({user }: { user: any }) {
+interface Users {
+  id: string;
+  email: string;
+  role: Role;
+}
+
+export default function SaleForm({ user }: { user: any }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState("");
   const [quantity, setQuantity] = useState<number>(0);
@@ -21,6 +29,9 @@ export default function SaleForm({user }: { user: any }) {
   const [amountChange, setChange] = useState<string>("0");
   const [clientName, setClientName] = useState("");
   const [message, setMessage] = useState("");
+  const [measurement, setMeasurement] = useState<string>("");
+  const [users, setUsers] = useState<any[]>([]); // Cargar usuarios
+  const [category, setCategory] = useState<string>("");
 
   // Cargar productos
   useEffect(() => {
@@ -33,11 +44,31 @@ export default function SaleForm({user }: { user: any }) {
           id: docSnap.id,
           productName: item.name ?? item.productName ?? "(sin nombre)",
           price: Number(item.price ?? 0),
+          measurement: item.measurement ?? "(sin unidad)",
+          category: item.category ?? "(sin categoría)",
         });
       });
       setProducts(data);
     }
     fetchProducts();
+  }, []);
+
+  //Cargar usuario
+  useEffect(() => {
+    async function fetchUsers() {
+      const querySnapshot = await getDocs(collection(db, "users"));
+      const data: Users[] = [];
+      querySnapshot.forEach((docSnap) => {
+        const item = docSnap.data() as any;
+        data.push({
+          id: docSnap.id,
+          email: item.email ?? "(sin email)",
+          role: item.role ?? "USER",
+        });
+      });
+      setUsers(data);
+    }
+    fetchUsers();
   }, []);
 
   // Calcular monto sugerido al seleccionar producto o cambiar cantidad
@@ -77,9 +108,12 @@ export default function SaleForm({user }: { user: any }) {
 
     try {
       await addDoc(collection(db, "sales"), {
+        //Datos de producto ya creado
         id: uuidv4(),
         productId: selectedProductId,
         productName: product.productName,
+        measurement: product.measurement,
+        category: product.category,
 
         // Cantidad e importes
         quantity: qty,
@@ -96,8 +130,8 @@ export default function SaleForm({user }: { user: any }) {
         difference: Number((chg - sug).toFixed(2)),
         timestamp: Timestamp.now(),
         date: format(new Date(), "yyyy-MM-dd"), // 👈 fecha local (coincide con CierreVentas)
-        userEmail: user?.email ?? "sin usuario",
-        vendor: user?.email ?? "sin usuario", // compatibilidad
+        userEmail: users[0]?.email ?? "sin usuario",
+        vendor: users[0]?.role ?? "sin usuario", // compatibilidad
 
         // Estado de flujo para cierre
         status: "FLOTANTE", // 👈 requerido por el cierre
@@ -115,6 +149,8 @@ export default function SaleForm({user }: { user: any }) {
     } catch (err) {
       console.error(err);
       setMessage("❌ Error al registrar la venta.");
+      setCategory("");
+      setMeasurement("");
     }
   };
 
@@ -145,7 +181,25 @@ export default function SaleForm({user }: { user: any }) {
 
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
-          Producto
+          Categoria
+        </label>
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
+        >
+          {" "}
+          <option value="selecciona">Seleccione</option>
+          <option value="pollo">Pollo</option>
+          <option value="cerdo">Cerdo</option>
+          <option value="huevo">Huevos</option>
+          <option value="ropa">Ropa</option>
+          <option value="otros">Otros</option>
+        </select>
+      </div>
+      <div className="space-y-1">
+        <label className="block text-sm font-semibold text-gray-700">
+          Producto | Precio por Libra/Unidad
         </label>
         <select
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
@@ -157,7 +211,7 @@ export default function SaleForm({user }: { user: any }) {
           </option>
           {products.map((product) => (
             <option key={product.id} value={product.id}>
-              {product.productName} - C$ {product.price}/lb
+              {product.productName} - C${product.price}
             </option>
           ))}
         </select>
@@ -165,7 +219,25 @@ export default function SaleForm({user }: { user: any }) {
 
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
-          Cantidad (Libras)
+          Unidad de medida
+        </label>
+        <select
+          value={measurement}
+          onChange={(e) => setMeasurement(e.target.value)}
+          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
+        >
+          <option value="" disabled>
+            Selecciona
+          </option>
+          <option value="lb">Libra</option>
+          <option value="kg">Kilogramo</option>
+          <option value="unidad">Unidad</option>
+        </select>
+      </div>
+
+      <div className="space-y-1">
+        <label className="block text-sm font-semibold text-gray-700">
+          Cantidad
         </label>
         <input
           type="number"

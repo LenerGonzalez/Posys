@@ -1,7 +1,19 @@
 // src/HistorialCierres.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { db } from "./firebase";
-import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
+import { db } from "../firebase";
+import {
+  collection,
+  getDocs,
+  addDoc,
+  Timestamp,
+  query,
+  where,
+  onSnapshot,
+  writeBatch,
+  doc,
+  updateDoc,
+  deleteDoc,
+} from "firebase/firestore";
 import { format, subDays } from "date-fns";
 
 type ClosureDoc = {

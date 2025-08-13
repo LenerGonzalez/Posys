@@ -8,6 +8,8 @@ import Sidebar from "./Sidebar";
 import ProductForm from "./ProductForm";
 import SaleForm from "./SaleForm";
 import { Role } from "../apis/apis";
+import HistorialCierres from "./HistorialCierres";
+import UserRegisterForm from "./UserRegisterForm";
 
 export default function DashboardAdmin(): React.JSX.Element {
   return (
@@ -18,12 +20,12 @@ export default function DashboardAdmin(): React.JSX.Element {
         }}
       />
       <div className="flex-1 p-8 space-y-8">
-        
-        <InventarioForm />
-        <CierreVentas role={Role.ADMIN} />
+        <UserRegisterForm />
         <SaleForm user={""} />
+        <CierreVentas role={Role.ADMIN} />
+        <HistorialCierres />
         <ProductForm />
-    
+        <InventarioForm />
       </div>
     </div>
   );

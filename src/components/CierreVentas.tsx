@@ -19,7 +19,6 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import { Role } from "../apis/apis"; // Importa el enum Role desde tu archivo de APIs
 
-//type Role = "admin" | "vendedor";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -338,7 +337,9 @@ export default function CierreVentas({
           value={filter}
           onChange={(e) => setFilter(e.target.value as any)}
         >
-          <option value="ALL" disabled>Todas</option>
+          <option value="ALL" disabled>
+            Todas
+          </option>
           <option value="FLOTANTE">Venta Flotante</option>
           <option value="PROCESADA">Venta Procesada</option>
         </select>
@@ -355,6 +356,7 @@ export default function CierreVentas({
                 <th className="border p-2">Estado</th>
                 <th className="border p-2">Producto</th>
                 <th className="border p-2">Cantidad</th>
+
                 <th className="border p-2">Monto</th>
                 <th className="border p-2">Vendedor</th>
                 <th className="border p-2">Cliente</th>
