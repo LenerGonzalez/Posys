@@ -7,7 +7,7 @@ const Sidebar = () => {
   const navigate = useNavigate();
 
   const sections = [
-    { name: "Ventas", path: "/admin/ventas" },
+    { name: "tuma", path: "/admin/ventas" },
     { name: "Cierre", path: "/admin/cierre" },
     { name: "Historial de Cierres", path: "/admin/historial_cierres" },
     { name: "Usuarios", path: "/admin/usuarios" },
@@ -36,12 +36,6 @@ const Sidebar = () => {
       </div>
 
       {/* Botón cerrar sesión al final */}
-      <button
-        onClick={handleLogout}
-        className="mt-4 bg-red-500 text-white px-3 py-2 rounded hover:bg-red-600"
-      >
-        Cerrar sesión
-      </button>
     </div>
   );
 };

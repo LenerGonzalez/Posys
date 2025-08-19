@@ -1,6 +1,4 @@
-import React from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import Sidebar from "./Sidebar";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { useNavigate } from "react-router-dom";
@@ -23,24 +21,37 @@ export default function AdminLayout() {
       <aside className="w-56 bg-gray-50 border-r p-3">
         <h3 className="text-sm font-semibold text-gray-500 mb-2">Menú</h3>
         <nav className="space-y-1">
-          <NavLink to={`${base}/ventas`} className={linkCls}>
-            Ventas
+          <NavLink to={`${base}/financialDashboard`} className={linkCls}>
+            Dashboard Financiero
           </NavLink>
-          <NavLink to={`${base}/cierre`} className={linkCls}>
+          <NavLink to={`${base}/salesV2`} className={linkCls}>
+            Venta
+          </NavLink>
+          <NavLink to={`${base}/bills`} className={linkCls}>
             Cierre
           </NavLink>
-          <NavLink to={`${base}/cierres`} className={linkCls}>
+          <NavLink to={`${base}/billhistoric`} className={linkCls}>
             Historial de Cierres
           </NavLink>
-          <NavLink to={`${base}/usuarios`} className={linkCls}>
+          <NavLink to={`${base}/batches`} className={linkCls}>
+            Lotes
+          </NavLink>
+          <NavLink to={`${base}/transactionclose`} className={linkCls}>
+            Liquidaciones
+          </NavLink>
+          <NavLink to={`${base}/expenses`} className={linkCls}>
+            Gastos
+          </NavLink>
+          <NavLink to={`${base}/users`} className={linkCls}>
             Usuarios
           </NavLink>
-          <NavLink to={`${base}/productos`} className={linkCls}>
+          <NavLink to={`${base}/products`} className={linkCls}>
             Productos
           </NavLink>
-          <NavLink to={`${base}/inventario`} className={linkCls}>
+
+          {/* <NavLink to={`${base}/inventario`} className={linkCls}>
             Inventario
-          </NavLink>
+          </NavLink> */}
         </nav>
         <button
           onClick={handleLogout}

@@ -21,6 +21,11 @@ import HistorialCierres from "./components/HistorialCierres";
 import UserRegisterForm from "./components/UserRegisterForm"; // si quieres mantenerlo para “Usuarios”
 import ProductForm from "./components/ProductForm";
 import InventarioForm from "./components/InventarioForm"; // o el nombre que uses
+import SaleFormV2 from "./components/SaleFormV2";
+import InventoryBatches from "./components/InventoryBatches";
+import Liquidaciones from "./components/Liquidaciones";
+import FinancialDashboard from "./components/FinancialDashboard";
+import ExpensesAdmin from "./components/ExpensesAdmin";
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -61,22 +66,11 @@ export default function App() {
           }
         >
           {/* Redirige /admin a /admin/ventas */}
-          <Route index element={<Navigate to="ventas" replace />} />
-
-          {/* Ventas (vendedor y admin) */}
-          <Route
-            path="ventas"
-            element={
-              <PrivateRoute allowedRoles={["vendedor", "admin"]}>
-                {/* Si tu SaleForm necesita user, pásalo */}
-                <SaleForm user={user} />
-              </PrivateRoute>
-            }
-          />
+          <Route index element={<Navigate to="bills" replace />} />
 
           {/* Cierre del día */}
           <Route
-            path="cierre"
+            path="bills"
             element={
               <PrivateRoute allowedRoles={["vendedor", "admin"]}>
                 {/* si tu CierreVentas recibe role, usa: role={role === "admin" ? "admin" : "vendedor"} */}
@@ -84,10 +78,19 @@ export default function App() {
               </PrivateRoute>
             }
           />
+          {/* Ventas (vendedor y admin) */}
+          <Route
+            path="salesV2"
+            element={
+              <PrivateRoute allowedRoles={["vendedor", "admin"]}>
+                <SaleFormV2 user={user} />
+              </PrivateRoute>
+            }
+          />
 
           {/* Historial de cierres (solo admin) */}
           <Route
-            path="cierres"
+            path="billhistoric"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <HistorialCierres />
@@ -97,7 +100,7 @@ export default function App() {
 
           {/* Usuarios (solo admin) – usa tu componente de usuarios/registro */}
           <Route
-            path="usuarios"
+            path="users"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <UserRegisterForm />
@@ -107,7 +110,7 @@ export default function App() {
 
           {/* Productos (solo admin) */}
           <Route
-            path="productos"
+            path="products"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <ProductForm />
@@ -115,12 +118,37 @@ export default function App() {
             }
           />
 
-          {/* Inventario (solo admin) */}
           <Route
-            path="inventario"
+            path="batches"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
-                <InventarioForm />
+                <InventoryBatches />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="transactionclose"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <Liquidaciones />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="financialDashboard"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <FinancialDashboard />
+              </PrivateRoute>
+            }
+          />
+
+          {/* Registro de gastos */}
+          <Route
+            path="expenses"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <ExpensesAdmin />
               </PrivateRoute>
             }
           />
@@ -128,10 +156,10 @@ export default function App() {
 
         {/* Ruta legacy para vendedores si la usas aún */}
         <Route
-          path="/ventas"
+          path="/salesV2"
           element={
             <PrivateRoute allowedRoles={["vendedor", "admin"]}>
-              <SaleForm user={user} />
+              <SaleFormV2 user={user} />
             </PrivateRoute>
           }
         />

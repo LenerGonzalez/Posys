@@ -1,21 +1,8 @@
-// src/HistorialCierres.tsx
+// src/components/HistorialCierres.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
-import {
-  collection,
-  getDocs,
-  addDoc,
-  Timestamp,
-  query,
-  where,
-  onSnapshot,
-  writeBatch,
-  doc,
-  updateDoc,
-  deleteDoc,
-} from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { format, subDays } from "date-fns";
-import html2canvas from "html2canvas";
 
 type ClosureDoc = {
   id: string;
@@ -25,8 +12,36 @@ type ClosureDoc = {
   totalCharged?: number;
   totalSuggested?: number;
   totalDifference?: number;
+
+  // NUEVO: métricas financieras (guardadas por CierreVentas)
+  totalCOGS?: number; // costo total del día
+  grossProfit?: number; // utilidad bruta del día
+
   products?: { productName: string; quantity: number; amount: number }[];
-  // opcionales agregados:
+
+  // detalle (si lo guardaste desde CierreVentas)
+  salesV2?: Array<{
+    id?: string;
+    productName?: string;
+    quantity?: number;
+    amount?: number;
+    amountSuggested?: number;
+    userEmail?: string;
+    clientName?: string;
+    amountReceived?: number;
+    change?: string | number;
+    status?: "FLOTANTE" | "PROCESADA";
+    cogsAmount?: number;
+    avgUnitCost?: number | null;
+    allocations?: {
+      batchId: string;
+      qty: number;
+      unitCost: number;
+      lineCost: number;
+    }[];
+  }>;
+
+  // compat: si tuvieras el campo "sales" legacy
   sales?: Array<{
     id?: string;
     productName?: string;
@@ -39,6 +54,7 @@ type ClosureDoc = {
     change?: string | number;
     status?: "FLOTANTE" | "PROCESADA";
   }>;
+
   productSummary?: Array<{
     productName: string;
     totalQuantity: number;
@@ -65,17 +81,14 @@ export default function HistorialCierres() {
   const fetchClosures = async () => {
     try {
       setLoading(true);
-      // Nota: Firestore permite doble where en el mismo campo
       const qy = query(
         collection(db, "daily_closures"),
         where("date", ">=", startDate),
         where("date", "<=", endDate)
-        // Si tu colección guarda muchos, puedes añadir orderBy("date","desc") en reglas adecuadas
       );
       const snap = await getDocs(qy);
       const rows: ClosureDoc[] = [];
       snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
-      // Ordenamos manualmente por fecha descendente
       rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
       setClosures(rows);
     } catch (e) {
@@ -97,19 +110,26 @@ export default function HistorialCierres() {
   };
 
   const totalsForSelected = useMemo(() => {
-    if (!selected) return { units: 0, sug: 0, chg: 0, diff: 0 };
+    if (!selected)
+      return { units: 0, sug: 0, chg: 0, diff: 0, cogs: 0, profit: 0 };
     const units = Number(selected.totalUnits ?? 0);
     const sug = Number(selected.totalSuggested ?? 0);
     const chg = Number(selected.totalCharged ?? 0);
-    const diff = Number(selected.totalDifference ?? chg - sug);
-    return { units, sug, chg, diff };
+    const diff = Number(
+      selected.totalDifference ?? (isFinite(chg - sug) ? chg - sug : 0)
+    );
+    const cogs = Number(selected.totalCOGS ?? 0); // NUEVO
+    const profit = Number(
+      selected.grossProfit ?? (isFinite(chg - cogs) ? chg - cogs : 0)
+    ); // NUEVO
+    return { units, sug, chg, diff, cogs, profit };
   }, [selected]);
 
   const handleDownloadPDF = async () => {
     if (!detailRef.current || !selected) return;
 
     const el = detailRef.current;
-    // 1) Forzar colores simples antes de rasterizar
+    // Forzar colores simples antes de rasterizar
     el.classList.add("force-pdf-colors");
 
     try {
@@ -121,7 +141,6 @@ export default function HistorialCierres() {
       const canvas = await html2canvas(el, {
         backgroundColor: "#ffffff",
         onclone: (clonedDoc) => {
-          // 2) Aplanar colores a rgb/rgba en el DOM clonado
           const win = clonedDoc.defaultView!;
           const root = clonedDoc.body;
           root.querySelectorAll<HTMLElement>("*").forEach((n) => {
@@ -139,11 +158,11 @@ export default function HistorialCierres() {
       });
 
       const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF();
+      const { jsPDF: _jsPDF } = await import("jspdf");
+      const pdf = new _jsPDF();
       pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
       pdf.save(`cierre_${selected.date}.pdf`);
     } finally {
-      // 3) Restaurar estilos
       el.classList.remove("force-pdf-colors");
     }
   };
@@ -199,6 +218,9 @@ export default function HistorialCierres() {
               <th className="border p-2">Total cobrado</th>
               <th className="border p-2">Total sugerido</th>
               <th className="border p-2">Diferencia</th>
+              {/* NUEVOS campos en la tabla de lista */}
+              <th className="border p-2">COGS</th>
+              <th className="border p-2">Utilidad bruta</th>
               <th className="border p-2">Acciones</th>
             </tr>
           </thead>
@@ -223,6 +245,16 @@ export default function HistorialCierres() {
                         Number(c.totalSuggested ?? 0)
                   )}
                 </td>
+                {/* NUEVOS celdas de COGS y utilidad */}
+                <td className="border p-1">C${money(c.totalCOGS)}</td>
+                <td className="border p-1">
+                  C$
+                  {money(
+                    c.grossProfit ??
+                      Number(c.totalCharged ?? 0) - Number(c.totalCOGS ?? 0)
+                  )}
+                </td>
+
                 <td className="border p-1">
                   <button
                     className="text-xs bg-gray-800 text-white px-2 py-1 rounded hover:bg-black"
@@ -278,8 +310,59 @@ export default function HistorialCierres() {
               </div>
             </div>
 
-            {/* Si existe el detalle de ventas, lo mostramos */}
-            {selected.sales?.length ? (
+            {/* NUEVO: Bloque finanzas del día */}
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+              <div>
+                Costo (COGS): <strong>C${money(totalsForSelected.cogs)}</strong>
+              </div>
+              <div>
+                Utilidad bruta:{" "}
+                <strong>C${money(totalsForSelected.profit)}</strong>
+              </div>
+            </div>
+
+            {/* Detalle de ventas (salesV2 si existe, si no products) */}
+            {selected.salesV2?.length ? (
+              <>
+                <h3 className="font-semibold">Ventas incluidas en el cierre</h3>
+                <table className="min-w-full border text-sm">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="border p-2">Producto</th>
+                      <th className="border p-2">Cantidad</th>
+                      <th className="border p-2">Monto</th>
+                      <th className="border p-2">COGS</th>
+                      <th className="border p-2">Vendedor</th>
+                      <th className="border p-2">Cliente</th>
+                      <th className="border p-2">Paga con</th>
+                      <th className="border p-2">Vuelto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selected.salesV2.map((s, i) => (
+                      <tr key={i} className="text-center">
+                        <td className="border p-1">
+                          {s.productName ?? "(sin nombre)"}
+                        </td>
+                        <td className="border p-1">{s.quantity ?? 0}</td>
+                        <td className="border p-1">C${money(s.amount)}</td>
+                        <td className="border p-1">C${money(s.cogsAmount)}</td>
+                        <td className="border p-1">{s.userEmail ?? ""}</td>
+                        <td className="border p-1">{s.clientName ?? ""}</td>
+                        <td className="border p-1">
+                          C${money(s.amountReceived)}
+                        </td>
+                        <td className="border p-1">
+                          {typeof s.change === "number"
+                            ? money(s.change)
+                            : s.change ?? "0"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : selected.sales?.length ? (
               <>
                 <h3 className="font-semibold">Ventas incluidas en el cierre</h3>
                 <table className="min-w-full border text-sm">

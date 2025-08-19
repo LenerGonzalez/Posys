@@ -17,7 +17,6 @@ import {
 import { format } from "date-fns";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
-import { Role } from "../apis/apis"; // Importa el enum Role desde tu archivo de APIs
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -36,6 +35,16 @@ interface SaleDataRaw {
   change?: string | number;
   status?: "FLOTANTE" | "PROCESADA";
   timestamp?: FireTimestamp;
+
+  // nuevos si vienen desde FIFO
+  allocations?: {
+    batchId: string;
+    qty: number;
+    unitCost: number;
+    lineCost: number;
+  }[];
+  avgUnitCost?: number;
+  cogsAmount?: number; // costo total de la venta
 }
 
 interface SaleData {
@@ -50,6 +59,16 @@ interface SaleData {
   amountReceived: number;
   change: string;
   status: "FLOTANTE" | "PROCESADA";
+
+  // compatibilidad con FIFO
+  allocations?: {
+    batchId: string;
+    qty: number;
+    unitCost: number;
+    lineCost: number;
+  }[];
+  avgUnitCost?: number;
+  cogsAmount?: number;
 }
 
 interface ClosureData {
@@ -61,13 +80,18 @@ interface ClosureData {
   totalCharged: number;
   totalSuggested: number;
   totalDifference: number;
-  // Campos adicionales opcionales:
-  sales?: any[];
+
+  // extendidos
+  salesV2?: any[];
   productSummary?: {
     productName: string;
     totalQuantity: number;
     totalAmount: number;
   }[];
+
+  // nuevos campos de finanzas si existen COGS
+  totalCOGS?: number;
+  grossProfit?: number;
 }
 
 // helpers
@@ -93,11 +117,18 @@ const normalizeSale = (raw: SaleDataRaw, id: string): SaleData | null => {
     amountReceived: Number(raw.amountReceived ?? 0),
     change: String(raw.change ?? "0"),
     status: (raw.status as any) ?? "FLOTANTE",
+    allocations: raw.allocations,
+    avgUnitCost: raw.avgUnitCost,
+    cogsAmount: raw.cogsAmount,
   };
 };
 
-export default function CierreVentas(): React.ReactElement {
-  const [sales, setSales] = useState<SaleData[]>([]);
+export default function CierreVentas({
+  role, // opcional: "admin" para bloquear acciones a no-admins
+}: {
+  role?: "admin" | "vendedor";
+}): React.ReactElement {
+  const [salesV2, setSales] = useState<SaleData[]>([]);
   const [closure, setClosure] = useState<ClosureData | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -116,7 +147,7 @@ export default function CierreVentas(): React.ReactElement {
 
   // Ventas del día en tiempo real
   useEffect(() => {
-    const q = query(collection(db, "sales"), where("date", "==", today));
+    const q = query(collection(db, "salesV2"), where("date", "==", today));
     const unsub = onSnapshot(q, (snap) => {
       const rows: SaleData[] = [];
       snap.forEach((d) => {
@@ -149,7 +180,7 @@ export default function CierreVentas(): React.ReactElement {
 
   // Ventas visibles según filtro
   const visibleSales =
-    filter === "ALL" ? sales : sales.filter((s) => s.status === filter);
+    filter === "ALL" ? salesV2 : salesV2.filter((s) => s.status === filter);
 
   // Totales (sobre visibles para UI)
   const totalSuggested = visibleSales.reduce(
@@ -166,12 +197,19 @@ export default function CierreVentas(): React.ReactElement {
     0
   );
 
-  // Consolidado por producto (sobre todo el día para reporte)
+  // COGS/Utilidad (sobre visibles — para mostrar en pantalla)
+  const totalCOGSVisible = visibleSales.reduce(
+    (sum, s) => sum + Number(s.cogsAmount ?? 0),
+    0
+  );
+  const grossProfitVisible = totalCharged - totalCOGSVisible;
+
+  // Consolidado por producto (sobre TODO el día para el reporte)
   const productMap: Record<
     string,
     { totalQuantity: number; totalAmount: number }
   > = {};
-  sales.forEach((s) => {
+  salesV2.forEach((s) => {
     const key = s.productName || "(sin nombre)";
     if (!productMap[key])
       productMap[key] = { totalQuantity: 0, totalAmount: 0 };
@@ -189,18 +227,23 @@ export default function CierreVentas(): React.ReactElement {
   // Guardar cierre (solo ventas FLOTANTE) y marcarlas PROCESADA
   const handleSaveClosure = async () => {
     try {
-      const toProcess = sales.filter((s) => s.status !== "PROCESADA");
+      const toProcess = salesV2.filter((s) => s.status !== "PROCESADA");
       if (toProcess.length === 0) {
         setMessage("No hay ventas FLOTANTE para procesar.");
         return;
       }
 
       const totals = {
-        totalCharged: toProcess.reduce((a, s) => a + s.amount, 0),
-        totalSuggested: toProcess.reduce((a, s) => a + s.amountSuggested, 0),
-        totalUnits: toProcess.reduce((a, s) => a + s.quantity, 0),
+        totalCharged: toProcess.reduce((a, s) => a + (s.amount || 0), 0),
+        totalSuggested: toProcess.reduce(
+          (a, s) => a + (s.amountSuggested || 0),
+          0
+        ),
+        totalUnits: toProcess.reduce((a, s) => a + (s.quantity || 0), 0),
+        totalCOGS: toProcess.reduce((a, s) => a + Number(s.cogsAmount ?? 0), 0),
       };
       const diff = totals.totalCharged - totals.totalSuggested;
+      const grossProfit = totals.totalCharged - totals.totalCOGS;
 
       // 1) Crear documento de cierre (manteniendo campos actuales + agregados)
       const ref = await addDoc(collection(db, "daily_closures"), {
@@ -210,13 +253,15 @@ export default function CierreVentas(): React.ReactElement {
         totalSuggested: totals.totalSuggested,
         totalDifference: diff,
         totalUnits: totals.totalUnits,
+        totalCOGS: totals.totalCOGS, // NUEVO
+        grossProfit, // NUEVO
         products: toProcess.map((s) => ({
           productName: s.productName,
           quantity: s.quantity,
           amount: s.amount,
         })),
         // Detalle adicional:
-        sales: toProcess.map((s) => ({
+        salesV2: toProcess.map((s) => ({
           id: s.id,
           productName: s.productName,
           quantity: s.quantity,
@@ -227,6 +272,9 @@ export default function CierreVentas(): React.ReactElement {
           amountReceived: s.amountReceived,
           change: s.change,
           status: s.status,
+          cogsAmount: s.cogsAmount ?? 0, // NUEVO
+          avgUnitCost: s.avgUnitCost ?? null, // opcional
+          allocations: s.allocations ?? [], // opcional
         })),
         productSummary: productSummaryArray,
       });
@@ -234,7 +282,7 @@ export default function CierreVentas(): React.ReactElement {
       // 2) Marcar ventas como PROCESADA
       const batch = writeBatch(db);
       toProcess.forEach((s) => {
-        batch.update(doc(db, "sales", s.id), {
+        batch.update(doc(db, "salesV2", s.id), {
           status: "PROCESADA",
           closureId: ref.id,
           closureDate: today,
@@ -257,7 +305,7 @@ export default function CierreVentas(): React.ReactElement {
       return;
 
     try {
-      await updateDoc(doc(db, "sales", saleId), {
+      await updateDoc(doc(db, "salesV2", saleId), {
         status: "FLOTANTE",
         closureId: null,
         closureDate: null,
@@ -282,7 +330,7 @@ export default function CierreVentas(): React.ReactElement {
   const saveEdit = async () => {
     if (!editing) return;
     try {
-      await updateDoc(doc(db, "sales", editing.id), {
+      await updateDoc(doc(db, "salesV2", editing.id), {
         quantity: editQty,
         amount: editAmount,
         amountCharged: editAmount, // por compatibilidad con otros lectores
@@ -306,7 +354,7 @@ export default function CierreVentas(): React.ReactElement {
     )
       return;
     try {
-      await deleteDoc(doc(db, "sales", saleId));
+      await deleteDoc(doc(db, "salesV2", saleId));
       setMessage("🗑️ Venta eliminada.");
     } catch (e) {
       console.error(e);
@@ -316,15 +364,11 @@ export default function CierreVentas(): React.ReactElement {
 
   const handleDownloadPDF = async () => {
     if (!pdfRef.current) return;
-
-    // 1) Forzar colores simples en el bloque que vamos a rasterizar
     pdfRef.current.classList.add("force-pdf-colors");
-
     try {
       const canvas = await html2canvas(pdfRef.current, {
         backgroundColor: "#ffffff",
         onclone: (clonedDoc) => {
-          // Refuerza: convierte colores calculados a rgb en el DOM clonado
           const win = clonedDoc.defaultView!;
           const root = clonedDoc.body;
           root.querySelectorAll<HTMLElement>("*").forEach((el) => {
@@ -346,10 +390,11 @@ export default function CierreVentas(): React.ReactElement {
       pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
       pdf.save(`cierre_${today}.pdf`);
     } finally {
-      // 2) Restaurar estilos normales de la página
       pdfRef.current.classList.remove("force-pdf-colors");
     }
   };
+
+  const isAdmin = role === "admin"; // si no pasas role, no restringe
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow">
@@ -363,9 +408,7 @@ export default function CierreVentas(): React.ReactElement {
           value={filter}
           onChange={(e) => setFilter(e.target.value as any)}
         >
-          <option value="ALL" disabled>
-            Todas
-          </option>
+          <option value="ALL">Todas</option>
           <option value="FLOTANTE">Venta Flotante</option>
           <option value="PROCESADA">Venta Procesada</option>
         </select>
@@ -381,8 +424,7 @@ export default function CierreVentas(): React.ReactElement {
               <tr>
                 <th className="border p-2">Estado</th>
                 <th className="border p-2">Producto</th>
-                <th className="border p-2">Cantidad</th>
-
+                <th className="border p-2">Libras - Unidad</th>
                 <th className="border p-2">Monto</th>
                 <th className="border p-2">Vendedor</th>
                 <th className="border p-2">Cliente</th>
@@ -415,27 +457,39 @@ export default function CierreVentas(): React.ReactElement {
                   <td className="border p-1">
                     {s.status === "FLOTANTE" ? (
                       <div className="flex gap-2 justify-center">
-                        <button
-                          onClick={() => openEdit(s)}
-                          className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={() => deleteSale(s.id)}
-                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                        >
-                          Eliminar
-                        </button>
+                        {/* Editar / Eliminar solo visibles si es admin (si role se usa) */}
+                        {isAdmin && (
+                          <>
+                            <button
+                              onClick={() => openEdit(s)}
+                              className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              onClick={() => deleteSale(s.id)}
+                              className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                            >
+                              Eliminar
+                            </button>
+                          </>
+                        )}
+                        {!isAdmin && (
+                          <span className="text-gray-400 text-xs">—</span>
+                        )}
                       </div>
                     ) : s.status === "PROCESADA" ? (
                       <div className="flex gap-2 justify-center">
-                        <button
-                          onClick={() => handleRevert(s.id)}
-                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                        >
-                          Revertir
-                        </button>
+                        {isAdmin ? (
+                          <button
+                            onClick={() => handleRevert(s.id)}
+                            className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                          >
+                            Revertir
+                          </button>
+                        ) : (
+                          <span className="text-gray-400 text-xs">—</span>
+                        )}
                       </div>
                     ) : (
                       <span className="text-gray-400 text-xs">No options</span>
@@ -454,7 +508,7 @@ export default function CierreVentas(): React.ReactElement {
           </table>
 
           {/* Totales visibles */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-2">
             <div>
               Total unidades: <strong>{totalUnits}</strong>
             </div>
@@ -469,9 +523,21 @@ export default function CierreVentas(): React.ReactElement {
                 totalDifference < 0 ? "text-red-600" : "text-green-600"
               }`}
             >
-              Diferencia: C${money(totalDifference)}
+              Diferencia (cobrado - sugerido): C${money(totalDifference)}
             </div>
           </div>
+
+          {/* NUEVO: COGS/Utilidad visibles si existen */}
+          {(totalCOGSVisible > 0 || grossProfitVisible !== totalCharged) && (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm mb-6">
+              <div>
+                Costo (COGS): <strong>C${money(totalCOGSVisible)}</strong>
+              </div>
+              <div>
+                Utilidad bruta: <strong>C${money(grossProfitVisible)}</strong>
+              </div>
+            </div>
+          )}
 
           {/* Consolidado por producto del día */}
           <h3 className="font-semibold mb-2">Consolidado por producto (día)</h3>
@@ -508,7 +574,7 @@ export default function CierreVentas(): React.ReactElement {
           onClick={handleSaveClosure}
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
         >
-          Guardar cierre del día (marca PROCESADA)
+          Cerrar ventas del día
         </button>
         <button
           onClick={handleDownloadPDF}
