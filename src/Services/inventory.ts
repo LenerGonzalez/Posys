@@ -196,3 +196,42 @@ export async function allocationsByBatchInRange(from: string, to: string) {
   });
   return Object.values(map);
 }
+
+// Restaura el stock de los lotes consumidos por una venta (usando salesV2.allocations)
+// y luego elimina la venta. Si no hay allocations, solo elimina la venta.
+export async function restoreSaleAndDelete(saleId: string) {
+  // 1) lee la venta
+  const saleRef = doc(db, "salesV2", saleId);
+  const saleSnap = await getDoc(saleRef);
+  if (!saleSnap.exists()) {
+    throw new Error("La venta no existe.");
+  }
+  const sale = saleSnap.data() as any;
+  const allocations: Array<{ batchId: string; qty: number }> = Array.isArray(
+    sale.allocations
+  )
+    ? sale.allocations
+    : [];
+
+  // 2) si tenía allocations, devolver cantidades a los lotes en una transacción
+  await runTransaction(db, async (tx) => {
+    if (allocations.length > 0) {
+      for (const a of allocations) {
+        if (!a?.batchId || !a?.qty) continue;
+        const batchRef = doc(db, "inventory_batches", a.batchId);
+        const batchSnap = await tx.get(batchRef);
+        if (!batchSnap.exists()) continue;
+
+        const rem = Number((batchSnap.data() as any).remaining ?? 0);
+        const newRem = Number((rem + Number(a.qty || 0)).toFixed(2));
+        tx.update(batchRef, { remaining: newRem });
+      }
+    }
+    // 3) borra la venta
+    tx.delete(saleRef);
+  });
+
+  return {
+    restored: allocations.reduce((s, a) => s + (Number(a.qty) || 0), 0),
+  };
+}

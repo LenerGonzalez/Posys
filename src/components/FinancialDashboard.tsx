@@ -183,7 +183,7 @@ export default function FinancialDashboard(): React.ReactElement {
   }, [sales]);
 
   return (
-    <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow">
+    <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow ">
       <h2 className="text-2xl font-bold mb-4">Finanzas</h2>
 
       {/* Filtro de fechas */}
@@ -213,16 +213,20 @@ export default function FinancialDashboard(): React.ReactElement {
       ) : (
         <>
           {/* KPIs */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
-            <Kpi title="Ingresos (ventas)" value={money(kpis.revenue)} />
-            <Kpi title="Costo (COGS real)" value={money(kpis.cogsReal)} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6 text-3xl font-bold">
+            <Kpi title="Ventas Totales" value={money(kpis.revenue)} />
+            <Kpi title="Costo de Mercaderia" value={money(kpis.cogsReal)} />
             <Kpi
-              title="Utilidad bruta"
+              title="Ganancia antes de Gastos"
               value={money(kpis.grossProfit)}
               positive
             />
-            <Kpi title="Gastos" value={money(kpis.expensesSum)} />
-            <Kpi title="Utilidad neta" value={money(kpis.netProfit)} positive />
+            <Kpi title="Gastos del Negocio" value={money(kpis.expensesSum)} />
+            <Kpi
+              title="Ganancia despues de Gastos"
+              value={money(kpis.netProfit)}
+              positive
+            />
           </div>
 
           {/* Consolidado por producto */}

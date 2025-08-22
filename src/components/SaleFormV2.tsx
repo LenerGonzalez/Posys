@@ -54,8 +54,9 @@ export default function SaleForm({ user }: { user: any }) {
   const [selectedProductId, setSelectedProductId] = useState("");
   const [quantity, setQuantity] = useState<number>(0);
 
-  // 👇 SIGUE EDITABLE, como pediste
+  // 👇 Sigue editable, pero ahora con flag para saber si el usuario tocó el campo
   const [amountCharged, setAmountCharged] = useState<number>(0);
+  const [manualAmount, setManualAmount] = useState(false); // NEW
 
   const [amountReceived, setAmountReceived] = useState<number>(0);
   const [amountChange, setChange] = useState<string>("0");
@@ -63,6 +64,20 @@ export default function SaleForm({ user }: { user: any }) {
   const [message, setMessage] = useState("");
   const [users, setUsers] = useState<Users[]>([]);
   const [clientName, setClientName] = useState("");
+
+  // helpers
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Detectar si el producto actual es de unidades (no libras)
+  const selectedProduct = products.find((p) => p.id === selectedProductId);
+  const isUnit = (selectedProduct?.measurement || "").toLowerCase() !== "lb";
+
+  // Función de parseo para cantidad según tipo
+  function parseQty(value: string) {
+    const n = parseFloat((value || "0").replace(",", ".")) || 0;
+    if (isUnit) return Math.max(0, Math.floor(n)); // unidades = entero
+    return Math.max(0, Math.floor(n * 100) / 100); // libras = 2 decimales
+  }
 
   // ---- helpers de stock (NUEVO) ---------------------------------
   const getDisponibleByProductId = async (productId: string) => {
@@ -102,7 +117,7 @@ export default function SaleForm({ user }: { user: any }) {
       const data: Product[] = [];
       querySnapshot.forEach((docSnap) => {
         const item = docSnap.data() as any;
-        if (item?.active === false) return; // 🔴 filtro puntual: ocultar inactivos
+        if (item?.active === false) return; // ocultar inactivos
         data.push({
           id: docSnap.id,
           productName: item.name ?? item.productName ?? "(sin nombre)",
@@ -134,18 +149,25 @@ export default function SaleForm({ user }: { user: any }) {
     fetchUsers();
   }, []);
 
-  // Calcular monto sugerido por producto*cantidad y
-  // precargar amountCharged con ese valor (pero sigue editable)
+  // Si cambia el producto, volvemos a modo "automático" de monto
+  useEffect(() => {
+    setManualAmount(false);
+  }, [selectedProductId]);
+
+  // Calcular monto sugerido por producto*cantidad
+  // ✅ Ahora recalcula siempre que NO hayas tocado manualmente el monto
   useEffect(() => {
     const product = products.find((p) => p.id === selectedProductId);
-    if (product && quantity > 0) {
-      const calc = Number((product.price * quantity).toFixed(2));
-      setAmountCharged((prev) => (prev === 0 ? calc : prev)); // si ya editaste, no te lo pisa
-    } else {
+    if (!product) {
       setAmountCharged(0);
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProductId, quantity, products]);
+    const qty = Number(quantity) || 0;
+    if (!manualAmount) {
+      const calc = round2(product.price * qty);
+      setAmountCharged(calc);
+    }
+  }, [selectedProductId, quantity, products, manualAmount]);
 
   // Calcular vuelto
   useEffect(() => {
@@ -177,7 +199,6 @@ export default function SaleForm({ user }: { user: any }) {
     }
 
     try {
-      // --- Verificación previa de stock (NUEVO) ------------------
       // --- Verificación previa de stock (AUTO-FIX de productId por nombre) ---
       const disponibleById = await getDisponibleByProductId(product.id);
 
@@ -199,12 +220,10 @@ export default function SaleForm({ user }: { user: any }) {
               Math.round((qty - dispAfter) * 100) / 100
             );
             setMessage(
-              `❌ Stock insuficiente tras corregir ${changed} lote(s). ` +
-                `Faltan ${faltan} unidades.`
+              `❌ Stock insuficiente tras corregir ${changed} lote(s). Faltan ${faltan} unidades.`
             );
             return;
           } else {
-            // pequeño aviso informativo, tu flujo sigue igual
             setMessage(
               `✅ Lotes corregidos (${changed}). Continuando con la venta…`
             );
@@ -215,12 +234,10 @@ export default function SaleForm({ user }: { user: any }) {
             Math.round((qty - disponibleById) * 100) / 100
           );
           setMessage(
-            `❌ Stock insuficiente para "${product.productName}". ` +
-              `Faltan ${faltan} unidades.`
+            `❌ Stock insuficiente para "${product.productName}". Faltan ${faltan} unidades.`
           );
           return;
         }
-        // -----------------------------------------------------------------------
       }
       // -----------------------------------------------------------
 
@@ -253,9 +270,9 @@ export default function SaleForm({ user }: { user: any }) {
         status: "FLOTANTE",
 
         // Costeo real (para finanzas/liquidaciones)
-        allocations, // [{ batchId, qty, unitCost, lineCost }]
-        avgUnitCost, // costo promedio unitario ponderado
-        cogsAmount, // suma de lineCost
+        allocations,
+        avgUnitCost,
+        cogsAmount,
       });
 
       setMessage("✅ Venta registrada y asignada a inventario (FIFO).");
@@ -263,6 +280,7 @@ export default function SaleForm({ user }: { user: any }) {
       // Reset
       setSelectedProductId("");
       setQuantity(0);
+      setManualAmount(false); // reset del flag
       setAmountCharged(0);
       setAmountReceived(0);
       setChange("0");
@@ -276,10 +294,10 @@ export default function SaleForm({ user }: { user: any }) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="max-w-md mx-auto bg-white p-8 shadow-lg rounded-lg space-y-6 border border-gray-200"
+      className="block w-[400px] h-[450px] py-10 px-5 mx-auto space-y-4  bg-white rounded-2xl shadow-2xl"
     >
       <h2 className="text-2xl font-bold mb-4 text-blue-700 flex items-center gap-2">
-        <span className="inline-block bg-blue-100 text-blue-700 rounded-full p-2">
+        <span className="block bg-blue-100 text-blue-700 rounded-full p-2">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             className="h-6 w-6"
@@ -327,8 +345,9 @@ export default function SaleForm({ user }: { user: any }) {
         <input
           type="number"
           lang="eng"
-          step="0.01"
-          inputMode="decimal"
+          /* 👉 si es por unidad: enteros; si es por libra: 2 decimales */
+          step={isUnit ? 1 : 0.01}
+          inputMode={isUnit ? "numeric" : "decimal"}
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
           value={quantity === 0 ? "" : quantity}
           onKeyDown={numberKeyGuard}
@@ -338,8 +357,19 @@ export default function SaleForm({ user }: { user: any }) {
           onChange={(e) => {
             const value = e.target.value.replace(",", ".");
             const num = value === "" ? 0 : parseFloat(value);
-            const truncated = Math.floor(num * 100) / 100;
-            setQuantity(truncated);
+
+            if (isUnit) {
+              // 🔹 productos por unidad: fuerza enteros
+              const intVal = Number.isFinite(num)
+                ? Math.max(0, Math.round(num))
+                : 0;
+              setQuantity(intVal);
+            } else {
+              // 🔹 productos por libra: 2 decimales (truncado)
+              const truncated =
+                Math.floor((Number.isFinite(num) ? num : 0) * 100) / 100;
+              setQuantity(truncated);
+            }
           }}
         />
       </div>
@@ -352,8 +382,9 @@ export default function SaleForm({ user }: { user: any }) {
         <input
           type="number"
           step="0.01"
+          readOnly
           inputMode="decimal"
-          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+          className="w-full border border-gray-300 p-2 rounded bg-gray-100"
           value={amountCharged === 0 ? "" : amountCharged}
           onKeyDown={numberKeyGuard}
           onFocus={(e) => {
@@ -363,12 +394,13 @@ export default function SaleForm({ user }: { user: any }) {
             const value = e.target.value.replace(",", ".");
             const num = value === "" ? 0 : parseFloat(value);
             const truncated = Math.floor(num * 100) / 100;
+            setManualAmount(true); // 👈 marca que el usuario lo tocó
             setAmountCharged(truncated);
           }}
         />
       </div>
 
-      {/* Paga con */}
+      {/* Paga con
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
           💵 Cliente paga con:
@@ -390,10 +422,10 @@ export default function SaleForm({ user }: { user: any }) {
             setAmountReceived(truncated);
           }}
         />
-      </div>
+      </div> */}
 
       {/* Vuelto */}
-      <div className="space-y-1">
+      {/* <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
           💵 Vuelto al cliente:
         </label>
@@ -403,7 +435,7 @@ export default function SaleForm({ user }: { user: any }) {
           className="w-full border border-gray-300 p-2 rounded bg-gray-100"
           value={amountChange}
         />
-      </div>
+      </div> */}
 
       <button
         type="submit"

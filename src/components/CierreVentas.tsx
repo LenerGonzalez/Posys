@@ -17,6 +17,7 @@ import {
 import { format } from "date-fns";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+import { restoreSaleAndDelete } from "../Services/inventory";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -349,13 +350,16 @@ export default function CierreVentas({
   const deleteSale = async (saleId: string) => {
     if (
       !window.confirm(
-        "¿Eliminar esta venta FLOTANTE? Esta acción no se puede deshacer."
+        "¿Eliminar esta venta? Se restaurará el stock en los lotes asignados."
       )
     )
       return;
+
     try {
-      await deleteDoc(doc(db, "salesV2", saleId));
-      setMessage("🗑️ Venta eliminada.");
+      const { restored } = await restoreSaleAndDelete(saleId);
+      setMessage(
+        `🗑️ Venta eliminada. Stock restaurado: ${Number(restored).toFixed(2)}.`
+      );
     } catch (e) {
       console.error(e);
       setMessage("❌ No se pudo eliminar la venta.");

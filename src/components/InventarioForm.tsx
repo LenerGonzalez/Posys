@@ -69,9 +69,9 @@ const InventarioForm = () => {
   return (
     <form
       onSubmit={handleSubmit}
-      className="max-w-md mx-auto bg-white p-8 shadow-lg rounded-lg space-y-6 border border-gray-200"
+      className="max-w-md mx-auto bg-white p-8 shadow-lg rounded-lg space-y-6 border border-gray-200 "
     >
-      <div className="border p-4 rounded shadow-sm mt-4">
+      <div className="border p-4 rounded-3xl shadow-sm mt-4">
         <h2 className="text-lg font-bold mb-2">Agregar Inventario</h2>
         <div>
           <label className="block text-sm font-semibold text-gray-700">
