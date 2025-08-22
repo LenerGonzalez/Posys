@@ -1,7 +1,15 @@
 // src/components/HistorialCierres.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  where,
+  writeBatch,
+} from "firebase/firestore";
 import { format, subDays } from "date-fns";
 
 type ClosureDoc = {
@@ -65,6 +73,49 @@ type ClosureDoc = {
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 
 export default function HistorialCierres() {
+  const deleteClosure = async (c: ClosureDoc) => {
+    if (!window.confirm(`¿Eliminar el cierre del ${c.date}?`)) return;
+
+    // Ofrece reabrir ventas ligadas a este cierre
+    const alsoRevert = window.confirm(
+      "¿También quieres reabrir (revertir a FLOTANTE) las ventas vinculadas a este cierre?"
+    );
+
+    try {
+      if (alsoRevert) {
+        // Busca ventas ligadas por closureId
+        const qs = await getDocs(
+          query(collection(db, "salesV2"), where("closureId", "==", c.id))
+        );
+        if (!qs.empty) {
+          const batch = writeBatch(db);
+          qs.forEach((d) => {
+            batch.update(doc(db, "salesV2", d.id), {
+              status: "FLOTANTE",
+              closureId: null,
+              closureDate: null,
+            });
+          });
+          await batch.commit();
+        }
+      }
+
+      // Borra el doc del cierre
+      await deleteDoc(doc(db, "daily_closures", c.id));
+
+      // Limpia selección y refresca lista
+      if (selected?.id === c.id) setSelected(null);
+      await fetchClosures();
+
+      setMessage(
+        `🗑️ Cierre eliminado${alsoRevert ? " y ventas reabiertas." : "."}`
+      );
+    } catch (e) {
+      console.error(e);
+      setMessage("❌ No se pudo eliminar el cierre.");
+    }
+  };
+
   const [startDate, setStartDate] = useState<string>(
     format(subDays(new Date(), 14), "yyyy-MM-dd")
   );
@@ -254,14 +305,21 @@ export default function HistorialCierres() {
                       Number(c.totalCharged ?? 0) - Number(c.totalCOGS ?? 0)
                   )}
                 </td>
-
                 <td className="border p-1">
-                  <button
-                    className="text-xs bg-gray-800 text-white px-2 py-1 rounded hover:bg-black"
-                    onClick={() => setSelected(c)}
-                  >
-                    Ver detalle
-                  </button>
+                  <div className="flex items-center gap-2 justify-center">
+                    <button
+                      className="text-xs bg-gray-800 text-white px-2 py-1 rounded hover:bg-black"
+                      onClick={() => setSelected(c)}
+                    >
+                      Ver detalle
+                    </button>
+                    <button
+                      className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                      onClick={() => deleteClosure(c)}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

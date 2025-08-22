@@ -3,7 +3,6 @@ import {
   collection,
   doc,
   getDocs,
-  orderBy,
   query,
   runTransaction,
   where,
@@ -27,10 +26,10 @@ export interface AllocationResult {
  * Asigna stock por FIFO (lotes más antiguos primero) para un producto
  * y descuenta de `remaining` en cada lote dentro de una transacción.
  *
- * Requiere un índice compuesto en Firestore para la colección `inventoryBatches`:
- *   Campos: productName (ASC), createdAt (ASC)
- *   (Si decides filtrar remaining > 0, añade remaining (ASC) antes de createdAt
- *    y respeta ese orden en el query con orderBy("remaining"), orderBy("createdAt")).
+ * NOTA: En tu BD actual la colección se llama `inventory_batches`
+ * y el costo unitario es `purchasePrice`. Aquí se consulta por productName
+ * (para mantener compatibilidad con tu llamada actual) y se ordena en
+ * memoria por `date` asc (y luego por `createdAt` si existe) para FIFO.
  */
 export default async function allocateFIFOAndUpdateBatches(
   db: Firestore,
@@ -42,17 +41,30 @@ export default async function allocateFIFOAndUpdateBatches(
     return { allocations: [], avgUnitCost: 0, cogsAmount: 0 };
   }
 
-  // 🔹 Consulta indexada: FIFO por fecha de creación
-  const q = query(
-    collection(db, "inventoryBatches"),
-    where("productName", "==", productName),
-    // Si habilitas este filtro, recuerda crear índice: productName ASC, remaining ASC, createdAt ASC
-    // where("remaining", ">", 0),
-    orderBy("createdAt", "asc")
-  );
+  // Colección y campos que realmente existen en tu app:
+  // - collection: inventory_batches
+  // - fields: productName, remaining, quantity, purchasePrice, date, createdAt
+  const colRef = collection(db, "inventory_batches");
+  const q = query(colRef, where("productName", "==", productName));
 
   const snap = await getDocs(q);
-  const batchRefs = snap.docs.map((d) => doc(db, "inventoryBatches", d.id));
+
+  // Preparamos los refs en FIFO puro:
+  // 1) Orden por date asc (yyyy-MM-dd en tu app)
+  // 2) Empate por createdAt asc (si existe)
+  const docsSorted = snap.docs
+    .map((d) => ({ id: d.id, data: d.data() as any }))
+    .sort((a, b) => {
+      const da = (a.data.date ?? "") as string;
+      const dbs = (b.data.date ?? "") as string;
+      if (da !== dbs) return da < dbs ? -1 : 1;
+
+      const ca = a.data.createdAt?.seconds ?? 0;
+      const cb = b.data.createdAt?.seconds ?? 0;
+      return ca - cb;
+    });
+
+  const batchRefs = docsSorted.map((d) => doc(db, "inventory_batches", d.id));
 
   return runTransaction(db, async (tx) => {
     let need = Number(quantityNeeded);
@@ -65,9 +77,13 @@ export default async function allocateFIFOAndUpdateBatches(
       if (!ds.exists()) continue;
 
       const data = ds.data() as any;
+
+      // remaining con fallback a quantity (por si algún lote viejo no lo tiene)
       const qty = Number(data.quantity ?? 0);
-      const rem = Number(data.remaining ?? qty); // fallback si aún no existe remaining
-      const cost = Number(data.costPrice ?? 0);
+      const rem = Number(data.remaining ?? qty ?? 0);
+
+      // costo unitario real en tus lotes
+      const cost = Number(data.purchasePrice ?? 0);
 
       if (rem <= 0) continue;
 
@@ -88,7 +104,7 @@ export default async function allocateFIFOAndUpdateBatches(
     }
 
     if (need > 0 && !allowNegative) {
-      // Al estar en transacción, no se aplican cambios si lanzamos error
+      // La transacción se aborta lanzando error
       throw new Error(
         `Stock insuficiente para "${productName}". Faltan ${need} unidades.`
       );

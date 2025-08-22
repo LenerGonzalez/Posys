@@ -394,7 +394,7 @@ export default function CierreVentas({
     }
   };
 
-  const isAdmin = role === "admin"; // si no pasas role, no restringe
+  const isAdmin = !role || role === "admin";
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow">

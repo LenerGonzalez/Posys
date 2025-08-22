@@ -34,7 +34,7 @@ export default function AdminLayout() {
             Historial de Cierres
           </NavLink>
           <NavLink to={`${base}/batches`} className={linkCls}>
-            Lotes
+            Inventario
           </NavLink>
           <NavLink to={`${base}/transactionclose`} className={linkCls}>
             Liquidaciones
@@ -42,11 +42,14 @@ export default function AdminLayout() {
           <NavLink to={`${base}/expenses`} className={linkCls}>
             Gastos
           </NavLink>
+          <NavLink to={`${base}/products`} className={linkCls}>
+            Productos
+          </NavLink>
           <NavLink to={`${base}/users`} className={linkCls}>
             Usuarios
           </NavLink>
-          <NavLink to={`${base}/products`} className={linkCls}>
-            Productos
+          <NavLink to={`${base}/fix`} className={linkCls}>
+            Fix de lotes
           </NavLink>
 
           {/* <NavLink to={`${base}/inventario`} className={linkCls}>
@@ -59,6 +62,8 @@ export default function AdminLayout() {
         >
           Cerrar sesión
         </button>
+
+        {/* dentro de <nav className="space-y-1"> … */}
       </aside>
 
       {/* Contenido */}

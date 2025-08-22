@@ -1,10 +1,39 @@
 import React, { useEffect, useState } from "react";
 import { db } from "../firebase";
-import { collection, addDoc, getDocs, Timestamp } from "firebase/firestore";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  Timestamp,
+  query,
+  where,
+} from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { format } from "date-fns";
 import { Role } from "../apis/apis";
 import allocateFIFOAndUpdateBatches from "../Services/allocateFIFO";
+// --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
+import { updateDoc, doc as fsDoc } from "firebase/firestore";
+
+async function fixBatchesProductIdByName(
+  productName: string,
+  newProductId: string
+) {
+  const snap = await getDocs(collection(db, "inventory_batches"));
+  const lower = productName.trim().toLowerCase();
+  let updates = 0;
+  for (const d of snap.docs) {
+    const b = d.data() as any;
+    const bn = (b.productName || "").trim().toLowerCase();
+    if (bn === lower && b.productId !== newProductId) {
+      await updateDoc(fsDoc(db, "inventory_batches", d.id), {
+        productId: newProductId,
+      });
+      updates++;
+    }
+  }
+  return updates; // por si quieres mostrar cuántos actualizó
+}
 
 interface Product {
   id: string;
@@ -35,13 +64,45 @@ export default function SaleForm({ user }: { user: any }) {
   const [users, setUsers] = useState<Users[]>([]);
   const [clientName, setClientName] = useState("");
 
-  // Cargar productos
+  // ---- helpers de stock (NUEVO) ---------------------------------
+  const getDisponibleByProductId = async (productId: string) => {
+    if (!productId) return 0;
+    const qId = query(
+      collection(db, "inventory_batches"),
+      where("productId", "==", productId)
+    );
+    const snap = await getDocs(qId);
+    let total = 0;
+    snap.forEach((d) => {
+      const b = d.data() as any;
+      total += Number(b.remaining || 0);
+    });
+    return Math.max(0, Math.floor(total * 100) / 100);
+  };
+
+  const getDisponibleByName = async (productName: string) => {
+    if (!productName) return 0;
+    const all = await getDocs(collection(db, "inventory_batches"));
+    let total = 0;
+    all.forEach((d) => {
+      const b = d.data() as any;
+      const name = (b.productName || "").trim().toLowerCase();
+      if (name === productName.trim().toLowerCase()) {
+        total += Number(b.remaining || 0);
+      }
+    });
+    return Math.max(0, Math.floor(total * 100) / 100);
+  };
+  // ---------------------------------------------------------------
+
+  // Cargar productos (SOLO activos: item.active !== false)
   useEffect(() => {
     async function fetchProducts() {
       const querySnapshot = await getDocs(collection(db, "products"));
       const data: Product[] = [];
       querySnapshot.forEach((docSnap) => {
         const item = docSnap.data() as any;
+        if (item?.active === false) return; // 🔴 filtro puntual: ocultar inactivos
         data.push({
           id: docSnap.id,
           productName: item.name ?? item.productName ?? "(sin nombre)",
@@ -116,6 +177,53 @@ export default function SaleForm({ user }: { user: any }) {
     }
 
     try {
+      // --- Verificación previa de stock (NUEVO) ------------------
+      // --- Verificación previa de stock (AUTO-FIX de productId por nombre) ---
+      const disponibleById = await getDisponibleByProductId(product.id);
+
+      if (qty > disponibleById) {
+        const disponibleByName = await getDisponibleByName(product.productName);
+
+        // Si por nombre hay stock pero por id no, reparamos automáticamente los lotes
+        if (disponibleByName > 0 && disponibleById === 0) {
+          const changed = await fixBatchesProductIdByName(
+            product.productName,
+            product.id
+          );
+          // Revalidamos stock por id tras el fix
+          const dispAfter = await getDisponibleByProductId(product.id);
+
+          if (qty > dispAfter) {
+            const faltan = Math.max(
+              0,
+              Math.round((qty - dispAfter) * 100) / 100
+            );
+            setMessage(
+              `❌ Stock insuficiente tras corregir ${changed} lote(s). ` +
+                `Faltan ${faltan} unidades.`
+            );
+            return;
+          } else {
+            // pequeño aviso informativo, tu flujo sigue igual
+            setMessage(
+              `✅ Lotes corregidos (${changed}). Continuando con la venta…`
+            );
+          }
+        } else {
+          const faltan = Math.max(
+            0,
+            Math.round((qty - disponibleById) * 100) / 100
+          );
+          setMessage(
+            `❌ Stock insuficiente para "${product.productName}". ` +
+              `Faltan ${faltan} unidades.`
+          );
+          return;
+        }
+        // -----------------------------------------------------------------------
+      }
+      // -----------------------------------------------------------
+
       // 1) Asignar FIFO y descontar de lotes (manteniendo tu flujo)
       const { allocations, avgUnitCost, cogsAmount } =
         await allocateFIFOAndUpdateBatches(db, product.productName, qty, false);
@@ -296,20 +404,6 @@ export default function SaleForm({ user }: { user: any }) {
           value={amountChange}
         />
       </div>
-      {/* 
-      Cliente opcional
-      <div className="space-y-1">
-        <label className="block text-sm font-semibold text-gray-700">
-          💵 Nombre de cliente:
-        </label>
-        <input
-          type="text"
-          placeholder="Nombre del cliente"
-          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={clientName}
-          onChange={(e) => setClientName(e.target.value)}
-        />
-      </div> */}
 
       <button
         type="submit"
@@ -321,7 +415,11 @@ export default function SaleForm({ user }: { user: any }) {
       {message && (
         <p
           className={`text-sm mt-2 ${
-            message.startsWith("✅") ? "text-green-600" : "text-red-600"
+            message.startsWith("✅")
+              ? "text-green-600"
+              : message.startsWith("⚠️")
+              ? "text-yellow-600"
+              : "text-red-600"
           }`}
         >
           {message}

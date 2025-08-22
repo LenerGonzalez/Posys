@@ -334,10 +334,10 @@ export default function InventoryBatches() {
 
         <div>
           <label className="block text-sm font-semibold">
-            Cantidad (ingreso)
+            Cantidad (Lo que esta ingresando)
           </label>
           <input
-            type="text"
+            type="number"
             inputMode="decimal"
             pattern="^[0-9]*[.]?[0-9]*$"
             className="w-full border p-2 rounded"
@@ -354,10 +354,10 @@ export default function InventoryBatches() {
 
         <div>
           <label className="block text-sm font-semibold">
-            Costo unitario (compra)
+            Precio de compra (compra)
           </label>
           <input
-            type="text"
+            type="number"
             inputMode="decimal"
             pattern="^[0-9]*[.]?[0-9]*$"
             className="w-full border p-2 rounded"
@@ -374,10 +374,10 @@ export default function InventoryBatches() {
 
         <div>
           <label className="block text-sm font-semibold">
-            Precio unitario (venta ref.)
+            Precio de venta (venta)
           </label>
           <input
-            type="text"
+            type="number"
             inputMode="decimal"
             pattern="^[0-9]*[.]?[0-9]*$"
             className="w-full border p-2 rounded"
@@ -453,15 +453,18 @@ export default function InventoryBatches() {
           <thead className="bg-gray-100">
             <tr>
               <th className="p-2 border">Fecha</th>
+              <th className="p-2 border">Tipo</th>
               <th className="p-2 border">Producto</th>
-              <th className="p-2 border">Cat.</th>
+
               <th className="p-2 border">Unidad</th>
               <th className="p-2 border">Ingresado</th>
-              <th className="p-2 border">Remaining</th>
-              <th className="p-2 border">Costo</th>
-              <th className="p-2 border">Venta ref</th>
+              <th className="p-2 border">Restantes</th>
+              <th className="p-2 border">Precio Compra</th>
+              <th className="p-2 border">Precio Venta</th>
               <th className="p-2 border">Total factura</th>
               <th className="p-2 border">Total esperado</th>
+              <th className="p-2 border">Total ganancia</th>
+
               <th className="p-2 border">Estado</th>
               <th className="p-2 border">Acciones</th>
             </tr>
@@ -496,8 +499,9 @@ export default function InventoryBatches() {
                         b.date
                       )}
                     </td>
-                    <td className="p-2 border">{b.productName}</td>
                     <td className="p-2 border">{b.category}</td>
+                    <td className="p-2 border">{b.productName}</td>
+
                     <td className="p-2 border">{b.unit}</td>
                     <td className="p-2 border">
                       {isEditing ? (
@@ -566,6 +570,11 @@ export default function InventoryBatches() {
                       {isEditing
                         ? money(editExpectedTotal)
                         : money(b.expectedTotal || 0)}
+                    </td>
+                    <td className="p-2 border">
+                      {isEditing
+                        ? money(editExpectedTotal - editInvoiceTotal)
+                        : money((b.expectedTotal || 0) - (b.invoiceTotal || 0))}
                     </td>
                     <td className="p-2 border">
                       <span

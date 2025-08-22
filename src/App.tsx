@@ -26,6 +26,7 @@ import InventoryBatches from "./components/InventoryBatches";
 import Liquidaciones from "./components/Liquidaciones";
 import FinancialDashboard from "./components/FinancialDashboard";
 import ExpensesAdmin from "./components/ExpensesAdmin";
+import FixBatchesPages from "./components/FixBatchesPages";
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -75,6 +76,14 @@ export default function App() {
               <PrivateRoute allowedRoles={["vendedor", "admin"]}>
                 {/* si tu CierreVentas recibe role, usa: role={role === "admin" ? "admin" : "vendedor"} */}
                 <CierreVentas />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="fix"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <FixBatchesPages />
               </PrivateRoute>
             }
           />
