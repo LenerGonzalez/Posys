@@ -88,7 +88,7 @@ export default function ProductForm() {
       // actualiza UI sin recargar
       setProducts((prev) => [{ id: newRef.id, ...payload }, ...prev]);
 
-      setMessage("✅ Producto registrado.");
+      setMessage("✅ Producto registrado con exito.");
       setName("");
       setPrice(0);
       setMeasurement("");
