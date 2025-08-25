@@ -266,12 +266,12 @@ export default function HistorialCierres() {
             <tr>
               <th className="border p-2">Fecha</th>
               <th className="border p-2">Total libras/unidades</th>
-              <th className="border p-2">Total cobrado</th>
-              <th className="border p-2">Total sugerido</th>
-              <th className="border p-2">Diferencia</th>
+              <th className="border p-2">Monto de venta</th>
+              {/* <th className="border p-2">Total sugerido</th> */}
+              {/* <th className="border p-2">Diferencia</th> */}
               {/* NUEVOS campos en la tabla de lista */}
-              <th className="border p-2">COGS</th>
-              <th className="border p-2">Utilidad bruta</th>
+              <th className="border p-2">Monto al costo</th>
+              <th className="border p-2">Ganancia sin gastos</th>
               <th className="border p-2">Acciones</th>
             </tr>
           </thead>
@@ -281,8 +281,8 @@ export default function HistorialCierres() {
                 <td className="border p-1">{c.date}</td>
                 <td className="border p-1">{c.totalUnits ?? 0}</td>
                 <td className="border p-1">C${money(c.totalCharged)}</td>
-                <td className="border p-1">C${money(c.totalSuggested)}</td>
-                <td
+                {/* <td className="border p-1">C${money(c.totalSuggested)}</td> */}
+                {/* <td
                   className={`border p-1 ${
                     Number(c.totalDifference ?? 0) < 0
                       ? "text-red-600"
@@ -295,7 +295,7 @@ export default function HistorialCierres() {
                       Number(c.totalCharged ?? 0) -
                         Number(c.totalSuggested ?? 0)
                   )}
-                </td>
+                </td> */}
                 {/* NUEVOS celdas de COGS y utilidad */}
                 <td className="border p-1">C${money(c.totalCOGS)}</td>
                 <td className="border p-1">
@@ -352,29 +352,30 @@ export default function HistorialCierres() {
               <div>
                 Total unidades: <strong>{totalsForSelected.units}</strong>
               </div>
-              <div>
+              {/* <div>
                 Total sugerido:{" "}
                 <strong>C${money(totalsForSelected.sug)}</strong>
               </div>
               <div>
                 Total cobrado: <strong>C${money(totalsForSelected.chg)}</strong>
-              </div>
-              <div
+              </div> */}
+              {/* <div
                 className={`font-bold ${
                   totalsForSelected.diff < 0 ? "text-red-600" : "text-green-600"
                 }`}
               >
                 Diferencia: C${money(totalsForSelected.diff)}
-              </div>
+              </div> */}
             </div>
 
             {/* NUEVO: Bloque finanzas del día */}
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
               <div>
-                Costo (COGS): <strong>C${money(totalsForSelected.cogs)}</strong>
+                Monto al costo:{" "}
+                <strong>C${money(totalsForSelected.cogs)}</strong>
               </div>
               <div>
-                Utilidad bruta:{" "}
+                Ganancia sin gastos:{" "}
                 <strong>C${money(totalsForSelected.profit)}</strong>
               </div>
             </div>
@@ -388,12 +389,12 @@ export default function HistorialCierres() {
                     <tr>
                       <th className="border p-2">Producto</th>
                       <th className="border p-2">Cantidad</th>
-                      <th className="border p-2">Monto</th>
-                      <th className="border p-2">COGS</th>
+                      <th className="border p-2">Monto de ventas</th>
+                      <th className="border p-2">Monto al costo</th>
                       <th className="border p-2">Vendedor</th>
-                      <th className="border p-2">Cliente</th>
+                      {/* <th className="border p-2">Cliente</th>
                       <th className="border p-2">Paga con</th>
-                      <th className="border p-2">Vuelto</th>
+                      <th className="border p-2">Vuelto</th> */}
                     </tr>
                   </thead>
                   <tbody>
@@ -406,7 +407,7 @@ export default function HistorialCierres() {
                         <td className="border p-1">C${money(s.amount)}</td>
                         <td className="border p-1">C${money(s.cogsAmount)}</td>
                         <td className="border p-1">{s.userEmail ?? ""}</td>
-                        <td className="border p-1">{s.clientName ?? ""}</td>
+                        {/* <td className="border p-1">{s.clientName ?? ""}</td>
                         <td className="border p-1">
                           C${money(s.amountReceived)}
                         </td>
@@ -414,7 +415,7 @@ export default function HistorialCierres() {
                           {typeof s.change === "number"
                             ? money(s.change)
                             : s.change ?? "0"}
-                        </td>
+                        </td> */}
                       </tr>
                     ))}
                   </tbody>

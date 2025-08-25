@@ -431,9 +431,9 @@ export default function CierreVentas({
                 <th className="border p-2">Libras - Unidad</th>
                 <th className="border p-2">Monto</th>
                 <th className="border p-2">Vendedor</th>
-                <th className="border p-2">Cliente</th>
-                <th className="border p-2">Paga con</th>
-                <th className="border p-2">Vuelto</th>
+                {/* <th className="border p-2">Cliente</th> */}
+                {/* <th className="border p-2">Paga con</th> */}
+                {/* <th className="border p-2">Vuelto</th> */}
                 <th className="border p-2">Acciones</th>
               </tr>
             </thead>
@@ -455,9 +455,9 @@ export default function CierreVentas({
                   <td className="border p-1">{s.quantity}</td>
                   <td className="border p-1">C${money(s.amount)}</td>
                   <td className="border p-1">{s.userEmail}</td>
-                  <td className="border p-1">{s.clientName}</td>
-                  <td className="border p-1">C${money(s.amountReceived)}</td>
-                  <td className="border p-1">C${s.change}</td>
+                  {/* <td className="border p-1">{s.clientName}</td> */}
+                  {/* <td className="border p-1">C${money(s.amountReceived)}</td> */}
+                  {/* <td className="border p-1">C${s.change}</td> */}
                   <td className="border p-1">
                     {s.status === "FLOTANTE" ? (
                       <div className="flex gap-2 justify-center">
@@ -516,29 +516,31 @@ export default function CierreVentas({
             <div>
               Total unidades: <strong>{totalUnits}</strong>
             </div>
-            <div>
+            {/* <div>
               Total sugerido: <strong>C${money(totalSuggested)}</strong>
-            </div>
+            </div> */}
             <div>
               Total cobrado: <strong>C${money(totalCharged)}</strong>
             </div>
-            <div
+            {/* <div
               className={`font-bold ${
                 totalDifference < 0 ? "text-red-600" : "text-green-600"
               }`}
             >
               Diferencia (cobrado - sugerido): C${money(totalDifference)}
-            </div>
+            </div> */}
           </div>
 
           {/* NUEVO: COGS/Utilidad visibles si existen */}
           {(totalCOGSVisible > 0 || grossProfitVisible !== totalCharged) && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm mb-6">
               <div>
-                Costo (COGS): <strong>C${money(totalCOGSVisible)}</strong>
+                Calculo a Precio compra:{" "}
+                <strong>C${money(totalCOGSVisible)}</strong>
               </div>
               <div>
-                Utilidad bruta: <strong>C${money(grossProfitVisible)}</strong>
+                Ganancia antes de gasto:{" "}
+                <strong>C${money(grossProfitVisible)}</strong>
               </div>
             </div>
           )}

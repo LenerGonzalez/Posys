@@ -294,13 +294,17 @@ export default function SaleForm({ user }: { user: any }) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="block w-[400px] h-[450px] py-10 px-5 mx-auto space-y-4  bg-white rounded-2xl shadow-2xl"
+      /* ✅ Responsive sin tocar tu lógica */
+      className="w-full mx-auto bg-white rounded-2xl shadow-2xl
+                 p-4 sm:p-6 md:p-8
+                 max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl
+                 space-y-4"
     >
-      <h2 className="text-2xl font-bold mb-4 text-blue-700 flex items-center gap-2">
+      <h2 className="text-xl sm:text-2xl font-bold mb-2 sm:mb-4 text-blue-700 flex items-center gap-2">
         <span className="block bg-blue-100 text-blue-700 rounded-full p-2">
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            className="h-6 w-6"
+            className="h-5 w-5 sm:h-6 sm:w-6"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -359,13 +363,11 @@ export default function SaleForm({ user }: { user: any }) {
             const num = value === "" ? 0 : parseFloat(value);
 
             if (isUnit) {
-              // 🔹 productos por unidad: fuerza enteros
               const intVal = Number.isFinite(num)
                 ? Math.max(0, Math.round(num))
                 : 0;
               setQuantity(intVal);
             } else {
-              // 🔹 productos por libra: 2 decimales (truncado)
               const truncated =
                 Math.floor((Number.isFinite(num) ? num : 0) * 100) / 100;
               setQuantity(truncated);
@@ -394,52 +396,16 @@ export default function SaleForm({ user }: { user: any }) {
             const value = e.target.value.replace(",", ".");
             const num = value === "" ? 0 : parseFloat(value);
             const truncated = Math.floor(num * 100) / 100;
-            setManualAmount(true); // 👈 marca que el usuario lo tocó
+            setManualAmount(true);
             setAmountCharged(truncated);
           }}
         />
       </div>
 
-      {/* Paga con
-      <div className="space-y-1">
-        <label className="block text-sm font-semibold text-gray-700">
-          💵 Cliente paga con:
-        </label>
-        <input
-          type="number"
-          step="0.01"
-          inputMode="decimal"
-          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={amountReceived === 0 ? "" : amountReceived}
-          onKeyDown={numberKeyGuard}
-          onFocus={(e) => {
-            if (e.target.value === "0") e.target.value = "";
-          }}
-          onChange={(e) => {
-            const value = e.target.value.replace(",", ".");
-            const num = value === "" ? 0 : parseFloat(value);
-            const truncated = Math.floor(num * 100) / 100;
-            setAmountReceived(truncated);
-          }}
-        />
-      </div> */}
-
-      {/* Vuelto */}
-      {/* <div className="space-y-1">
-        <label className="block text-sm font-semibold text-gray-700">
-          💵 Vuelto al cliente:
-        </label>
-        <input
-          type="text"
-          readOnly
-          className="w-full border border-gray-300 p-2 rounded bg-gray-100"
-          value={amountChange}
-        />
-      </div> */}
-
+      {/* Botón */}
       <button
         type="submit"
-        className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition"
+        className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition"
       >
         Guardar venta
       </button>

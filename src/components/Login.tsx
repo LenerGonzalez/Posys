@@ -117,7 +117,7 @@ export default function Login() {
           placeholder="Correo"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full p-2 border rounded"
+          className="w-full p-2 border rounded-[20px]"
           required
         />
 
@@ -128,7 +128,7 @@ export default function Login() {
             placeholder="Contraseña"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full p-2 border rounded pr-10"
+            className="w-full p-2 border rounded-[20px] pr-10"
             required
           />
           <button
@@ -147,7 +147,7 @@ export default function Login() {
         {error && <p className="text-red-600 text-sm">{error}</p>}
         <button
           type="submit"
-          className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
+          className="w-full bg-blue-600 text-white py-2 rounded-[20px] hover:bg-blue-700"
         >
           Entrar
         </button>
