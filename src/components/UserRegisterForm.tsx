@@ -1,4 +1,7 @@
 import React, { useEffect, useState } from "react";
+import { getAuth, signOut } from "firebase/auth";
+import { getApp, initializeApp, deleteApp } from "firebase/app";
+
 import { auth, db } from "../firebase";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import {
@@ -51,28 +54,70 @@ export default function UserRegisterForm() {
     loadUsers();
   }, []);
 
+  //   const handleRegister = async (e: React.FormEvent) => {
+  //     e.preventDefault();
+  //     setMessage("");
+  //
+  //     try {
+  //       const userCred = await createUserWithEmailAndPassword(
+  //         auth,
+  //         email,
+  //         password
+  //       );
+  //       await setDoc(doc(collection(db, "users"), userCred.user.uid), {
+  //         email,
+  //         role,
+  //       });
+  //
+  //       setUsers((prev) => [{ id: userCred.user.uid, email, role }, ...prev]);
+  //
+  //       setMessage("✅ Usuario creado correctamente.");
+  //       setEmail("");
+  //       setPassword("");
+  //       setRole("vendedor");
+  //     } catch (err: any) {
+  //       setMessage("❌ Error al crear el usuario: " + err.message);
+  //     }
+  //   };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
 
     try {
+      // 1) Crear instancia secundaria que NO afecta tu sesión actual
+      const primaryApp = getApp(); // tu app principal ya inicializada
+      const secondaryApp = initializeApp(
+        primaryApp.options as any,
+        "Secondary"
+      );
+      const secondaryAuth = getAuth(secondaryApp);
+
+      // 2) Crear el usuario en la instancia secundaria (no te desloguea)
       const userCred = await createUserWithEmailAndPassword(
-        auth,
+        secondaryAuth,
         email,
         password
       );
+
+      // 3) Guardar su perfil en Firestore (colección users)
       await setDoc(doc(collection(db, "users"), userCred.user.uid), {
         email,
         role,
       });
 
-      setUsers((prev) => [{ id: userCred.user.uid, email, role }, ...prev]);
+      // 4) (Opcional) cerrar sesión de la instancia secundaria y limpiarla
+      await signOut(secondaryAuth);
+      await deleteApp(secondaryApp);
 
+      // 5) Refrescar UI localmente
+      setUsers((prev) => [{ id: userCred.user.uid, email, role }, ...prev]);
       setMessage("✅ Usuario creado correctamente.");
       setEmail("");
       setPassword("");
       setRole("vendedor");
     } catch (err: any) {
+      console.error(err);
       setMessage("❌ Error al crear el usuario: " + err.message);
     }
   };

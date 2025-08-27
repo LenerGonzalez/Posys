@@ -58,14 +58,15 @@ export default function App() {
         <Route path="/" element={<Login />} />
 
         {/* Árbol ADMIN protegido con layout + rutas hijas */}
-        <Route
-          path="/admin"
-          element={
-            <PrivateRoute allowedRoles={["admin", "vendedor"]}>
-              <AdminLayout />
-            </PrivateRoute>
-          }
-        >
+       <Route
+  path="/admin"
+  element={
+    <PrivateRoute allowedRoles={["admin", "vendedor"]}>
+      <AdminLayout role={role} />
+    </PrivateRoute>
+  }
+>
+
           {/* Redirige /admin a /admin/ventas */}
           <Route index element={<Navigate to="bills" replace />} />
 
@@ -74,7 +75,6 @@ export default function App() {
             path="bills"
             element={
               <PrivateRoute allowedRoles={["vendedor", "admin"]}>
-                {/* si tu CierreVentas recibe role, usa: role={role === "admin" ? "admin" : "vendedor"} */}
                 <CierreVentas />
               </PrivateRoute>
             }
