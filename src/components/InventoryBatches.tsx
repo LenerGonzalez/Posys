@@ -12,7 +12,7 @@ import {
 import { db } from "../firebase";
 import { newBatch, markBatchAsPaid } from "../Services/inventory";
 import { Timestamp } from "firebase/firestore";
-import { format } from "date-fns";
+import { format, set } from "date-fns";
 
 const money = (n: number) => `C$${(Number(n) || 0).toFixed(2)}`;
 
@@ -143,7 +143,15 @@ export default function InventoryBatches() {
   const totals = useMemo(() => {
     const qty = batches.reduce((a, b) => a + b.quantity, 0);
     const rem = batches.reduce((a, b) => a + b.remaining, 0);
-    return { qty, rem };
+    const totalFacturado = batches.reduce(
+      (a, b) => a + (b.invoiceTotal || 0),
+      0
+    );
+    const totalEsperado = batches.reduce(
+      (a, b) => a + (b.expectedTotal || 0),
+      0
+    );
+    return { qty, rem, totalFacturado, totalEsperado };
   }, [batches]);
 
   const saveBatch = async (e: React.FormEvent) => {
@@ -338,17 +346,21 @@ export default function InventoryBatches() {
           </label>
           <input
             type="number"
+            step="0.01"
             inputMode="decimal"
-            pattern="^[0-9]*[.]?[0-9]*$"
             className="w-full border p-2 rounded"
-            value={quantity || ""}
-            onChange={(e) =>
-              setQuantity(
-                Math.floor(
-                  (parseFloat(e.target.value.replace(",", ".")) || 0) * 100
-                ) / 100
-              )
-            }
+            value={quantity === 0 ? "" : quantity}
+            onChange={(e) => {
+              const raw = e.target.value.replace(",", ".");
+              const num = parseFloat(raw);
+              const safe = Number.isFinite(num)
+                ? parseFloat(num.toFixed(3))
+                : 0;
+              setQuantity(safe);
+            }}
+            disabled={!productId}
+            placeholder={!productId ? "Selecciona un producto primero" : ""}
+            title={!productId ? "Selecciona un producto para habilitar" : ""}
           />
         </div>
 
@@ -358,17 +370,21 @@ export default function InventoryBatches() {
           </label>
           <input
             type="number"
+            step="0.01"
             inputMode="decimal"
-            pattern="^[0-9]*[.]?[0-9]*$"
             className="w-full border p-2 rounded"
-            value={purchasePrice || ""}
-            onChange={(e) =>
-              setPurchasePrice(
-                Math.floor(
-                  (parseFloat(e.target.value.replace(",", ".")) || 0) * 100
-                ) / 100
-              )
-            }
+            value={purchasePrice === 0 ? "" : purchasePrice}
+            onChange={(e) => {
+              const raw = e.target.value.replace(",", ".");
+              const num = parseFloat(raw);
+              const safe = Number.isFinite(num)
+                ? parseFloat(num.toFixed(2))
+                : 0;
+              setPurchasePrice(safe);
+            }}
+            disabled={!productId}
+            placeholder={!productId ? "Selecciona un producto primero" : ""}
+            title={!productId ? "Selecciona un producto para habilitar" : ""}
           />
         </div>
 
@@ -389,6 +405,9 @@ export default function InventoryBatches() {
                 ) / 100
               )
             }
+            disabled={!productId}
+            placeholder={!productId ? "Selecciona un producto primero" : ""}
+            title={!productId ? "Selecciona un producto para habilitar" : ""}
           />
         </div>
 
@@ -434,22 +453,30 @@ export default function InventoryBatches() {
       </form>
 
       {/* Totales */}
-      <div className="bg-white p-3 rounded shadow border mb-3 text-sm">
+      <div className="bg-gray-50 p-3 rounded shadow border mb-3 text-sm">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <div>
             <span className="font-semibold">Libras/Unidades ingresadas:</span>{" "}
-            {totals.qty}
+            {totals.qty.toFixed(3)}
           </div>
           <div>
             <span className="font-semibold">Restantes (abiertas):</span>{" "}
-            {totals.rem}
+            {totals.rem.toFixed(3)}
+          </div>
+          <div>
+            <span className="font-semibold">Total Esperado ganar:</span>{" "}
+            {totals.totalEsperado.toFixed(2)}
+          </div>
+          <div>
+            <span className="font-semibold">Total Facturado:</span>{" "}
+            {totals.totalFacturado.toFixed(2)}
           </div>
         </div>
       </div>
 
       {/* Tabla de lotes */}
-      <div className="bg-white p-2 rounded shadow border overflow-x-auto">
-        <table className="min-w-full text-sm">
+      <div className="bg-white p-2 rounded shadow border w-full">
+        <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
               <th className="p-2 border">Fecha</th>
@@ -499,24 +526,26 @@ export default function InventoryBatches() {
                         b.date
                       )}
                     </td>
-                    <td className="p-2 border">{b.category}</td>
+                    <td className="p-2 border">{b.category.toUpperCase()}</td>
                     <td className="p-2 border">{b.productName}</td>
 
-                    <td className="p-2 border">{b.unit}</td>
+                    <td className="p-2 border">{b.unit.toUpperCase()}</td>
                     <td className="p-2 border">
                       {isEditing ? (
                         <input
-                          className="w-full border p-1 rounded text-right"
+                          type="number"
+                          step="0.01"
                           inputMode="decimal"
+                          className="w-full border p-1 rounded text-right"
                           value={Number.isNaN(editQty) ? "" : editQty}
-                          onChange={(e) =>
-                            setEditQty(
-                              Math.floor(
-                                (parseFloat(e.target.value.replace(",", ".")) ||
-                                  0) * 100
-                              ) / 100
-                            )
-                          }
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(",", ".");
+                            const num = parseFloat(raw);
+                            const safe = Number.isFinite(num)
+                              ? parseFloat(num.toFixed(3))
+                              : 0;
+                            setEditQty(Math.max(0, safe));
+                          }}
                         />
                       ) : (
                         b.quantity
@@ -526,17 +555,19 @@ export default function InventoryBatches() {
                     <td className="p-2 border">
                       {isEditing ? (
                         <input
-                          className="w-full border p-1 rounded text-right"
+                          type="number"
+                          step="0.01"
                           inputMode="decimal"
+                          className="w-full border p-1 rounded text-right"
                           value={Number.isNaN(editPurchase) ? "" : editPurchase}
-                          onChange={(e) =>
-                            setEditPurchase(
-                              Math.floor(
-                                (parseFloat(e.target.value.replace(",", ".")) ||
-                                  0) * 100
-                              ) / 100
-                            )
-                          }
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(",", ".");
+                            const num = parseFloat(raw);
+                            const safe = Number.isFinite(num)
+                              ? parseFloat(num.toFixed(2))
+                              : 0;
+                            setEditPurchase(Math.max(0, safe));
+                          }}
                         />
                       ) : (
                         money(b.purchasePrice)
@@ -545,17 +576,19 @@ export default function InventoryBatches() {
                     <td className="p-2 border">
                       {isEditing ? (
                         <input
-                          className="w-full border p-1 rounded text-right"
+                          type="number"
+                          step="0.01"
                           inputMode="decimal"
+                          className="w-full border p-1 rounded text-right"
                           value={Number.isNaN(editSale) ? "" : editSale}
-                          onChange={(e) =>
-                            setEditSale(
-                              Math.floor(
-                                (parseFloat(e.target.value.replace(",", ".")) ||
-                                  0) * 100
-                              ) / 100
-                            )
-                          }
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(",", ".");
+                            const num = parseFloat(raw);
+                            const safe = Number.isFinite(num)
+                              ? parseFloat(num.toFixed(2))
+                              : 0;
+                            setEditSale(Math.max(0, safe));
+                          }}
                         />
                       ) : (
                         money(b.salePrice)
@@ -587,7 +620,7 @@ export default function InventoryBatches() {
                         {b.status}
                       </span>
                     </td>
-                    <td className="p-2 border space-x-2">
+                    <td className="flex space-x-2 justify-center">
                       {isEditing ? (
                         <>
                           <button
@@ -610,7 +643,7 @@ export default function InventoryBatches() {
                               onClick={() => payBatch(b)}
                               className="px-2 py-1 rounded text-white bg-green-600 hover:bg-green-700"
                             >
-                              Marcar pagado
+                              Pagar
                             </button>
                           )}
                           <button
@@ -623,7 +656,7 @@ export default function InventoryBatches() {
                             className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
                             onClick={() => deleteBatch(b)}
                           >
-                            Eliminar
+                            Borrar
                           </button>
                         </>
                       )}

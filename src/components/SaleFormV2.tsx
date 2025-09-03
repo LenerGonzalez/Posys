@@ -363,16 +363,23 @@ export default function SaleForm({ user }: { user: any }) {
             const num = value === "" ? 0 : parseFloat(value);
 
             if (isUnit) {
+              // 🔹 productos por unidad: fuerza enteros
               const intVal = Number.isFinite(num)
                 ? Math.max(0, Math.round(num))
                 : 0;
               setQuantity(intVal);
             } else {
-              const truncated =
-                Math.floor((Number.isFinite(num) ? num : 0) * 100) / 100;
-              setQuantity(truncated);
+              // 🔹 productos por libra: acepta decimales (sin truncar)
+              setQuantity(Number.isFinite(num) ? num : 0);
             }
           }}
+          disabled={!selectedProductId}
+          placeholder={
+            !selectedProductId ? "Selecciona un producto primero" : ""
+          }
+          title={
+            !selectedProductId ? "Selecciona un producto para habilitar" : ""
+          }
         />
       </div>
 
@@ -387,18 +394,8 @@ export default function SaleForm({ user }: { user: any }) {
           readOnly
           inputMode="decimal"
           className="w-full border border-gray-300 p-2 rounded bg-gray-100"
-          value={amountCharged === 0 ? "" : amountCharged}
+          value={amountCharged === 0 ? "" : amountCharged.toFixed(2)}
           onKeyDown={numberKeyGuard}
-          onFocus={(e) => {
-            if (e.target.value === "0") e.target.value = "";
-          }}
-          onChange={(e) => {
-            const value = e.target.value.replace(",", ".");
-            const num = value === "" ? 0 : parseFloat(value);
-            const truncated = Math.floor(num * 100) / 100;
-            setManualAmount(true);
-            setAmountCharged(truncated);
-          }}
         />
       </div>
 
