@@ -92,13 +92,9 @@ export default function Login() {
         const data = docSnap.data();
         const role = data.role;
 
-        if (role === "admin") {
-          navigate("/admin");
-        } else if (role === "vendedor") {
-          navigate("/ventas");
-        } else {
-          setError("Rol no válido");
-        }
+        if (role === "admin") navigate("/admin");
+        else if (role === "vendedor") navigate("/admin/salesV2"); // ← aquí
+        else setError("Rol no válido");
       } else {
         setError("No se encontró el perfil de usuario");
       }
