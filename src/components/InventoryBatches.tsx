@@ -1,4 +1,4 @@
-// src/components/InventoryBatches.tsx
+// // src/components/InventoryBatches.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -12,7 +12,7 @@ import {
 import { db } from "../firebase";
 import { newBatch, markBatchAsPaid } from "../Services/inventory";
 import { Timestamp } from "firebase/firestore";
-import { format, set } from "date-fns";
+import { format, startOfMonth, endOfMonth } from "date-fns";
 
 const money = (n: number) => `C$${(Number(n) || 0).toFixed(2)}`;
 
@@ -49,6 +49,14 @@ export default function InventoryBatches() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+
+  // 🔎 Filtro por fecha
+  const [fromDate, setFromDate] = useState<string>(
+    format(startOfMonth(new Date()), "yyyy-MM-dd")
+  );
+  const [toDate, setToDate] = useState<string>(
+    format(endOfMonth(new Date()), "yyyy-MM-dd")
+  );
 
   // form (crear)
   const [productId, setProductId] = useState("");
@@ -140,19 +148,29 @@ export default function InventoryBatches() {
     setExpectedTotal(Math.floor(quantity * salePrice * 100) / 100);
   }, [quantity, salePrice]);
 
+  // 🔎 Filtro en memoria sobre tus lotes ya cargados
+  const filteredBatches = useMemo(() => {
+    return batches.filter((b) => {
+      if (fromDate && b.date < fromDate) return false;
+      if (toDate && b.date > toDate) return false;
+      return true;
+    });
+  }, [batches, fromDate, toDate]);
+
+  // Totales calculados sobre el FILTRO
   const totals = useMemo(() => {
-    const qty = batches.reduce((a, b) => a + b.quantity, 0);
-    const rem = batches.reduce((a, b) => a + b.remaining, 0);
-    const totalFacturado = batches.reduce(
+    const qty = filteredBatches.reduce((a, b) => a + b.quantity, 0);
+    const rem = filteredBatches.reduce((a, b) => a + b.remaining, 0);
+    const totalFacturado = filteredBatches.reduce(
       (a, b) => a + (b.invoiceTotal || 0),
       0
     );
-    const totalEsperado = batches.reduce(
+    const totalEsperado = filteredBatches.reduce(
       (a, b) => a + (b.expectedTotal || 0),
       0
     );
     return { qty, rem, totalFacturado, totalEsperado };
-  }, [batches]);
+  }, [filteredBatches]);
 
   const saveBatch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -304,9 +322,140 @@ export default function InventoryBatches() {
   };
   // ====== FIN edición/eliminación ======
 
+  // ====== Exportar/Imprimir PDF (solo HTML nativo) ======
+  const handlePrintPDF = () => {
+    const titleRange =
+      (fromDate ? `Desde ${fromDate}` : "Desde inicio") +
+      " — " +
+      (toDate ? `Hasta ${toDate}` : "Hasta hoy");
+
+    const rowsHtml = filteredBatches
+      .map(
+        (b) => `
+      <tr>
+        <td>${b.date}</td>
+        <td>${(b.category || "").toUpperCase()}</td>
+        <td>${b.productName}</td>
+        <td>${(b.unit || "").toUpperCase()}</td>
+        <td style="text-align:right">${b.quantity.toFixed(3)}</td>
+        <td style="text-align:right">${b.remaining.toFixed(3)}</td>
+        <td style="text-align:right">${money(b.purchasePrice)}</td>
+        <td style="text-align:right">${money(b.salePrice)}</td>
+        <td style="text-align:right">${money(b.invoiceTotal || 0)}</td>
+        <td style="text-align:right">${money(b.expectedTotal || 0)}</td>
+        <td>${b.status}</td>
+      </tr>`
+      )
+      .join("");
+
+    const html = `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Inventario por Lotes</title>
+  <style>
+    * { font-family: Arial, sans-serif; }
+    h1 { margin: 0 0 4px; }
+    .muted { color: #555; font-size: 12px; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #ddd; padding: 6px; }
+    th { background: #f5f5f5; text-align: left; }
+    .totals { margin: 10px 0 16px; font-size: 12px; }
+    .totals span { margin-right: 16px; }
+    @media print {
+      @page { size: A4 landscape; margin: 15mm; }
+      button { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <button onclick="window.print()">Imprimir</button>
+  <h1>Inventario por Lotes</h1>
+  <div class="muted">${titleRange}</div>
+  <div class="totals">
+    <span><strong>Ingresadas:</strong> ${totals.qty.toFixed(3)}</span>
+    <span><strong>Restantes:</strong> ${totals.rem.toFixed(3)}</span>
+    <span><strong>Total Esperado:</strong> ${money(totals.totalEsperado)}</span>
+    <span><strong>Total Facturado:</strong> ${money(
+      totals.totalFacturado
+    )}</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>Tipo</th>
+        <th>Producto</th>
+        <th>Unidad</th>
+        <th>Ingresado</th>
+        <th>Restantes</th>
+        <th>Precio Compra</th>
+        <th>Precio Venta</th>
+        <th>Total factura</th>
+        <th>Total esperado</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${
+        rowsHtml ||
+        `<tr><td colspan="11" style="text-align:center">Sin lotes</td></tr>`
+      }
+    </tbody>
+  </table>
+</body>
+</html>`;
+
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
   return (
     <div className="max-w-6xl mx-auto">
       <h2 className="text-2xl font-bold mb-3">Inventario por Lotes</h2>
+
+      {/* 🔎 Barra de filtro por fecha */}
+      <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
+        <div className="flex flex-col">
+          <label className="font-semibold">Desde</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col">
+          <label className="font-semibold">Hasta</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+          />
+        </div>
+        <button
+          className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+          onClick={() => {
+            setFromDate("");
+            setToDate("");
+          }}
+        >
+          Quitar filtro
+        </button>
+
+        {/* 🖨️ Imprimir/Exportar PDF */}
+        <button
+          className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+          onClick={handlePrintPDF}
+        >
+          Imprimir PDF
+        </button>
+      </div>
 
       {/* Form nuevo lote */}
       <form
@@ -394,17 +543,18 @@ export default function InventoryBatches() {
           </label>
           <input
             type="number"
+            step="0.01"
             inputMode="decimal"
-            pattern="^[0-9]*[.]?[0-9]*$"
             className="w-full border p-2 rounded"
-            value={salePrice || ""}
-            onChange={(e) =>
-              setSalePrice(
-                Math.floor(
-                  (parseFloat(e.target.value.replace(",", ".")) || 0) * 100
-                ) / 100
-              )
-            }
+            value={salePrice === 0 ? "" : salePrice}
+            onChange={(e) => {
+              const raw = e.target.value.replace(",", ".");
+              const num = parseFloat(raw);
+              const safe = Number.isFinite(num)
+                ? parseFloat(num.toFixed(2))
+                : 0;
+              setSalePrice(safe);
+            }}
             disabled={!productId}
             placeholder={!productId ? "Selecciona un producto primero" : ""}
             title={!productId ? "Selecciona un producto para habilitar" : ""}
@@ -452,7 +602,7 @@ export default function InventoryBatches() {
         </div>
       </form>
 
-      {/* Totales */}
+      {/* Totales (sobre el filtro) */}
       <div className="bg-gray-50 p-3 rounded shadow border mb-3 text-sm">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <div>
@@ -474,7 +624,7 @@ export default function InventoryBatches() {
         </div>
       </div>
 
-      {/* Tabla de lotes */}
+      {/* Tabla de lotes (filtrada) */}
       <div className="bg-white p-2 rounded shadow border w-full">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
@@ -482,7 +632,6 @@ export default function InventoryBatches() {
               <th className="p-2 border">Fecha</th>
               <th className="p-2 border">Tipo</th>
               <th className="p-2 border">Producto</th>
-
               <th className="p-2 border">Unidad</th>
               <th className="p-2 border">Ingresado</th>
               <th className="p-2 border">Restantes</th>
@@ -491,7 +640,6 @@ export default function InventoryBatches() {
               <th className="p-2 border">Total factura</th>
               <th className="p-2 border">Total esperado</th>
               <th className="p-2 border">Total ganancia</th>
-
               <th className="p-2 border">Estado</th>
               <th className="p-2 border">Acciones</th>
             </tr>
@@ -503,14 +651,14 @@ export default function InventoryBatches() {
                   Cargando…
                 </td>
               </tr>
-            ) : batches.length === 0 ? (
+            ) : filteredBatches.length === 0 ? (
               <tr>
                 <td colSpan={12} className="p-4 text-center">
                   Sin lotes
                 </td>
               </tr>
             ) : (
-              batches.map((b) => {
+              filteredBatches.map((b) => {
                 const isEditing = editingId === b.id;
                 return (
                   <tr key={b.id} className="text-center">
@@ -528,7 +676,6 @@ export default function InventoryBatches() {
                     </td>
                     <td className="p-2 border">{b.category.toUpperCase()}</td>
                     <td className="p-2 border">{b.productName}</td>
-
                     <td className="p-2 border">{b.unit.toUpperCase()}</td>
                     <td className="p-2 border">
                       {isEditing ? (
