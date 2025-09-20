@@ -27,6 +27,8 @@ import Liquidaciones from "./components/Liquidaciones";
 import FinancialDashboard from "./components/FinancialDashboard";
 import ExpensesAdmin from "./components/ExpensesAdmin";
 import FixBatchesPages from "./components/FixBatchesPages";
+import Billing from "./components/Billing";
+import PaidBatches from "./components/paidBatches";
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -58,15 +60,14 @@ export default function App() {
         <Route path="/" element={<Login />} />
 
         {/* Árbol ADMIN protegido con layout + rutas hijas */}
-       <Route
-  path="/admin"
-  element={
-    <PrivateRoute allowedRoles={["admin", "vendedor"]}>
-      <AdminLayout role={role} />
-    </PrivateRoute>
-  }
->
-
+        <Route
+          path="/admin"
+          element={
+            <PrivateRoute allowedRoles={["admin", "vendedor"]}>
+              <AdminLayout role={role} />
+            </PrivateRoute>
+          }
+        >
           {/* Redirige /admin a /admin/ventas */}
           <Route index element={<Navigate to="bills" replace />} />
 
@@ -158,6 +159,22 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <ExpensesAdmin />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="billing"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <Billing />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="paidBatches"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <PaidBatches />
               </PrivateRoute>
             }
           />

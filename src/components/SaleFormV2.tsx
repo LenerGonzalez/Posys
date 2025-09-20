@@ -14,6 +14,7 @@ import { Role } from "../apis/apis";
 import allocateFIFOAndUpdateBatches from "../Services/allocateFIFO";
 // --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
 import { updateDoc, doc as fsDoc } from "firebase/firestore";
+import { roundQty, addQty, subQty, gteQty } from "../Services/decimal";
 
 async function fixBatchesProductIdByName(
   productName: string,
@@ -32,15 +33,15 @@ async function fixBatchesProductIdByName(
       updates++;
     }
   }
-  return updates; // por si quieres mostrar cuántos actualizó
+  return updates;
 }
 
 interface Product {
   id: string;
-  productName: string; // mapeamos desde item.name
+  productName: string;
   price: number;
-  measurement: string; // mapeamos desde item.measurement
-  category: string; // mapeamos desde item.category
+  measurement: string;
+  category: string;
 }
 
 interface Users {
@@ -54,9 +55,9 @@ export default function SaleForm({ user }: { user: any }) {
   const [selectedProductId, setSelectedProductId] = useState("");
   const [quantity, setQuantity] = useState<number>(0);
 
-  // 👇 Sigue editable, pero ahora con flag para saber si el usuario tocó el campo
+  // 👇 editable con flag (igual que tenías)
   const [amountCharged, setAmountCharged] = useState<number>(0);
-  const [manualAmount, setManualAmount] = useState(false); // NEW
+  const [manualAmount, setManualAmount] = useState(false);
 
   const [amountReceived, setAmountReceived] = useState<number>(0);
   const [amountChange, setChange] = useState<string>("0");
@@ -65,21 +66,18 @@ export default function SaleForm({ user }: { user: any }) {
   const [users, setUsers] = useState<Users[]>([]);
   const [clientName, setClientName] = useState("");
 
-  // helpers
+  // 🔵 NUEVO: fecha de la venta (por defecto hoy)
+  const [saleDate, setSaleDate] = useState<string>(
+    format(new Date(), "yyyy-MM-dd")
+  );
+
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
   // Detectar si el producto actual es de unidades (no libras)
   const selectedProduct = products.find((p) => p.id === selectedProductId);
   const isUnit = (selectedProduct?.measurement || "").toLowerCase() !== "lb";
 
-  // Función de parseo para cantidad según tipo
-  function parseQty(value: string) {
-    const n = parseFloat((value || "0").replace(",", ".")) || 0;
-    if (isUnit) return Math.max(0, Math.floor(n)); // unidades = entero
-    return Math.max(0, Math.floor(n * 100) / 100); // libras = 2 decimales
-  }
-
-  // ---- helpers de stock (NUEVO) ---------------------------------
+  // ---- helpers de stock (ajustados a 3 decimales) --------------------------
   const getDisponibleByProductId = async (productId: string) => {
     if (!productId) return 0;
     const qId = query(
@@ -90,9 +88,9 @@ export default function SaleForm({ user }: { user: any }) {
     let total = 0;
     snap.forEach((d) => {
       const b = d.data() as any;
-      total += Number(b.remaining || 0);
+      total = addQty(total, Number(b.remaining || 0)); // 🔵 suma segura a 3 dec
     });
-    return Math.max(0, Math.floor(total * 100) / 100);
+    return roundQty(total); // 🔵 normaliza
   };
 
   const getDisponibleByName = async (productName: string) => {
@@ -103,21 +101,21 @@ export default function SaleForm({ user }: { user: any }) {
       const b = d.data() as any;
       const name = (b.productName || "").trim().toLowerCase();
       if (name === productName.trim().toLowerCase()) {
-        total += Number(b.remaining || 0);
+        total = addQty(total, Number(b.remaining || 0)); // 🔵
       }
     });
-    return Math.max(0, Math.floor(total * 100) / 100);
+    return roundQty(total); // 🔵
   };
-  // ---------------------------------------------------------------
+  // -------------------------------------------------------------------------
 
-  // Cargar productos (SOLO activos: item.active !== false)
+  // Cargar productos (SOLO activos)
   useEffect(() => {
     async function fetchProducts() {
       const querySnapshot = await getDocs(collection(db, "products"));
       const data: Product[] = [];
       querySnapshot.forEach((docSnap) => {
         const item = docSnap.data() as any;
-        if (item?.active === false) return; // ocultar inactivos
+        if (item?.active === false) return;
         data.push({
           id: docSnap.id,
           productName: item.name ?? item.productName ?? "(sin nombre)",
@@ -131,7 +129,7 @@ export default function SaleForm({ user }: { user: any }) {
     fetchProducts();
   }, []);
 
-  // Cargar usuarios (mantengo tu misma lógica)
+  // Cargar usuarios
   useEffect(() => {
     async function fetchUsers() {
       const querySnapshot = await getDocs(collection(db, "users"));
@@ -149,13 +147,12 @@ export default function SaleForm({ user }: { user: any }) {
     fetchUsers();
   }, []);
 
-  // Si cambia el producto, volvemos a modo "automático" de monto
+  // Si cambia el producto, volver a modo automático del monto
   useEffect(() => {
     setManualAmount(false);
   }, [selectedProductId]);
 
-  // Calcular monto sugerido por producto*cantidad
-  // ✅ Ahora recalcula siempre que NO hayas tocado manualmente el monto
+  // Calcular monto sugerido (cuando NO tocaste manualmente)
   useEffect(() => {
     const product = products.find((p) => p.id === selectedProductId);
     if (!product) {
@@ -190,7 +187,9 @@ export default function SaleForm({ user }: { user: any }) {
     setMessage("");
 
     const product = products.find((p) => p.id === selectedProductId);
-    const qty = Number(quantity) || 0;
+    // 🔵 qty normalizado: entero si unidad, 3 dec si libra
+    const qtyRaw = Number(quantity) || 0;
+    const qty = isUnit ? Math.max(0, Math.round(qtyRaw)) : roundQty(qtyRaw); // 🔵
     const chg = Number(amountCharged) || 0;
 
     if (!product || qty <= 0) {
@@ -199,28 +198,26 @@ export default function SaleForm({ user }: { user: any }) {
     }
 
     try {
-      // --- Verificación previa de stock (AUTO-FIX de productId por nombre) ---
+      // --- Verificación previa de stock (con normalización) ---
       const disponibleById = await getDisponibleByProductId(product.id);
 
-      if (qty > disponibleById) {
+      if (!gteQty(disponibleById, qty)) {
+        // 🔵 comparación robusta
         const disponibleByName = await getDisponibleByName(product.productName);
 
-        // Si por nombre hay stock pero por id no, reparamos automáticamente los lotes
-        if (disponibleByName > 0 && disponibleById === 0) {
+        if (gteQty(disponibleByName, 0) && !gteQty(disponibleById, 0)) {
           const changed = await fixBatchesProductIdByName(
             product.productName,
             product.id
           );
-          // Revalidamos stock por id tras el fix
           const dispAfter = await getDisponibleByProductId(product.id);
 
-          if (qty > dispAfter) {
-            const faltan = Math.max(
-              0,
-              Math.round((qty - dispAfter) * 100) / 100
-            );
+          if (!gteQty(dispAfter, qty)) {
+            const faltan = roundQty(qty - dispAfter);
             setMessage(
-              `❌ Stock insuficiente tras corregir ${changed} lote(s). Faltan ${faltan} unidades.`
+              `❌ Stock insuficiente tras corregir ${changed} lote(s). Faltan ${faltan.toFixed(
+                3
+              )} unidades.`
             );
             return;
           } else {
@@ -229,47 +226,44 @@ export default function SaleForm({ user }: { user: any }) {
             );
           }
         } else {
-          const faltan = Math.max(
-            0,
-            Math.round((qty - disponibleById) * 100) / 100
-          );
+          const faltan = roundQty(qty - disponibleById);
           setMessage(
-            `❌ Stock insuficiente para "${product.productName}". Faltan ${faltan} unidades.`
+            `❌ Stock insuficiente para "${
+              product.productName
+            }". Faltan ${faltan.toFixed(3)} unidades.`
           );
           return;
         }
       }
       // -----------------------------------------------------------
 
-      // 1) Asignar FIFO y descontar de lotes (manteniendo tu flujo)
+      // 1) Asignar FIFO y descontar de lotes
       const { allocations, avgUnitCost, cogsAmount } =
         await allocateFIFOAndUpdateBatches(db, product.productName, qty, false);
 
-      // 2) Registrar venta en salesV2 (SIN cambiar tu mapeo de usuario)
+      // 2) Registrar venta en salesV2
       await addDoc(collection(db, "salesV2"), {
         id: uuidv4(),
         productId: selectedProductId,
         productName: product.productName,
         price: product.price,
 
-        quantity: qty,
-        amount: chg, // tu campo principal de ingreso
-        amountCharged: chg, // compatibilidad
+        quantity: qty, // 🔵 normalizado
+        amount: chg,
+        amountCharged: chg,
 
         amountReceived: Number(amountReceived) || 0,
         change: amountChange,
         clientName: clientName.trim(),
 
         timestamp: Timestamp.now(),
-        date: format(new Date(), "yyyy-MM-dd"),
+        date: saleDate, // 🔵 usa la fecha elegida
 
-        // 👇 conservando tu lógica original
         userEmail: users[0]?.email ?? "sin usuario",
         vendor: users[0]?.role ?? "sin usuario",
 
         status: "FLOTANTE",
 
-        // Costeo real (para finanzas/liquidaciones)
         allocations,
         avgUnitCost,
         cogsAmount,
@@ -280,11 +274,12 @@ export default function SaleForm({ user }: { user: any }) {
       // Reset
       setSelectedProductId("");
       setQuantity(0);
-      setManualAmount(false); // reset del flag
+      setManualAmount(false);
       setAmountCharged(0);
       setAmountReceived(0);
       setChange("0");
       setClientName("");
+      setSaleDate(format(new Date(), "yyyy-MM-dd")); // reset a hoy
     } catch (err: any) {
       console.error(err);
       setMessage(`❌ ${err?.message || "Error al registrar la venta."}`);
@@ -294,7 +289,6 @@ export default function SaleForm({ user }: { user: any }) {
   return (
     <form
       onSubmit={handleSubmit}
-      /* ✅ Responsive sin tocar tu lógica */
       className="w-full mx-auto bg-white rounded-2xl shadow-2xl
                  p-4 sm:p-6 md:p-8
                  max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl
@@ -341,6 +335,19 @@ export default function SaleForm({ user }: { user: any }) {
         </select>
       </div>
 
+      {/* 🔵 NUEVO: Fecha de la venta */}
+      <div className="space-y-1">
+        <label className="block text-sm font-semibold text-gray-700">
+          Fecha de la venta
+        </label>
+        <input
+          type="date"
+          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+          value={saleDate}
+          onChange={(e) => setSaleDate(e.target.value)}
+        />
+      </div>
+
       {/* Cantidad */}
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
@@ -349,7 +356,6 @@ export default function SaleForm({ user }: { user: any }) {
         <input
           type="number"
           lang="eng"
-          /* 👉 si es por unidad: enteros; si es por libra: 2 decimales */
           step={isUnit ? 1 : 0.01}
           inputMode={isUnit ? "numeric" : "decimal"}
           className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
@@ -363,13 +369,11 @@ export default function SaleForm({ user }: { user: any }) {
             const num = value === "" ? 0 : parseFloat(value);
 
             if (isUnit) {
-              // 🔹 productos por unidad: fuerza enteros
               const intVal = Number.isFinite(num)
                 ? Math.max(0, Math.round(num))
                 : 0;
               setQuantity(intVal);
             } else {
-              // 🔹 productos por libra: acepta decimales (sin truncar)
               setQuantity(Number.isFinite(num) ? num : 0);
             }
           }}
@@ -383,7 +387,7 @@ export default function SaleForm({ user }: { user: any }) {
         />
       </div>
 
-      {/* Monto total (EDITABLE, como tenías) */}
+      {/* Monto total (READONLY como lo tenías) */}
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
           💵 Monto total

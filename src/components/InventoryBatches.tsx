@@ -13,8 +13,9 @@ import { db } from "../firebase";
 import { newBatch, markBatchAsPaid } from "../Services/inventory";
 import { Timestamp } from "firebase/firestore";
 import { format, startOfMonth, endOfMonth } from "date-fns";
+import { roundQty, addQty, subQty, gteQty } from "../Services/decimal";
 
-const money = (n: number) => `C$${(Number(n) || 0).toFixed(2)}`;
+const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
 interface Product {
   id: string;
@@ -57,6 +58,9 @@ export default function InventoryBatches() {
   const [toDate, setToDate] = useState<string>(
     format(endOfMonth(new Date()), "yyyy-MM-dd")
   );
+
+  // 🔵 Filtro por producto
+  const [productFilterId, setProductFilterId] = useState<string>("");
 
   // form (crear)
   const [productId, setProductId] = useState("");
@@ -112,8 +116,8 @@ export default function InventoryBatches() {
           productName: b.productName,
           category: b.category,
           unit: b.unit,
-          quantity: Number(b.quantity || 0),
-          remaining: Number(b.remaining || 0),
+          quantity: roundQty(Number(b.quantity || 0)), // 🔵 normaliza
+          remaining: roundQty(Number(b.remaining || 0)), // 🔵 normaliza
           purchasePrice: Number(b.purchasePrice || 0),
           salePrice: Number(b.salePrice || 0),
           invoiceTotal: Number(b.invoiceTotal || 0),
@@ -148,19 +152,24 @@ export default function InventoryBatches() {
     setExpectedTotal(Math.floor(quantity * salePrice * 100) / 100);
   }, [quantity, salePrice]);
 
-  // 🔎 Filtro en memoria sobre tus lotes ya cargados
+  // helper para segmentar por unidad (lb/libra => "libras")
+  const isPounds = (u: string) => {
+    const s = (u || "").toLowerCase();
+    return /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(s) || s === "lb";
+  };
+
+  // Filtro en memoria (fecha + producto)
   const filteredBatches = useMemo(() => {
     return batches.filter((b) => {
       if (fromDate && b.date < fromDate) return false;
       if (toDate && b.date > toDate) return false;
+      if (productFilterId && b.productId !== productFilterId) return false;
       return true;
     });
-  }, [batches, fromDate, toDate]);
+  }, [batches, fromDate, toDate, productFilterId]);
 
-  // Totales calculados sobre el FILTRO
+  // Totales sobre el filtro
   const totals = useMemo(() => {
-    const qty = filteredBatches.reduce((a, b) => a + b.quantity, 0);
-    const rem = filteredBatches.reduce((a, b) => a + b.remaining, 0);
     const totalFacturado = filteredBatches.reduce(
       (a, b) => a + (b.invoiceTotal || 0),
       0
@@ -169,7 +178,35 @@ export default function InventoryBatches() {
       (a, b) => a + (b.expectedTotal || 0),
       0
     );
-    return { qty, rem, totalFacturado, totalEsperado };
+
+    let lbsIng = 0,
+      lbsRem = 0,
+      udsIng = 0,
+      udsRem = 0;
+
+    for (const b of filteredBatches) {
+      if (isPounds(b.unit)) {
+        lbsIng += b.quantity;
+        lbsRem += b.remaining;
+      } else {
+        udsIng += b.quantity;
+        udsRem += b.remaining;
+      }
+    }
+
+    const qty = filteredBatches.reduce((a, b) => a + b.quantity, 0);
+    const rem = filteredBatches.reduce((a, b) => a + b.remaining, 0);
+
+    return {
+      lbsIng,
+      lbsRem,
+      udsIng,
+      udsRem,
+      qty,
+      rem,
+      totalFacturado,
+      totalEsperado,
+    };
   }, [filteredBatches]);
 
   const saveBatch = async (e: React.FormEvent) => {
@@ -180,12 +217,14 @@ export default function InventoryBatches() {
       return;
     }
     try {
+      const qtyR = roundQty(quantity); // 🔵 normaliza cantidad creada
+
       const ref = await newBatch({
         productId: p.id,
         productName: p.name,
         category: p.category,
         unit: p.measurement,
-        quantity,
+        quantity: qtyR, // 🔵
         purchasePrice,
         salePrice,
         invoiceTotal, // calculado auto
@@ -200,8 +239,8 @@ export default function InventoryBatches() {
           productName: p.name,
           category: p.category,
           unit: p.measurement,
-          quantity,
-          remaining: quantity,
+          quantity: qtyR, // 🔵
+          remaining: qtyR, // 🔵
           purchasePrice,
           salePrice,
           invoiceTotal,
@@ -242,7 +281,7 @@ export default function InventoryBatches() {
   const startEdit = (b: Batch) => {
     setEditingId(b.id);
     setEditDate(b.date);
-    setEditQty(b.quantity);
+    setEditQty(roundQty(b.quantity)); // 🔵 asegura 3 dec
     setEditPurchase(b.purchasePrice);
     setEditSale(b.salePrice);
     setEditNotes(b.notes || "");
@@ -277,19 +316,20 @@ export default function InventoryBatches() {
     // Recalcular remaining conservando lo ya consumido
     const old = batches.find((x) => x.id === editingId);
     if (!old) return;
-    const consumido = old.quantity - old.remaining; // lo ya vendido/salido
-    const newRemaining = Math.max(0, editQty - consumido); // evita negativos
+
+    const consumido = roundQty(old.quantity - old.remaining); // 🔵
+    const newRemaining = Math.max(0, roundQty(editQty - consumido)); // 🔵
 
     const ref = doc(db, "inventory_batches", editingId);
     await updateDoc(ref, {
       date: editDate,
-      quantity: editQty,
+      quantity: roundQty(editQty), // 🔵 guarda normalizado
       purchasePrice: editPurchase,
       salePrice: editSale,
       invoiceTotal: editInvoiceTotal,
       expectedTotal: editExpectedTotal,
       notes: editNotes,
-      remaining: newRemaining,
+      remaining: newRemaining, // 🔵
     });
 
     setBatches((prev) =>
@@ -298,13 +338,13 @@ export default function InventoryBatches() {
           ? {
               ...x,
               date: editDate,
-              quantity: editQty,
+              quantity: roundQty(editQty), // 🔵
               purchasePrice: editPurchase,
               salePrice: editSale,
               invoiceTotal: editInvoiceTotal,
               expectedTotal: editExpectedTotal,
               notes: editNotes,
-              remaining: newRemaining,
+              remaining: newRemaining, // 🔵
             }
           : x
       )
@@ -354,33 +394,57 @@ export default function InventoryBatches() {
 <head>
   <meta charset="utf-8" />
   <title>Inventario por Lotes</title>
-  <style>
-    * { font-family: Arial, sans-serif; }
-    h1 { margin: 0 0 4px; }
-    .muted { color: #555; font-size: 12px; margin-bottom: 12px; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { border: 1px solid #ddd; padding: 6px; }
-    th { background: #f5f5f5; text-align: left; }
-    .totals { margin: 10px 0 16px; font-size: 12px; }
-    .totals span { margin-right: 16px; }
-    @media print {
-      @page { size: A4 landscape; margin: 15mm; }
-      button { display: none; }
-    }
-  </style>
+ <style>
+  * { font-family: Arial, sans-serif; }
+  h1 { margin: 0 0 4px; }
+  .muted { color: #555; font-size: 12px; margin-bottom: 12px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 6px; }
+  th { background: #f5f5f5; text-align: left; }
+
+  .totals {
+    margin: 10px 0 16px;
+    font-size: 12px;
+    display: grid;
+    grid-template-columns: repeat(2, max-content);
+    column-gap: 32px;
+    row-gap: 6px;
+    align-items: center;
+  }
+  .totals span {
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  @media print {
+    @page { size: A4 landscape; margin: 15mm; }
+    button { display: none; }
+  }
+</style>
+
 </head>
+
 <body>
   <button onclick="window.print()">Imprimir</button>
   <h1>Inventario por Lotes</h1>
-  <div class="muted">${titleRange}</div>
-  <div class="totals">
-    <span><strong>Ingresadas:</strong> ${totals.qty.toFixed(3)}</span>
-    <span><strong>Restantes:</strong> ${totals.rem.toFixed(3)}</span>
-    <span><strong>Total Esperado:</strong> ${money(totals.totalEsperado)}</span>
-    <span><strong>Total Facturado:</strong> ${money(
-      totals.totalFacturado
-    )}</span>
-  </div>
+<div class="muted">${titleRange}</div>
+<div class="totals">
+  <span><strong>Libras ingresadas:</strong> ${totals.lbsIng.toFixed(3)}</span>
+  <span><strong>Libras restantes:</strong> ${totals.lbsRem.toFixed(3)}</span>
+
+  <span><strong>Unidades ingresadas:</strong> ${totals.udsIng.toFixed(3)}</span>
+  <span><strong>Unidades restantes:</strong> ${totals.udsRem.toFixed(3)}</span>
+
+  <span><strong>Total esperado a ganar:</strong> ${money(
+    totals.totalEsperado
+  )}</span>
+  <span><strong>Total facturado:</strong> ${money(totals.totalFacturado)}</span>
+  <span><strong>Ganancia sin gastos:</strong> ${money(
+    Number((totals.totalEsperado - totals.totalFacturado).toFixed(2))
+  )}</span>
+</div>
+
   <table>
     <thead>
       <tr>
@@ -416,46 +480,7 @@ export default function InventoryBatches() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Inventario por Lotes</h2>
-
-      {/* 🔎 Barra de filtro por fecha */}
-      <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
-        <div className="flex flex-col">
-          <label className="font-semibold">Desde</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-          />
-        </div>
-        <div className="flex flex-col">
-          <label className="font-semibold">Hasta</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1"
-            value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-          />
-        </div>
-        <button
-          className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-          onClick={() => {
-            setFromDate("");
-            setToDate("");
-          }}
-        >
-          Quitar filtro
-        </button>
-
-        {/* 🖨️ Imprimir/Exportar PDF */}
-        <button
-          className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-          onClick={handlePrintPDF}
-        >
-          Imprimir PDF
-        </button>
-      </div>
+      <h2 className="text-2xl font-bold mb-3">Inventario Productos</h2>
 
       {/* Form nuevo lote */}
       <form
@@ -602,24 +627,98 @@ export default function InventoryBatches() {
         </div>
       </form>
 
+      {/* 🔎 Barra de filtro por fecha */}
+      <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
+        <div className="flex flex-col">
+          <label className="font-semibold">Desde</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col">
+          <label className="font-semibold">Hasta</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+          />
+        </div>
+
+        {/* Filtro por producto */}
+        <div className="flex flex-col min-w-[240px]">
+          <label className="font-semibold">Producto</label>
+          <select
+            className="border rounded px-2 py-1"
+            value={productFilterId}
+            onChange={(e) => setProductFilterId(e.target.value)}
+          >
+            <option value="">Todos</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} — {p.category}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+          onClick={() => {
+            setFromDate("");
+            setToDate("");
+            setProductFilterId("");
+          }}
+        >
+          Quitar filtro
+        </button>
+
+        {/* 🖨️ Imprimir/Exportar PDF */}
+        <button
+          className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+          onClick={handlePrintPDF}
+        >
+          Imprimir PDF
+        </button>
+      </div>
+
       {/* Totales (sobre el filtro) */}
-      <div className="bg-gray-50 p-3 rounded shadow border mb-3 text-sm">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <div className="bg-gray-50 p-3 rounded shadow border mb-3 text-base">
+        <div className="grid grid-cols-3 gap-y-2 gap-x-8">
           <div>
-            <span className="font-semibold">Libras/Unidades ingresadas:</span>{" "}
-            {totals.qty.toFixed(3)}
+            <span className="font-semibold">Libras ingresadas:</span>{" "}
+            {totals.lbsIng.toFixed(3)}
           </div>
+
           <div>
-            <span className="font-semibold">Restantes (abiertas):</span>{" "}
-            {totals.rem.toFixed(3)}
+            <span className="font-semibold">Unidades ingresadas:</span>{" "}
+            {totals.udsIng.toFixed(3)}
           </div>
+
           <div>
-            <span className="font-semibold">Total Esperado ganar:</span>{" "}
+            <span className="font-semibold">Total esperado en ventas:</span> C${" "}
             {totals.totalEsperado.toFixed(2)}
           </div>
+
           <div>
-            <span className="font-semibold">Total Facturado:</span>{" "}
+            <span className="font-semibold">Libras restantes:</span>{" "}
+            {totals.lbsRem.toFixed(3)}
+          </div>
+
+          <div>
+            <span className="font-semibold">Unidades restantes:</span>{" "}
+            {totals.udsRem.toFixed(3)}
+          </div>
+          <div>
+            <span className="font-semibold">Total facturado:</span> C${" "}
             {totals.totalFacturado.toFixed(2)}
+          </div>
+          <div>
+            <span className="font-semibold">Ganancia sin gastos:</span> C${" "}
+            {(totals.totalEsperado - totals.totalFacturado).toFixed(2)}
           </div>
         </div>
       </div>
@@ -695,10 +794,14 @@ export default function InventoryBatches() {
                           }}
                         />
                       ) : (
-                        b.quantity
+                        b.quantity.toFixed(3) // 🔵 muestra 3 decimales
                       )}
                     </td>
-                    <td className="p-2 border">{b.remaining}</td>
+                    <td className="p-2 border">
+                      {
+                        isEditing ? b.remaining : b.remaining.toFixed(3) // 🔵 muestra 3 decimales
+                      }
+                    </td>
                     <td className="p-2 border">
                       {isEditing ? (
                         <input

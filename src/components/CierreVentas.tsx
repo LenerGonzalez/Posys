@@ -1,4 +1,4 @@
-// CierreVentas.tsx
+// // src/components/CierreVentas.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { db } from "../firebase";
 import {
@@ -12,7 +12,6 @@ import {
   writeBatch,
   doc,
   updateDoc,
-  deleteDoc,
 } from "firebase/firestore";
 import { format } from "date-fns";
 import html2canvas from "html2canvas";
@@ -25,8 +24,8 @@ interface SaleDataRaw {
   id?: string;
   productName?: string;
   quantity?: number;
-  amount?: number; // posible
-  amountCharged?: number; // posible
+  amount?: number;
+  amountCharged?: number;
   amountSuggested?: number;
   date?: string;
   userEmail?: string;
@@ -36,8 +35,6 @@ interface SaleDataRaw {
   change?: string | number;
   status?: "FLOTANTE" | "PROCESADA";
   timestamp?: FireTimestamp;
-
-  // nuevos si vienen desde FIFO
   allocations?: {
     batchId: string;
     qty: number;
@@ -45,7 +42,7 @@ interface SaleDataRaw {
     lineCost: number;
   }[];
   avgUnitCost?: number;
-  cogsAmount?: number; // costo total de la venta
+  cogsAmount?: number;
 }
 
 interface SaleData {
@@ -60,8 +57,6 @@ interface SaleData {
   amountReceived: number;
   change: string;
   status: "FLOTANTE" | "PROCESADA";
-
-  // compatibilidad con FIFO
   allocations?: {
     batchId: string;
     qty: number;
@@ -81,22 +76,21 @@ interface ClosureData {
   totalCharged: number;
   totalSuggested: number;
   totalDifference: number;
-
-  // extendidos
   salesV2?: any[];
   productSummary?: {
     productName: string;
     totalQuantity: number;
     totalAmount: number;
   }[];
-
-  // nuevos campos de finanzas si existen COGS
   totalCOGS?: number;
   grossProfit?: number;
 }
 
-// helpers
+// 🔧 helpers de formato/round
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
+const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 
 const normalizeSale = (raw: SaleDataRaw, id: string): SaleData | null => {
   const date =
@@ -110,7 +104,7 @@ const normalizeSale = (raw: SaleDataRaw, id: string): SaleData | null => {
     id,
     productName: raw.productName ?? "(sin nombre)",
     quantity: Number(raw.quantity ?? 0),
-    amount: Number(raw.amount ?? raw.amountCharged ?? 0), // fallback
+    amount: Number(raw.amount ?? raw.amountCharged ?? 0),
     amountSuggested: Number(raw.amountSuggested ?? 0),
     date,
     userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
@@ -125,11 +119,12 @@ const normalizeSale = (raw: SaleDataRaw, id: string): SaleData | null => {
 };
 
 export default function CierreVentas({
-  role, // opcional: "admin" para bloquear acciones a no-admins
+  role, // opcional
 }: {
   role?: "admin" | "vendedor";
 }): React.ReactElement {
   const [salesV2, setSales] = useState<SaleData[]>([]);
+  const [floatersExtra, setFloatersExtra] = useState<SaleData[]>([]); // ⬅️ FLOTANTE de cualquier fecha
   const [closure, setClosure] = useState<ClosureData | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -146,7 +141,7 @@ export default function CierreVentas({
   const today = format(new Date(), "yyyy-MM-dd");
   const pdfRef = useRef<HTMLDivElement>(null);
 
-  // Ventas del día en tiempo real
+  // Ventas de HOY (tu lógica)
   useEffect(() => {
     const q = query(collection(db, "salesV2"), where("date", "==", today));
     const unsub = onSnapshot(q, (snap) => {
@@ -161,7 +156,24 @@ export default function CierreVentas({
     return () => unsub();
   }, [today]);
 
-  // Si ya hay cierre del día, lo traemos (informativo)
+  // Ventas FLOTANTE de cualquier fecha (para que no desaparezcan)
+  useEffect(() => {
+    const qFlo = query(
+      collection(db, "salesV2"),
+      where("status", "==", "FLOTANTE")
+    );
+    const unsub = onSnapshot(qFlo, (snap) => {
+      const rows: SaleData[] = [];
+      snap.forEach((d) => {
+        const norm = normalizeSale(d.data() as SaleDataRaw, d.id);
+        if (norm) rows.push(norm);
+      });
+      setFloatersExtra(rows);
+    });
+    return () => unsub();
+  }, []);
+
+  // Cierre del día (informativo)
   useEffect(() => {
     const fetchClosure = async () => {
       const q = query(
@@ -180,42 +192,55 @@ export default function CierreVentas({
   }, [today]);
 
   // Ventas visibles según filtro
-  const visibleSales =
-    filter === "ALL" ? salesV2 : salesV2.filter((s) => s.status === filter);
+  const visibleSales = React.useMemo(() => {
+    if (filter === "FLOTANTE") {
+      // SOLO FLOTANTE (de hoy + de otras fechas)
+      const all = [...salesV2, ...floatersExtra];
+      const map = new Map<string, SaleData>();
+      for (const s of all) if (s.status === "FLOTANTE") map.set(s.id, s);
+      return Array.from(map.values());
+    }
+    if (filter === "ALL") {
+      // TODO lo de hoy (FLOTANTE y PROCESADA) + FLOTANTE de otras fechas
+      const all = [...salesV2, ...floatersExtra];
+      const map = new Map<string, SaleData>();
+      for (const s of all) map.set(s.id, s); // de-dup
+      return Array.from(map.values());
+    }
+    // PROCESADA (hoy)
+    return salesV2.filter((s) => s.status === "PROCESADA");
+  }, [filter, salesV2, floatersExtra]);
 
-  // Totales (sobre visibles para UI)
-  const totalSuggested = visibleSales.reduce(
-    (sum, s) => sum + (s.amountSuggested || 0),
-    0
+  // Totales (sobre visibles) con redondeo final
+  const totalSuggested = round2(
+    visibleSales.reduce((sum, s) => sum + (s.amountSuggested || 0), 0)
   );
-  const totalCharged = visibleSales.reduce(
-    (sum, s) => sum + (s.amount || 0),
-    0
+  const totalCharged = round2(
+    visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0)
   );
-  const totalDifference = totalCharged - totalSuggested;
-  const totalUnits = visibleSales.reduce(
-    (sum, s) => sum + (s.quantity || 0),
-    0
+  const totalUnits = round3(
+    visibleSales.reduce((sum, s) => sum + (s.quantity || 0), 0)
   );
+  const totalCOGSVisible = round2(
+    visibleSales.reduce((sum, s) => sum + Number(s.cogsAmount ?? 0), 0)
+  );
+  const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
-  // COGS/Utilidad (sobre visibles — para mostrar en pantalla)
-  const totalCOGSVisible = visibleSales.reduce(
-    (sum, s) => sum + Number(s.cogsAmount ?? 0),
-    0
-  );
-  const grossProfitVisible = totalCharged - totalCOGSVisible;
-
-  // Consolidado por producto (sobre TODO el día para el reporte)
+  // Consolidado por producto (según ventas visibles y filtro)
   const productMap: Record<
     string,
     { totalQuantity: number; totalAmount: number }
   > = {};
-  salesV2.forEach((s) => {
+  visibleSales.forEach((s) => {
     const key = s.productName || "(sin nombre)";
     if (!productMap[key])
       productMap[key] = { totalQuantity: 0, totalAmount: 0 };
-    productMap[key].totalQuantity += s.quantity || 0;
-    productMap[key].totalAmount += s.amount || 0;
+    productMap[key].totalQuantity = round3(
+      productMap[key].totalQuantity + (s.quantity || 0)
+    );
+    productMap[key].totalAmount = round2(
+      productMap[key].totalAmount + (s.amount || 0)
+    );
   });
   const productSummaryArray = Object.entries(productMap).map(
     ([productName, v]) => ({
@@ -225,28 +250,45 @@ export default function CierreVentas({
     })
   );
 
-  // Guardar cierre (solo ventas FLOTANTE) y marcarlas PROCESADA
+  // Guardar cierre (ventas NO PROCESADAS de HOY)
+  // Reemplaza COMPLETO handleSaveClosure por esto 👇
   const handleSaveClosure = async () => {
     try {
-      const toProcess = salesV2.filter((s) => s.status !== "PROCESADA");
+      // 1) Si en la vista hay FLOTANTE (de cualquier fecha), procesamos esos.
+      // 2) Si no hay FLOTANTE visible, caemos al comportamiento original:
+      //    procesar TODO lo no PROCESADO de HOY (salesV2).
+      const candidatesVisible = visibleSales.filter(
+        (s) => s.status === "FLOTANTE"
+      );
+      const toProcess =
+        candidatesVisible.length > 0
+          ? candidatesVisible
+          : salesV2.filter((s) => s.status !== "PROCESADA");
+
       if (toProcess.length === 0) {
-        setMessage("No hay ventas FLOTANTE para procesar.");
+        setMessage("No hay ventas para procesar.");
         return;
       }
 
+      // Totales (con tus redondeos)
       const totals = {
-        totalCharged: toProcess.reduce((a, s) => a + (s.amount || 0), 0),
-        totalSuggested: toProcess.reduce(
-          (a, s) => a + (s.amountSuggested || 0),
-          0
+        totalCharged: round2(
+          toProcess.reduce((a, s) => a + (s.amount || 0), 0)
         ),
-        totalUnits: toProcess.reduce((a, s) => a + (s.quantity || 0), 0),
-        totalCOGS: toProcess.reduce((a, s) => a + Number(s.cogsAmount ?? 0), 0),
+        totalSuggested: round2(
+          toProcess.reduce((a, s) => a + (s.amountSuggested || 0), 0)
+        ),
+        totalUnits: round3(
+          toProcess.reduce((a, s) => a + (s.quantity || 0), 0)
+        ),
+        totalCOGS: round2(
+          toProcess.reduce((a, s) => a + Number(s.cogsAmount ?? 0), 0)
+        ),
       };
-      const diff = totals.totalCharged - totals.totalSuggested;
-      const grossProfit = totals.totalCharged - totals.totalCOGS;
+      const diff = round2(totals.totalCharged - totals.totalSuggested);
+      const grossProfit = round2(totals.totalCharged - totals.totalCOGS);
 
-      // 1) Crear documento de cierre (manteniendo campos actuales + agregados)
+      // 1) Crear documento de cierre (con fecha HOY; puede incluir flotantes de días previos)
       const ref = await addDoc(collection(db, "daily_closures"), {
         date: today,
         createdAt: Timestamp.now(),
@@ -254,14 +296,13 @@ export default function CierreVentas({
         totalSuggested: totals.totalSuggested,
         totalDifference: diff,
         totalUnits: totals.totalUnits,
-        totalCOGS: totals.totalCOGS, // NUEVO
-        grossProfit, // NUEVO
+        totalCOGS: totals.totalCOGS,
+        grossProfit,
         products: toProcess.map((s) => ({
           productName: s.productName,
           quantity: s.quantity,
           amount: s.amount,
         })),
-        // Detalle adicional:
         salesV2: toProcess.map((s) => ({
           id: s.id,
           productName: s.productName,
@@ -273,14 +314,31 @@ export default function CierreVentas({
           amountReceived: s.amountReceived,
           change: s.change,
           status: s.status,
-          cogsAmount: s.cogsAmount ?? 0, // NUEVO
-          avgUnitCost: s.avgUnitCost ?? null, // opcional
-          allocations: s.allocations ?? [], // opcional
+          cogsAmount: s.cogsAmount ?? 0,
+          avgUnitCost: s.avgUnitCost ?? null,
+          allocations: s.allocations ?? [],
+          date: s.date, // ⬅️ esta es la nueva línea
         })),
-        productSummary: productSummaryArray,
+
+        // El summary guardado sigue siendo del lote procesado
+        productSummary: Object.entries(
+          toProcess.reduce((acc, s) => {
+            const k = s.productName || "(sin nombre)";
+            if (!acc[k]) acc[k] = { totalQuantity: 0, totalAmount: 0 };
+            acc[k].totalQuantity = round3(
+              acc[k].totalQuantity + (s.quantity || 0)
+            );
+            acc[k].totalAmount = round2(acc[k].totalAmount + (s.amount || 0));
+            return acc;
+          }, {} as Record<string, { totalQuantity: number; totalAmount: number }>)
+        ).map(([productName, v]) => ({
+          productName,
+          totalQuantity: v.totalQuantity,
+          totalAmount: v.totalAmount,
+        })),
       });
 
-      // 2) Marcar ventas como PROCESADA
+      // 2) Marcar como PROCESADA todo lo que cerramos (aunque sea de fechas previas)
       const batch = writeBatch(db);
       toProcess.forEach((s) => {
         batch.update(doc(db, "salesV2", s.id), {
@@ -291,7 +349,7 @@ export default function CierreVentas({
       });
       await batch.commit();
 
-      setMessage("✅ Cierre guardado y ventas marcadas como PROCESADA.");
+      setMessage(`✅ Cierre guardado. Ventas procesadas: ${toProcess.length}.`);
     } catch (error) {
       console.error(error);
       setMessage("❌ Error al guardar el cierre.");
@@ -304,7 +362,6 @@ export default function CierreVentas({
       !window.confirm("¿Revertir esta venta? Esta acción no se puede deshacer.")
     )
       return;
-
     try {
       await updateDoc(doc(db, "salesV2", saleId), {
         status: "FLOTANTE",
@@ -334,7 +391,7 @@ export default function CierreVentas({
       await updateDoc(doc(db, "salesV2", editing.id), {
         quantity: editQty,
         amount: editAmount,
-        amountCharged: editAmount, // por compatibilidad con otros lectores
+        amountCharged: editAmount, // compatibilidad
         clientName: editClient,
         amountReceived: editPaid,
         change: editChange,
@@ -354,7 +411,6 @@ export default function CierreVentas({
       )
     )
       return;
-
     try {
       const { restored } = await restoreSaleAndDelete(saleId);
       setMessage(
@@ -372,23 +428,7 @@ export default function CierreVentas({
     try {
       const canvas = await html2canvas(pdfRef.current, {
         backgroundColor: "#ffffff",
-        onclone: (clonedDoc) => {
-          const win = clonedDoc.defaultView!;
-          const root = clonedDoc.body;
-          root.querySelectorAll<HTMLElement>("*").forEach((el) => {
-            const cs = win.getComputedStyle(el);
-            if (cs.color) el.style.color = cs.color;
-            if (
-              cs.backgroundColor &&
-              cs.backgroundColor !== "rgba(0, 0, 0, 0)"
-            ) {
-              el.style.backgroundColor = cs.backgroundColor;
-            }
-            if (cs.borderColor) el.style.borderColor = cs.borderColor;
-          });
-        },
       });
-
       const imgData = canvas.toDataURL("image/png");
       const pdf = new jsPDF();
       pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
@@ -422,7 +462,7 @@ export default function CierreVentas({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          {/* Tabla de ventas del día con estado y acciones */}
+          {/* Tabla de ventas */}
           <table className="min-w-full border text-sm mb-4">
             <thead className="bg-gray-100">
               <tr>
@@ -430,10 +470,8 @@ export default function CierreVentas({
                 <th className="border p-2">Producto</th>
                 <th className="border p-2">Libras - Unidad</th>
                 <th className="border p-2">Monto</th>
+                <th className="border p-2">Fecha venta</th>
                 <th className="border p-2">Vendedor</th>
-                {/* <th className="border p-2">Cliente</th> */}
-                {/* <th className="border p-2">Paga con</th> */}
-                {/* <th className="border p-2">Vuelto</th> */}
                 <th className="border p-2">Acciones</th>
               </tr>
             </thead>
@@ -452,16 +490,13 @@ export default function CierreVentas({
                     </span>
                   </td>
                   <td className="border p-1">{s.productName}</td>
-                  <td className="border p-1">{s.quantity}</td>
+                  <td className="border p-1">{qty3(s.quantity)}</td>
                   <td className="border p-1">C${money(s.amount)}</td>
+                  <td className="border p-1">{s.date}</td>
                   <td className="border p-1">{s.userEmail}</td>
-                  {/* <td className="border p-1">{s.clientName}</td> */}
-                  {/* <td className="border p-1">C${money(s.amountReceived)}</td> */}
-                  {/* <td className="border p-1">C${s.change}</td> */}
                   <td className="border p-1">
                     {s.status === "FLOTANTE" ? (
                       <div className="flex gap-2 justify-center">
-                        {/* Editar / Eliminar solo visibles si es admin (si role se usa) */}
                         {isAdmin && (
                           <>
                             <button
@@ -511,27 +546,17 @@ export default function CierreVentas({
             </tbody>
           </table>
 
-          {/* Totales visibles */}
+          {/* Totales visibles (formateados) */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-2">
             <div>
-              Total unidades: <strong>{totalUnits}</strong>
+              Total unidades: <strong>{qty3(totalUnits)}</strong>
             </div>
-            {/* <div>
-              Total sugerido: <strong>C${money(totalSuggested)}</strong>
-            </div> */}
             <div>
               Total cobrado: <strong>C${money(totalCharged)}</strong>
             </div>
-            {/* <div
-              className={`font-bold ${
-                totalDifference < 0 ? "text-red-600" : "text-green-600"
-              }`}
-            >
-              Diferencia (cobrado - sugerido): C${money(totalDifference)}
-            </div> */}
           </div>
 
-          {/* NUEVO: COGS/Utilidad visibles si existen */}
+          {/* COGS/Utilidad visibles si existen (formateados) */}
           {(totalCOGSVisible > 0 || grossProfitVisible !== totalCharged) && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm mb-6">
               <div>
@@ -545,8 +570,8 @@ export default function CierreVentas({
             </div>
           )}
 
-          {/* Consolidado por producto del día */}
-          <h3 className="font-semibold mb-2">Consolidado por producto (día)</h3>
+          {/* Consolidado por producto (según filtro/visibles) */}
+          <h3 className="font-semibold mb-2">Consolidado por producto</h3>
           <table className="min-w-full border text-sm mb-2">
             <thead className="bg-gray-100">
               <tr>
@@ -559,7 +584,7 @@ export default function CierreVentas({
               {productSummaryArray.map((row) => (
                 <tr key={row.productName} className="text-center">
                   <td className="border p-1">{row.productName}</td>
-                  <td className="border p-1">{row.totalQuantity}</td>
+                  <td className="border p-1">{qty3(row.totalQuantity)}</td>
                   <td className="border p-1">C${money(row.totalAmount)}</td>
                 </tr>
               ))}

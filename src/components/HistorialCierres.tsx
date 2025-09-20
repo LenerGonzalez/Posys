@@ -47,6 +47,8 @@ type ClosureDoc = {
       unitCost: number;
       lineCost: number;
     }[];
+    // ⬇️ NUEVO (opcional): fecha de la venta si fue guardada por CierreVentas
+    date?: string;
   }>;
 
   // compat: si tuvieras el campo "sales" legacy
@@ -71,6 +73,8 @@ type ClosureDoc = {
 };
 
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
+// ⬇️ NUEVO helper para cantidades a 3 decimales (solo formato de salida)
+const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 
 export default function HistorialCierres() {
   const deleteClosure = async (c: ClosureDoc) => {
@@ -279,23 +283,9 @@ export default function HistorialCierres() {
             {closures.map((c) => (
               <tr key={c.id} className="text-center">
                 <td className="border p-1">{c.date}</td>
-                <td className="border p-1">{c.totalUnits ?? 0}</td>
+                {/* ⬇️ mostrar total unidades con 3 decimales */}
+                <td className="border p-1">{qty3(c.totalUnits)}</td>
                 <td className="border p-1">C${money(c.totalCharged)}</td>
-                {/* <td className="border p-1">C${money(c.totalSuggested)}</td> */}
-                {/* <td
-                  className={`border p-1 ${
-                    Number(c.totalDifference ?? 0) < 0
-                      ? "text-red-600"
-                      : "text-green-700"
-                  }`}
-                >
-                  C$
-                  {money(
-                    c.totalDifference ??
-                      Number(c.totalCharged ?? 0) -
-                        Number(c.totalSuggested ?? 0)
-                  )}
-                </td> */}
                 {/* NUEVOS celdas de COGS y utilidad */}
                 <td className="border p-1">C${money(c.totalCOGS)}</td>
                 <td className="border p-1">
@@ -350,7 +340,8 @@ export default function HistorialCierres() {
             {/* Totales */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
               <div>
-                Total unidades: <strong>{totalsForSelected.units}</strong>
+                {/* ⬇️ total unidades a 3 decimales */}
+                Total unidades: <strong>{qty3(totalsForSelected.units)}</strong>
               </div>
               {/* <div>
                 Total sugerido:{" "}
@@ -388,13 +379,13 @@ export default function HistorialCierres() {
                   <thead className="bg-gray-100">
                     <tr>
                       <th className="border p-2">Producto</th>
+                      {/* ⬇️ cantidad a 3 decimales */}
                       <th className="border p-2">Cantidad</th>
                       <th className="border p-2">Monto de ventas</th>
                       <th className="border p-2">Monto al costo</th>
+                      {/* ⬇️ NUEVA columna: fecha de venta (si existe en el doc) */}
+                      <th className="border p-2">Fecha venta</th>
                       <th className="border p-2">Vendedor</th>
-                      {/* <th className="border p-2">Cliente</th>
-                      <th className="border p-2">Paga con</th>
-                      <th className="border p-2">Vuelto</th> */}
                     </tr>
                   </thead>
                   <tbody>
@@ -403,19 +394,12 @@ export default function HistorialCierres() {
                         <td className="border p-1">
                           {s.productName ?? "(sin nombre)"}
                         </td>
-                        <td className="border p-1">{s.quantity ?? 0}</td>
+                        <td className="border p-1">{qty3(s.quantity)}</td>
                         <td className="border p-1">C${money(s.amount)}</td>
                         <td className="border p-1">C${money(s.cogsAmount)}</td>
+                        {/* ⬇️ muestra fecha si está guardada; si no, “—” */}
+                        <td className="border p-1">{s.date ?? "—"}</td>
                         <td className="border p-1">{s.userEmail ?? ""}</td>
-                        {/* <td className="border p-1">{s.clientName ?? ""}</td>
-                        <td className="border p-1">
-                          C${money(s.amountReceived)}
-                        </td>
-                        <td className="border p-1">
-                          {typeof s.change === "number"
-                            ? money(s.change)
-                            : s.change ?? "0"}
-                        </td> */}
                       </tr>
                     ))}
                   </tbody>
@@ -442,7 +426,7 @@ export default function HistorialCierres() {
                         <td className="border p-1">
                           {s.productName ?? "(sin nombre)"}
                         </td>
-                        <td className="border p-1">{s.quantity ?? 0}</td>
+                        <td className="border p-1">{qty3(s.quantity)}</td>
                         <td className="border p-1">C${money(s.amount)}</td>
                         <td className="border p-1">{s.userEmail ?? ""}</td>
                         <td className="border p-1">{s.clientName ?? ""}</td>
@@ -474,7 +458,7 @@ export default function HistorialCierres() {
                     {selected.products.map((p, i) => (
                       <tr key={i} className="text-center">
                         <td className="border p-1">{p.productName}</td>
-                        <td className="border p-1">{p.quantity}</td>
+                        <td className="border p-1">{qty3(p.quantity)}</td>
                         <td className="border p-1">C${money(p.amount)}</td>
                       </tr>
                     ))}
@@ -503,7 +487,7 @@ export default function HistorialCierres() {
                     {selected.productSummary.map((r, i) => (
                       <tr key={i} className="text-center">
                         <td className="border p-1">{r.productName}</td>
-                        <td className="border p-1">{r.totalQuantity}</td>
+                        <td className="border p-1">{qty3(r.totalQuantity)}</td>
                         <td className="border p-1">C${money(r.totalAmount)}</td>
                       </tr>
                     ))}

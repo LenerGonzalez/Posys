@@ -46,8 +46,21 @@ export default function AdminLayout({ role }: { role: string }) {
                     to={`${base}/financialDashboard`}
                     className={linkCls}
                   >
-                    Finanzas
+                    Dashboard
                   </NavLink>
+                  <NavLink to={`${base}/batches`} className={linkCls}>
+                    Inventario
+                  </NavLink>
+                  <NavLink to={`${base}/paidBatches`} className={linkCls}>
+                    Inventarios Pagados
+                  </NavLink>
+                  <NavLink to={`${base}/billing`} className={linkCls}>
+                    Facturacion
+                  </NavLink>
+                  <NavLink to={`${base}/expenses`} className={linkCls}>
+                    Gastos
+                  </NavLink>
+
                   <NavLink to={`${base}/salesV2`} className={linkCls}>
                     Venta
                   </NavLink>
@@ -57,15 +70,11 @@ export default function AdminLayout({ role }: { role: string }) {
                   <NavLink to={`${base}/billhistoric`} className={linkCls}>
                     Historial de Cierres
                   </NavLink>
-                  <NavLink to={`${base}/batches`} className={linkCls}>
-                    Inventario
-                  </NavLink>
+
                   <NavLink to={`${base}/transactionclose`} className={linkCls}>
                     Liquidaciones
                   </NavLink>
-                  <NavLink to={`${base}/expenses`} className={linkCls}>
-                    Gastos
-                  </NavLink>
+
                   <NavLink to={`${base}/products`} className={linkCls}>
                     Productos
                   </NavLink>
