@@ -29,6 +29,13 @@ import ExpensesAdmin from "./components/ExpensesAdmin";
 import FixBatchesPages from "./components/FixBatchesPages";
 import Billing from "./components/Billing";
 import PaidBatches from "./components/paidBatches";
+import InventoryClothesBatches from "./components/Clothes/InventoryClothesBatches";
+import ProductsClothes from "./components/Clothes/ClothesProducts";
+import CustomersClothes from "./components/Clothes/CustomersClothes";
+import SalesClothesPOS from "./components/Clothes/SalesClothesPOS";
+import FinancialDashboardClothes from "./components/Clothes/FinancialDashboardClothes";
+import ExpensesClothes from "./components/Clothes/ExpensesClothes";
+import TransactionsReportClothes from "./components/Clothes/TransactionsReportClothes";
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -58,7 +65,6 @@ export default function App() {
     <Router>
       <Routes>
         <Route path="/" element={<Login />} />
-
         {/* Árbol ADMIN protegido con layout + rutas hijas */}
         <Route
           path="/admin"
@@ -70,7 +76,6 @@ export default function App() {
         >
           {/* Redirige /admin a /admin/ventas */}
           <Route index element={<Navigate to="bills" replace />} />
-
           {/* Cierre del día */}
           <Route
             path="bills"
@@ -97,7 +102,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           {/* Historial de cierres (solo admin) */}
           <Route
             path="billhistoric"
@@ -107,7 +111,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           {/* Usuarios (solo admin) – usa tu componente de usuarios/registro */}
           <Route
             path="users"
@@ -117,7 +120,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           {/* Productos (solo admin) */}
           <Route
             path="products"
@@ -127,7 +129,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           <Route
             path="batches"
             element={
@@ -149,6 +150,14 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <FinancialDashboard />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="TransactionsReportClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <TransactionsReportClothes />
               </PrivateRoute>
             }
           />
@@ -178,6 +187,54 @@ export default function App() {
               </PrivateRoute>
             }
           />
+          <Route
+            path="inventoryClothesBatches"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <InventoryClothesBatches />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="productsClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <ProductsClothes />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="CustomersClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <CustomersClothes />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="salesClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <SalesClothesPOS />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="financialDashboardClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <FinancialDashboardClothes />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="ExpensesClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <ExpensesClothes />
+              </PrivateRoute>
+            }
+          />
         </Route>
 
         {/* Ruta legacy para vendedores si la usas aún */}
@@ -189,7 +246,6 @@ export default function App() {
             </PrivateRoute>
           }
         />
-
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Router>
