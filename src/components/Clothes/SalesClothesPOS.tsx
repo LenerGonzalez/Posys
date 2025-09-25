@@ -1,11 +1,12 @@
 // src/components/Clothes/SalesClothesPOS.tsx
+import { allocateSaleFIFOClothes } from "../../Services/inventory_clothes";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
   doc,
   getDocs,
-  orderBy, // (no usado para precio; lo dejo porque ya lo traías)
+  orderBy,
   query,
   Timestamp,
   where,
@@ -43,57 +44,62 @@ interface Product {
   sku?: string;
 }
 
-interface ClothesBatch {
-  id: string;
+interface SelectedItem {
   productId: string;
-  date: string; // yyyy-MM-dd
-  remaining: number; // unidades
+  productName: string;
+  sku?: string;
+  unitPrice: number; // precio del lote más reciente
+  available: number; // existencias actuales
+  qty: number; // piezas
+  discount: number; // NUEVO: entero (C$) aplicado a este ítem
 }
 
-// 🔹 Helper: tomar salePrice del lote MÁS RECIENTE del producto (sin orderBy, sin índice)
+// Helpers
 async function getLatestSalePriceForClothes(
   productId: string
 ): Promise<number> {
   if (!productId) return 0;
-
-  const q = query(
+  const qRef = query(
     collection(db, "inventory_clothes_batches"),
     where("productId", "==", productId)
   );
-  const snap = await getDocs(q);
+  const snap = await getDocs(qRef);
 
-  let latest: {
-    date: string;
-    createdAt?: { seconds?: number; nanoseconds?: number };
-    salePrice: number;
-  } | null = null;
+  let bestDate = "0000-00-00";
+  let bestCreatedAtMs = -1;
+  let bestSalePrice = 0;
 
   snap.forEach((d) => {
     const x = d.data() as any;
-    const salePrice = Number(x.salePrice || 0);
-    const dateStr = String(x.date || "0000-00-00"); // yyyy-MM-dd
-    const createdAt = x.createdAt; // Timestamp opcional
+    const dateStr: string = String(x.date || "0000-00-00");
+    const salePrice: number = Number(x.salePrice || 0);
+    const ca = x.createdAt;
+    const createdAtMs =
+      (ca?.seconds ?? 0) * 1000 + (ca?.nanoseconds ?? 0) / 1e6;
 
-    if (!latest) {
-      latest = { date: dateStr, createdAt, salePrice };
-      return;
-    }
-
-    // Comparar por fecha; si empata, por createdAt
-    const cmp = dateStr.localeCompare(latest.date);
-    if (cmp > 0) {
-      latest = { date: dateStr, createdAt, salePrice };
-    } else if (cmp === 0) {
-      const a =
-        (createdAt?.seconds ?? 0) * 1000 + (createdAt?.nanoseconds ?? 0) / 1e6;
-      const b =
-        (latest.createdAt?.seconds ?? 0) * 1000 +
-        (latest.createdAt?.nanoseconds ?? 0) / 1e6;
-      if (a > b) latest = { date: dateStr, createdAt, salePrice };
+    if (dateStr > bestDate) {
+      bestDate = dateStr;
+      bestCreatedAtMs = createdAtMs;
+      bestSalePrice = salePrice;
+    } else if (dateStr === bestDate && createdAtMs > bestCreatedAtMs) {
+      bestCreatedAtMs = createdAtMs;
+      bestSalePrice = salePrice;
     }
   });
 
-  return Number(latest?.salePrice || 0);
+  return Number(bestSalePrice || 0);
+}
+
+async function getAvailableUnitsForClothes(productId: string): Promise<number> {
+  if (!productId) return 0;
+  const qRef = query(
+    collection(db, "inventory_clothes_batches"),
+    where("productId", "==", productId)
+  );
+  const snap = await getDocs(qRef);
+  let available = 0;
+  snap.forEach((d) => (available += Number((d.data() as any).remaining || 0)));
+  return available;
 }
 
 function normalizePhone(input: string): string {
@@ -107,29 +113,43 @@ function normalizePhone(input: string): string {
 }
 
 export default function SalesClothesPOS() {
-  // ===== Catálogos =====
+  // Catálogos
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
-  // ===== Form venta =====
+  // Generales
   const [clientType, setClientType] = useState<ClientType>("CONTADO");
   const [customerId, setCustomerId] = useState<string>("");
   const [customerNameCash, setCustomerNameCash] = useState<string>("");
   const [saleDate, setSaleDate] = useState<string>(
     new Date().toISOString().slice(0, 10)
   );
+
+  // Selección de productos (múltiple)
   const [productId, setProductId] = useState<string>("");
-  const [quantity, setQuantity] = useState<number>(0); // 👈 ahora inicia en 0
-  const [totalAmount, setTotalAmount] = useState<number>(0);
+  const [items, setItems] = useState<SelectedItem[]>([]);
+
+  // Totales
+  const totalPieces = useMemo(
+    () => items.reduce((acc, it) => acc + (it.qty || 0), 0),
+    [items]
+  );
+  const totalAmount = useMemo(() => {
+    const sum = items.reduce((acc, it) => {
+      const line = Math.max(
+        0,
+        (Number(it.unitPrice) || 0) * (it.qty || 0) - (Number(it.discount) || 0)
+      );
+      return acc + line;
+    }, 0);
+    return Math.floor(sum * 100) / 100;
+  }, [items]);
+
   const [downPayment, setDownPayment] = useState<number>(0);
-
-  // ✅ precio unitario para calcular total (precargado del inventario)
-  const [unitPrice, setUnitPrice] = useState<number>(0);
-
   const [msg, setMsg] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
-  // ===== Modal "Nuevo cliente" =====
+  // Modal cliente
   const [showModal, setShowModal] = useState(false);
   const [mName, setMName] = useState("");
   const [mPhone, setMPhone] = useState("+505 ");
@@ -146,10 +166,10 @@ export default function SalesClothesPOS() {
     setMCreditLimit(0);
   };
 
-  // ===== Cargar catálogos =====
+  // Cargar catálogos
   useEffect(() => {
     (async () => {
-      // Clientes
+      // clientes
       const qC = query(
         collection(db, "customers_clothes"),
         orderBy("createdAt", "desc")
@@ -168,8 +188,7 @@ export default function SalesClothesPOS() {
           balance: 0,
         });
       });
-
-      // Saldos
+      // saldos
       for (const c of listC) {
         try {
           const qMov = query(
@@ -186,7 +205,7 @@ export default function SalesClothesPOS() {
       }
       setCustomers(listC);
 
-      // Productos
+      // productos
       const qP = query(
         collection(db, "products_clothes"),
         orderBy("createdAt", "desc")
@@ -209,7 +228,6 @@ export default function SalesClothesPOS() {
     () => customers.find((c) => c.id === customerId),
     [customers, customerId]
   );
-
   const currentBalance = selectedCustomer?.balance || 0;
   const projectedBalance =
     clientType === "CREDITO"
@@ -218,46 +236,73 @@ export default function SalesClothesPOS() {
         Math.max(0, Number(downPayment || 0))
       : 0;
 
-  // 🔹 PRECARGAR PRECIO unitario desde inventario (lote más reciente)
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!productId) {
-        if (alive) setUnitPrice(0);
-        return;
-      }
+  // Añadir producto (bloquea duplicados)
+  const addProductToList = async (pid: string) => {
+    if (!pid) return;
+    if (items.some((it) => it.productId === pid)) {
+      setProductId("");
+      return;
+    }
 
-      // 1) Buscar salePrice en inventory_clothes_batches (más reciente)
-      let price = await getLatestSalePriceForClothes(productId);
+    const prod = products.find((p) => p.id === pid);
+    if (!prod) {
+      setProductId("");
+      return;
+    }
 
-      // 2) Fallback al precio del catálogo (por si faltara)
-      if (!price) {
-        const p = products.find((pp) => pp.id === productId) as any;
-        price = Number(p?.price || 0);
-      }
+    let price = await getLatestSalePriceForClothes(pid);
+    if (!price) price = Number((prod as any)?.price || 0);
+    const available = await getAvailableUnitsForClothes(pid);
 
-      if (alive) setUnitPrice(price);
-    })();
-    return () => {
-      alive = false;
+    const newItem: SelectedItem = {
+      productId: pid,
+      productName: prod.name || "",
+      sku: prod.sku || "",
+      unitPrice: Number(price) || 0,
+      available: Number(available) || 0,
+      qty: 0,
+      discount: 0, // NUEVO
     };
-  }, [productId, products]);
+    setItems((prev) => [...prev, newItem]);
+    setProductId("");
+  };
 
-  // 🔹 Calcular total = precio × cantidad (2 decimales)
-  useEffect(() => {
-    const q = Number(quantity) || 0;
-    const p = Number(unitPrice) || 0;
-    const total = Math.floor(p * q * 100) / 100;
-    setTotalAmount(total);
-  }, [unitPrice, quantity]);
+  const setItemQty = (pid: string, qtyRaw: string) => {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.productId !== pid) return it;
+        if (qtyRaw === "") return { ...it, qty: 0 };
+        const n = Math.max(0, Math.floor(Number(qtyRaw)));
+        return { ...it, qty: n };
+      })
+    );
+  };
 
-  // ===== Validaciones =====
+  // NUEVO: actualizar descuento (entero)
+  const setItemDiscount = (pid: string, discRaw: string) => {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.productId !== pid) return it;
+        if (discRaw === "") return { ...it, discount: 0 };
+        // Solo enteros >= 0
+        const n = Math.max(0, Math.floor(Number(discRaw)));
+        return { ...it, discount: n };
+      })
+    );
+  };
+
+  const removeItem = (pid: string) =>
+    setItems((prev) => prev.filter((it) => it.productId !== pid));
+
+  // Validaciones
   const validate = async (): Promise<string | null> => {
-    if (!productId) return "Selecciona un producto.";
     if (!saleDate) return "Selecciona la fecha.";
-    if (!Number.isInteger(Number(quantity)) || Number(quantity) <= 0)
-      return "La cantidad debe ser un entero mayor a cero.";
-    if (!(totalAmount > 0)) return "Ingresa el monto total (> 0).";
+    if (items.length === 0) return "Agrega al menos un producto.";
+    const itemsWithQty = items.filter((it) => (it.qty || 0) > 0);
+    if (itemsWithQty.length === 0)
+      return "Debes ingresar cantidades (> 0) en al menos un producto.";
+    if (!(totalAmount > 0)) return "El total debe ser mayor a cero.";
+
     if (clientType === "CONTADO") {
       if (!customerNameCash.trim())
         return "Ingresa el nombre del cliente (contado).";
@@ -270,24 +315,24 @@ export default function SalesClothesPOS() {
         return "El cliente está BLOQUEADO. No se puede facturar a crédito.";
     }
 
-    // 🚧 Validar inventario disponible (unidades) en inventory_clothes_batches
-    const qB = query(
-      collection(db, "inventory_clothes_batches"),
-      where("productId", "==", productId)
-    );
-    const bSnap = await getDocs(qB);
-    let available = 0;
-    bSnap.forEach((d) => {
-      const x = d.data() as any;
-      available += Number(x.remaining || 0);
-    });
-    if (Number(quantity) > available) {
-      return `Inventario insuficiente. Disponible: ${available} unidades.`;
+    // Stock y descuentos por ítem
+    for (const it of itemsWithQty) {
+      const available = await getAvailableUnitsForClothes(it.productId);
+      if (it.qty > available)
+        return `Inventario insuficiente para "${it.productName}". Disponible: ${available} unidades.`;
+      const lineGross = (Number(it.unitPrice) || 0) * (it.qty || 0);
+      const disc = Number(it.discount) || 0;
+      if (!Number.isInteger(disc) || disc < 0)
+        return `El descuento en "${it.productName}" debe ser entero y ≥ 0.`;
+      if (disc > lineGross)
+        return `El descuento en "${
+          it.productName
+        }" no puede exceder C$ ${lineGross.toFixed(2)}.`;
     }
     return null;
   };
 
-  // ===== Guardar venta =====
+  // Guardar
   const saveSale = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg("");
@@ -300,21 +345,31 @@ export default function SalesClothesPOS() {
     try {
       setSaving(true);
 
-      const prod = products.find((p) => p.id === productId);
+      const itemsToSave = items
+        .filter((it) => (it.qty || 0) > 0)
+        .map((it) => {
+          const lineGross = (Number(it.unitPrice) || 0) * (it.qty || 0);
+          const disc = Math.max(0, Math.floor(Number(it.discount) || 0));
+          const lineNet = Math.max(0, lineGross - disc);
+          return {
+            productId: it.productId,
+            productName: it.productName,
+            sku: it.sku || "",
+            qty: it.qty,
+            unitPrice: Number(it.unitPrice) || 0,
+            discount: disc, // NUEVO
+            total: Math.floor(lineNet * 100) / 100,
+          };
+        });
+
       const payload: any = {
-        type: clientType, // CONTADO | CREDITO
+        type: clientType,
         date: saleDate,
         createdAt: Timestamp.now(),
         itemsTotal: Number(totalAmount) || 0,
         total: Number(totalAmount) || 0,
-        quantity: Number(quantity) || 0,
-        item: {
-          productId,
-          productName: prod?.name || "",
-          sku: prod?.sku || "",
-          qty: Number(quantity) || 0,
-          total: Number(totalAmount) || 0,
-        },
+        quantity: Number(totalPieces) || 0,
+        items: itemsToSave,
       };
 
       if (clientType === "CONTADO") {
@@ -327,7 +382,7 @@ export default function SalesClothesPOS() {
       // 1) Crear venta
       const saleRef = await addDoc(collection(db, "sales_clothes"), payload);
 
-      // 2) CxC si es crédito
+      // 2) CxC crédito
       if (clientType === "CREDITO" && customerId) {
         const base = {
           customerId,
@@ -335,13 +390,11 @@ export default function SalesClothesPOS() {
           createdAt: Timestamp.now(),
           ref: { saleId: saleRef.id },
         };
-        // CARGO
         await addDoc(collection(db, "ar_movements"), {
           ...base,
           type: "CARGO",
           amount: Number(totalAmount) || 0,
         });
-        // ABONO inicial (opcional)
         if (Number(downPayment) > 0) {
           await addDoc(collection(db, "ar_movements"), {
             ...base,
@@ -351,50 +404,39 @@ export default function SalesClothesPOS() {
         }
       }
 
-      // 3) Descontar INVENTARIO por FIFO (por fecha asc)
-      let toConsume = Number(quantity) || 0;
-      if (toConsume > 0) {
-        const qB = query(
-          collection(db, "inventory_clothes_batches"),
-          where("productId", "==", productId)
-        );
-        const bSnap = await getDocs(qB);
-        const batches: ClothesBatch[] = [];
-        bSnap.forEach((d) => {
-          const x = d.data() as any;
-          batches.push({
-            id: d.id,
-            productId: x.productId,
-            date: x.date || "",
-            remaining: Number(x.remaining || 0),
+      // 3) FIFO por producto
+      const allocationsByItem: Record<
+        string,
+        { productId: string; allocations: any[] }
+      > = {};
+      for (const it of itemsToSave) {
+        if (it.qty > 0) {
+          const { allocations } = await allocateSaleFIFOClothes({
+            productId: it.productId,
+            quantity: it.qty,
+            saleDate,
+            saleId: saleRef.id,
           });
-        });
-        // Orden FIFO por date (asc)
-        batches.sort((a, b) => a.date.localeCompare(b.date));
-
-        for (const b of batches) {
-          if (toConsume <= 0) break;
-          if (b.remaining <= 0) continue;
-          const use = Math.min(b.remaining, toConsume);
-          toConsume -= use;
-          await updateDoc(doc(db, "inventory_clothes_batches", b.id), {
-            remaining: Number((b.remaining - use).toFixed(0)),
-          });
+          allocationsByItem[it.productId] = {
+            productId: it.productId,
+            allocations,
+          };
         }
       }
+
+      // 4) Guardar allocations
+      await updateDoc(doc(db, "sales_clothes", saleRef.id), {
+        allocationsByItem,
+      });
 
       // Reset
       setClientType("CONTADO");
       setCustomerId("");
       setCustomerNameCash("");
       setSaleDate(new Date().toISOString().slice(0, 10));
-      setProductId("");
-      setQuantity(0); // vuelve a 0
-      setTotalAmount(0);
+      setItems([]);
       setDownPayment(0);
-      setUnitPrice(0);
 
-      // Recalcular saldos localmente si crédito
       if (clientType === "CREDITO" && customerId) {
         setCustomers((prev) =>
           prev.map((c) =>
@@ -420,46 +462,7 @@ export default function SalesClothesPOS() {
     }
   };
 
-  // ===== Crear cliente desde modal =====
-  const createCustomerFromModal = async () => {
-    setMsg("");
-    if (!mName.trim()) {
-      setMsg("Ingresa el nombre del nuevo cliente.");
-      return;
-    }
-    const cleanPhone = normalizePhone(mPhone);
-    try {
-      const ref = await addDoc(collection(db, "customers_clothes"), {
-        name: mName.trim(),
-        phone: cleanPhone,
-        place: mPlace || "",
-        notes: mNotes || "",
-        status: mStatus,
-        creditLimit: Number(mCreditLimit || 0),
-        createdAt: Timestamp.now(),
-      });
-
-      const newC: Customer = {
-        id: ref.id,
-        name: mName.trim(),
-        phone: cleanPhone,
-        place: mPlace || "",
-        status: mStatus,
-        creditLimit: Number(mCreditLimit || 0),
-        balance: 0,
-      };
-
-      setCustomers((prev) => [newC, ...prev]);
-      setCustomerId(ref.id); // queda seleccionado
-      resetModal();
-      setShowModal(false);
-      setMsg("✅ Cliente creado");
-    } catch (e) {
-      console.error(e);
-      setMsg("❌ Error al crear cliente");
-    }
-  };
-
+  // UI
   return (
     <div className="max-w-6xl mx-auto">
       <h2 className="text-2xl font-bold mb-3">Ventas (Ropa)</h2>
@@ -559,23 +562,6 @@ export default function SalesClothesPOS() {
           </div>
         )}
 
-        {/* Producto */}
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Producto</label>
-          <select
-            className="w-full border p-2 rounded"
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
-          >
-            <option value="">Selecciona un producto</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} {p.sku ? `— ${p.sku}` : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-
         {/* Fecha */}
         <div>
           <label className="block text-sm font-semibold">Fecha de venta</label>
@@ -587,60 +573,163 @@ export default function SalesClothesPOS() {
           />
         </div>
 
-        {/* Cantidad (entero) */}
-        <div>
-          <label className="block text-sm font-semibold">
-            Cantidad (piezas)
-          </label>
-          <input
-            type="number"
-            step="1"
-            min={0}
+        {/* Selector de producto (agrega a lista) */}
+        <div className="md:col-span-2">
+          <label className="block text-sm font-semibold">Producto</label>
+          <select
             className="w-full border p-2 rounded"
-            value={Number.isNaN(quantity) || quantity === 0 ? "" : quantity}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "") {
-                setQuantity(0);
-                return;
-              }
-              const n = Math.max(0, Math.floor(Number(v)));
-              setQuantity(n);
+            value={productId}
+            onChange={async (e) => {
+              const pid = e.target.value;
+              setProductId(pid);
+              await addProductToList(pid);
             }}
-            inputMode="numeric"
-            placeholder="0"
-          />
-        </div>
-
-        {/* Precio unitario (auto, readOnly) */}
-        <div>
-          <label className="block text-sm font-semibold">
-            Precio unitario (pza)
-          </label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded bg-gray-100"
-            value={money(unitPrice)}
-            readOnly
-            title="Se precarga desde el inventario (salePrice del lote más reciente)."
-          />
-        </div>
-
-        {/* Total (auto, readOnly) */}
-        <div>
-          <label className="block text-sm font-semibold">Monto total</label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded bg-gray-100"
-            value={money(totalAmount)}
-            readOnly
-          />
+          >
+            <option value="">Selecciona un producto</option>
+            {products.map((p) => {
+              const already = items.some((it) => it.productId === p.id);
+              return (
+                <option
+                  key={p.id}
+                  value={already ? "" : p.id}
+                  disabled={already}
+                >
+                  {/* Concatenar SKU en el nombre del producto */}
+                  {p.name} {p.sku ? `— ${p.sku}` : ""}{" "}
+                  {already ? " (seleccionado)" : ""}
+                </option>
+              );
+            })}
+          </select>
           <div className="text-xs text-gray-500 mt-1">
-            Se calcula automáticamente (precio × cantidad).
+            Los productos ya añadidos quedan bloqueados para evitar duplicados.
           </div>
         </div>
 
-        {/* Botón guardar */}
+        {/* Lista de productos seleccionados */}
+        <div className="md:col-span-2">
+          <div className="border rounded overflow-hidden">
+            <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold border-b">
+              <div className="col-span-4">Producto</div>
+              <div className="col-span-2 text-right">Precio</div>
+              <div className="col-span-2 text-right">Existencias</div>
+              <div className="col-span-1 text-right">Cantidad</div>
+              <div className="col-span-1 text-right">Descuento</div>
+              {/* NUEVO */}
+              <div className="col-span-1 text-right">Monto</div>
+              {/* NUEVO */}
+              <div className="col-span-1 text-center">Quitar</div>
+            </div>
+
+            {items.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-gray-500">
+                No hay productos agregados.
+              </div>
+            ) : (
+              items.map((it) => {
+                const visualStock = Math.max(
+                  0,
+                  (it.available || 0) - (it.qty || 0)
+                );
+                const lineGross = (Number(it.unitPrice) || 0) * (it.qty || 0);
+                const lineNet = Math.max(
+                  0,
+                  lineGross - (Number(it.discount) || 0)
+                );
+
+                return (
+                  <div
+                    key={it.productId}
+                    className="grid grid-cols-12 items-center px-3 py-2 border-b text-sm gap-x-2"
+                  >
+                    <div className="col-span-4">
+                      {/* Nombre + SKU concatenado */}
+                      <div className="font-medium">
+                        {it.productName}
+                        {it.sku ? ` — ${it.sku}` : ""}
+                      </div>
+                    </div>
+
+                    <div className="col-span-2 text-right">
+                      {money(it.unitPrice)}
+                    </div>
+                    <div className="col-span-2 text-right">{visualStock}</div>
+
+                    <div className="col-span-1">
+                      <input
+                        type="number"
+                        step="0"
+                        min={0}
+                        className="w-full border p-1 rounded text-right"
+                        value={
+                          Number.isNaN(it.qty) || it.qty === 0 ? "" : it.qty
+                        }
+                        onChange={(e) =>
+                          setItemQty(it.productId, e.target.value)
+                        }
+                        inputMode="numeric"
+                        placeholder="0"
+                        title="Cantidad de piezas"
+                      />
+                    </div>
+
+                    {/* NUEVO: Descuento entero */}
+                    <div className="col-span-1">
+                      <input
+                        type="number"
+                        step="1"
+                        min={0}
+                        className="w-full border p-1 rounded text-right"
+                        value={
+                          Number.isNaN(it.discount) || it.discount === 0
+                            ? ""
+                            : it.discount
+                        }
+                        onChange={(e) =>
+                          setItemDiscount(it.productId, e.target.value)
+                        }
+                        inputMode="numeric"
+                        placeholder="0"
+                        title="Descuento entero (C$)"
+                      />
+                    </div>
+
+                    {/* NUEVO: Monto por fila */}
+                    <div className="col-span-1 text-right">
+                      {money(lineNet)}
+                    </div>
+
+                    <div className="col-span-1 text-center">
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded bg-red-100 hover:bg-red-200"
+                        onClick={() => removeItem(it.productId)}
+                        title="Quitar producto"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {items.length > 0 && (
+            <div className="flex justify-end gap-6 mt-3 text-sm">
+              <div>
+                <span className="text-gray-600">Piezas totales: </span>
+                <span className="font-semibold">{totalPieces}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Total: </span>
+                <span className="font-semibold">{money(totalAmount)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Guardar */}
         <div className="md:col-span-2">
           <button
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
@@ -653,7 +742,7 @@ export default function SalesClothesPOS() {
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
-      {/* ===== Modal: Crear cliente rápido ===== */}
+      {/* Modal: Crear cliente rápido */}
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-xl p-4">
@@ -745,7 +834,45 @@ export default function SalesClothesPOS() {
               </button>
               <button
                 className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
-                onClick={createCustomerFromModal}
+                onClick={async () => {
+                  setMsg("");
+                  if (!mName.trim()) {
+                    setMsg("Ingresa el nombre del nuevo cliente.");
+                    return;
+                  }
+                  const cleanPhone = normalizePhone(mPhone);
+                  try {
+                    const ref = await addDoc(
+                      collection(db, "customers_clothes"),
+                      {
+                        name: mName.trim(),
+                        phone: cleanPhone,
+                        place: mPlace || "",
+                        notes: mNotes || "",
+                        status: mStatus,
+                        creditLimit: Number(mCreditLimit || 0),
+                        createdAt: Timestamp.now(),
+                      }
+                    );
+                    const newC: Customer = {
+                      id: ref.id,
+                      name: mName.trim(),
+                      phone: cleanPhone,
+                      place: mPlace || "",
+                      status: mStatus,
+                      creditLimit: Number(mCreditLimit || 0),
+                      balance: 0,
+                    };
+                    setCustomers((prev) => [newC, ...prev]);
+                    setCustomerId(ref.id);
+                    resetModal();
+                    setShowModal(false);
+                    setMsg("✅ Cliente creado");
+                  } catch (e) {
+                    console.error(e);
+                    setMsg("❌ Error al crear cliente");
+                  }
+                }}
               >
                 Guardar cliente
               </button>

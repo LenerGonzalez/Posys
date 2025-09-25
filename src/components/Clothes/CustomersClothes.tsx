@@ -13,6 +13,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import { restoreSaleAndDeleteClothes } from "../../Services/inventory_clothes";
 
 const PLACES = [
   "Altagracia",
@@ -35,8 +36,7 @@ interface CustomerRow {
   status: Status;
   creditLimit?: number;
   createdAt: Timestamp;
-  // calculado
-  balance?: number;
+  balance?: number; // calculado
 }
 
 interface MovementRow {
@@ -60,6 +60,18 @@ function normalizePhone(input: string): string {
   }
   const rest = input.slice(prefix.length).replace(/\D/g, "");
   return prefix + rest.slice(0, 8);
+}
+
+// ==== helpers CxC ====
+async function deleteARMovesBySaleId(saleId: string) {
+  const qMov = query(
+    collection(db, "ar_movements"),
+    where("ref.saleId", "==", saleId)
+  );
+  const snap = await getDocs(qMov);
+  await Promise.all(
+    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id)))
+  );
 }
 
 export default function CustomersClothes() {
@@ -134,7 +146,7 @@ export default function CustomersClothes() {
         });
       });
 
-      // Consulta rápida de saldos (si existe la colección ar_movements)
+      // Saldos
       for (const c of list) {
         try {
           const qMov = query(
@@ -143,10 +155,7 @@ export default function CustomersClothes() {
           );
           const mSnap = await getDocs(qMov);
           let sum = 0;
-          mSnap.forEach((m) => {
-            const v = Number((m.data() as any).amount || 0);
-            sum += v;
-          });
+          mSnap.forEach((m) => (sum += Number((m.data() as any).amount || 0)));
           c.balance = sum;
         } catch {
           c.balance = 0;
@@ -273,11 +282,61 @@ export default function CustomersClothes() {
     }
   };
 
+  // ===== Eliminar cliente (+ devolver prendas de TODAS sus compras) =====
   const handleDelete = async (row: CustomerRow) => {
-    const ok = confirm(`¿Eliminar al cliente "${row.name}"?`);
+    const ok = confirm(
+      `¿Eliminar al cliente "${row.name}"?\nSe devolverán al inventario todas las prendas de sus compras y se borrarán sus movimientos.`
+    );
     if (!ok) return;
-    await deleteDoc(doc(db, "customers_clothes", row.id));
-    setRows((prev) => prev.filter((x) => x.id !== row.id));
+
+    try {
+      setLoading(true);
+
+      // 1) Ventas del cliente
+      const qSales = query(
+        collection(db, "sales_clothes"),
+        where("customerId", "==", row.id)
+      );
+      const sSnap = await getDocs(qSales);
+
+      // 2) Por cada venta -> restaurar allocations y borrar venta + movimientos
+      for (const d of sSnap.docs) {
+        const saleId = d.id;
+        try {
+          await restoreSaleAndDeleteClothes(saleId); // repone inventario y borra la venta
+        } catch (e) {
+          console.warn("restoreSaleAndDeleteClothes error", e);
+          // si por alguna razón falla, al menos intenta borrar la venta para no dejar colgando
+          // (pero lo ideal es revisar el error)
+          try {
+            await deleteDoc(doc(db, "sales_clothes", saleId));
+          } catch {}
+        }
+        await deleteARMovesBySaleId(saleId);
+      }
+
+      // 3) Movimientos sueltos del cliente (sin saleId)
+      const qMov = query(
+        collection(db, "ar_movements"),
+        where("customerId", "==", row.id)
+      );
+      const mSnap = await getDocs(qMov);
+      await Promise.all(
+        mSnap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id)))
+      );
+
+      // 4) Borrar cliente
+      await deleteDoc(doc(db, "customers_clothes", row.id));
+
+      // 5) UI
+      setRows((prev) => prev.filter((x) => x.id !== row.id));
+      setMsg("🗑️ Cliente eliminado y prendas devueltas al inventario");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ No se pudo eliminar el cliente.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // ===== Abrir estado de cuenta =====
@@ -403,7 +462,6 @@ export default function CustomersClothes() {
             : c
         )
       );
-      // y también en el objeto del modal
       setStCustomer((prev) =>
         prev ? { ...prev, balance: (prev.balance || 0) - safeAmt } : prev
       );
@@ -504,12 +562,43 @@ export default function CustomersClothes() {
     const ok = confirm(
       `¿Eliminar este movimiento (${
         m.type === "ABONO" ? "Abono" : "Compra"
-      }) del ${m.date}?`
+      }) del ${m.date}?${
+        m.type === "CARGO" && m.ref?.saleId
+          ? "\nSe devolverán al inventario las prendas de esa venta."
+          : ""
+      }`
     );
     if (!ok) return;
+
     try {
-      await deleteDoc(doc(db, "ar_movements", m.id));
-      const newList = stRows.filter((x) => x.id !== m.id);
+      setLoading(true);
+
+      // Si es una COMPRA vinculada a una venta, devolvemos inventario
+      if (m.type === "CARGO" && m.ref?.saleId) {
+        try {
+          await restoreSaleAndDeleteClothes(m.ref.saleId);
+        } catch (e) {
+          console.warn("restoreSaleAndDeleteClothes error", e);
+          // si falla la restauración, no seguimos para evitar descuadre
+          setLoading(false);
+          setMsg("❌ No se pudo devolver inventario de la venta.");
+          return;
+        }
+        // borrar también cualquier movimiento vinculado a esa venta
+        await deleteARMovesBySaleId(m.ref.saleId);
+      } else {
+        // Movimiento suelto (p. ej. Abono manual): solo borrar ese doc
+        await deleteDoc(doc(db, "ar_movements", m.id));
+      }
+
+      // refrescar tabla del modal
+      const newList = stRows.filter((x) => {
+        if (m.type === "CARGO" && m.ref?.saleId) {
+          // quitamos todos los movimientos asociados a esa venta
+          return x.ref?.saleId !== m.ref.saleId;
+        }
+        return x.id !== m.id;
+      });
       setStRows(newList);
       recomputeKpis(newList);
 
@@ -529,6 +618,8 @@ export default function CustomersClothes() {
     } catch (e) {
       console.error(e);
       setMsg("❌ Error al eliminar movimiento");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1038,7 +1129,7 @@ export default function CustomersClothes() {
       {showAbono && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
           <div className="bg-white rounded-lg shadow-2xl border w-[95%] max-w-md p-4">
-            <h3 className="text-lg font-bold mb-3">
+            <h3 className="text-lg font-bold">
               Registrar abono — {stCustomer?.name || ""}
             </h3>
 

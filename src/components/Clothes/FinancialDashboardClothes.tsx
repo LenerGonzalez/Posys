@@ -3,8 +3,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
+import RefreshButton from "../common/RefreshButton"; 
+import useManualRefresh from "../../hooks/useManualRefresh";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
 
 type SaleType = "CONTADO" | "CREDITO";
 
@@ -14,13 +17,14 @@ interface SaleItem {
   sku?: string;
   qty: number;
   unitPrice: number;
+  discount?: number; // NUEVO
 }
 interface SaleDoc {
   id: string;
   date: string; // yyyy-MM-dd
   type: SaleType;
   total: number;
-  items: SaleItem[]; // ← SIEMPRE llenamos esto (desde items[] o item)
+  items: SaleItem[];
   customerId?: string;
 }
 
@@ -29,9 +33,9 @@ interface BatchRow {
   productId: string;
   productName: string;
   date: string; // yyyy-MM-dd
-  quantity: number; // ingresado
-  remaining: number; // restante (informativo)
-  purchasePrice: number; // costo unitario
+  quantity: number;
+  remaining: number;
+  purchasePrice: number;
 }
 
 interface Movement {
@@ -64,7 +68,9 @@ interface CreditPiece {
   sku?: string;
   qty: number;
   unitPrice: number;
-  lineTotal: number;
+  lineTotal: number; // bruto
+  discount: number; // descuento por ítem (C$)
+  lineFinal: number; // neto (con descuento)
 }
 
 /** Devuelve yyyy-MM-dd del createdAt si no hay date string */
@@ -77,11 +83,8 @@ function ensureDate(x: any): string {
   return "";
 }
 
-
-
 /** Normaliza ítems de venta: lee items[] o cae a item {} */
 function normalizeSaleItems(x: any): SaleItem[] {
-  // Preferir items[]
   if (Array.isArray(x?.items)) {
     return x.items.map((it: any) => {
       const qty = Number(it?.qty || 0);
@@ -95,17 +98,14 @@ function normalizeSaleItems(x: any): SaleItem[] {
         sku: it?.sku || "",
         qty,
         unitPrice: Number(unitPrice || 0),
+        discount: Number(it?.discount || 0),
       };
     });
   }
 
-  // Fallback a item {}
   if (x?.item) {
     const it = x.item;
-    const qty =
-      Number(it?.qty || 0) ||
-      Number(x?.quantity || 0) || // por compatibilidad
-      0;
+    const qty = Number(it?.qty || 0) || Number(x?.quantity || 0) || 0;
     const unitPrice =
       Number(it?.unitPrice || 0) ||
       (qty > 0 ? Number(it?.total || x?.total || 0) / qty : 0) ||
@@ -118,11 +118,11 @@ function normalizeSaleItems(x: any): SaleItem[] {
         sku: it?.sku || "",
         qty,
         unitPrice: Number(unitPrice || 0),
+        discount: Number(it?.discount || 0),
       },
     ];
   }
 
-  // Último recurso: si hay quantity/total sueltos
   const qty = Number(x?.quantity || 0);
   const unitPrice = qty > 0 ? Number(x?.total || 0) / qty : 0;
   if (qty > 0) {
@@ -133,15 +133,65 @@ function normalizeSaleItems(x: any): SaleItem[] {
         sku: x?.sku || "",
         qty,
         unitPrice: Number(unitPrice || 0),
+        discount: Number(x?.discount || 0),
       },
     ];
   }
   return [];
 }
 
-/**
- * Calcula COGS por FIFO.
- */
+// ===== Normalización completa de cada doc de venta =====
+function normalizeSale(raw: any, id: string): SaleDoc | null {
+  const date = ensureDate(raw);
+  if (!date) return null;
+
+  if (Array.isArray(raw.items)) {
+    return {
+      id,
+      date,
+      type: (raw.type || "CONTADO") as SaleType,
+      total: Number(raw.total ?? raw.itemsTotal ?? 0),
+      items: raw.items.map((it: any) => ({
+        productId: String(it.productId || ""),
+        productName: String(it.productName || ""),
+        sku: it.sku || "",
+        qty: Number(it.qty || 0),
+        unitPrice: Number(
+          it.unitPrice ??
+            (Number(it.total || 0) / Math.max(1, Number(it.qty || 0)) || 0)
+        ),
+        discount: Number(it.discount || 0),
+      })),
+      customerId: raw.customerId || undefined,
+    };
+  }
+
+  const single = raw.item || {};
+  const qty = Number(raw.quantity ?? single.qty ?? 0);
+  const lineTotal = Number(raw.total ?? raw.itemsTotal ?? single.total ?? 0);
+
+  return {
+    id,
+    date,
+    type: (raw.type || "CONTADO") as SaleType,
+    total: Number(raw.total ?? raw.itemsTotal ?? lineTotal ?? 0),
+    items: [
+      {
+        productId: String(single.productId || raw.productId || ""),
+        productName: String(single.productName || raw.productName || ""),
+        sku: single.sku || raw.sku || "",
+        qty,
+        unitPrice: Number(
+          single.unitPrice ?? (lineTotal && qty ? lineTotal / qty : 0)
+        ),
+        discount: Number(single.discount || 0),
+      },
+    ],
+    customerId: raw.customerId || undefined,
+  };
+}
+
+/** COGS por FIFO */
 function computeFifoCogs(
   batches: BatchRow[],
   salesUpToToDate: SaleDoc[],
@@ -202,6 +252,8 @@ function computeFifoCogs(
 }
 
 export default function FinancialDashboardClothes() {
+  const { refreshKey, refresh } = useManualRefresh();
+
   const [fromDate, setFromDate] = useState(
     format(startOfMonth(new Date()), "yyyy-MM-dd")
   );
@@ -223,188 +275,20 @@ export default function FinancialDashboardClothes() {
   const [modalPieces, setModalPieces] = useState<CreditPiece[]>([]);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalKpis, setModalKpis] = useState({
-    totalFiado: 0,
+    totalBruto: 0, // NUEVO
+    totalDescuento: 0, // NUEVO
+    totalFiado: 0, // Neto (bruto - descuento)
     saldoActual: 0,
     abonadoPeriodo: 0,
   });
 
-  // Añade este helper encima del useEffect (debajo de ensureDate está bien)
-  function normalizeSale(raw: any, id: string): SaleDoc | null {
-    const date = ensureDate(raw);
-    if (!date) return null;
-
-    // Preferir array `items` si existe
-    if (Array.isArray(raw.items)) {
-      return {
-        id,
-        date,
-        type: (raw.type || "CONTADO") as SaleType,
-        total: Number(raw.total ?? raw.itemsTotal ?? 0),
-        items: raw.items.map((it: any) => ({
-          productId: String(it.productId || ""),
-          productName: String(it.productName || ""),
-          sku: it.sku || "",
-          qty: Number(it.qty || 0),
-          unitPrice: Number(
-            it.unitPrice ??
-              (Number(it.total || 0) / Math.max(1, Number(it.qty || 0)) || 0)
-          ),
-        })),
-        customerId: raw.customerId || undefined,
-      };
-    }
-
-    // Soportar shape "viejo": 1 item (o campos planos)
-    const single = raw.item || {};
-    const qty = Number(raw.quantity ?? single.qty ?? 0);
-    const lineTotal = Number(raw.total ?? raw.itemsTotal ?? single.total ?? 0);
-
-    return {
-      id,
-      date,
-      type: (raw.type || "CONTADO") as SaleType,
-      total: Number(raw.total ?? raw.itemsTotal ?? lineTotal ?? 0),
-      items: [
-        {
-          productId: String(single.productId || raw.productId || ""),
-          productName: String(single.productName || raw.productName || ""),
-          sku: single.sku || raw.sku || "",
-          qty,
-          unitPrice: Number(
-            single.unitPrice ?? (lineTotal && qty ? lineTotal / qty : 0)
-          ),
-        },
-      ],
-      customerId: raw.customerId || undefined,
-    };
-  }
-
-  // useEffect(() => {
-
-  //   (async () => {
-  //     setLoading(true);
-  //     setMsg("");
-  //     try {
-  //       // ===== Ventas (todas hasta toDate) =====
-  //       const sSnap = await getDocs(collection(db, "sales_clothes"));
-  //       const allSales: SaleDoc[] = [];
-  //       const rangeSales: SaleDoc[] = [];
-  //       sSnap.forEach((d) => {
-  //         const x = d.data() as any;
-  //         const date = ensureDate(x);
-  //         if (!date) return;
-
-  //         const items = normalizeSaleItems(x);
-
-  //         const doc: SaleDoc = {
-  //           id: d.id,
-  //           date,
-  //           type: (x.type || "CONTADO") as SaleType,
-  //           total: Number(x.total || x.itemsTotal || 0),
-  //           items,
-  //           customerId: x.customerId || undefined,
-  //         };
-
-  //         if (date <= toDate) allSales.push(doc);
-  //         if (date >= fromDate && date <= toDate) rangeSales.push(doc);
-  //       });
-  //       setSalesUpToToDate(allSales);
-  //       setSalesRange(rangeSales);
-
-  //       // ===== Lotes (todos hasta toDate) =====
-  //       const bSnap = await getDocs(
-  //         collection(db, "inventory_clothes_batches")
-  //       );
-  //       const allBatches: BatchRow[] = [];
-  //       bSnap.forEach((d) => {
-  //         const x = d.data() as any;
-  //         const date = ensureDate(x);
-  //         if (!date || date > toDate) return;
-  //         allBatches.push({
-  //           id: d.id,
-  //           productId: x.productId,
-  //           productName: x.productName || "",
-  //           date,
-  //           quantity: Number(x.quantity || 0),
-  //           remaining: Number(x.remaining || 0),
-  //           purchasePrice: Number(x.purchasePrice || 0),
-  //         });
-  //       });
-  //       setBatchesUpToToDate(allBatches);
-
-  //       // ===== Gastos (solo rango) =====
-  //       const eSnap = await getDocs(collection(db, "expenses_clothes"));
-  //       const eList: ExpenseRow[] = [];
-  //       eSnap.forEach((d) => {
-  //         const x = d.data() as any;
-  //         const date = ensureDate(x);
-  //         if (!date) return;
-  //         if (date >= fromDate && date <= toDate) {
-  //           eList.push({
-  //             id: d.id,
-  //             date,
-  //             category: x.category || "",
-  //             description: x.description || "",
-  //             amount: Number(x.amount || 0),
-  //             status: x.status || "",
-  //           });
-  //         }
-  //       });
-  //       setExpenses(eList);
-
-  //       // ===== Movimientos (abonos rango, balances totales) =====
-  //       const mSnap = await getDocs(collection(db, "ar_movements"));
-  //       const abonosRange: Movement[] = [];
-  //       const balanceByCust: Record<string, number> = {};
-  //       mSnap.forEach((d) => {
-  //         const x = d.data() as any;
-  //         const date = ensureDate(x);
-  //         if (!date) return;
-  //         const cid = x.customerId;
-  //         const amt = Number(x.amount || 0);
-  //         if (cid) balanceByCust[cid] = (balanceByCust[cid] || 0) + amt;
-  //         if (x.type === "ABONO" && date >= fromDate && date <= toDate) {
-  //           abonosRange.push({
-  //             id: d.id,
-  //             customerId: cid,
-  //             type: "ABONO",
-  //             amount: amt,
-  //             date,
-  //           });
-  //         }
-  //       });
-  //       setAbonos(abonosRange);
-
-  //       // ===== Clientes (para nombres + balance) =====
-  //       const cSnap = await getDocs(collection(db, "customers_clothes"));
-  //       const cList: Customer[] = [];
-  //       cSnap.forEach((d) => {
-  //         const x = d.data() as any;
-  //         cList.push({
-  //           id: d.id,
-  //           name: x.name || "",
-  //           balance: balanceByCust[d.id] || 0,
-  //         });
-  //       });
-  //       setCustomers(cList);
-  //     } catch (e) {
-  //       console.error(e);
-  //       setMsg("❌ Error cargando datos del dashboard.");
-  //     } finally {
-  //       setLoading(false);
-  //     }
-  //   })();
-  // }, [fromDate, toDate]);
-
-  // ====== COGS por FIFO ======
-
-  // Reemplaza TODO tu useEffect grande por este (solo la parte que carga datos)
+  // ===== Carga de datos =====
   useEffect(() => {
     (async () => {
       setLoading(true);
       setMsg("");
       try {
-        // ===== Ventas (todas hasta toDate) =====
+        // Ventas
         const sSnap = await getDocs(collection(db, "sales_clothes"));
         const allSales: SaleDoc[] = [];
         const rangeSales: SaleDoc[] = [];
@@ -420,7 +304,7 @@ export default function FinancialDashboardClothes() {
         setSalesUpToToDate(allSales);
         setSalesRange(rangeSales);
 
-        // ===== Lotes (todos hasta toDate) =====
+        // Lotes
         const bSnap = await getDocs(
           collection(db, "inventory_clothes_batches")
         );
@@ -441,7 +325,7 @@ export default function FinancialDashboardClothes() {
         });
         setBatchesUpToToDate(allBatches);
 
-        // ===== Gastos (solo rango) =====
+        // Gastos
         const eSnap = await getDocs(collection(db, "expenses_clothes"));
         const eList: ExpenseRow[] = [];
         eSnap.forEach((d) => {
@@ -461,7 +345,7 @@ export default function FinancialDashboardClothes() {
         });
         setExpenses(eList);
 
-        // ===== Movimientos (abonos rango, balances totales) =====
+        // Movimientos
         const mSnap = await getDocs(collection(db, "ar_movements"));
         const abonosRange: Movement[] = [];
         const balanceByCust: Record<string, number> = {};
@@ -484,7 +368,7 @@ export default function FinancialDashboardClothes() {
         });
         setAbonos(abonosRange);
 
-        // ===== Clientes (para nombres + balance) =====
+        // Clientes
         const cSnap = await getDocs(collection(db, "customers_clothes"));
         const cList: Customer[] = [];
         cSnap.forEach((d) => {
@@ -503,8 +387,9 @@ export default function FinancialDashboardClothes() {
         setLoading(false);
       }
     })();
-  }, [fromDate, toDate]);
+  }, [fromDate, toDate, refreshKey]);
 
+  // ====== COGS por FIFO ======
   const cogsFIFO = useMemo(() => {
     try {
       return computeFifoCogs(
@@ -519,7 +404,7 @@ export default function FinancialDashboardClothes() {
     }
   }, [batchesUpToToDate, salesUpToToDate, fromDate, toDate]);
 
-  // ====== KPIs ======
+  // ====== KPIs generales ======
   const kpis = useMemo(() => {
     const ventasTotales = salesRange.reduce((a, s) => a + (s.total || 0), 0);
     const gastosPeriodo = expenses.reduce((a, e) => a + (e.amount || 0), 0);
@@ -537,7 +422,6 @@ export default function FinancialDashboardClothes() {
       0
     );
 
-    // Piezas: cash vs crédito (periodo) usando items normalizados
     let prendasCash = 0;
     let prendasCredito = 0;
     for (const s of salesRange) {
@@ -595,27 +479,44 @@ export default function FinancialDashboardClothes() {
     setModalCustomer({ id: row.customerId, name: row.name });
     setModalPieces([]);
     setModalLoading(true);
-    setModalKpis({ totalFiado: 0, saldoActual: 0, abonadoPeriodo: 0 });
+    setModalKpis({
+      totalBruto: 0,
+      totalDescuento: 0,
+      totalFiado: 0,
+      saldoActual: 0,
+      abonadoPeriodo: 0,
+    });
 
     try {
-      // Piezas fiadas del periodo (ventas crédito del rango)
       const list: CreditPiece[] = [];
+      let totalBruto = 0;
+      let totalDescuento = 0;
       let totalFiado = 0;
 
       for (const s of salesRange) {
         if (s.type !== "CREDITO" || s.customerId !== row.customerId) continue;
         for (const it of s.items || []) {
-          const line = Number(it.qty || 0) * Number(it.unitPrice || 0);
+          const qty = Number(it.qty || 0);
+          const unitPrice = Number(it.unitPrice || 0);
+          const lineTotal = qty * unitPrice; // BRUTO
+          const discount = Math.max(0, Number(it.discount || 0));
+          const lineFinal = Math.max(0, lineTotal - discount); // NETO
+
           list.push({
             saleId: s.id,
             date: s.date,
             productName: it.productName,
             sku: it.sku || "",
-            qty: Number(it.qty || 0),
-            unitPrice: Number(it.unitPrice || 0),
-            lineTotal: line,
+            qty,
+            unitPrice,
+            lineTotal,
+            discount,
+            lineFinal,
           });
-          totalFiado += line;
+
+          totalBruto += lineTotal;
+          totalDescuento += discount;
+          totalFiado += lineFinal; // KPI usa NETO
         }
       }
 
@@ -627,12 +528,18 @@ export default function FinancialDashboardClothes() {
         }
       }
 
-      // Saldo actual (de toda la historia)
+      // Saldo actual (histórico)
       const cust = customers.find((c) => c.id === row.customerId);
       const saldoActual = cust?.balance || 0;
 
       setModalPieces(list);
-      setModalKpis({ totalFiado, saldoActual, abonadoPeriodo });
+      setModalKpis({
+        totalBruto,
+        totalDescuento,
+        totalFiado,
+        saldoActual,
+        abonadoPeriodo,
+      });
     } catch (e) {
       console.error(e);
       setMsg("❌ No se pudo cargar el detalle del cliente.");
@@ -643,9 +550,16 @@ export default function FinancialDashboardClothes() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Finanzas (Ropa)</h2>
+    
 
       {/* Filtro */}
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Finanzas (Ropa)</h2>
+        <RefreshButton
+          onClick={refresh}
+          loading={loading}
+        />
+      </div>
       <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
         <div className="flex flex-col">
           <label className="font-semibold">Desde</label>
@@ -865,7 +779,22 @@ export default function FinancialDashboardClothes() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            {/* Mini-resumen del periodo para este cliente */}
+            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-3">
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">
+                  Total Bruto (periodo)
+                </div>
+                <div className="text-xl font-semibold">
+                  {money(modalKpis.totalBruto)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Descuento (periodo)</div>
+                <div className="text-xl font-semibold">
+                  {money(modalKpis.totalDescuento)}
+                </div>
+              </div>
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">
                   Monto Total Fiado (periodo)
@@ -897,19 +826,21 @@ export default function FinancialDashboardClothes() {
                     <th className="p-2 border">SKU</th>
                     <th className="p-2 border">Cant.</th>
                     <th className="p-2 border">P. Unit</th>
-                    <th className="p-2 border">Monto</th>
+                    <th className="p-2 border">Monto</th> {/* Bruto */}
+                    <th className="p-2 border">Descuento</th> {/* Nuevo */}
+                    <th className="p-2 border">Monto final</th> {/* Neto */}
                   </tr>
                 </thead>
                 <tbody>
                   {modalLoading ? (
                     <tr>
-                      <td colSpan={6} className="p-4 text-center">
+                      <td colSpan={8} className="p-4 text-center">
                         Cargando…
                       </td>
                     </tr>
                   ) : modalPieces.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="p-4 text-center">
+                      <td colSpan={8} className="p-4 text-center">
                         Sin piezas fiadas en el periodo.
                       </td>
                     </tr>
@@ -924,6 +855,8 @@ export default function FinancialDashboardClothes() {
                           <td className="p-2 border">{p.qty}</td>
                           <td className="p-2 border">{money(p.unitPrice)}</td>
                           <td className="p-2 border">{money(p.lineTotal)}</td>
+                          <td className="p-2 border">{money(p.discount)}</td>
+                          <td className="p-2 border">{money(p.lineFinal)}</td>
                         </tr>
                       ))
                   )}

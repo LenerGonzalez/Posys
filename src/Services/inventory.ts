@@ -1,4 +1,3 @@
-// src/services/inventory.ts
 import { db } from "../firebase";
 import {
   addDoc,
@@ -105,11 +104,16 @@ export async function allocateSaleFIFO(
   await runTransaction(db, async (tx) => {
     let toConsume = quantity;
 
-    for (const batchId of batchIds) {
-      if (toConsume <= 0) break;
+    // 🔎 Lecturas primero
+    const batchSnaps = await Promise.all(
+      batchIds.map((batchId) => tx.get(doc(db, "inventory_batches", batchId)))
+    );
 
+    // ✍️ Escrituras después
+    for (let i = 0; i < batchIds.length && toConsume > 0; i++) {
+      const batchId = batchIds[i];
       const batchRef = doc(db, "inventory_batches", batchId);
-      const batchSnap = await tx.get(batchRef);
+      const batchSnap = batchSnaps[i];
       if (!batchSnap.exists()) continue;
 
       const batch = batchSnap.data() as any;
@@ -142,7 +146,7 @@ export async function allocateSaleFIFO(
     }
   });
 
-  // Crear allocations (ya fuera del tx)
+  // Crear allocations (fuera del tx)
   for (const alloc of pendingAllocations) {
     await addDoc(collection(db, "batch_allocations"), {
       ...alloc,
@@ -197,10 +201,11 @@ export async function allocationsByBatchInRange(from: string, to: string) {
   return Object.values(map);
 }
 
-// Restaura el stock de los lotes consumidos por una venta (usando salesV2.allocations)
-// y luego elimina la venta. Si no hay allocations, solo elimina la venta.
+/**
+ * Restaura el stock de los lotes consumidos por una venta (usando salesV2.allocations)
+ * y luego elimina la venta. Si no hay allocations, solo elimina la venta.
+ */
 export async function restoreSaleAndDelete(saleId: string) {
-  // 1) lee la venta
   const saleRef = doc(db, "salesV2", saleId);
   const saleSnap = await getDoc(saleRef);
   if (!saleSnap.exists()) {
@@ -213,21 +218,28 @@ export async function restoreSaleAndDelete(saleId: string) {
     ? sale.allocations
     : [];
 
-  // 2) si tenía allocations, devolver cantidades a los lotes en una transacción
   await runTransaction(db, async (tx) => {
-    if (allocations.length > 0) {
-      for (const a of allocations) {
-        if (!a?.batchId || !a?.qty) continue;
-        const batchRef = doc(db, "inventory_batches", a.batchId);
-        const batchSnap = await tx.get(batchRef);
-        if (!batchSnap.exists()) continue;
+    // 🔎 Lecturas primero
+    const batchRefs = allocations
+      .filter((a) => a?.batchId && a?.qty)
+      .map((a) => doc(db, "inventory_batches", a.batchId));
+    const batchSnaps = await Promise.all(batchRefs.map((ref) => tx.get(ref)));
 
-        const rem = Number((batchSnap.data() as any).remaining ?? 0);
-        const newRem = Number((rem + Number(a.qty || 0)).toFixed(2));
-        tx.update(batchRef, { remaining: newRem });
-      }
+    // ✍️ Escrituras después
+    for (let i = 0; i < batchRefs.length; i++) {
+      const ref = batchRefs[i];
+      const snap = batchSnaps[i];
+      if (!snap.exists()) continue;
+
+      const data = snap.data() as any;
+      const rem = Number(data.remaining ?? 0);
+      const qty = Number(allocations[i]?.qty || 0);
+      const newRem = Number((rem + qty).toFixed(3));
+
+      tx.update(ref, { remaining: newRem });
     }
-    // 3) borra la venta
+
+    // ✍️ Eliminar la venta
     tx.delete(saleRef);
   });
 
