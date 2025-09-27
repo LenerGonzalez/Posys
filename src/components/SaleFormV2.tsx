@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+// src/components/SaleForm.tsx
+import React, { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
 import {
   collection,
@@ -7,15 +8,16 @@ import {
   Timestamp,
   query,
   where,
+  updateDoc,
+  doc as fsDoc,
 } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { format } from "date-fns";
 import { Role } from "../apis/apis";
 import allocateFIFOAndUpdateBatches from "../Services/allocateFIFO";
-// --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
-import { updateDoc, doc as fsDoc } from "firebase/firestore";
-import { roundQty, addQty, subQty, gteQty } from "../Services/decimal";
+import { roundQty, addQty, gteQty } from "../Services/decimal";
 
+// --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
 async function fixBatchesProductIdByName(
   productName: string,
   newProductId: string
@@ -50,34 +52,43 @@ interface Users {
   role: Role;
 }
 
+// Ítem del carrito
+type CartItem = {
+  productId: string;
+  productName: string;
+  measurement: string; // "lb" o unidad
+  price: number; // unitario
+  stock: number; // existencias calculadas
+  qty: number; // cantidad elegida
+  discount: number; // entero C$ por línea
+};
+
 export default function SaleForm({ user }: { user: any }) {
+  // ===== Catálogos =====
   const [products, setProducts] = useState<Product[]>([]);
+  const [users, setUsers] = useState<Users[]>([]);
+
+  // ===== Form =====
   const [selectedProductId, setSelectedProductId] = useState("");
-  const [quantity, setQuantity] = useState<number>(0);
+  const [saleDate, setSaleDate] = useState<string>(
+    format(new Date(), "yyyy-MM-dd")
+  );
+  const [clientName, setClientName] = useState("");
 
-  // 👇 editable con flag (igual que tenías)
-  const [amountCharged, setAmountCharged] = useState<number>(0);
-  const [manualAmount, setManualAmount] = useState(false);
+  // Carrito
+  const [items, setItems] = useState<CartItem[]>([]);
 
+  // Totales (mantengo tus nombres para compatibilidad)
+  const [amountCharged, setAmountCharged] = useState<number>(0); // total neto
   const [amountReceived, setAmountReceived] = useState<number>(0);
   const [amountChange, setChange] = useState<string>("0");
 
   const [message, setMessage] = useState("");
-  const [users, setUsers] = useState<Users[]>([]);
-  const [clientName, setClientName] = useState("");
-
-  // 🔵 NUEVO: fecha de la venta (por defecto hoy)
-  const [saleDate, setSaleDate] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
-  );
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
+  const qty3 = (n: number) => roundQty(n).toFixed(3);
 
-  // Detectar si el producto actual es de unidades (no libras)
-  const selectedProduct = products.find((p) => p.id === selectedProductId);
-  const isUnit = (selectedProduct?.measurement || "").toLowerCase() !== "lb";
-
-  // ---- helpers de stock (ajustados a 3 decimales) --------------------------
+  // ---- helpers stock (a 3 decimales) ---------------------------------------
   const getDisponibleByProductId = async (productId: string) => {
     if (!productId) return 0;
     const qId = query(
@@ -88,9 +99,9 @@ export default function SaleForm({ user }: { user: any }) {
     let total = 0;
     snap.forEach((d) => {
       const b = d.data() as any;
-      total = addQty(total, Number(b.remaining || 0)); // 🔵 suma segura a 3 dec
+      total = addQty(total, Number(b.remaining || 0));
     });
-    return roundQty(total); // 🔵 normaliza
+    return roundQty(total);
   };
 
   const getDisponibleByName = async (productName: string) => {
@@ -101,80 +112,128 @@ export default function SaleForm({ user }: { user: any }) {
       const b = d.data() as any;
       const name = (b.productName || "").trim().toLowerCase();
       if (name === productName.trim().toLowerCase()) {
-        total = addQty(total, Number(b.remaining || 0)); // 🔵
+        total = addQty(total, Number(b.remaining || 0));
       }
     });
-    return roundQty(total); // 🔵
+    return roundQty(total);
   };
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
 
-  // Cargar productos (SOLO activos)
+  // Cargar productos (activos)
   useEffect(() => {
-    async function fetchProducts() {
-      const querySnapshot = await getDocs(collection(db, "products"));
-      const data: Product[] = [];
-      querySnapshot.forEach((docSnap) => {
-        const item = docSnap.data() as any;
-        if (item?.active === false) return;
-        data.push({
+    (async () => {
+      const snap = await getDocs(collection(db, "products"));
+      const list: Product[] = [];
+      snap.forEach((docSnap) => {
+        const x = docSnap.data() as any;
+        if (x?.active === false) return;
+        list.push({
           id: docSnap.id,
-          productName: item.name ?? item.productName ?? "(sin nombre)",
-          price: Number(item.price ?? 0),
-          measurement: item.measurement ?? "(sin unidad)",
-          category: item.category ?? "(sin categoría)",
+          productName: x.name ?? x.productName ?? "(sin nombre)",
+          price: Number(x.price ?? 0),
+          measurement: x.measurement ?? "(sin unidad)",
+          category: x.category ?? "(sin categoría)",
         });
       });
-      setProducts(data);
-    }
-    fetchProducts();
+      setProducts(list);
+    })();
   }, []);
 
-  // Cargar usuarios
+  // Cargar usuarios (igual que tenías)
   useEffect(() => {
-    async function fetchUsers() {
-      const querySnapshot = await getDocs(collection(db, "users"));
-      const data: Users[] = [];
-      querySnapshot.forEach((docSnap) => {
-        const item = docSnap.data() as any;
-        data.push({
+    (async () => {
+      const snap = await getDocs(collection(db, "users"));
+      const list: Users[] = [];
+      snap.forEach((docSnap) => {
+        const x = docSnap.data() as any;
+        list.push({
           id: docSnap.id,
-          email: item.email ?? "(sin email)",
-          role: item.role ?? "USER",
+          email: x.email ?? "(sin email)",
+          role: x.role ?? "USER",
         });
       });
-      setUsers(data);
-    }
-    fetchUsers();
+      setUsers(list);
+    })();
   }, []);
 
-  // Si cambia el producto, volver a modo automático del monto
-  useEffect(() => {
-    setManualAmount(false);
-  }, [selectedProductId]);
-
-  // Calcular monto sugerido (cuando NO tocaste manualmente)
-  useEffect(() => {
-    const product = products.find((p) => p.id === selectedProductId);
-    if (!product) {
-      setAmountCharged(0);
+  // Agregar producto al carrito (bloquea repetidos)
+  const addSelectedProduct = async () => {
+    if (!selectedProductId) return;
+    const p = products.find((pp) => pp.id === selectedProductId);
+    if (!p) return;
+    if (items.some((it) => it.productId === p.id)) {
+      setSelectedProductId("");
       return;
     }
-    const qty = Number(quantity) || 0;
-    if (!manualAmount) {
-      const calc = round2(product.price * qty);
-      setAmountCharged(calc);
+    const stock = await getDisponibleByProductId(p.id);
+    setItems((prev) => [
+      ...prev,
+      {
+        productId: p.id,
+        productName: p.productName,
+        measurement: p.measurement,
+        price: Number(p.price || 0),
+        stock,
+        qty: 0,
+        discount: 0,
+      },
+    ]);
+    setSelectedProductId("");
+  };
+
+  // Quitar producto
+  const removeItem = (productId: string) => {
+    setItems((prev) => prev.filter((it) => it.productId !== productId));
+  };
+
+  // Actualizar cantidad (solo cambia qty; existencias visibles = stock - qty)
+  const setItemQty = async (productId: string, raw: string) => {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.productId !== productId) return it;
+        const isUnit = (it.measurement || "").toLowerCase() !== "lb";
+        const num = raw === "" ? 0 : Number(raw);
+        const qty = isUnit ? Math.max(0, Math.round(num)) : roundQty(num);
+        return { ...it, qty };
+      })
+    );
+  };
+
+  // Actualizar descuento (entero)
+  const setItemDiscount = (productId: string, raw: string) => {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.productId !== productId) return it;
+        const d = Math.max(0, Math.floor(Number(raw || 0)));
+        return { ...it, discount: d };
+      })
+    );
+  };
+
+  // Recalcular total neto (precio×cantidad − descuento)
+  const cartTotal = useMemo(() => {
+    let sum = 0;
+    for (const it of items) {
+      const line = Number(it.price || 0) * Number(it.qty || 0);
+      const net = Math.max(0, line - Math.max(0, Number(it.discount || 0)));
+      sum += net;
     }
-  }, [selectedProductId, quantity, products, manualAmount]);
+    return round2(sum);
+  }, [items]);
+
+  // Sincroniza total con tu campo amountCharged
+  useEffect(() => {
+    setAmountCharged(cartTotal);
+  }, [cartTotal]);
 
   // Calcular vuelto
   useEffect(() => {
     const validReceived = Number(amountReceived) || 0;
     const validCharged = Number(amountCharged) || 0;
-    const change = (validReceived - validCharged).toFixed(2);
-    setChange(change);
+    setChange((validReceived - validCharged).toFixed(2));
   }, [amountReceived, amountCharged]);
 
-  // Bloquear coma y permitir punto en inputs numéricos
+  // Bloquear coma y permitir punto
   const numberKeyGuard = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === ",") {
       e.preventDefault();
@@ -182,231 +241,332 @@ export default function SaleForm({ user }: { user: any }) {
     }
   };
 
+  // Validación rápida
+  const validate = async (): Promise<string | null> => {
+    if (items.length === 0) return "Agrega al menos un producto.";
+    for (const it of items) {
+      if (!it.qty || it.qty <= 0) {
+        return `Cantidad inválida para "${it.productName}".`;
+      }
+      const disponibleById = await getDisponibleByProductId(it.productId);
+      if (!gteQty(disponibleById, it.qty)) {
+        const disponibleByName = await getDisponibleByName(it.productName);
+        if (gteQty(disponibleByName, 0) && !gteQty(disponibleById, 0)) {
+          const changed = await fixBatchesProductIdByName(
+            it.productName,
+            it.productId
+          );
+          const dispAfter = await getDisponibleByProductId(it.productId);
+          if (!gteQty(dispAfter, it.qty)) {
+            return `Stock insuficiente tras corregir ${changed} lote(s) para "${it.productName}".`;
+          }
+        } else {
+          return `Stock insuficiente para "${it.productName}". Disponible: ${disponibleById}`;
+        }
+      }
+    }
+    return null;
+  };
+
+  // Guardar venta (multi-ítem)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
 
-    const product = products.find((p) => p.id === selectedProductId);
-    // 🔵 qty normalizado: entero si unidad, 3 dec si libra
-    const qtyRaw = Number(quantity) || 0;
-    const qty = isUnit ? Math.max(0, Math.round(qtyRaw)) : roundQty(qtyRaw); // 🔵
-    const chg = Number(amountCharged) || 0;
-
-    if (!product || qty <= 0) {
-      setMessage("Selecciona un producto y una cantidad válida.");
+    const err = await validate();
+    if (err) {
+      setMessage("❌ " + err);
       return;
     }
 
     try {
-      // --- Verificación previa de stock (con normalización) ---
-      const disponibleById = await getDisponibleByProductId(product.id);
+      // 1) Asignar FIFO y descontar por ítem
+      const enriched = [];
+      for (const it of items) {
+        const qty = it.qty;
+        const { allocations, avgUnitCost, cogsAmount } =
+          await allocateFIFOAndUpdateBatches(db, it.productName, qty, false);
 
-      if (!gteQty(disponibleById, qty)) {
-        // 🔵 comparación robusta
-        const disponibleByName = await getDisponibleByName(product.productName);
+        const line = Number(it.price || 0) * Number(qty || 0);
+        const discount = Math.max(0, Number(it.discount || 0));
+        const net = Math.max(0, line - discount);
 
-        if (gteQty(disponibleByName, 0) && !gteQty(disponibleById, 0)) {
-          const changed = await fixBatchesProductIdByName(
-            product.productName,
-            product.id
-          );
-          const dispAfter = await getDisponibleByProductId(product.id);
-
-          if (!gteQty(dispAfter, qty)) {
-            const faltan = roundQty(qty - dispAfter);
-            setMessage(
-              `❌ Stock insuficiente tras corregir ${changed} lote(s). Faltan ${faltan.toFixed(
-                3
-              )} unidades.`
-            );
-            return;
-          } else {
-            setMessage(
-              `✅ Lotes corregidos (${changed}). Continuando con la venta…`
-            );
-          }
-        } else {
-          const faltan = roundQty(qty - disponibleById);
-          setMessage(
-            `❌ Stock insuficiente para "${
-              product.productName
-            }". Faltan ${faltan.toFixed(3)} unidades.`
-          );
-          return;
-        }
+        enriched.push({
+          productId: it.productId,
+          productName: it.productName,
+          measurement: it.measurement,
+          unitPrice: Number(it.price || 0),
+          qty,
+          discount,
+          lineTotal: round2(line),
+          lineFinal: round2(net),
+          allocations,
+          avgUnitCost,
+          cogsAmount,
+        });
       }
-      // -----------------------------------------------------------
 
-      // 1) Asignar FIFO y descontar de lotes
-      const { allocations, avgUnitCost, cogsAmount } =
-        await allocateFIFOAndUpdateBatches(db, product.productName, qty, false);
+      // 2) Totales
+      const itemsTotal = enriched.reduce((a, x) => a + x.lineFinal, 0);
+      const qtyTotal = enriched.reduce((a, x) => a + Number(x.qty || 0), 0);
 
-      // 2) Registrar venta en salesV2
+      // 3) Registrar venta en salesV2
       await addDoc(collection(db, "salesV2"), {
         id: uuidv4(),
-        productId: selectedProductId,
-        productName: product.productName,
-        price: product.price,
-
-        quantity: qty, // 🔵 normalizado
-        amount: chg,
-        amountCharged: chg,
-
+        quantity: qtyTotal,
+        amount: itemsTotal,
+        amountCharged: itemsTotal,
         amountReceived: Number(amountReceived) || 0,
         change: amountChange,
         clientName: clientName.trim(),
 
         timestamp: Timestamp.now(),
-        date: saleDate, // 🔵 usa la fecha elegida
-
+        date: saleDate,
         userEmail: users[0]?.email ?? "sin usuario",
         vendor: users[0]?.role ?? "sin usuario",
-
         status: "FLOTANTE",
 
-        allocations,
-        avgUnitCost,
-        cogsAmount,
+        items: enriched,
+        itemsTotal: itemsTotal,
       });
 
       setMessage("✅ Venta registrada y asignada a inventario (FIFO).");
-
-      // Reset
+      setItems([]);
       setSelectedProductId("");
-      setQuantity(0);
-      setManualAmount(false);
       setAmountCharged(0);
       setAmountReceived(0);
       setChange("0");
       setClientName("");
-      setSaleDate(format(new Date(), "yyyy-MM-dd")); // reset a hoy
+      setSaleDate(format(new Date(), "yyyy-MM-dd"));
     } catch (err: any) {
       console.error(err);
       setMessage(`❌ ${err?.message || "Error al registrar la venta."}`);
     }
   };
 
+  // Productos ya elegidos (para bloquear en el select)
+  const chosenIds = useMemo(
+    () => new Set(items.map((i) => i.productId)),
+    [items]
+  );
+
   return (
     <form
       onSubmit={handleSubmit}
       className="w-full mx-auto bg-white rounded-2xl shadow-2xl
                  p-4 sm:p-6 md:p-8
-                 max-w-md sm:max-w-lg md:max-w-xl lg:max-w-2xl
-                 space-y-4"
+                 max-w-5xl space-y-4"
     >
-      <h2 className="text-xl sm:text-2xl font-bold mb-2 sm:mb-4 text-blue-700 flex items-center gap-2">
-        <span className="block bg-blue-100 text-blue-700 rounded-full p-2">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5 sm:h-6 sm:w-6"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 10c-4.41 0-8-1.79-8-4V6c0-2.21 3.59-4 8-4s8 1.79 8 4v8c0 2.21-3.59 4-8 4z"
-            />
-          </svg>
-        </span>
-        Registrar venta
-      </h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl sm:text-2xl font-bold text-blue-700 whitespace-nowrap">
+          Registrar venta (Pollo)
+        </h2>
+      </div>
 
-      {/* Producto */}
+      {/* Selector de producto */}
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
           Producto | Precio por Libra/Unidad
         </label>
-        <select
-          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={selectedProductId}
-          onChange={(e) => setSelectedProductId(e.target.value)}
-        >
-          <option value="" disabled>
-            Selecciona un producto
-          </option>
-          {products.map((product) => (
-            <option key={product.id} value={product.id}>
-              {product.productName} - C$ {product.price}
+        <div className="flex gap-2">
+          <select
+            className="flex-1 border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+            value={selectedProductId}
+            onChange={(e) => setSelectedProductId(e.target.value)}
+          >
+            <option value="" disabled>
+              Selecciona un producto
             </option>
-          ))}
-        </select>
+            {products.map((p) => (
+              <option
+                key={p.id}
+                value={p.id}
+                disabled={chosenIds.has(p.id)}
+                title={chosenIds.has(p.id) ? "Ya está en la lista" : ""}
+              >
+                {p.productName} — {p.measurement} — C$ {p.price}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={addSelectedProduct}
+            disabled={!selectedProductId || chosenIds.has(selectedProductId)}
+            className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            Agregar
+          </button>
+        </div>
       </div>
 
-      {/* 🔵 NUEVO: Fecha de la venta */}
-      <div className="space-y-1">
-        <label className="block text-sm font-semibold text-gray-700">
-          Fecha de la venta
-        </label>
-        <input
-          type="date"
-          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={saleDate}
-          onChange={(e) => setSaleDate(e.target.value)}
-        />
+      {/* Fecha / Cliente */}
+      <div className="grid md:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="block text-sm font-semibold text-gray-700">
+            Fecha de la venta
+          </label>
+          <input
+            type="date"
+            className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+            value={saleDate}
+            onChange={(e) => setSaleDate(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="block text-sm font-semibold text-gray-700">
+            Cliente
+          </label>
+          <input
+            className="w-full border border-gray-300 p-2 rounded"
+            value={clientName}
+            onChange={(e) => setClientName(e.target.value)}
+            placeholder="Opcional"
+          />
+        </div>
       </div>
 
-      {/* Cantidad */}
-      <div className="space-y-1">
-        <label className="block text-sm font-semibold text-gray-700">
-          Libras - Unidad
-        </label>
-        <input
-          type="number"
-          lang="eng"
-          step={isUnit ? 1 : 0.01}
-          inputMode={isUnit ? "numeric" : "decimal"}
-          className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-          value={quantity === 0 ? "" : quantity}
-          onKeyDown={numberKeyGuard}
-          onFocus={(e) => {
-            if (e.target.value === "0") e.target.value = "";
-          }}
-          onChange={(e) => {
-            const value = e.target.value.replace(",", ".");
-            const num = value === "" ? 0 : parseFloat(value);
-
-            if (isUnit) {
-              const intVal = Number.isFinite(num)
-                ? Math.max(0, Math.round(num))
-                : 0;
-              setQuantity(intVal);
-            } else {
-              setQuantity(Number.isFinite(num) ? num : 0);
-            }
-          }}
-          disabled={!selectedProductId}
-          placeholder={
-            !selectedProductId ? "Selecciona un producto primero" : ""
-          }
-          title={
-            !selectedProductId ? "Selecciona un producto para habilitar" : ""
-          }
-        />
+      {/* Lista de ítems */}
+      <div className="rounded border overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-100">
+            <tr className="text-center">
+              <th className="p-2 border whitespace-nowrap">Producto</th>
+              <th className="p-2 border whitespace-nowrap">Precio</th>
+              <th className="p-2 border whitespace-nowrap">Existencias</th>
+              <th className="p-2 border whitespace-nowrap">Cantidad</th>
+              <th className="p-2 border whitespace-nowrap">Descuento</th>
+              <th className="p-2 border whitespace-nowrap">Monto</th>
+              <th className="p-2 border">—</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="p-4 text-center text-gray-500">
+                  Agrega productos al carrito.
+                </td>
+              </tr>
+            ) : (
+              items.map((it) => {
+                const line = Number(it.price || 0) * Number(it.qty || 0);
+                const net = Math.max(
+                  0,
+                  line - Math.max(0, Number(it.discount || 0))
+                );
+                const isUnit = (it.measurement || "").toLowerCase() !== "lb";
+                const shownExist = roundQty(
+                  Number(it.stock) - Number(it.qty || 0)
+                ); // 🔵 stock dinámico
+                return (
+                  <tr key={it.productId} className="text-center">
+                    <td className="p-2 border whitespace-nowrap">
+                      {it.productName} — {it.measurement}
+                    </td>
+                    <td className="p-2 border whitespace-nowrap">
+                      C$ {round2(it.price).toFixed(2)}
+                    </td>
+                    <td className="p-2 border whitespace-nowrap">
+                      {shownExist.toFixed(3)}
+                    </td>
+                    <td className="p-2 border">
+                      <input
+                        type="number"
+                        step={isUnit ? 1 : 0.01}
+                        inputMode={isUnit ? "numeric" : "decimal"}
+                        className="w-28 border p-1 rounded text-right"
+                        value={it.qty === 0 ? "" : it.qty}
+                        onKeyDown={numberKeyGuard}
+                        onChange={(e) =>
+                          setItemQty(it.productId, e.target.value)
+                        }
+                        placeholder="0"
+                        title="Cantidad"
+                      />
+                    </td>
+                    <td className="p-2 border">
+                      <input
+                        type="number"
+                        step={1}
+                        min={0}
+                        className="w-24 border p-1 rounded text-right"
+                        value={it.discount === 0 ? "" : it.discount}
+                        onChange={(e) =>
+                          setItemDiscount(it.productId, e.target.value)
+                        }
+                        inputMode="numeric"
+                        placeholder="0"
+                        title="Descuento (entero C$)"
+                      />
+                    </td>
+                    <td className="p-2 border whitespace-nowrap">
+                      C$ {round2(net).toFixed(2)}
+                    </td>
+                    <td className="p-2 border">
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
+                        onClick={() => removeItem(it.productId)}
+                        title="Quitar"
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
-      {/* Monto total (READONLY como lo tenías) */}
+      {/* Total de la venta (readOnly) */}
       <div className="space-y-1">
         <label className="block text-sm font-semibold text-gray-700">
           💵 Monto total
         </label>
         <input
-          type="number"
-          step="0.01"
-          readOnly
-          inputMode="decimal"
+          type="text"
           className="w-full border border-gray-300 p-2 rounded bg-gray-100"
-          value={amountCharged === 0 ? "" : amountCharged.toFixed(2)}
-          onKeyDown={numberKeyGuard}
+          value={`C$ ${amountCharged.toFixed(2)}`}
+          readOnly
+          title="Suma de (precio × cantidad − descuento) de cada producto."
         />
       </div>
 
-      {/* Botón */}
+      {/* Pago recibido / Cambio */}
+      <div className="grid grid-cols-2 gap-x-3">
+        <div className="space-y-1">
+          <label className="block text-sm font-semibold text-gray-700">
+            Monto recibido
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            inputMode="decimal"
+            className="w-full border border-gray-300 p-2 rounded"
+            value={amountReceived === 0 ? "" : amountReceived}
+            onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="block text-sm font-semibold text-gray-700">
+            Cambio
+          </label>
+          <input
+            type="text"
+            className="w-full border border-gray-300 p-2 rounded bg-gray-100"
+            value={`C$ ${amountChange}`}
+            readOnly
+          />
+        </div>
+      </div>
+
+      {/* Guardar */}
       <button
         type="submit"
-        className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition"
+        className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50"
+        disabled={items.length === 0}
       >
         Guardar venta
       </button>

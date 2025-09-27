@@ -260,6 +260,7 @@ export default function FinancialDashboardClothes() {
   const [toDate, setToDate] = useState(
     format(endOfMonth(new Date()), "yyyy-MM-dd")
   );
+  
 
   const [salesRange, setSalesRange] = useState<SaleDoc[]>([]);
   const [salesUpToToDate, setSalesUpToToDate] = useState<SaleDoc[]>([]);

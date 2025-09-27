@@ -1,3 +1,4 @@
+// src/components/financialDashboard.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
 import {
@@ -8,10 +9,12 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { format } from "date-fns";
+import RefreshButton from "../components/common/RefreshButton";
+import useManualRefresh from "../hooks/useManualRefresh";
 
-// Helpers
 const money = (n: unknown) => `C$${Number(n ?? 0).toFixed(2)}`;
 const todayStr = () => format(new Date(), "yyyy-MM-dd");
+const qty3 = (n: number) => Number(n || 0).toFixed(3);
 
 type Allocation = {
   batchId: string;
@@ -26,23 +29,22 @@ type SaleDoc = {
   productName: string;
   quantity: number;
   amount: number; // ingreso
-  allocations?: Allocation[]; // costos reales por lote
-  avgUnitCost?: number; // backup: costo unitario promedio guardado
+  allocations?: Allocation[];
+  avgUnitCost?: number;
 };
 
 type ExpenseDoc = {
   id: string;
-  date: string; // "yyyy-MM-dd"
+  date: string;
   category: string;
   description?: string;
-  amount: number; // Monto del gasto (+)
+  amount: number;
   status?: "PAGADO" | "PENDIENTE";
   createdAt?: Timestamp;
 };
 
 export default function FinancialDashboard(): React.ReactElement {
   const [from, setFrom] = useState(() => {
-    // mes actual inicio
     const d = new Date();
     const first = new Date(d.getFullYear(), d.getMonth(), 1);
     return format(first, "yyyy-MM-dd");
@@ -53,7 +55,8 @@ export default function FinancialDashboard(): React.ReactElement {
   const [sales, setSales] = useState<SaleDoc[]>([]);
   const [expenses, setExpenses] = useState<ExpenseDoc[]>([]);
 
-  // Carga ventas y gastos por rango (strings "yyyy-MM-dd")
+  const { refreshKey, refresh } = useManualRefresh();
+
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -66,11 +69,41 @@ export default function FinancialDashboard(): React.ReactElement {
       );
       const sSnap = await getDocs(qs);
       const sRows: SaleDoc[] = [];
+
       sSnap.forEach((d) => {
         const x = d.data() as any;
+        const baseDate = x.date ?? "";
+
+        // 🔵 Si hay items[], crear UNA fila por ítem
+        if (Array.isArray(x.items) && x.items.length > 0) {
+          x.items.forEach((it: any, idx: number) => {
+            const prod = String(it.productName ?? "(sin nombre)");
+            const qty = Number(it.qty ?? 0);
+            const lineFinal =
+              Number(it.lineFinal ?? 0) ||
+              Math.max(
+                0,
+                Number(it.unitPrice || 0) * qty - Number(it.discount || 0)
+              );
+            sRows.push({
+              id: `${d.id}#${idx}`,
+              date: baseDate,
+              productName: prod,
+              quantity: qty,
+              amount: lineFinal,
+              allocations: Array.isArray(it.allocations)
+                ? it.allocations
+                : x.allocations,
+              avgUnitCost: Number(it.avgUnitCost ?? x.avgUnitCost ?? 0),
+            });
+          });
+          return;
+        }
+
+        // 🔵 Fallback al shape viejo
         sRows.push({
           id: d.id,
-          date: x.date ?? "",
+          date: baseDate,
           productName: x.productName ?? "(sin nombre)",
           quantity: Number(x.quantity ?? 0),
           amount: Number(x.amount ?? x.amountCharged ?? 0),
@@ -78,6 +111,7 @@ export default function FinancialDashboard(): React.ReactElement {
           avgUnitCost: Number(x.avgUnitCost ?? 0),
         });
       });
+
       setSales(sRows);
 
       // Gastos
@@ -105,43 +139,32 @@ export default function FinancialDashboard(): React.ReactElement {
       setLoading(false);
     };
     load();
-  }, [from, to]);
+  }, [from, to, refreshKey]);
 
-  // --- Cálculos principales ---
+  // --- Cálculos principales (igual que tenías) ---
   const kpis = useMemo(() => {
-    // Ingreso (ventas)
     const revenue = sales.reduce((a, s) => a + (s.amount || 0), 0);
 
-    // Costo real (COGS) usando allocations; si no tiene, cae al avgUnitCost*qty
     let cogsReal = 0;
     sales.forEach((s) => {
-      if (s.allocations && s.allocations.length > 0) {
-        const line = s.allocations.reduce(
+      if (s.allocations?.length) {
+        cogsReal += s.allocations.reduce(
           (x, a) => x + Number(a.lineCost || 0),
           0
         );
-        cogsReal += line;
       } else if (s.avgUnitCost && s.quantity) {
         cogsReal += Number(s.avgUnitCost) * Number(s.quantity);
-      } // si no, 0
+      }
     });
 
     const grossProfit = revenue - cogsReal;
-
-    // Gastos del periodo (puedes filtrar solo PAGADO si quieres)
     const expensesSum = expenses.reduce((a, g) => a + (g.amount || 0), 0);
     const netProfit = grossProfit - expensesSum;
 
-    return {
-      revenue,
-      cogsReal,
-      grossProfit,
-      expensesSum,
-      netProfit,
-    };
+    return { revenue, cogsReal, grossProfit, expensesSum, netProfit };
   }, [sales, expenses]);
 
-  // Consolidado por producto (unidades, ingreso, costo, utilidad)
+  // Consolidado por producto (con cantidades a 3 decimales)
   const byProduct = useMemo(() => {
     type Row = {
       productName: string;
@@ -184,7 +207,14 @@ export default function FinancialDashboard(): React.ReactElement {
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow ">
-      <h2 className="text-2xl font-bold mb-4">Finanzas</h2>
+       <div className="flex items-center justify-between mb-3">
+              <h2 className="text-2xl font-bold">Finanzas (Ropa)</h2>
+              <RefreshButton
+                onClick={refresh}
+                loading={loading}
+              />
+            </div>
+      
 
       {/* Filtro de fechas */}
       <div className="flex flex-wrap items-end gap-2 mb-4">
@@ -245,7 +275,7 @@ export default function FinancialDashboard(): React.ReactElement {
               {byProduct.map((r) => (
                 <tr key={r.productName} className="text-center">
                   <td className="border p-1">{r.productName}</td>
-                  <td className="border p-1">{r.units}</td>
+                  <td className="border p-1">{qty3(r.units)}</td>
                   <td className="border p-1">{money(r.revenue)}</td>
                   <td className="border p-1">{money(r.cogs)}</td>
                   <td

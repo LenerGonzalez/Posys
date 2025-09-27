@@ -1,4 +1,4 @@
-// src/components/ProductsClothes.tsx
+// src/components/Clothes/ProductsClothes.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
@@ -12,7 +12,11 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 
-// ====== Catálogos (puedes ampliarlos cuando quieras) ======
+// REFRESH
+import RefreshButton from "../../components/common/RefreshButton";
+import useManualRefresh from "../../hooks/useManualRefresh";
+
+// ====== Catálogos ======
 const SUBCATS = [
   "Camisa",
   "Blusa",
@@ -26,7 +30,6 @@ const SUBCATS = [
   "Suéter",
   "Accesorio",
 ];
-
 const COLORS = [
   "Negro",
   "Blanco",
@@ -41,7 +44,6 @@ const COLORS = [
   "Morado",
   "Naranja",
 ];
-
 const SIZES_ADULT = ["XS", "S", "M", "L", "XL", "2XL"];
 const SIZES_KIDS = ["2", "4", "6", "8", "10", "12", "14"];
 const SIZES_JEANS = ["26", "28", "30", "32", "34", "36", "38"];
@@ -52,8 +54,6 @@ type Brand = (typeof BRANDS)[number];
 type Gender = (typeof GENDERS)[number];
 
 // ====== Helpers ======
-const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
-
 function norm(token?: string) {
   return (token || "")
     .trim()
@@ -90,20 +90,15 @@ function generarSKU(parts: {
   const col = norm(parts.color).slice(0, 3) || "COL";
   const siz = norm(parts.size) || "TLL";
   const brd = norm(parts.brand).slice(0, 4) || "BRD";
-  // 🔵 SIN sufijo aleatorio: SKU estable igual al del producto
   return `${prefix}-${sub}-${gen}-${col}-${siz}-${brd}`;
 }
-
-// Código del cliente (opcional) A–Z 0–9 . _ -
 const CLIENT_CODE_RE = /^[A-Za-z0-9._-]{0,32}$/;
 
-// ====== Tipos ======
 interface ProductRow {
   id: string;
   name: string;
-  category: string; // subcategoría
-  measurement: string; // "unidad"
-  // Campos de ropa
+  category: string;
+  measurement: string;
   sku: string;
   size?: string;
   color?: string;
@@ -115,45 +110,41 @@ interface ProductRow {
 }
 
 export default function ProductsClothes() {
-  // ---- Formulario (campos en rojo) ----
+  // form state
   const [name, setName] = useState("");
-  const [category, setCategory] = useState<string>("Camisa"); // subcategoría
-  const [size, setSize] = useState<string>("");
-  const [color, setColor] = useState<string>("");
+  const [category, setCategory] = useState<string>("Camisa");
+  const [size, setSize] = useState("");
+  const [color, setColor] = useState("");
   const [brand, setBrand] = useState<Brand>("Shein");
   const [gender, setGender] = useState<Gender>("");
-  const [clientCode, setClientCode] = useState<string>("");
-  const [sku, setSku] = useState<string>("");
-  const [notes, setNotes] = useState<string>("");
+  const [clientCode, setClientCode] = useState("");
+  const [sku, setSku] = useState("");
+  const [notes, setNotes] = useState("");
 
-  // Lista
+  // lista
   const [rows, setRows] = useState<ProductRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+  const { refreshKey, refresh } = useManualRefresh();
 
-  // Tallas sugeridas según subcat/género
+  // modal
+  const [openForm, setOpenForm] = useState(false);
+
+  // opciones talla
   const sizeOptions = useMemo(() => {
     if (category.toLowerCase() === "jean") return SIZES_JEANS;
     if (gender === "NINO" || gender === "NINA") return SIZES_KIDS;
     return SIZES_ADULT;
   }, [category, gender]);
 
-  // 🔵 Autogenerar SKU cuando cambian los insumos (sin sufijo)
   useEffect(() => {
-    setSku(
-      generarSKU({
-        subcat: category,
-        gender,
-        color,
-        size,
-        brand,
-      })
-    );
+    setSku(generarSKU({ subcat: category, gender, color, size, brand }));
   }, [category, gender, color, size, brand]);
 
-  // Cargar lista
+  // load lista
   useEffect(() => {
     (async () => {
+      setLoading(true);
       const qP = query(
         collection(db, "products_clothes"),
         orderBy("createdAt", "desc")
@@ -180,7 +171,7 @@ export default function ProductsClothes() {
       setRows(list);
       setLoading(false);
     })();
-  }, []);
+  }, [refreshKey]);
 
   const resetForm = () => {
     setName("");
@@ -196,22 +187,19 @@ export default function ProductsClothes() {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg("");
-
     if (!name.trim()) {
       setMsg("Ingresa el nombre del producto.");
       return;
     }
     if (clientCode && !CLIENT_CODE_RE.test(clientCode)) {
-      setMsg("Código del cliente inválido (A–Z 0–9 . _ - , máx 32).");
+      setMsg("Código del cliente inválido");
       return;
     }
-
     try {
       const ref = await addDoc(collection(db, "products_clothes"), {
         name: name.trim(),
         category,
         measurement: "unidad",
-        // ropa
         sku,
         size: size || "",
         color: color || "",
@@ -221,7 +209,6 @@ export default function ProductsClothes() {
         notes: notes || "",
         createdAt: Timestamp.now(),
       });
-
       setRows((prev) => [
         {
           id: ref.id,
@@ -239,8 +226,8 @@ export default function ProductsClothes() {
         },
         ...prev,
       ]);
-
       resetForm();
+      setOpenForm(false);
       setMsg("✅ Producto de ropa creado");
     } catch (err) {
       console.error(err);
@@ -257,175 +244,188 @@ export default function ProductsClothes() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Productos de Ropa</h2>
-
-      {/* ===== Formulario ===== */}
-      <form
-        onSubmit={handleCreate}
-        className="bg-white p-4 rounded shadow border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
-      >
-        {/* Nombre / Subcategoría */}
-        <div>
-          <label className="block text-sm font-semibold">
-            Nombre del producto
-          </label>
-          <input
-            className="w-full border p-2 rounded"
-            placeholder="Ej: Blusa floral manga corta"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Subcategoría</label>
-          <select
-            className="w-full border p-2 rounded"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          >
-            {SUBCATS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Género (opcional)
-          </label>
-          <select
-            className="w-full border p-2 rounded"
-            value={gender}
-            onChange={(e) => setGender(e.target.value as Gender)}
-          >
-            {GENDERS.map((g) => (
-              <option key={g} value={g}>
-                {g || "—"}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Talla (opcional)
-          </label>
-          <select
-            className="w-full border p-2 rounded"
-            value={size}
-            onChange={(e) => setSize(e.target.value)}
-          >
-            <option value="">—</option>
-            {sizeOptions.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <div className="text-[11px] text-gray-500 mt-1">
-            Sugeridas por subcategoría/género
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Color (opcional)
-          </label>
-          <select
-            className="w-full border p-2 rounded"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-          >
-            <option value="">—</option>
-            {COLORS.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Marca / Origen (opcional)
-          </label>
-          <select
-            className="w-full border p-2 rounded"
-            value={brand}
-            onChange={(e) => setBrand(e.target.value as Brand)}
-          >
-            {BRANDS.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* SKU / Código cliente */}
-        <div>
-          <label className="block text-sm font-semibold">SKU (auto)</label>
-          <input
-            className="w-full border p-2 rounded bg-gray-100"
-            value={sku}
-            readOnly
-            placeholder="Se genera automáticamente"
-            title="Se genera de subcategoría, género, talla, color y marca"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Código del cliente (opcional)
-          </label>
-          <input
-            className="w-full border p-2 rounded"
-            placeholder="Ej: LOTE-SHEIN-SEP-01"
-            value={clientCode}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (CLIENT_CODE_RE.test(v)) setClientCode(v);
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Productos de Ropa</h2>
+        <div className="flex gap-2">
+          <RefreshButton onClick={refresh} loading={loading} />
+          <button
+            className="inline-flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+            onClick={() => {
+              setOpenForm(true);
             }}
-            title="Solo letras, números, punto, guion y guion_bajo (máx 32)"
-          />
-          {!CLIENT_CODE_RE.test(clientCode) && clientCode.length > 0 && (
-            <div className="text-xs text-red-600 mt-1">Formato inválido</div>
-          )}
-        </div>
-
-        {/* Comentario */}
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Comentario</label>
-          <textarea
-            className="w-full border p-2 rounded resize-y min-h-24"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            maxLength={500}
-            placeholder="Ej: Camisita veranera, tela delgada, tirantes…"
-          />
-          <div className="text-xs text-gray-500 text-right">
-            {notes.length}/500
-          </div>
-        </div>
-
-        <div className="md:col-span-2">
-          <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Crear producto
+          >
+            <span className="inline-block bg-green-700/40 rounded-full p-1">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 4v16m8-8H4"
+                />
+              </svg>
+            </span>
+            Nuevo producto
           </button>
         </div>
-      </form>
+      </div>
 
-      {/* ===== Lista de productos agregados ===== */}
+      {/* MODAL */}
+      {openForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-bold mb-4">Nuevo producto de ropa</h3>
+            <form
+              onSubmit={handleCreate}
+              className="grid grid-cols-1 md:grid-cols-2 gap-4"
+            >
+              <div>
+                <label className="block text-sm font-semibold">Nombre</label>
+                <input
+                  className="w-full border p-2 rounded"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Ej: Blusa floral"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">
+                  Subcategoría
+                </label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                >
+                  {SUBCATS.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">Género</label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={gender}
+                  onChange={(e) => setGender(e.target.value as Gender)}
+                >
+                  {GENDERS.map((g) => (
+                    <option key={g} value={g}>
+                      {g || "—"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">Talla</label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={size}
+                  onChange={(e) => setSize(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {sizeOptions.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">Color</label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {COLORS.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">Marca</label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={brand}
+                  onChange={(e) => setBrand(e.target.value as Brand)}
+                >
+                  {BRANDS.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">
+                  SKU (auto)
+                </label>
+                <input
+                  className="w-full border p-2 rounded bg-gray-100"
+                  value={sku}
+                  readOnly
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">
+                  Código cliente
+                </label>
+                <input
+                  className="w-full border p-2 rounded"
+                  value={clientCode}
+                  onChange={(e) => setClientCode(e.target.value)}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-semibold">
+                  Comentario
+                </label>
+                <textarea
+                  className="w-full border p-2 rounded resize-y min-h-24"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  maxLength={500}
+                />
+              </div>
+              <div className="md:col-span-2 flex justify-end gap-2 mt-2">
+                <button
+                  type="button"
+                  onClick={() => setOpenForm(false)}
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Guardar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* tabla */}
       <div className="bg-white p-2 rounded shadow border w-full">
-        <table className="min-w-full w-full text-sm">
+        <table className="min-w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
               <th className="p-2 border">Fecha</th>
               <th className="p-2 border">Subcat.</th>
-              <th className="p-2 border">Nombre Producto</th>
+              <th className="p-2 border">Nombre</th>
               <th className="p-2 border">SKU</th>
               <th className="p-2 border">Talla</th>
               <th className="p-2 border">Color</th>
@@ -439,13 +439,13 @@ export default function ProductsClothes() {
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-center" colSpan={11}>
+                <td colSpan={11} className="p-4 text-center">
                   Cargando…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td className="p-4 text-center" colSpan={11}>
+                <td colSpan={11} className="p-4 text-center">
                   Sin productos
                 </td>
               </tr>
@@ -457,26 +457,18 @@ export default function ProductsClothes() {
                       ? r.createdAt.toDate().toISOString().slice(0, 10)
                       : "—"}
                   </td>
-                  <td className="p-2 border">{r.category || "—"}</td>
+                  <td className="p-2 border">{r.category}</td>
                   <td className="p-2 border">{r.name}</td>
-                  <td className="p-2 border">{r.sku || "—"}</td>
+                  <td className="p-2 border">{r.sku}</td>
                   <td className="p-2 border">{r.size || "—"}</td>
-                  <td className="p-2 border">
-                    {r.color?.toUpperCase() || "—"}
-                  </td>
+                  <td className="p-2 border">{r.color || "—"}</td>
                   <td className="p-2 border">{r.brand || "—"}</td>
                   <td className="p-2 border">{r.gender || "—"}</td>
                   <td className="p-2 border">{r.clientCode || "—"}</td>
-                  <td className="p-2 border">
-                    <span title={r.notes || ""}>
-                      {(r.notes || "").length > 40
-                        ? (r.notes || "").slice(0, 40) + "…"
-                        : r.notes || "—"}
-                    </span>
-                  </td>
+                  <td className="p-2 border">{r.notes || "—"}</td>
                   <td className="p-2 border">
                     <button
-                      className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                      className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
                       onClick={() => handleDelete(r)}
                     >
                       Borrar
@@ -488,7 +480,6 @@ export default function ProductsClothes() {
           </tbody>
         </table>
       </div>
-
       {msg && <p className="mt-2 text-sm">{msg}</p>}
     </div>
   );

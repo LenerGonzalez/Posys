@@ -1,3 +1,4 @@
+// src/components/ProductForm.tsx
 import React, { useEffect, useState } from "react";
 import { db } from "../firebase";
 import {
@@ -42,6 +43,9 @@ export default function ProductForm() {
   const [editCategory, setEditCategory] = useState("");
   const [editMeasurement, setEditMeasurement] = useState("");
   const [editPrice, setEditPrice] = useState<number>(0);
+
+  // modal crear
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const loadProducts = async () => {
     setLoadingList(true);
@@ -93,6 +97,9 @@ export default function ProductForm() {
       setPrice(0);
       setMeasurement("");
       setCategory("");
+
+      // cerrar modal al crear
+      setShowCreateModal(false);
     } catch (err: any) {
       setMessage("❌ Error: " + err.message);
     }
@@ -180,16 +187,20 @@ export default function ProductForm() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      {/* Form Crear */}
-      <form
-        onSubmit={handleSubmit}
-        className="max-w-md mx-auto bg-white p-8 shadow-lg rounded-lg space-y-6 border border-gray-200"
-      >
-        <h2 className="text-2xl font-bold mb-4 text-green-700 flex items-center gap-2">
-          <span className="inline-block bg-green-100 text-green-700 rounded-full p-2">
+      {/* Encabezado con botón para abrir modal */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-2xl font-bold">Productos</h2>
+        <button
+          className="inline-flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+          onClick={() => {
+            setMessage("");
+            setShowCreateModal(true);
+          }}
+        >
+          <span className="inline-block bg-green-700/40 rounded-full p-1">
             <svg
               xmlns="http://www.w3.org/2000/svg"
-              className="h-6 w-6"
+              className="h-4 w-4"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -202,76 +213,122 @@ export default function ProductForm() {
               />
             </svg>
           </span>
-          Registrar producto
-        </h2>
-
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            Categoría
-          </label>
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
-          >
-            <option value="">Selecciona</option>
-            <option value="pollo">Pollo</option>
-            <option value="cerdo">Cerdo</option>
-            <option value="huevo">Huevos</option>
-            <option value="ropa">Ropa</option>
-            <option value="otros">Otros</option>
-          </select>
-        </div>
-
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            Nombre del producto
-          </label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            Tipo de unidad de medida
-          </label>
-          <select
-            value={measurement}
-            onChange={(e) => setMeasurement(e.target.value)}
-            className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
-          >
-            <option value="">Selecciona</option>
-            <option value="lb">Libra</option>
-            <option value="kg">Kilogramo</option>
-            <option value="unidad">Unidad</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm">Precio por unidad (ej: 55.50)</label>
-          <input
-            type="number"
-            step="0.01"
-            className="w-full border p-2 rounded"
-            value={Number.isNaN(price) ? "" : price}
-            onChange={(e) => setPrice(parseFloat(e.target.value))}
-            onFocus={(e) => (e.target.value === "0" ? setPrice(NaN) : null)}
-          />
-        </div>
-
-        <button
-          type="submit"
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full"
-        >
-          Agregar producto
+          Nuevo producto
         </button>
+      </div>
 
-        {message && <p className="text-sm mt-2">{message}</p>}
-      </form>
+      {/* ===== Modal: Crear producto ===== */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowCreateModal(false)}
+          />
+          <div className="relative z-10 w-[95%] max-w-lg bg-white rounded-lg shadow-2xl border p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-green-700 flex items-center gap-2">
+                <span className="inline-block bg-green-100 text-green-700 rounded-full p-2">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 4v16m8-8H4"
+                    />
+                  </svg>
+                </span>
+                Registrar producto
+              </h3>
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => setShowCreateModal(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {/* Form Crear (idéntico, solo reubicado) */}
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Categoría
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
+                >
+                  <option value="">Selecciona</option>
+                  <option value="pollo">Pollo</option>
+                  <option value="cerdo">Cerdo</option>
+                  <option value="huevo">Huevos</option>
+                  <option value="ropa">Ropa</option>
+                  <option value="otros">Otros</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Nombre del producto
+                </label>
+                <input
+                  type="text"
+                  className="w-full border p-2 rounded"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Tipo de unidad de medida
+                </label>
+                <select
+                  value={measurement}
+                  onChange={(e) => setMeasurement(e.target.value)}
+                  className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
+                >
+                  <option value="">Selecciona</option>
+                  <option value="lb">Libra</option>
+                  <option value="kg">Kilogramo</option>
+                  <option value="unidad">Unidad</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm">
+                  Precio por unidad (ej: 55.50)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="w-full border p-2 rounded"
+                  value={Number.isNaN(price) ? "" : price}
+                  onChange={(e) => setPrice(parseFloat(e.target.value))}
+                  onFocus={(e) =>
+                    e.target.value === "0" ? setPrice(NaN) : null
+                  }
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full"
+              >
+                Agregar producto
+              </button>
+
+              {message && <p className="text-sm mt-2">{message}</p>}
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Controles de lista */}
       <div className="flex items-center justify-between mt-6 mb-2">

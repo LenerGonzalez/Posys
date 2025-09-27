@@ -1,3 +1,4 @@
+// src/Services/inventory.ts
 import { db } from "../firebase";
 import {
   addDoc,
@@ -202,8 +203,10 @@ export async function allocationsByBatchInRange(from: string, to: string) {
 }
 
 /**
- * Restaura el stock de los lotes consumidos por una venta (usando salesV2.allocations)
- * y luego elimina la venta. Si no hay allocations, solo elimina la venta.
+ * Restaura el stock de los lotes consumidos por una venta y luego elimina la venta.
+ * - Soporta esquema viejo: `allocations` en la raíz + `quantity`.
+ * - Soporta esquema nuevo: `items[]` con `allocations` por ítem.
+ * Si no existen allocations en ningún formato, elimina la venta (no hay a qué lote regresar).
  */
 export async function restoreSaleAndDelete(saleId: string) {
   const saleRef = doc(db, "salesV2", saleId);
@@ -212,38 +215,74 @@ export async function restoreSaleAndDelete(saleId: string) {
     throw new Error("La venta no existe.");
   }
   const sale = saleSnap.data() as any;
-  const allocations: Array<{ batchId: string; qty: number }> = Array.isArray(
-    sale.allocations
-  )
-    ? sale.allocations
-    : [];
+
+  // ---- Normalizar allocations (raíz o por ítem) ----
+  type SimpleAlloc = { batchId: string; qty: number };
+
+  const allocs: SimpleAlloc[] = [];
+
+  // Nuevo: items[].allocations
+  if (Array.isArray(sale.items)) {
+    for (const it of sale.items) {
+      if (Array.isArray(it?.allocations)) {
+        for (const a of it.allocations) {
+          const batchId = String(a?.batchId || "").trim();
+          const qty = Number(a?.qty || 0);
+          if (batchId && qty) allocs.push({ batchId, qty });
+        }
+      }
+    }
+  }
+
+  // Viejo: allocations en la raíz
+  if (Array.isArray(sale.allocations)) {
+    for (const a of sale.allocations) {
+      const batchId = String(a?.batchId || "").trim();
+      const qty = Number(a?.qty || 0);
+      if (batchId && qty) allocs.push({ batchId, qty });
+    }
+  }
+
+  // Si no hay allocations en ningún lado, elimina la venta y sal.
+  if (allocs.length === 0) {
+    await runTransaction(db, async (tx) => {
+      tx.delete(saleRef);
+    });
+    return { restored: 0 };
+  }
+
+  // Agrupar por lote (puede haber varias líneas del mismo batch)
+  const byBatch = new Map<string, number>();
+  for (const a of allocs) {
+    byBatch.set(a.batchId, Number((byBatch.get(a.batchId) || 0) + a.qty));
+  }
+
+  // Restaurar en transacción (read-modify-write) con redondeo a 3 decimales
+  let totalRestored = 0;
 
   await runTransaction(db, async (tx) => {
-    // 🔎 Lecturas primero
-    const batchRefs = allocations
-      .filter((a) => a?.batchId && a?.qty)
-      .map((a) => doc(db, "inventory_batches", a.batchId));
-    const batchSnaps = await Promise.all(batchRefs.map((ref) => tx.get(ref)));
+    // Lectura de todos los lotes involucrados
+    const entries = Array.from(byBatch.entries()); // [batchId, qtySum]
+    const lotRefs = entries.map(([batchId]) =>
+      doc(db, "inventory_batches", batchId)
+    );
+    const lotSnaps = await Promise.all(lotRefs.map((r) => tx.get(r)));
 
-    // ✍️ Escrituras después
-    for (let i = 0; i < batchRefs.length; i++) {
-      const ref = batchRefs[i];
-      const snap = batchSnaps[i];
-      if (!snap.exists()) continue;
+    // Actualización
+    entries.forEach(([batchId, qtySum], idx) => {
+      const snap = lotSnaps[idx];
+      if (!snap.exists()) return;
 
       const data = snap.data() as any;
-      const rem = Number(data.remaining ?? 0);
-      const qty = Number(allocations[i]?.qty || 0);
-      const newRem = Number((rem + qty).toFixed(3));
+      const rem = Number(data?.remaining ?? 0);
+      const newRem = Number((rem + Number(qtySum || 0)).toFixed(3));
+      tx.update(lotRefs[idx], { remaining: newRem });
+      totalRestored += Number(qtySum || 0);
+    });
 
-      tx.update(ref, { remaining: newRem });
-    }
-
-    // ✍️ Eliminar la venta
+    // Eliminar la venta al final
     tx.delete(saleRef);
   });
 
-  return {
-    restored: allocations.reduce((s, a) => s + (Number(a.qty) || 0), 0),
-  };
+  return { restored: totalRestored };
 }

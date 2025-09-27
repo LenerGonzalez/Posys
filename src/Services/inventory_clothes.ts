@@ -1,4 +1,4 @@
-// src/services/inventory_clothes.ts
+// src/Services/inventory_clothes.ts
 import { db } from "../firebase";
 import {
   addDoc,
@@ -165,11 +165,13 @@ export async function allocateSaleFIFOClothes(params: {
 
 /**
  * Restaura inventario para una venta de ROPA y elimina la venta.
- * - Si la venta tiene `allocations`, devuelve exactamente esas unidades por lote.
- * - Si NO tiene `allocations` (ventas viejas), hace un fallback: repone FIFO
- *   respetando cuánto se usó en cada lote (quantity - remaining).
+ * - Soporta venta de 1 ítem (legacy) y venta con múltiples ítems (`items[]`).
+ * - Si la venta tiene `allocations` / `allocationsByItem` / `items[i].allocations`,
+ *   devuelve exactamente esas unidades por lote.
+ * - Si NO tiene allocations (ventas viejas), hace fallback FIFO por producto:
+ *   repone según (quantity - remaining) de cada lote y, si falta, reparte FIFO.
  * - Cumple regla de Firestore (lecturas antes de escrituras).
- * - NO toca CxC (ar_movements): mantené tu lógica actual para borrar esos docs aparte.
+ * - NO toca CxC (ar_movements): borrá esos docs aparte.
  */
 export async function restoreSaleAndDeleteClothes(saleId: string) {
   const saleRef = doc(db, "sales_clothes", saleId);
@@ -178,129 +180,241 @@ export async function restoreSaleAndDeleteClothes(saleId: string) {
 
   const sale = saleSnap.data() as any;
 
-  // Datos base de la venta
-  const item = sale.item || {};
-  const productId: string = String(item.productId || sale.productId || "");
-  const qtyTotal: number = Math.max(
-    0,
-    Math.floor(Number(item.qty ?? sale.quantity ?? 0))
-  );
+  // Normalizamos posibles estructuras de la venta
+  const items: Array<{
+    productId: string;
+    productName?: string;
+    qty: number;
+    allocations?: ClothesAllocation[];
+  }> = [];
 
-  // Intentar allocations guardadas en la venta
-  const allocationsInSale: ClothesAllocation[] = Array.isArray(sale.allocations)
-    ? sale.allocations.map((a: any) => ({
-        batchId: String(a.batchId),
-        qty: Math.max(0, Math.floor(Number(a.qty || a.quantity || 0))),
-      }))
-    : [];
+  // Nuevo: venta multi-ítem (items[])
+  if (Array.isArray(sale.items) && sale.items.length > 0) {
+    // allocationsByItem puede venir como objeto { [productId]: { productId, allocations } } o arreglo
+    const mapAlloc: Record<string, ClothesAllocation[]> = {};
 
-  // Si no hay productId o qty, simplemente borrar la venta (no podemos restaurar)
-  if (!productId || qtyTotal <= 0) {
+    // Caso objeto (como guarda tu POS)
+    if (sale.allocationsByItem && typeof sale.allocationsByItem === "object") {
+      for (const key of Object.keys(sale.allocationsByItem)) {
+        const entry = sale.allocationsByItem[key];
+        const pId = String(entry?.productId || key || "");
+        if (!pId) continue;
+        const arr = Array.isArray(entry?.allocations) ? entry.allocations : [];
+        mapAlloc[pId] = arr.map((a: any) => ({
+          batchId: String(a.batchId),
+          qty: Math.max(0, Math.floor(Number(a.qty || a.quantity || 0))),
+        }));
+      }
+    }
+
+    // Caso arreglo
+    if (Array.isArray(sale.allocationsByItem)) {
+      for (const e of sale.allocationsByItem) {
+        const pId = String(e?.productId || "");
+        if (!pId) continue;
+        const arr = Array.isArray(e?.allocations) ? e.allocations : [];
+        mapAlloc[pId] = arr.map((a: any) => ({
+          batchId: String(a.batchId),
+          qty: Math.max(0, Math.floor(Number(a.qty || a.quantity || 0))),
+        }));
+      }
+    }
+
+    for (const it of sale.items) {
+      const productId = String(it?.productId || "");
+      if (!productId) continue;
+      const qty = Math.max(0, Math.floor(Number(it?.qty || it?.quantity || 0)));
+
+      // preferimos allocations dentro del item; si no, buscamos por productId en allocationsByItem
+      const allocsFromItem = Array.isArray(it?.allocations)
+        ? it.allocations.map((a: any) => ({
+            batchId: String(a.batchId),
+            qty: Math.max(0, Math.floor(Number(a.qty || a.quantity || 0))),
+          }))
+        : mapAlloc[productId] || [];
+
+      items.push({
+        productId,
+        productName: String(it?.productName || ""),
+        qty,
+        allocations: allocsFromItem.length ? allocsFromItem : undefined,
+      });
+    }
+  } else {
+    // Legacy: un solo item
+    const item = sale.item || {};
+    const productId: string = String(item.productId || sale.productId || "");
+    const qtyTotal: number = Math.max(
+      0,
+      Math.floor(Number(item.qty ?? sale.quantity ?? 0))
+    );
+    const allocationsInSale: ClothesAllocation[] = Array.isArray(
+      sale.allocations
+    )
+      ? sale.allocations.map((a: any) => ({
+          batchId: String(a.batchId),
+          qty: Math.max(0, Math.floor(Number(a.qty || a.quantity || 0))),
+        }))
+      : [];
+
+    if (productId && qtyTotal > 0) {
+      items.push({
+        productId,
+        productName: String(item.productName || sale.productName || ""),
+        qty: qtyTotal,
+        allocations: allocationsInSale.length ? allocationsInSale : undefined,
+      });
+    }
+  }
+
+  if (items.length === 0) {
+    // No hay nada que restaurar; eliminar la venta
     await runTransaction(db, async (tx) => {
       tx.delete(saleRef);
     });
     return { restored: 0 };
   }
 
-  // Camino A: tenemos allocations exactas → devolver a cada lote esas unidades
-  if (allocationsInSale.length > 0) {
+  // --- Camino A: todas las líneas tienen allocations → reversa exacta por lote ---
+  const allHaveAllocations = items.every(
+    (it) => Array.isArray(it.allocations) && it.allocations.length > 0
+  );
+
+  if (allHaveAllocations) {
     await runTransaction(db, async (tx) => {
-      // 🔎 Leer primero
-      const refs = allocationsInSale.map((a) =>
-        doc(db, "inventory_clothes_batches", a.batchId)
-      );
-      const snaps = await Promise.all(refs.map((r) => tx.get(r)));
-
-      // ✍️ Actualizar remaining por cada allocation
-      for (let i = 0; i < refs.length; i++) {
-        const ref = refs[i];
-        const snap = snaps[i];
-        if (!snap.exists()) continue;
-
-        const data = snap.data() as any;
-        const rem = Math.max(0, Math.floor(Number(data.remaining || 0)));
-        const qty = Math.max(0, Math.floor(Number(allocationsInSale[i].qty)));
-        const newRem = rem + qty;
-
-        tx.update(ref, { remaining: newRem });
+      // Construimos refs a tocar
+      const refs: Array<{ ref: any; addBack: number }> = [];
+      for (const it of items) {
+        for (const a of it.allocations || []) {
+          refs.push({
+            ref: doc(db, "inventory_clothes_batches", a.batchId),
+            addBack: Math.max(0, Math.floor(Number(a.qty || 0))),
+          });
+        }
       }
 
-      // Borrar venta
+      // Lecturas
+      const snaps = await Promise.all(refs.map((x) => tx.get(x.ref)));
+
+      // Escrituras
+      for (let i = 0; i < refs.length; i++) {
+        const snap = snaps[i];
+        if (!snap.exists()) continue;
+        const data = snap.data() as any;
+        const rem = Math.max(0, Math.floor(Number(data.remaining || 0)));
+        tx.update(refs[i].ref, { remaining: rem + refs[i].addBack });
+      }
+
+      // Borrar la venta al final
       tx.delete(saleRef);
     });
 
-    const restored = allocationsInSale.reduce((s, a) => s + a.qty, 0);
+    const restored = items.reduce(
+      (s, it) => s + (it.allocations || []).reduce((x, a) => x + a.qty, 0),
+      0
+    );
     return { restored };
   }
 
-  // Camino B: venta vieja sin allocations → fallback (repone por FIFO en función de "usado")
-  // Traer lotes del producto
-  const qB = query(
-    collection(db, "inventory_clothes_batches"),
-    where("productId", "==", productId)
-  );
-  const snap = await getDocs(qB);
-
-  // Construir filas con quantity/remaining y ordenar FIFO
-  const lots = snap.docs
-    .map((d) => {
-      const x = d.data() as any;
-      const quantity = Math.max(0, Math.floor(Number(x.quantity || 0)));
-      const remaining = Number.isFinite(Number(x.remaining))
-        ? Math.max(0, Math.floor(Number(x.remaining || 0)))
-        : quantity;
-      return {
-        id: d.id,
-        date: String(x.date || ""),
-        quantity,
-        remaining,
-      };
-    })
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  // Calcular cuánto se "usó" en cada lote (quantity - remaining) y devolver ahí primero
-  const plan: Array<{ id: string; addBack: number }> = [];
-  let toReturn = qtyTotal;
-
-  for (const lot of lots) {
-    if (toReturn <= 0) break;
-    const used = Math.max(0, lot.quantity - lot.remaining);
-    if (used <= 0) continue;
-
-    const addBack = Math.min(used, toReturn);
-    plan.push({ id: lot.id, addBack });
-    toReturn -= addBack;
-  }
-
-  // Si aún falta por devolver (caso raro), repártelo FIFO simplemente aumentando remaining
-  for (const lot of lots) {
-    if (toReturn <= 0) break;
-    const addBack = Math.min(toReturn, qtyTotal); // cualquier resto
-    plan.push({ id: lot.id, addBack });
-    toReturn -= addBack;
-  }
-
+  // --- Camino B: falta allocations en al menos una línea → fallback FIFO por producto ---
   await runTransaction(db, async (tx) => {
-    // 🔎 Lecturas primero
-    const refs = plan.map((p) => doc(db, "inventory_clothes_batches", p.id));
-    const snaps2 = await Promise.all(refs.map((r) => tx.get(r)));
+    // Pre-leer lotes por producto
+    const byProduct: Record<
+      string,
+      Array<{ id: string; date: string; quantity: number; remaining: number }>
+    > = {};
 
-    // ✍️ Escrituras
+    for (const it of items) {
+      if (!it.productId || it.qty <= 0) continue;
+
+      const qB = query(
+        collection(db, "inventory_clothes_batches"),
+        where("productId", "==", it.productId)
+      );
+      const snap = await getDocs(qB);
+      const lots = snap.docs
+        .map((d) => {
+          const x = d.data() as any;
+          const quantity = Math.max(0, Math.floor(Number(x.quantity || 0)));
+          const remaining = Number.isFinite(Number(x.remaining))
+            ? Math.max(0, Math.floor(Number(x.remaining || 0)))
+            : quantity;
+          return {
+            id: d.id,
+            date: String(x.date || ""),
+            quantity,
+            remaining,
+          };
+        })
+        .sort((a, b) => a.date.localeCompare(b.date));
+      byProduct[it.productId] = lots;
+    }
+
+    // Construir plan de updates (pueden repetirse lotes)
+    const planUpdates: Array<{ id: string; addBack: number }> = [];
+
+    for (const it of items) {
+      if (!it.productId || it.qty <= 0) continue;
+
+      if (Array.isArray(it.allocations) && it.allocations.length > 0) {
+        for (const a of it.allocations) {
+          planUpdates.push({
+            id: a.batchId,
+            addBack: Math.max(0, Math.floor(Number(a.qty || 0))),
+          });
+        }
+        continue;
+      }
+
+      // Fallback FIFO: primero donde hubo consumo (quantity - remaining)
+      const lots = byProduct[it.productId] || [];
+      let toReturn = it.qty;
+
+      for (const lot of lots) {
+        if (toReturn <= 0) break;
+        const used = Math.max(0, lot.quantity - lot.remaining);
+        if (used <= 0) continue;
+        const addBack = Math.min(used, toReturn);
+        planUpdates.push({ id: lot.id, addBack });
+        toReturn -= addBack;
+      }
+
+      // Si sobra, repartir FIFO
+      for (const lot of lots) {
+        if (toReturn <= 0) break;
+        const addBack = Math.min(toReturn, it.qty);
+        planUpdates.push({ id: lot.id, addBack });
+        toReturn -= addBack;
+      }
+    }
+
+    // Agrupar por lote
+    const grouped: Record<string, number> = {};
+    for (const p of planUpdates) {
+      grouped[p.id] =
+        (grouped[p.id] || 0) + Math.max(0, Math.floor(Number(p.addBack || 0)));
+    }
+
+    // Lecturas
+    const refs = Object.keys(grouped).map((id) =>
+      doc(db, "inventory_clothes_batches", id)
+    );
+    const snaps = await Promise.all(refs.map((r) => tx.get(r)));
+
+    // Escrituras
     for (let i = 0; i < refs.length; i++) {
-      const ref = refs[i];
-      const snap2 = snaps2[i];
-      if (!snap2.exists()) continue;
-
-      const data = snap2.data() as any;
+      const snap = snaps[i];
+      if (!snap.exists()) continue;
+      const data = snap.data() as any;
       const rem = Math.max(0, Math.floor(Number(data.remaining || 0)));
-      const addBack = Math.max(0, Math.floor(Number(plan[i].addBack)));
-      tx.update(ref, { remaining: rem + addBack });
+      const addBack = Math.max(0, Math.floor(Number(grouped[refs[i].id] || 0)));
+      tx.update(refs[i], { remaining: rem + addBack });
     }
 
     // Borrar la venta
     tx.delete(saleRef);
   });
 
-  const restored = plan.reduce((s, p) => s + p.addBack, 0);
+  const restored = items.reduce((s, it) => s + it.qty, 0);
   return { restored };
 }

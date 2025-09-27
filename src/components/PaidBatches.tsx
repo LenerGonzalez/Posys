@@ -11,6 +11,9 @@ import {
 import { db } from "../firebase";
 import { format } from "date-fns";
 import InvoiceModal from "../components/InvoiceModal";
+import RefreshButton from "../components/common/RefreshButton";
+import useManualRefresh from "../hooks/useManualRefresh";
+import { ref } from "process";
 
 type Batch = {
   id: string;
@@ -52,6 +55,7 @@ export default function PaidBatches() {
   const [product, setProduct] = useState<string>("");
 
   const [openInvoice, setOpenInvoice] = useState(false);
+  const { refreshKey, refresh } = useManualRefresh();
 
   useEffect(() => {
     (async () => {
@@ -88,7 +92,7 @@ export default function PaidBatches() {
       setRows(out);
       setLoading(false);
     })();
-  }, []);
+  }, [refreshKey]);
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
@@ -153,7 +157,10 @@ export default function PaidBatches() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Inventarios Pagados</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Pagados</h2>
+        <RefreshButton onClick={refresh} loading={loading} />
+      </div>
 
       {/* Filtros */}
       <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">

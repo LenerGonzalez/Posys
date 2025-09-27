@@ -174,6 +174,9 @@ export default function InventoryClothesBatches() {
     y: 0,
   });
 
+  // 👉 Modal Crear Inventario
+  const [showCreateModal, setShowCreateModal] = useState(false);
+
   // cerrar con click fuera y con ESC
   useEffect(() => {
     const onDocClick = () => setMenuRowId(null);
@@ -239,7 +242,6 @@ export default function InventoryClothesBatches() {
       window.removeEventListener("resize", close);
     };
   }, [menuRowId]);
-
 
   // ===== Carga inicial =====
   useEffect(() => {
@@ -739,207 +741,16 @@ export default function InventoryClothesBatches() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Inventario de Ropa</h2>
-
-      {/* Form nuevo lote (ROPA) */}
-      <form
-        onSubmit={saveBatch}
-        className="bg-white p-4 rounded shadow border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
-      >
-        {/* Producto de catálogo (opcional) */}
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">
-            Producto de ropa
-          </label>
-          <select
-            className="w-full border p-2 rounded"
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
-          >
-            <option value="">(Opcional) Selecciona un producto</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} — {p.category} — {p.sku ? `SKU: ${p.sku}` : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Fecha del lote</label>
-          <input
-            type="date"
-            className="w-full border p-2 rounded"
-            value={dateStr}
-            onChange={(e) => setDateStr(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Cantidad (pzas)</label>
-          <input
-            type="number"
-            step="1"
-            inputMode="numeric"
-            className="w-full border p-2 rounded"
-            value={quantity === 0 ? "" : quantity}
-            onChange={(e) =>
-              setQuantity(Math.max(0, parseInt(e.target.value || "0", 10)))
-            }
-            placeholder=""
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Precio de compra (pza)
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border p-2 rounded"
-            value={purchasePrice === 0 ? "" : purchasePrice}
-            onChange={(e) =>
-              setPurchasePrice(Math.max(0, parseFloat(e.target.value || "0")))
-            }
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Precio de venta (pza)
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border p-2 rounded"
-            value={salePrice === 0 ? "" : salePrice}
-            onChange={(e) =>
-              setSalePrice(Math.max(0, parseFloat(e.target.value || "0")))
-            }
-          />
-        </div>
-
-        {/* Campos opcionales de ropa (por lote) */}
-        <div>
-          <label className="block text-sm font-semibold">SKU (auto)</label>
-          <input
-            className="w-full border p-2 rounded bg-gray-100"
-            value={sku}
-            readOnly
-            placeholder="Se genera automáticamente o se carga del producto"
-            title="Si el producto tiene SKU, se usa tal cual; si no, se genera por subcat/género/talla/color/marca."
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-semibold">Talla</label>
-          <input
-            className="w-full border p-2 rounded bg-gray-100"
-            value={size}
-            readOnly
-            onChange={(e) => setSize(e.target.value)}
-            placeholder="XS/S/M/L/XL/10/12…"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-semibold">Color</label>
-          <input
-            className="w-full border p-2 rounded bg-gray-100"
-            value={color}
-            readOnly
-            onChange={(e) => setColor(e.target.value)}
-            placeholder="Negro, Azul, Rojo…"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-semibold">Color</label>
-          <input
-            className="w-full border p-2 rounded bg-gray-100"
-            value={gender}
-            readOnly
-            onChange={(e) => setGender(e.target.value)}
-            placeholder="Masculino, Femenino, Otro…"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-semibold">
-            Marca / Origen (opcional)
-          </label>
-          <input
-            className="w-full border p-2 rounded bg-gray-100"
-            value={brand}
-            onChange={(e) => setBrand(e.target.value)}
-            placeholder="Shein, Usado, Otro…"
-          />
-        </div>
-
-        {/* Código del cliente (opcional) */}
-        <div>
-          <label className="block text-sm font-semibold">
-            Código del cliente (opcional)
-          </label>
-          <input
-            className="w-full border p-2 rounded"
-            placeholder="Ej: LOTE-SHEIN-SEP-01"
-            value={clientCode}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (CLIENT_CODE_RE.test(v)) setClientCode(v);
-            }}
-            title="Solo letras, números, punto, guion y guion_bajo (máx 32)"
-          />
-          {!CLIENT_CODE_RE.test(clientCode) && clientCode.length > 0 && (
-            <div className="text-xs text-red-600 mt-1">Formato inválido</div>
-          )}
-        </div>
-
-        {/* Comentario extendido */}
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Comentario</label>
-          <textarea
-            className="w-full border p-2 rounded resize-y min-h-24"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            maxLength={500}
-            placeholder="Ej: Camisita veranera, tela delgada, tirantes…"
-          />
-          <div className="text-xs text-gray-500 text-right">
-            {notes.length}/500
-          </div>
-        </div>
-
-        {/* campos calculados */}
-        <div>
-          <label className="block text-sm font-semibold">
-            Total factura (auto)
-          </label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded bg-gray-100"
-            value={money(invoiceTotal)}
-            readOnly
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-semibold">
-            Total esperado (auto)
-          </label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded bg-gray-100"
-            value={money(expectedTotal)}
-            readOnly
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Guardar lote
-          </button>
-        </div>
-      </form>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Inventario de Ropa</h2>
+        <button
+          className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+          onClick={() => setShowCreateModal(true)}
+          type="button"
+        >
+          Crear Inventario
+        </button>
+      </div>
 
       {/* 🔎 Barra de filtro por fecha */}
       <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
@@ -1025,7 +836,6 @@ export default function InventoryClothesBatches() {
         </div>
       </div>
 
-      {/* Tabla de lotes (filtrada) */}
       {/* Tabla de lotes (filtrada) */}
       <div className="bg-white rounded shadow border">
         <div className="w-full overflow-x-auto">
@@ -1327,53 +1137,6 @@ export default function InventoryClothesBatches() {
                       </td>
 
                       {/* Acciones */}
-                      {/* <td className="p-2 md:p-3 border align-top">
-                        <div className="flex flex-wrap gap-1 md:gap-2 justify-center">
-                          {isEditing ? (
-                            <>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                                onClick={saveEdit}
-                              >
-                                Guardar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                                onClick={cancelEdit}
-                              >
-                                Cancelar
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              {b.status === "PENDIENTE" && (
-                                <button
-                                  onClick={() => payBatch(b)}
-                                  className="px-2 py-1 rounded text-white bg-green-600 hover:bg-green-700"
-                                  title="Marcar como pagado"
-                                >
-                                  Pagar
-                                </button>
-                              )}
-                              <button
-                                className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                                onClick={() => startEdit(b)}
-                                title="Editar lote"
-                              >
-                                Editar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                                onClick={() => deleteBatch(b)}
-                                title="Borrar lote"
-                              >
-                                Borrar
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </td> */}
-
                       <td className="p-2 md:p-3 border align-top">
                         {isEditing ? (
                           <div className="flex gap-2 justify-center">
@@ -1419,6 +1182,8 @@ export default function InventoryClothesBatches() {
           </table>
         </div>
       </div>
+
+      {/* Menú acciones fila */}
       {menuRowId &&
         createPortal(
           <>
@@ -1479,6 +1244,254 @@ export default function InventoryClothesBatches() {
               </div>
             </div>
           </>,
+          document.body
+        )}
+
+      {/* Modal Crear Inventario (form original movido aquí) */}
+      {showCreateModal &&
+        createPortal(
+          <div className="fixed inset-0 z-[70] flex items-center justify-center">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setShowCreateModal(false)}
+            />
+            <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-4xl max-h-[92vh] overflow-auto p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-lg font-bold">Crear Inventario (Lote)</h3>
+                <button
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                  onClick={() => setShowCreateModal(false)}
+                  type="button"
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              {/* Form nuevo lote (ROPA) – SIN CAMBIOS DE LÓGICA */}
+              <form
+                onSubmit={saveBatch}
+                className="grid grid-cols-1 md:grid-cols-2 gap-4"
+              >
+                {/* Producto de catálogo (opcional) */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold">
+                    Producto de ropa
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={productId}
+                    onChange={(e) => setProductId(e.target.value)}
+                  >
+                    <option value="">(Opcional) Selecciona un producto</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — {p.category} — {p.sku ? `SKU: ${p.sku}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Fecha del lote
+                  </label>
+                  <input
+                    type="date"
+                    className="w-full border p-2 rounded"
+                    value={dateStr}
+                    onChange={(e) => setDateStr(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Cantidad (pzas)
+                  </label>
+                  <input
+                    type="number"
+                    step="1"
+                    inputMode="numeric"
+                    className="w-full border p-2 rounded"
+                    value={quantity === 0 ? "" : quantity}
+                    onChange={(e) =>
+                      setQuantity(
+                        Math.max(0, parseInt(e.target.value || "0", 10))
+                      )
+                    }
+                    placeholder=""
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Precio de compra (pza)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded"
+                    value={purchasePrice === 0 ? "" : purchasePrice}
+                    onChange={(e) =>
+                      setPurchasePrice(
+                        Math.max(0, parseFloat(e.target.value || "0"))
+                      )
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Precio de venta (pza)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded"
+                    value={salePrice === 0 ? "" : salePrice}
+                    onChange={(e) =>
+                      setSalePrice(
+                        Math.max(0, parseFloat(e.target.value || "0"))
+                      )
+                    }
+                  />
+                </div>
+
+                {/* Campos opcionales de ropa (por lote) */}
+                <div>
+                  <label className="block text-sm font-semibold">
+                    SKU (auto)
+                  </label>
+                  <input
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={sku}
+                    readOnly
+                    placeholder="Se genera automáticamente o se carga del producto"
+                    title="Si el producto tiene SKU, se usa tal cual; si no, se genera por subcat/género/talla/color/marca."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold">Talla</label>
+                  <input
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={size}
+                    readOnly
+                    onChange={(e) => setSize(e.target.value)}
+                    placeholder="XS/S/M/L/XL/10/12…"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold">Color</label>
+                  <input
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={color}
+                    readOnly
+                    onChange={(e) => setColor(e.target.value)}
+                    placeholder="Negro, Azul, Rojo…"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold">Color</label>
+                  <input
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={gender}
+                    readOnly
+                    onChange={(e) => setGender(e.target.value)}
+                    placeholder="Masculino, Femenino, Otro…"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Marca / Origen (opcional)
+                  </label>
+                  <input
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={brand}
+                    onChange={(e) => setBrand(e.target.value)}
+                    placeholder="Shein, Usado, Otro…"
+                  />
+                </div>
+
+                {/* Código del cliente (opcional) */}
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Código del cliente (opcional)
+                  </label>
+                  <input
+                    className="w-full border p-2 rounded"
+                    placeholder="Ej: LOTE-SHEIN-SEP-01"
+                    value={clientCode}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (CLIENT_CODE_RE.test(v)) setClientCode(v);
+                    }}
+                    title="Solo letras, números, punto, guion y guion_bajo (máx 32)"
+                  />
+                  {!CLIENT_CODE_RE.test(clientCode) &&
+                    clientCode.length > 0 && (
+                      <div className="text-xs text-red-600 mt-1">
+                        Formato inválido
+                      </div>
+                    )}
+                </div>
+
+                {/* Comentario extendido */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold">
+                    Comentario
+                  </label>
+                  <textarea
+                    className="w-full border p-2 rounded resize-y min-h-24"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    maxLength={500}
+                    placeholder="Ej: Camisita veranera, tela delgada, tirantes…"
+                  />
+                  <div className="text-xs text-gray-500 text-right">
+                    {notes.length}/500
+                  </div>
+                </div>
+
+                {/* campos calculados */}
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Total factura (auto)
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={money(invoiceTotal)}
+                    readOnly
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Total esperado (auto)
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={money(expectedTotal)}
+                    readOnly
+                  />
+                </div>
+
+                <div className="md:col-span-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                    onClick={() => setShowCreateModal(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                    Guardar lote
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
           document.body
         )}
 

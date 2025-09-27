@@ -1,5 +1,6 @@
-// // src/components/InventoryBatches.tsx
+// src/components/InventoryBatches.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   collection,
   getDocs,
@@ -13,7 +14,9 @@ import { db } from "../firebase";
 import { newBatch, markBatchAsPaid } from "../Services/inventory";
 import { Timestamp } from "firebase/firestore";
 import { format, startOfMonth, endOfMonth } from "date-fns";
-import { roundQty, addQty, subQty, gteQty } from "../Services/decimal";
+import { roundQty } from "../Services/decimal";
+import RefreshButton from "../components/common/RefreshButton";
+import useManualRefresh from "../hooks/useManualRefresh";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -50,6 +53,7 @@ export default function InventoryBatches() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+  const { refreshKey, refresh } = useManualRefresh();
 
   // 🔎 Filtro por fecha
   const [fromDate, setFromDate] = useState<string>(
@@ -61,6 +65,9 @@ export default function InventoryBatches() {
 
   // 🔵 Filtro por producto
   const [productFilterId, setProductFilterId] = useState<string>("");
+
+  // 👉 Modal Crear Lote
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // form (crear)
   const [productId, setProductId] = useState("");
@@ -86,6 +93,10 @@ export default function InventoryBatches() {
 
   useEffect(() => {
     (async () => {
+      // 🔁 mostrar spinner también cuando se refresca manualmente
+      setLoading(true);
+      console.log("Refrescando...", refreshKey);
+
       // cargar products
       const psnap = await getDocs(collection(db, "products"));
       const prods: Product[] = [];
@@ -110,21 +121,27 @@ export default function InventoryBatches() {
       const rows: Batch[] = [];
       bsnap.forEach((d) => {
         const b = d.data() as any;
+        const qty = roundQty(Number(b.quantity || 0));
+        const pBuy = Number(b.purchasePrice || 0);
+        const pSell = Number(b.salePrice || 0);
+
+        const derivedInvoice = Number((qty * pBuy).toFixed(2));
+        const derivedExpected = Number((qty * pSell).toFixed(2));
+
         rows.push({
           id: d.id,
           productId: b.productId,
           productName: b.productName,
           category: b.category,
           unit: b.unit,
-          quantity: roundQty(Number(b.quantity || 0)), // 🔵 normaliza
-          remaining: roundQty(Number(b.remaining || 0)), // 🔵 normaliza
-          purchasePrice: Number(b.purchasePrice || 0),
-          salePrice: Number(b.salePrice || 0),
-          invoiceTotal: Number(b.invoiceTotal || 0),
-          expectedTotal: Number(
-            b.expectedTotal ??
-              (Number(b.quantity || 0) * Number(b.salePrice || 0) || 0)
-          ),
+          quantity: qty,
+          remaining: roundQty(Number(b.remaining || 0)),
+          purchasePrice: pBuy,
+          salePrice: pSell,
+          invoiceTotal:
+            b.invoiceTotal != null ? Number(b.invoiceTotal) : derivedInvoice,
+          expectedTotal:
+            b.expectedTotal != null ? Number(b.expectedTotal) : derivedExpected,
           date: b.date,
           createdAt: b.createdAt,
           status: b.status,
@@ -136,23 +153,22 @@ export default function InventoryBatches() {
       setBatches(rows);
       setLoading(false);
     })();
-  }, []);
+  }, [refreshKey]);
 
   useEffect(() => {
     // sugerir salePrice del producto elegido
     const p = products.find((x) => x.id === productId);
     if (p) setSalePrice(Number(p.price || 0));
-  }, [productId, products]);
+  }, [productId, products, refreshKey]);
 
   // cálculos automáticos (crear)
   useEffect(() => {
     setInvoiceTotal(Math.floor(quantity * purchasePrice * 100) / 100);
-  }, [quantity, purchasePrice]);
+  }, [quantity, purchasePrice, refreshKey]);
   useEffect(() => {
     setExpectedTotal(Math.floor(quantity * salePrice * 100) / 100);
-  }, [quantity, salePrice]);
+  }, [quantity, salePrice, refreshKey]);
 
-  // helper para segmentar por unidad (lb/libra => "libras")
   const isPounds = (u: string) => {
     const s = (u || "").toLowerCase();
     return /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(s) || s === "lb";
@@ -171,11 +187,11 @@ export default function InventoryBatches() {
   // Totales sobre el filtro
   const totals = useMemo(() => {
     const totalFacturado = filteredBatches.reduce(
-      (a, b) => a + (b.invoiceTotal || 0),
+      (a, b) => a + Number(b.invoiceTotal || 0),
       0
     );
     const totalEsperado = filteredBatches.reduce(
-      (a, b) => a + (b.expectedTotal || 0),
+      (a, b) => a + Number(b.expectedTotal || 0),
       0
     );
 
@@ -217,18 +233,18 @@ export default function InventoryBatches() {
       return;
     }
     try {
-      const qtyR = roundQty(quantity); // 🔵 normaliza cantidad creada
+      const qtyR = roundQty(quantity);
 
       const ref = await newBatch({
         productId: p.id,
         productName: p.name,
         category: p.category,
         unit: p.measurement,
-        quantity: qtyR, // 🔵
+        quantity: qtyR,
         purchasePrice,
         salePrice,
-        invoiceTotal, // calculado auto
-        expectedTotal, // nuevo campo
+        invoiceTotal,
+        expectedTotal,
         date: dateStr,
         notes,
       });
@@ -239,8 +255,8 @@ export default function InventoryBatches() {
           productName: p.name,
           category: p.category,
           unit: p.measurement,
-          quantity: qtyR, // 🔵
-          remaining: qtyR, // 🔵
+          quantity: qtyR,
+          remaining: qtyR,
           purchasePrice,
           salePrice,
           invoiceTotal,
@@ -260,6 +276,7 @@ export default function InventoryBatches() {
       setInvoiceTotal(0);
       setExpectedTotal(0);
       setNotes("");
+      setShowCreateModal(false);
     } catch (e) {
       console.error(e);
       setMsg("❌ Error al crear lote");
@@ -281,7 +298,7 @@ export default function InventoryBatches() {
   const startEdit = (b: Batch) => {
     setEditingId(b.id);
     setEditDate(b.date);
-    setEditQty(roundQty(b.quantity)); // 🔵 asegura 3 dec
+    setEditQty(roundQty(b.quantity));
     setEditPurchase(b.purchasePrice);
     setEditSale(b.salePrice);
     setEditNotes(b.notes || "");
@@ -304,32 +321,30 @@ export default function InventoryBatches() {
   useEffect(() => {
     if (!editingId) return;
     setEditInvoiceTotal(Math.floor(editQty * editPurchase * 100) / 100);
-  }, [editingId, editQty, editPurchase]);
+  }, [editingId, editQty, editPurchase, refreshKey]);
   useEffect(() => {
     if (!editingId) return;
     setEditExpectedTotal(Math.floor(editQty * editSale * 100) / 100);
-  }, [editingId, editQty, editSale]);
+  }, [editingId, editQty, editSale, refreshKey]);
 
   const saveEdit = async () => {
     if (!editingId) return;
-
-    // Recalcular remaining conservando lo ya consumido
     const old = batches.find((x) => x.id === editingId);
     if (!old) return;
 
-    const consumido = roundQty(old.quantity - old.remaining); // 🔵
-    const newRemaining = Math.max(0, roundQty(editQty - consumido)); // 🔵
+    const consumido = roundQty(old.quantity - old.remaining);
+    const newRemaining = Math.max(0, roundQty(editQty - consumido));
 
     const ref = doc(db, "inventory_batches", editingId);
     await updateDoc(ref, {
       date: editDate,
-      quantity: roundQty(editQty), // 🔵 guarda normalizado
+      quantity: roundQty(editQty),
       purchasePrice: editPurchase,
       salePrice: editSale,
       invoiceTotal: editInvoiceTotal,
       expectedTotal: editExpectedTotal,
       notes: editNotes,
-      remaining: newRemaining, // 🔵
+      remaining: newRemaining,
     });
 
     setBatches((prev) =>
@@ -338,13 +353,13 @@ export default function InventoryBatches() {
           ? {
               ...x,
               date: editDate,
-              quantity: roundQty(editQty), // 🔵
+              quantity: roundQty(editQty),
               purchasePrice: editPurchase,
               salePrice: editSale,
               invoiceTotal: editInvoiceTotal,
               expectedTotal: editExpectedTotal,
               notes: editNotes,
-              remaining: newRemaining, // 🔵
+              remaining: newRemaining,
             }
           : x
       )
@@ -362,7 +377,7 @@ export default function InventoryBatches() {
   };
   // ====== FIN edición/eliminación ======
 
-  // ====== Exportar/Imprimir PDF (solo HTML nativo) ======
+  // ====== Exportar/Imprimir PDF ======
   const handlePrintPDF = () => {
     const titleRange =
       (fromDate ? `Desde ${fromDate}` : "Desde inicio") +
@@ -370,8 +385,10 @@ export default function InventoryBatches() {
       (toDate ? `Hasta ${toDate}` : "Hasta hoy");
 
     const rowsHtml = filteredBatches
-      .map(
-        (b) => `
+      .map((b) => {
+        const inv = Number(b.invoiceTotal || 0);
+        const exp = Number(b.expectedTotal || 0);
+        return `
       <tr>
         <td>${b.date}</td>
         <td>${(b.category || "").toUpperCase()}</td>
@@ -381,11 +398,11 @@ export default function InventoryBatches() {
         <td style="text-align:right">${b.remaining.toFixed(3)}</td>
         <td style="text-align:right">${money(b.purchasePrice)}</td>
         <td style="text-align:right">${money(b.salePrice)}</td>
-        <td style="text-align:right">${money(b.invoiceTotal || 0)}</td>
-        <td style="text-align:right">${money(b.expectedTotal || 0)}</td>
+        <td style="text-align:right">${money(inv)}</td>
+        <td style="text-align:right">${money(exp)}</td>
         <td>${b.status}</td>
-      </tr>`
-      )
+      </tr>`;
+      })
       .join("");
 
     const html = `
@@ -480,152 +497,16 @@ export default function InventoryBatches() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Inventario Productos</h2>
-
-      {/* Form nuevo lote */}
-      <form
-        onSubmit={saveBatch}
-        className="bg-white p-4 rounded shadow border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
-      >
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Producto</label>
-          <select
-            className="w-full border p-2 rounded"
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
-          >
-            <option value="">Selecciona un producto</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} — {p.category} — {p.measurement} — Precio:{" "}
-                {money(p.price)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Fecha del lote</label>
-          <input
-            type="date"
-            className="w-full border p-2 rounded"
-            value={dateStr}
-            onChange={(e) => setDateStr(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Cantidad (Lo que esta ingresando)
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border p-2 rounded"
-            value={quantity === 0 ? "" : quantity}
-            onChange={(e) => {
-              const raw = e.target.value.replace(",", ".");
-              const num = parseFloat(raw);
-              const safe = Number.isFinite(num)
-                ? parseFloat(num.toFixed(3))
-                : 0;
-              setQuantity(safe);
-            }}
-            disabled={!productId}
-            placeholder={!productId ? "Selecciona un producto primero" : ""}
-            title={!productId ? "Selecciona un producto para habilitar" : ""}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Precio de compra (compra)
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border p-2 rounded"
-            value={purchasePrice === 0 ? "" : purchasePrice}
-            onChange={(e) => {
-              const raw = e.target.value.replace(",", ".");
-              const num = parseFloat(raw);
-              const safe = Number.isFinite(num)
-                ? parseFloat(num.toFixed(2))
-                : 0;
-              setPurchasePrice(safe);
-            }}
-            disabled={!productId}
-            placeholder={!productId ? "Selecciona un producto primero" : ""}
-            title={!productId ? "Selecciona un producto para habilitar" : ""}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Precio de venta (venta)
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border p-2 rounded"
-            value={salePrice === 0 ? "" : salePrice}
-            onChange={(e) => {
-              const raw = e.target.value.replace(",", ".");
-              const num = parseFloat(raw);
-              const safe = Number.isFinite(num)
-                ? parseFloat(num.toFixed(2))
-                : 0;
-              setSalePrice(safe);
-            }}
-            disabled={!productId}
-            placeholder={!productId ? "Selecciona un producto primero" : ""}
-            title={!productId ? "Selecciona un producto para habilitar" : ""}
-          />
-        </div>
-
-        {/* campos calculados */}
-        <div>
-          <label className="block text-sm font-semibold">
-            Total factura (auto)
-          </label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded bg-gray-100"
-            value={money(invoiceTotal)}
-            readOnly
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Total esperado (auto)
-          </label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded bg-gray-100"
-            value={money(expectedTotal)}
-            readOnly
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Notas</label>
-          <input
-            className="w-full border p-2 rounded"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Guardar lote
-          </button>
-        </div>
-      </form>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Inventario (Pollo)</h2>
+        <button
+          className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+          type="button"
+          onClick={() => setShowCreateModal(true)}
+        >
+          Crear Lote
+        </button>
+      </div>
 
       {/* 🔎 Barra de filtro por fecha */}
       <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
@@ -683,6 +564,11 @@ export default function InventoryBatches() {
         >
           Imprimir PDF
         </button>
+
+        {/* 🔄 Refresh manual */}
+        <div className="ml-auto">
+          <RefreshButton onClick={() => refresh()} loading={loading} />
+        </div>
       </div>
 
       {/* Totales (sobre el filtro) */}
@@ -759,6 +645,8 @@ export default function InventoryBatches() {
             ) : (
               filteredBatches.map((b) => {
                 const isEditing = editingId === b.id;
+                const inv = Number(b.invoiceTotal || 0);
+                const exp = Number(b.expectedTotal || 0);
                 return (
                   <tr key={b.id} className="text-center">
                     <td className="p-2 border">
@@ -794,13 +682,11 @@ export default function InventoryBatches() {
                           }}
                         />
                       ) : (
-                        b.quantity.toFixed(3) // 🔵 muestra 3 decimales
+                        b.quantity.toFixed(3)
                       )}
                     </td>
                     <td className="p-2 border">
-                      {
-                        isEditing ? b.remaining : b.remaining.toFixed(3) // 🔵 muestra 3 decimales
-                      }
+                      {isEditing ? b.remaining : b.remaining.toFixed(3)}
                     </td>
                     <td className="p-2 border">
                       {isEditing ? (
@@ -845,19 +731,15 @@ export default function InventoryBatches() {
                       )}
                     </td>
                     <td className="p-2 border">
-                      {isEditing
-                        ? money(editInvoiceTotal)
-                        : money(b.invoiceTotal || 0)}
+                      {isEditing ? money(editInvoiceTotal) : money(inv)}
                     </td>
                     <td className="p-2 border">
-                      {isEditing
-                        ? money(editExpectedTotal)
-                        : money(b.expectedTotal || 0)}
+                      {isEditing ? money(editExpectedTotal) : money(exp)}
                     </td>
                     <td className="p-2 border">
                       {isEditing
                         ? money(editExpectedTotal - editInvoiceTotal)
-                        : money((b.expectedTotal || 0) - (b.invoiceTotal || 0))}
+                        : money(exp - inv)}
                     </td>
                     <td className="p-2 border">
                       <span
@@ -920,6 +802,198 @@ export default function InventoryBatches() {
       </div>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
+
+      {/* ===== Modal: Form Crear Lote (form original movido aquí, sin cambiar lógica) ===== */}
+      {showCreateModal &&
+        createPortal(
+          <div className="fixed inset-0 z-[70] flex items-center justify-center">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setShowCreateModal(false)}
+            />
+            <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-4xl max-h-[92vh] overflow-auto p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-lg font-bold">Crear Lote</h3>
+                <button
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                  onClick={() => setShowCreateModal(false)}
+                  type="button"
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              {/* === Formulario original === */}
+              <form
+                onSubmit={saveBatch}
+                className="grid grid-cols-1 md:grid-cols-2 gap-4"
+              >
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold">
+                    Producto
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={productId}
+                    onChange={(e) => setProductId(e.target.value)}
+                  >
+                    <option value="">Selecciona un producto</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — {p.category} — {p.measurement} — Precio:{" "}
+                        {money(p.price)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Fecha del lote
+                  </label>
+                  <input
+                    type="date"
+                    className="w-full border p-2 rounded"
+                    value={dateStr}
+                    onChange={(e) => setDateStr(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Cantidad (Lo que esta ingresando)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded"
+                    value={quantity === 0 ? "" : quantity}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(",", ".");
+                      const num = parseFloat(raw);
+                      const safe = Number.isFinite(num)
+                        ? parseFloat(num.toFixed(3))
+                        : 0;
+                      setQuantity(safe);
+                    }}
+                    disabled={!productId}
+                    placeholder={
+                      !productId ? "Selecciona un producto primero" : ""
+                    }
+                    title={
+                      !productId ? "Selecciona un producto para habilitar" : ""
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Precio de compra (compra)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded"
+                    value={purchasePrice === 0 ? "" : purchasePrice}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(",", ".");
+                      const num = parseFloat(raw);
+                      const safe = Number.isFinite(num)
+                        ? parseFloat(num.toFixed(2))
+                        : 0;
+                      setPurchasePrice(safe);
+                    }}
+                    disabled={!productId}
+                    placeholder={
+                      !productId ? "Selecciona un producto primero" : ""
+                    }
+                    title={
+                      !productId ? "Selecciona un producto para habilitar" : ""
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Precio de venta (venta)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded"
+                    value={salePrice === 0 ? "" : salePrice}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(",", ".");
+                      const num = parseFloat(raw);
+                      const safe = Number.isFinite(num)
+                        ? parseFloat(num.toFixed(2))
+                        : 0;
+                      setSalePrice(safe);
+                    }}
+                    disabled={!productId}
+                    placeholder={
+                      !productId ? "Selecciona un producto primero" : ""
+                    }
+                    title={
+                      !productId ? "Selecciona un producto para habilitar" : ""
+                    }
+                  />
+                </div>
+
+                {/* campos calculados */}
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Total factura (auto)
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={money(invoiceTotal)}
+                    readOnly
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Total esperado (auto)
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full border p-2 rounded bg-gray-100"
+                    value={money(expectedTotal)}
+                    readOnly
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold">Notas</label>
+                  <input
+                    className="w-full border p-2 rounded"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </div>
+
+                <div className="md:col-span-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                    onClick={() => setShowCreateModal(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                    Guardar lote
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 // src/components/Clothes/CustomersClothes.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   addDoc,
   collection,
@@ -122,6 +123,9 @@ export default function CustomersClothes() {
   const [eMovAmount, setEMovAmount] = useState<number>(0);
   const [eMovComment, setEMovComment] = useState<string>("");
 
+  // 👉 Modal Crear Cliente
+  const [showCreateModal, setShowCreateModal] = useState(false);
+
   // Cargar clientes y saldos
   useEffect(() => {
     (async () => {
@@ -216,6 +220,7 @@ export default function CustomersClothes() {
         ...prev,
       ]);
       resetForm();
+      setShowCreateModal(false);
       setMsg("✅ Cliente creado");
     } catch (err) {
       console.error(err);
@@ -306,8 +311,6 @@ export default function CustomersClothes() {
           await restoreSaleAndDeleteClothes(saleId); // repone inventario y borra la venta
         } catch (e) {
           console.warn("restoreSaleAndDeleteClothes error", e);
-          // si por alguna razón falla, al menos intenta borrar la venta para no dejar colgando
-          // (pero lo ideal es revisar el error)
           try {
             await deleteDoc(doc(db, "sales_clothes", saleId));
           } catch {}
@@ -374,7 +377,6 @@ export default function CustomersClothes() {
           createdAt: x.createdAt,
         });
       });
-      // ordenar por fecha asc y luego por createdAt
       list.sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         const as = a.createdAt?.seconds || 0;
@@ -436,7 +438,6 @@ export default function CustomersClothes() {
       };
       const ref = await addDoc(collection(db, "ar_movements"), payload);
 
-      // Actualiza tabla de movimientos en vivo
       const newRow: MovementRow = {
         id: ref.id,
         date: abonoDate,
@@ -454,7 +455,6 @@ export default function CustomersClothes() {
       setStRows(newList);
       recomputeKpis(newList);
 
-      // Actualiza saldo del cliente en la grilla principal
       setRows((prev) =>
         prev.map((c) =>
           c.id === stCustomer.id
@@ -466,7 +466,6 @@ export default function CustomersClothes() {
         prev ? { ...prev, balance: (prev.balance || 0) - safeAmt } : prev
       );
 
-      // Reset modal
       setAbonoAmount(0);
       setAbonoComment("");
       setAbonoDate(new Date().toISOString().slice(0, 10));
@@ -484,7 +483,7 @@ export default function CustomersClothes() {
   const startEditMovement = (m: MovementRow) => {
     setEditMovId(m.id);
     setEMovDate(m.date || new Date().toISOString().slice(0, 10));
-    setEMovAmount(Math.abs(Number(m.amount || 0))); // mostrar positivo al editar
+    setEMovAmount(Math.abs(Number(m.amount || 0)));
     setEMovComment(m.comment || "");
   };
 
@@ -501,7 +500,6 @@ export default function CustomersClothes() {
     if (idx === -1) return;
     const old = stRows[idx];
 
-    // Mantener signo según tipo
     const entered = Number(eMovAmount || 0);
     if (!(entered > 0)) {
       setMsg("El monto debe ser mayor a 0.");
@@ -526,7 +524,6 @@ export default function CustomersClothes() {
         amount: signed,
         comment: eMovComment || "",
       };
-      // reordenar por fecha/creado
       newList.sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         const as = a.createdAt?.seconds || 0;
@@ -537,7 +534,6 @@ export default function CustomersClothes() {
       setStRows(newList);
       recomputeKpis(newList);
 
-      // Actualizar saldo visual del cliente (re-sumar todo)
       const nuevoSaldo = newList.reduce(
         (acc, it) => acc + (Number(it.amount) || 0),
         0
@@ -573,28 +569,22 @@ export default function CustomersClothes() {
     try {
       setLoading(true);
 
-      // Si es una COMPRA vinculada a una venta, devolvemos inventario
       if (m.type === "CARGO" && m.ref?.saleId) {
         try {
           await restoreSaleAndDeleteClothes(m.ref.saleId);
         } catch (e) {
           console.warn("restoreSaleAndDeleteClothes error", e);
-          // si falla la restauración, no seguimos para evitar descuadre
           setLoading(false);
           setMsg("❌ No se pudo devolver inventario de la venta.");
           return;
         }
-        // borrar también cualquier movimiento vinculado a esa venta
         await deleteARMovesBySaleId(m.ref.saleId);
       } else {
-        // Movimiento suelto (p. ej. Abono manual): solo borrar ese doc
         await deleteDoc(doc(db, "ar_movements", m.id));
       }
 
-      // refrescar tabla del modal
       const newList = stRows.filter((x) => {
         if (m.type === "CARGO" && m.ref?.saleId) {
-          // quitamos todos los movimientos asociados a esa venta
           return x.ref?.saleId !== m.ref.saleId;
         }
         return x.id !== m.id;
@@ -602,7 +592,6 @@ export default function CustomersClothes() {
       setStRows(newList);
       recomputeKpis(newList);
 
-      // Recalcular saldo y reflejar en lista de clientes
       const nuevoSaldo = newList.reduce(
         (acc, it) => acc + (Number(it.amount) || 0),
         0
@@ -633,99 +622,16 @@ export default function CustomersClothes() {
 
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Clientes (Ropa)</h2>
-
-      {/* ===== Formulario ===== */}
-      <form
-        onSubmit={handleCreate}
-        className="bg-white p-4 rounded shadow border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
-      >
-        <div>
-          <label className="block text-sm font-semibold">Nombre</label>
-          <input
-            className="w-full border p-2 rounded"
-            placeholder="Ej: María López"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Teléfono</label>
-          <input
-            className="w-full border p-2 rounded"
-            value={phone}
-            onChange={(e) => setPhone(normalizePhone(e.target.value))}
-            placeholder="+505 88888888"
-            inputMode="numeric"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Lugar</label>
-          <select
-            className="w-full border p-2 rounded"
-            value={place}
-            onChange={(e) => setPlace(e.target.value as Place)}
-          >
-            <option value="">—</option>
-            {PLACES.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Estado</label>
-          <select
-            className="w-full border p-2 rounded"
-            value={status}
-            onChange={(e) => setStatus(e.target.value as Status)}
-          >
-            <option value="ACTIVO">ACTIVO</option>
-            <option value="BLOQUEADO">BLOQUEADO</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">
-            Límite de crédito (opcional)
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border p-2 rounded"
-            value={creditLimit === 0 ? "" : creditLimit}
-            onChange={(e) =>
-              setCreditLimit(Math.max(0, Number(e.target.value || 0)))
-            }
-            placeholder="Ej: 2000"
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Comentario</label>
-          <textarea
-            className="w-full border p-2 rounded resize-y min-h-24"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            maxLength={500}
-            placeholder="Notas del cliente…"
-          />
-          <div className="text-xs text-gray-500 text-right">
-            {notes.length}/500
-          </div>
-        </div>
-
-        <div className="md:col-span-2">
-          <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Guardar cliente
-          </button>
-        </div>
-      </form>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Clientes (Ropa)</h2>
+        <button
+          className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+          onClick={() => setShowCreateModal(true)}
+          type="button"
+        >
+          Crear Cliente
+        </button>
+      </div>
 
       {/* ===== Lista ===== */}
       <div className="bg-white p-2 rounded shadow border w-full">
@@ -928,6 +834,133 @@ export default function CustomersClothes() {
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
+      {/* ===== Modal: Form Crear Cliente (form original movido aquí, sin cambios de lógica) ===== */}
+      {showCreateModal &&
+        createPortal(
+          <div className="fixed inset-0 z-[70] flex items-center justify-center">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setShowCreateModal(false)}
+            />
+            <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-3xl max-h-[92vh] overflow-auto p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-lg font-bold">Crear Cliente</h3>
+                <button
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                  onClick={() => setShowCreateModal(false)}
+                  type="button"
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              {/* === Formulario original === */}
+              <form
+                onSubmit={handleCreate}
+                className="grid grid-cols-1 md:grid-cols-2 gap-4"
+              >
+                <div>
+                  <label className="block text-sm font-semibold">Nombre</label>
+                  <input
+                    className="w-full border p-2 rounded"
+                    placeholder="Ej: María López"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Teléfono
+                  </label>
+                  <input
+                    className="w-full border p-2 rounded"
+                    value={phone}
+                    onChange={(e) => setPhone(normalizePhone(e.target.value))}
+                    placeholder="+505 88888888"
+                    inputMode="numeric"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">Lugar</label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={place}
+                    onChange={(e) => setPlace(e.target.value as Place)}
+                  >
+                    <option value="">—</option>
+                    {PLACES.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">Estado</label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value as Status)}
+                  >
+                    <option value="ACTIVO">ACTIVO</option>
+                    <option value="BLOQUEADO">BLOQUEADO</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Límite de crédito (opcional)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded"
+                    value={creditLimit === 0 ? "" : creditLimit}
+                    onChange={(e) =>
+                      setCreditLimit(Math.max(0, Number(e.target.value || 0)))
+                    }
+                    placeholder="Ej: 2000"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold">
+                    Comentario
+                  </label>
+                  <textarea
+                    className="w-full border p-2 rounded resize-y min-h-24"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    maxLength={500}
+                    placeholder="Notas del cliente…"
+                  />
+                  <div className="text-xs text-gray-500 text-right">
+                    {notes.length}/500
+                  </div>
+                </div>
+
+                <div className="md:col-span-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                    onClick={() => setShowCreateModal(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                    Guardar cliente
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
       {/* ===== Modal: Estado de cuenta ===== */}
       {showStatement && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -937,7 +970,6 @@ export default function CustomersClothes() {
                 Estado de cuenta — {stCustomer?.name || ""}
               </h3>
               <div className="flex gap-2">
-                {/* Botón Abonar */}
                 <button
                   className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
                   onClick={() => {
@@ -958,7 +990,6 @@ export default function CustomersClothes() {
               </div>
             </div>
 
-            {/* KPIs */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Saldo actual</div>
@@ -980,7 +1011,6 @@ export default function CustomersClothes() {
               </div>
             </div>
 
-            {/* Tabla de movimientos */}
             <div className="bg-white rounded border overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-100">

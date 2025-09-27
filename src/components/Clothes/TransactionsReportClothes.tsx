@@ -1,4 +1,3 @@
-// src/components/Clothes/TransactionsReportClothes.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -13,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { format } from "date-fns";
+import { restoreSaleAndDeleteClothes } from "../../Services/inventory_clothes"; // 👈 NUEVO import
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -310,10 +310,12 @@ export default function TransactionsReportClothes() {
       return;
     try {
       setLoading(true);
-      await restoreFIFO(s.item.productId, s.item.qty);
+      // 👇 Reversar inventario por allocations / FIFO y borrar la venta
+      await restoreSaleAndDeleteClothes(s.id);
+      // 👇 Limpiar movimientos de CxC vinculados
       await deleteARMovesBySaleId(s.id);
-      await deleteDoc(doc(db, "sales_clothes", s.id));
-      // eliminamos de la fuente y se reflejará en filtrado/paginación
+
+      // UI
       setSales((prev) => prev.filter((x) => x.id !== s.id));
       setMsg("✅ Venta eliminada");
     } catch (e) {

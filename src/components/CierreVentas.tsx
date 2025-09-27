@@ -1,4 +1,4 @@
-// // src/components/CierreVentas.tsx
+// src/components/CierreVentas.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { db } from "../firebase";
 import {
@@ -17,6 +17,8 @@ import { format } from "date-fns";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import { restoreSaleAndDelete } from "../Services/inventory";
+import RefreshButton from "../components/common/RefreshButton";
+import useManualRefresh from "../hooks/useManualRefresh";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -43,6 +45,7 @@ interface SaleDataRaw {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
+  items?: any[]; // ← importante para multi-ítems
 }
 
 interface SaleData {
@@ -86,51 +89,85 @@ interface ClosureData {
   grossProfit?: number;
 }
 
-// 🔧 helpers de formato/round
+// 🔧 helpers
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 
-const normalizeSale = (raw: SaleDataRaw, id: string): SaleData | null => {
+// 🔵 Normaliza UNA venta en MÚLTIPLES filas si trae items[]
+const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const date =
     raw.date ??
     (raw.timestamp?.toDate
       ? format(raw.timestamp.toDate()!, "yyyy-MM-dd")
-      : undefined);
-  if (!date) return null;
+      : "");
+  if (!date) return [];
 
-  return {
-    id,
-    productName: raw.productName ?? "(sin nombre)",
-    quantity: Number(raw.quantity ?? 0),
-    amount: Number(raw.amount ?? raw.amountCharged ?? 0),
-    amountSuggested: Number(raw.amountSuggested ?? 0),
-    date,
-    userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
-    clientName: raw.clientName ?? "",
-    amountReceived: Number(raw.amountReceived ?? 0),
-    change: String(raw.change ?? "0"),
-    status: (raw.status as any) ?? "FLOTANTE",
-    allocations: raw.allocations,
-    avgUnitCost: raw.avgUnitCost,
-    cogsAmount: raw.cogsAmount,
-  };
+  // Si trae items, retornar una fila por ítem
+  if (Array.isArray(raw.items) && raw.items.length > 0) {
+    return raw.items.map((it, idx) => {
+      const qty = Number(it?.qty ?? 0);
+      const lineFinal =
+        Number(it?.lineFinal ?? 0) ||
+        Math.max(
+          0,
+          Number(it?.unitPrice || 0) * qty - Number(it?.discount || 0)
+        );
+      return {
+        id: `${id}#${idx}`,
+        productName: String(it?.productName ?? "(sin nombre)"),
+        quantity: qty,
+        amount: round2(lineFinal),
+        amountSuggested: Number(raw.amountSuggested ?? 0), // (si te sirve)
+        date,
+        userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
+        clientName: raw.clientName ?? "",
+        amountReceived: Number(raw.amountReceived ?? 0),
+        change: String(raw.change ?? "0"),
+        status: (raw.status as any) ?? "FLOTANTE",
+        allocations: Array.isArray(it?.allocations)
+          ? it.allocations
+          : raw.allocations,
+        avgUnitCost: Number(it?.avgUnitCost ?? raw.avgUnitCost ?? 0),
+        cogsAmount: Number(it?.cogsAmount ?? 0),
+      };
+    });
+  }
+
+  // Fallback: una sola fila
+  return [
+    {
+      id,
+      productName: raw.productName ?? "(sin nombre)",
+      quantity: Number(raw.quantity ?? 0),
+      amount: Number(raw.amount ?? raw.amountCharged ?? 0),
+      amountSuggested: Number(raw.amountSuggested ?? 0),
+      date,
+      userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
+      clientName: raw.clientName ?? "",
+      amountReceived: Number(raw.amountReceived ?? 0),
+      change: String(raw.change ?? "0"),
+      status: (raw.status as any) ?? "FLOTANTE",
+      allocations: raw.allocations,
+      avgUnitCost: raw.avgUnitCost,
+      cogsAmount: raw.cogsAmount,
+    },
+  ];
 };
 
 export default function CierreVentas({
-  role, // opcional
+  role,
 }: {
   role?: "admin" | "vendedor";
 }): React.ReactElement {
   const [salesV2, setSales] = useState<SaleData[]>([]);
-  const [floatersExtra, setFloatersExtra] = useState<SaleData[]>([]); // ⬅️ FLOTANTE de cualquier fecha
+  const [floatersExtra, setFloatersExtra] = useState<SaleData[]>([]);
   const [closure, setClosure] = useState<ClosureData | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState<"ALL" | "FLOTANTE" | "PROCESADA">("ALL");
 
-  // Edición
   const [editing, setEditing] = useState<null | SaleData>(null);
   const [editQty, setEditQty] = useState<number>(0);
   const [editAmount, setEditAmount] = useState<number>(0);
@@ -140,23 +177,24 @@ export default function CierreVentas({
 
   const today = format(new Date(), "yyyy-MM-dd");
   const pdfRef = useRef<HTMLDivElement>(null);
+  const { refreshKey, refresh } = useManualRefresh();
 
-  // Ventas de HOY (tu lógica)
+  // Ventas de HOY
   useEffect(() => {
     const q = query(collection(db, "salesV2"), where("date", "==", today));
     const unsub = onSnapshot(q, (snap) => {
       const rows: SaleData[] = [];
       snap.forEach((d) => {
-        const norm = normalizeSale(d.data() as SaleDataRaw, d.id);
-        if (norm) rows.push(norm);
+        const parts = normalizeMany(d.data() as SaleDataRaw, d.id);
+        rows.push(...parts);
       });
       setSales(rows);
       setLoading(false);
     });
     return () => unsub();
-  }, [today]);
+  }, [today, refreshKey]);
 
-  // Ventas FLOTANTE de cualquier fecha (para que no desaparezcan)
+  // FLOTANTE de cualquier fecha
   useEffect(() => {
     const qFlo = query(
       collection(db, "salesV2"),
@@ -165,15 +203,15 @@ export default function CierreVentas({
     const unsub = onSnapshot(qFlo, (snap) => {
       const rows: SaleData[] = [];
       snap.forEach((d) => {
-        const norm = normalizeSale(d.data() as SaleDataRaw, d.id);
-        if (norm) rows.push(norm);
+        const parts = normalizeMany(d.data() as SaleDataRaw, d.id);
+        rows.push(...parts);
       });
       setFloatersExtra(rows);
     });
     return () => unsub();
-  }, []);
+  }, [refreshKey]);
 
-  // Cierre del día (informativo)
+  // Cierre guardado (informativo)
   useEffect(() => {
     const fetchClosure = async () => {
       const q = query(
@@ -189,29 +227,26 @@ export default function CierreVentas({
       }
     };
     fetchClosure();
-  }, [today]);
+  }, [today, refreshKey]);
 
-  // Ventas visibles según filtro
+  // Ventas visibles
   const visibleSales = React.useMemo(() => {
     if (filter === "FLOTANTE") {
-      // SOLO FLOTANTE (de hoy + de otras fechas)
       const all = [...salesV2, ...floatersExtra];
       const map = new Map<string, SaleData>();
       for (const s of all) if (s.status === "FLOTANTE") map.set(s.id, s);
       return Array.from(map.values());
     }
     if (filter === "ALL") {
-      // TODO lo de hoy (FLOTANTE y PROCESADA) + FLOTANTE de otras fechas
       const all = [...salesV2, ...floatersExtra];
       const map = new Map<string, SaleData>();
-      for (const s of all) map.set(s.id, s); // de-dup
+      for (const s of all) map.set(s.id, s);
       return Array.from(map.values());
     }
-    // PROCESADA (hoy)
     return salesV2.filter((s) => s.status === "PROCESADA");
   }, [filter, salesV2, floatersExtra]);
 
-  // Totales (sobre visibles) con redondeo final
+  // Totales visibles
   const totalSuggested = round2(
     visibleSales.reduce((sum, s) => sum + (s.amountSuggested || 0), 0)
   );
@@ -226,7 +261,7 @@ export default function CierreVentas({
   );
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
-  // Consolidado por producto (según ventas visibles y filtro)
+  // Consolidado por producto
   const productMap: Record<
     string,
     { totalQuantity: number; totalAmount: number }
@@ -250,13 +285,9 @@ export default function CierreVentas({
     })
   );
 
-  // Guardar cierre (ventas NO PROCESADAS de HOY)
-  // Reemplaza COMPLETO handleSaveClosure por esto 👇
+  // Guardar cierre (misma lógica tuya)
   const handleSaveClosure = async () => {
     try {
-      // 1) Si en la vista hay FLOTANTE (de cualquier fecha), procesamos esos.
-      // 2) Si no hay FLOTANTE visible, caemos al comportamiento original:
-      //    procesar TODO lo no PROCESADO de HOY (salesV2).
       const candidatesVisible = visibleSales.filter(
         (s) => s.status === "FLOTANTE"
       );
@@ -270,7 +301,6 @@ export default function CierreVentas({
         return;
       }
 
-      // Totales (con tus redondeos)
       const totals = {
         totalCharged: round2(
           toProcess.reduce((a, s) => a + (s.amount || 0), 0)
@@ -288,7 +318,6 @@ export default function CierreVentas({
       const diff = round2(totals.totalCharged - totals.totalSuggested);
       const grossProfit = round2(totals.totalCharged - totals.totalCOGS);
 
-      // 1) Crear documento de cierre (con fecha HOY; puede incluir flotantes de días previos)
       const ref = await addDoc(collection(db, "daily_closures"), {
         date: today,
         createdAt: Timestamp.now(),
@@ -317,10 +346,8 @@ export default function CierreVentas({
           cogsAmount: s.cogsAmount ?? 0,
           avgUnitCost: s.avgUnitCost ?? null,
           allocations: s.allocations ?? [],
-          date: s.date, // ⬅️ esta es la nueva línea
+          date: s.date,
         })),
-
-        // El summary guardado sigue siendo del lote procesado
         productSummary: Object.entries(
           toProcess.reduce((acc, s) => {
             const k = s.productName || "(sin nombre)";
@@ -338,10 +365,9 @@ export default function CierreVentas({
         })),
       });
 
-      // 2) Marcar como PROCESADA todo lo que cerramos (aunque sea de fechas previas)
       const batch = writeBatch(db);
       toProcess.forEach((s) => {
-        batch.update(doc(db, "salesV2", s.id), {
+        batch.update(doc(db, "salesV2", s.id.split("#")[0]), {
           status: "PROCESADA",
           closureId: ref.id,
           closureDate: today,
@@ -356,14 +382,13 @@ export default function CierreVentas({
     }
   };
 
-  // Revertir una venta a FLOTANTE
   const handleRevert = async (saleId: string) => {
     if (
       !window.confirm("¿Revertir esta venta? Esta acción no se puede deshacer.")
     )
       return;
     try {
-      await updateDoc(doc(db, "salesV2", saleId), {
+      await updateDoc(doc(db, "salesV2", saleId.split("#")[0]), {
         status: "FLOTANTE",
         closureId: null,
         closureDate: null,
@@ -375,7 +400,6 @@ export default function CierreVentas({
     }
   };
 
-  // ---- ACCIONES ADMIN: EDITAR / ELIMINAR ----
   const openEdit = (s: SaleData) => {
     setEditing(s);
     setEditQty(s.quantity);
@@ -388,10 +412,10 @@ export default function CierreVentas({
   const saveEdit = async () => {
     if (!editing) return;
     try {
-      await updateDoc(doc(db, "salesV2", editing.id), {
+      await updateDoc(doc(db, "salesV2", editing.id.split("#")[0]), {
         quantity: editQty,
         amount: editAmount,
-        amountCharged: editAmount, // compatibilidad
+        amountCharged: editAmount,
         clientName: editClient,
         amountReceived: editPaid,
         change: editChange,
@@ -412,7 +436,7 @@ export default function CierreVentas({
     )
       return;
     try {
-      const { restored } = await restoreSaleAndDelete(saleId);
+      const { restored } = await restoreSaleAndDelete(saleId.split("#")[0]);
       setMessage(
         `🗑️ Venta eliminada. Stock restaurado: ${Number(restored).toFixed(2)}.`
       );
@@ -443,8 +467,10 @@ export default function CierreVentas({
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow">
       <h2 className="text-2xl font-bold mb-4">Cierre de Ventas - {today}</h2>
+      <div className="flex items-center justify-between mb-3">
+        <RefreshButton onClick={refresh} loading={loading}  />
+      </div>
 
-      {/* Filtro por estado */}
       <div className="flex items-center gap-2 mb-3">
         <label className="text-sm">Filtrar:</label>
         <select
@@ -462,7 +488,6 @@ export default function CierreVentas({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          {/* Tabla de ventas */}
           <table className="min-w-full border text-sm mb-4">
             <thead className="bg-gray-100">
               <tr>
@@ -546,31 +571,32 @@ export default function CierreVentas({
             </tbody>
           </table>
 
-          {/* Totales visibles (formateados) */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-2">
             <div>
+              {" "}
               Total unidades: <strong>{qty3(totalUnits)}</strong>
             </div>
             <div>
+              {" "}
               Total cobrado: <strong>C${money(totalCharged)}</strong>
             </div>
           </div>
 
-          {/* COGS/Utilidad visibles si existen (formateados) */}
           {(totalCOGSVisible > 0 || grossProfitVisible !== totalCharged) && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm mb-6">
               <div>
+                {" "}
                 Calculo a Precio compra:{" "}
                 <strong>C${money(totalCOGSVisible)}</strong>
               </div>
               <div>
+                {" "}
                 Ganancia antes de gasto:{" "}
                 <strong>C${money(grossProfitVisible)}</strong>
               </div>
             </div>
           )}
 
-          {/* Consolidado por producto (según filtro/visibles) */}
           <h3 className="font-semibold mb-2">Consolidado por producto</h3>
           <table className="min-w-full border text-sm mb-2">
             <thead className="bg-gray-100">
@@ -617,7 +643,7 @@ export default function CierreVentas({
 
       {message && <p className="mt-2 text-sm">{message}</p>}
 
-      {/* Panel simple de edición */}
+      {/* Panel de edición */}
       {editing && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4 space-y-3">
