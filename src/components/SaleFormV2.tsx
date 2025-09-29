@@ -85,6 +85,12 @@ export default function SaleForm({ user }: { user: any }) {
 
   const [message, setMessage] = useState("");
 
+  // 🔵 NUEVO: overlay de guardado
+  const [saving, setSaving] = useState(false);
+
+  // 🔵 NUEVO: mapa de existencias por productId para filtrar el selector
+  const [stockById, setStockById] = useState<Record<string, number>>({});
+
   const round2 = (n: number) => Math.round(n * 100) / 100;
   const qty3 = (n: number) => roundQty(n).toFixed(3);
 
@@ -136,6 +142,23 @@ export default function SaleForm({ user }: { user: any }) {
         });
       });
       setProducts(list);
+    })();
+  }, []);
+
+  // 🔵 NUEVO: cargar existencias por productId para filtrar el selector
+  useEffect(() => {
+    (async () => {
+      const snap = await getDocs(collection(db, "inventory_batches"));
+      const m: Record<string, number> = {};
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        const pid = x.productId;
+        const rem = Number(x.remaining || 0);
+        if (pid) m[pid] = addQty(m[pid] || 0, rem);
+      });
+      // redondeo a 3 decimales como el resto del módulo
+      Object.keys(m).forEach((k) => (m[k] = roundQty(m[k])));
+      setStockById(m);
     })();
   }, []);
 
@@ -280,6 +303,8 @@ export default function SaleForm({ user }: { user: any }) {
     }
 
     try {
+      setSaving(true); // 🔵 overlay ON
+
       // 1) Asignar FIFO y descontar por ítem
       const enriched = [];
       for (const it of items) {
@@ -341,6 +366,8 @@ export default function SaleForm({ user }: { user: any }) {
     } catch (err: any) {
       console.error(err);
       setMessage(`❌ ${err?.message || "Error al registrar la venta."}`);
+    } finally {
+      setSaving(false); // 🔵 overlay OFF
     }
   };
 
@@ -350,240 +377,283 @@ export default function SaleForm({ user }: { user: any }) {
     [items]
   );
 
+  // 🔵 NUEVO: solo mostrar en el selector los que tienen stock > 0
+  const selectableProducts = useMemo(
+    () => products.filter((p) => (stockById[p.id] || 0) > 0),
+    [products, stockById]
+  );
+
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="w-full mx-auto bg-white rounded-2xl shadow-2xl
+    <div className="relative">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full mx-auto bg-white rounded-2xl shadow-2xl
                  p-4 sm:p-6 md:p-8
                  max-w-5xl space-y-4"
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl sm:text-2xl font-bold text-blue-700 whitespace-nowrap">
-          Registrar venta (Pollo)
-        </h2>
-      </div>
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl sm:text-2xl font-bold text-blue-700 whitespace-nowrap">
+            Registrar venta (Pollo)
+          </h2>
+        </div>
 
-      {/* Selector de producto */}
-      <div className="space-y-1">
-        <label className="block text-sm font-semibold text-gray-700">
-          Producto | Precio por Libra/Unidad
-        </label>
-        <div className="flex gap-2">
-          <select
-            className="flex-1 border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-            value={selectedProductId}
-            onChange={(e) => setSelectedProductId(e.target.value)}
-          >
-            <option value="" disabled>
-              Selecciona un producto
-            </option>
-            {products.map((p) => (
-              <option
-                key={p.id}
-                value={p.id}
-                disabled={chosenIds.has(p.id)}
-                title={chosenIds.has(p.id) ? "Ya está en la lista" : ""}
-              >
-                {p.productName} — {p.measurement} — C$ {p.price}
+        {/* Selector de producto */}
+        <div className="space-y-1">
+          <label className="block text-sm font-semibold text-gray-700">
+            Producto | Precio por Libra/Unidad
+          </label>
+          <div className="flex gap-2">
+            <select
+              className="flex-1 border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+              value={selectedProductId}
+              onChange={(e) => setSelectedProductId(e.target.value)}
+            >
+              <option value="" disabled>
+                Selecciona un producto
               </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={addSelectedProduct}
-            disabled={!selectedProductId || chosenIds.has(selectedProductId)}
-            className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            Agregar
-          </button>
+              {selectableProducts.map((p) => (
+                <option
+                  key={p.id}
+                  value={p.id}
+                  disabled={chosenIds.has(p.id)}
+                  title={
+                    chosenIds.has(p.id)
+                      ? "Ya está en la lista"
+                      : `Disponible: ${qty3(stockById[p.id] || 0)}`
+                  }
+                >
+                  {p.productName} — {p.measurement} — C$ {p.price} (disp:{" "}
+                  {qty3(stockById[p.id] || 0)})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={addSelectedProduct}
+              disabled={!selectedProductId || chosenIds.has(selectedProductId)}
+              className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              Agregar
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Fecha / Cliente */}
-      <div className="grid md:grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            Fecha de la venta
-          </label>
-          <input
-            type="date"
-            className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
-            value={saleDate}
-            onChange={(e) => setSaleDate(e.target.value)}
-          />
+        {/* Fecha / Cliente */}
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Fecha de la venta
+            </label>
+            <input
+              type="date"
+              className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+              value={saleDate}
+              onChange={(e) => setSaleDate(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Cliente
+            </label>
+            <input
+              className="w-full border border-gray-300 p-2 rounded"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              placeholder="Opcional"
+            />
+          </div>
         </div>
 
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            Cliente
-          </label>
-          <input
-            className="w-full border border-gray-300 p-2 rounded"
-            value={clientName}
-            onChange={(e) => setClientName(e.target.value)}
-            placeholder="Opcional"
-          />
-        </div>
-      </div>
-
-      {/* Lista de ítems */}
-      <div className="rounded border overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr className="text-center">
-              <th className="p-2 border whitespace-nowrap">Producto</th>
-              <th className="p-2 border whitespace-nowrap">Precio</th>
-              <th className="p-2 border whitespace-nowrap">Existencias</th>
-              <th className="p-2 border whitespace-nowrap">Cantidad</th>
-              <th className="p-2 border whitespace-nowrap">Descuento</th>
-              <th className="p-2 border whitespace-nowrap">Monto</th>
-              <th className="p-2 border">—</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="p-4 text-center text-gray-500">
-                  Agrega productos al carrito.
-                </td>
+        {/* Lista de ítems */}
+        <div className="rounded border overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-100">
+              <tr className="text-center">
+                <th className="p-2 border whitespace-nowrap">Producto</th>
+                <th className="p-2 border whitespace-nowrap">Precio</th>
+                <th className="p-2 border whitespace-nowrap">Existencias</th>
+                <th className="p-2 border whitespace-nowrap">Cantidad</th>
+                <th className="p-2 border whitespace-nowrap">Descuento</th>
+                <th className="p-2 border whitespace-nowrap">Monto</th>
+                <th className="p-2 border">—</th>
               </tr>
-            ) : (
-              items.map((it) => {
-                const line = Number(it.price || 0) * Number(it.qty || 0);
-                const net = Math.max(
-                  0,
-                  line - Math.max(0, Number(it.discount || 0))
-                );
-                const isUnit = (it.measurement || "").toLowerCase() !== "lb";
-                const shownExist = roundQty(
-                  Number(it.stock) - Number(it.qty || 0)
-                ); // 🔵 stock dinámico
-                return (
-                  <tr key={it.productId} className="text-center">
-                    <td className="p-2 border whitespace-nowrap">
-                      {it.productName} — {it.measurement}
-                    </td>
-                    <td className="p-2 border whitespace-nowrap">
-                      C$ {round2(it.price).toFixed(2)}
-                    </td>
-                    <td className="p-2 border whitespace-nowrap">
-                      {shownExist.toFixed(3)}
-                    </td>
-                    <td className="p-2 border">
-                      <input
-                        type="number"
-                        step={isUnit ? 1 : 0.01}
-                        inputMode={isUnit ? "numeric" : "decimal"}
-                        className="w-28 border p-1 rounded text-right"
-                        value={it.qty === 0 ? "" : it.qty}
-                        onKeyDown={numberKeyGuard}
-                        onChange={(e) =>
-                          setItemQty(it.productId, e.target.value)
-                        }
-                        placeholder="0"
-                        title="Cantidad"
-                      />
-                    </td>
-                    <td className="p-2 border">
-                      <input
-                        type="number"
-                        step={1}
-                        min={0}
-                        className="w-24 border p-1 rounded text-right"
-                        value={it.discount === 0 ? "" : it.discount}
-                        onChange={(e) =>
-                          setItemDiscount(it.productId, e.target.value)
-                        }
-                        inputMode="numeric"
-                        placeholder="0"
-                        title="Descuento (entero C$)"
-                      />
-                    </td>
-                    <td className="p-2 border whitespace-nowrap">
-                      C$ {round2(net).toFixed(2)}
-                    </td>
-                    <td className="p-2 border">
-                      <button
-                        type="button"
-                        className="px-2 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
-                        onClick={() => removeItem(it.productId)}
-                        title="Quitar"
-                      >
-                        ✕
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Total de la venta (readOnly) */}
-      <div className="space-y-1">
-        <label className="block text-sm font-semibold text-gray-700">
-          💵 Monto total
-        </label>
-        <input
-          type="text"
-          className="w-full border border-gray-300 p-2 rounded bg-gray-100"
-          value={`C$ ${amountCharged.toFixed(2)}`}
-          readOnly
-          title="Suma de (precio × cantidad − descuento) de cada producto."
-        />
-      </div>
-
-      {/* Pago recibido / Cambio */}
-      <div className="grid grid-cols-2 gap-x-3">
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            Monto recibido
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border border-gray-300 p-2 rounded"
-            value={amountReceived === 0 ? "" : amountReceived}
-            onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
-          />
+            </thead>
+            <tbody>
+              {items.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-4 text-center text-gray-500">
+                    Agrega productos al carrito.
+                  </td>
+                </tr>
+              ) : (
+                items.map((it) => {
+                  const line = Number(it.price || 0) * Number(it.qty || 0);
+                  const net = Math.max(
+                    0,
+                    line - Math.max(0, Number(it.discount || 0))
+                  );
+                  const isUnit = (it.measurement || "").toLowerCase() !== "lb";
+                  const shownExist = roundQty(
+                    Number(it.stock) - Number(it.qty || 0)
+                  ); // 🔵 stock dinámico
+                  return (
+                    <tr key={it.productId} className="text-center">
+                      <td className="p-2 border whitespace-nowrap">
+                        {it.productName} — {it.measurement}
+                      </td>
+                      <td className="p-2 border whitespace-nowrap">
+                        C$ {round2(it.price).toFixed(2)}
+                      </td>
+                      <td className="p-2 border whitespace-nowrap">
+                        {shownExist.toFixed(3)}
+                      </td>
+                      <td className="p-2 border">
+                        <input
+                          type="number"
+                          step={isUnit ? 1 : 0.01}
+                          inputMode={isUnit ? "numeric" : "decimal"}
+                          className="w-28 border p-1 rounded text-right"
+                          value={it.qty === 0 ? "" : it.qty}
+                          onKeyDown={numberKeyGuard}
+                          onChange={(e) =>
+                            setItemQty(it.productId, e.target.value)
+                          }
+                          placeholder="0"
+                          title="Cantidad"
+                        />
+                      </td>
+                      <td className="p-2 border">
+                        <input
+                          type="number"
+                          step={1}
+                          min={0}
+                          className="w-24 border p-1 rounded text-right"
+                          value={it.discount === 0 ? "" : it.discount}
+                          onChange={(e) =>
+                            setItemDiscount(it.productId, e.target.value)
+                          }
+                          inputMode="numeric"
+                          placeholder="0"
+                          title="Descuento (entero C$)"
+                        />
+                      </td>
+                      <td className="p-2 border whitespace-nowrap">
+                        C$ {round2(net).toFixed(2)}
+                      </td>
+                      <td className="p-2 border">
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
+                          onClick={() => removeItem(it.productId)}
+                          title="Quitar"
+                        >
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
+
+        {/* Total de la venta (readOnly) */}
         <div className="space-y-1">
           <label className="block text-sm font-semibold text-gray-700">
-            Cambio
+            💵 Monto total
           </label>
           <input
             type="text"
             className="w-full border border-gray-300 p-2 rounded bg-gray-100"
-            value={`C$ ${amountChange}`}
+            value={`C$ ${amountCharged.toFixed(2)}`}
             readOnly
+            title="Suma de (precio × cantidad − descuento) de cada producto."
           />
         </div>
-      </div>
 
-      {/* Guardar */}
-      <button
-        type="submit"
-        className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50"
-        disabled={items.length === 0}
-      >
-        Guardar venta
-      </button>
+        {/* Pago recibido / Cambio */}
+        <div className="grid grid-cols-2 gap-x-3">
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Monto recibido
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              inputMode="decimal"
+              className="w-full border border-gray-300 p-2 rounded"
+              value={amountReceived === 0 ? "" : amountReceived}
+              onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Cambio
+            </label>
+            <input
+              type="text"
+              className="w-full border border-gray-300 p-2 rounded bg-gray-100"
+              value={`C$ ${amountChange}`}
+              readOnly
+            />
+          </div>
+        </div>
 
-      {message && (
-        <p
-          className={`text-sm mt-2 ${
-            message.startsWith("✅")
-              ? "text-green-600"
-              : message.startsWith("⚠️")
-              ? "text-yellow-600"
-              : "text-red-600"
-          }`}
+        {/* Guardar */}
+        <button
+          type="submit"
+          className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50"
+          disabled={items.length === 0 || saving}
         >
-          {message}
-        </p>
+          {saving ? "Guardando..." : "Guardar venta"}
+        </button>
+
+        {message && (
+          <p
+            className={`text-sm mt-2 ${
+              message.startsWith("✅")
+                ? "text-green-600"
+                : message.startsWith("⚠️")
+                ? "text-yellow-600"
+                : "text-red-600"
+            }`}
+          >
+            {message}
+          </p>
+        )}
+      </form>
+
+      {/* 🔵 Overlay de guardado (igual estilo que ropa) */}
+      {saving && (
+        <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center">
+          <div className="bg-white rounded-lg shadow-xl border px-6 py-5">
+            <div className="flex items-center gap-3">
+              <svg
+                className="animate-spin h-5 w-5"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                />
+              </svg>
+              <span className="font-semibold">Guardando venta…</span>
+            </div>
+          </div>
+        </div>
       )}
-    </form>
+    </div>
   );
 }

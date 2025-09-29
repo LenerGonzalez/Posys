@@ -1,4 +1,3 @@
-// src/components/financialDashboard.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
 import {
@@ -74,7 +73,7 @@ export default function FinancialDashboard(): React.ReactElement {
         const x = d.data() as any;
         const baseDate = x.date ?? "";
 
-        // 🔵 Si hay items[], crear UNA fila por ítem
+        // Si hay items[], crear UNA fila por ítem
         if (Array.isArray(x.items) && x.items.length > 0) {
           x.items.forEach((it: any, idx: number) => {
             const prod = String(it.productName ?? "(sin nombre)");
@@ -100,7 +99,7 @@ export default function FinancialDashboard(): React.ReactElement {
           return;
         }
 
-        // 🔵 Fallback al shape viejo
+        // Fallback al shape viejo
         sRows.push({
           id: d.id,
           date: baseDate,
@@ -141,7 +140,7 @@ export default function FinancialDashboard(): React.ReactElement {
     load();
   }, [from, to, refreshKey]);
 
-  // --- Cálculos principales (igual que tenías) ---
+  // KPIs principales
   const kpis = useMemo(() => {
     const revenue = sales.reduce((a, s) => a + (s.amount || 0), 0);
 
@@ -164,7 +163,13 @@ export default function FinancialDashboard(): React.ReactElement {
     return { revenue, cogsReal, grossProfit, expensesSum, netProfit };
   }, [sales, expenses]);
 
-  // Consolidado por producto (con cantidades a 3 decimales)
+  // KPI: Libras vendidas (suma de quantity)
+  const totalUnits = useMemo(
+    () => sales.reduce((a, s) => a + (Number(s.quantity) || 0), 0),
+    [sales]
+  );
+
+  // Consolidado por producto (con fechas)
   const byProduct = useMemo(() => {
     type Row = {
       productName: string;
@@ -172,6 +177,8 @@ export default function FinancialDashboard(): React.ReactElement {
       revenue: number;
       cogs: number;
       profit: number;
+      firstDate?: string;
+      lastDate?: string;
     };
     const map = new Map<string, Row>();
 
@@ -184,11 +191,18 @@ export default function FinancialDashboard(): React.ReactElement {
           revenue: 0,
           cogs: 0,
           profit: 0,
+          firstDate: s.date || "",
+          lastDate: s.date || "",
         });
 
       const row = map.get(key)!;
       row.units += Number(s.quantity || 0);
       row.revenue += Number(s.amount || 0);
+
+      if (!row.firstDate || s.date < (row.firstDate || s.date))
+        row.firstDate = s.date;
+      if (!row.lastDate || s.date > (row.lastDate || s.date))
+        row.lastDate = s.date;
 
       let c = 0;
       if (s.allocations?.length) {
@@ -205,16 +219,20 @@ export default function FinancialDashboard(): React.ReactElement {
     );
   }, [sales]);
 
+  // KPI: Top 3 productos por libras/unidades vendidas
+  const topProducts = useMemo(() => {
+    return [...byProduct]
+      .sort((a, b) => b.units - a.units)
+      .slice(0, 3)
+      .map((r, i) => ({ idx: i + 1, name: r.productName, units: r.units }));
+  }, [byProduct]);
+
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow ">
-       <div className="flex items-center justify-between mb-3">
-              <h2 className="text-2xl font-bold">Finanzas (Ropa)</h2>
-              <RefreshButton
-                onClick={refresh}
-                loading={loading}
-              />
-            </div>
-      
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Finanzas (Ropa)</h2>
+        <RefreshButton onClick={refresh} loading={loading} />
+      </div>
 
       {/* Filtro de fechas */}
       <div className="flex flex-wrap items-end gap-2 mb-4">
@@ -242,8 +260,8 @@ export default function FinancialDashboard(): React.ReactElement {
         <p>Cargando…</p>
       ) : (
         <>
-          {/* KPIs */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6 text-3xl font-bold">
+          {/* KPIs principales (igual tamaño que antes) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
             <Kpi title="Ventas Totales" value={money(kpis.revenue)} />
             <Kpi title="Costo de Mercaderia" value={money(kpis.cogsReal)} />
             <Kpi
@@ -259,12 +277,26 @@ export default function FinancialDashboard(): React.ReactElement {
             />
           </div>
 
+          {/* KPIs secundarios (debajo y compactos) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+            <KpiCompact title="Libras Vendidas" value={qty3(totalUnits)} />
+            <KpiList
+              title="Productos más vendidos"
+              items={topProducts.map((t) => ({
+                key: `${t.idx}`,
+                label: `${t.idx}. ${t.name}`,
+                value: `(${qty3(t.units)})`,
+              }))}
+            />
+          </div>
+
           {/* Consolidado por producto */}
           <h3 className="font-semibold mb-2">Consolidado por producto</h3>
           <table className="min-w-full border text-sm mb-6">
             <thead className="bg-gray-100">
               <tr>
                 <th className="border p-2">Producto</th>
+                <th className="border p-2">Fechas</th>
                 <th className="border p-2">Total libras/unidades</th>
                 <th className="border p-2">Ingreso</th>
                 <th className="border p-2">Costo</th>
@@ -275,6 +307,13 @@ export default function FinancialDashboard(): React.ReactElement {
               {byProduct.map((r) => (
                 <tr key={r.productName} className="text-center">
                   <td className="border p-1">{r.productName}</td>
+                  <td className="border p-1">
+                    {r.firstDate && r.lastDate
+                      ? r.firstDate === r.lastDate
+                        ? r.firstDate
+                        : `${r.firstDate} – ${r.lastDate}`
+                      : "—"}
+                  </td>
                   <td className="border p-1">{qty3(r.units)}</td>
                   <td className="border p-1">{money(r.revenue)}</td>
                   <td className="border p-1">{money(r.cogs)}</td>
@@ -289,7 +328,7 @@ export default function FinancialDashboard(): React.ReactElement {
               ))}
               {byProduct.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-3 text-center text-gray-500">
+                  <td colSpan={6} className="p-3 text-center text-gray-500">
                     Sin datos en el rango seleccionado.
                   </td>
                 </tr>
@@ -344,6 +383,8 @@ export default function FinancialDashboard(): React.ReactElement {
   );
 }
 
+/* ================== UI pequeñas ================== */
+
 function Kpi({
   title,
   value,
@@ -359,6 +400,42 @@ function Kpi({
       <div className={`text-xl font-bold ${positive ? "text-green-700" : ""}`}>
         {value}
       </div>
+    </div>
+  );
+}
+
+/** KPI compacto (tipografía pequeña) */
+function KpiCompact({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="border rounded-lg p-3">
+      <div className="text-[11px] text-gray-500">{title}</div>
+      <div className="text-base font-semibold">{value}</div>
+    </div>
+  );
+}
+
+/** KPI de lista (3 renglones, tipografía chica) */
+function KpiList({
+  title,
+  items,
+}: {
+  title: string;
+  items: { key: string; label: string; value?: string }[];
+}) {
+  return (
+    <div className="border rounded-lg p-3">
+      <div className="text-[11px] text-gray-500 mb-1">{title}</div>
+      <ul className="text-sm leading-snug list-none pl-0 m-0 space-y-0.5">
+        {items.length === 0 ? (
+          <li className="text-gray-500">—</li>
+        ) : (
+          items.map((it) => (
+            <li key={it.key}>
+              {it.label} {it.value ?? ""}
+            </li>
+          ))
+        )}
+      </ul>
     </div>
   );
 }

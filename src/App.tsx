@@ -18,9 +18,9 @@ import AdminLayout from "./components/AdminLayout";
 import SaleForm from "./components/SaleForm";
 import CierreVentas from "./components/CierreVentas";
 import HistorialCierres from "./components/HistorialCierres";
-import UserRegisterForm from "./components/UserRegisterForm"; // si quieres mantenerlo para “Usuarios”
+import UserRegisterForm from "./components/UserRegisterForm";
 import ProductForm from "./components/ProductForm";
-import InventarioForm from "./components/InventarioForm"; // o el nombre que uses
+import InventarioForm from "./components/InventarioForm";
 import SaleFormV2 from "./components/SaleFormV2";
 import InventoryBatches from "./components/InventoryBatches";
 import Liquidaciones from "./components/Liquidaciones";
@@ -37,9 +37,11 @@ import FinancialDashboardClothes from "./components/Clothes/FinancialDashboardCl
 import ExpensesClothes from "./components/Clothes/ExpensesClothes";
 import TransactionsReportClothes from "./components/Clothes/TransactionsReportClothes";
 
+type Role = "" | "admin" | "vendedor_pollo" | "vendedor_ropa";
+
 export default function App() {
   const [user, setUser] = useState<any>(null);
-  const [role, setRole] = useState<string>("");
+  const [role, setRole] = useState<Role>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -47,9 +49,14 @@ export default function App() {
       setLoading(true);
       if (firebaseUser) {
         setUser(firebaseUser);
-        const docRef = doc(db, "users", firebaseUser.uid);
-        const snap = await getDoc(docRef);
-        setRole(snap.exists() ? snap.data().role : "");
+        try {
+          const docRef = doc(db, "users", firebaseUser.uid);
+          const snap = await getDoc(docRef);
+          const r = (snap.exists() ? snap.data().role : "") as Role;
+          setRole(r || "");
+        } catch {
+          setRole("");
+        }
       } else {
         setUser(null);
         setRole("");
@@ -61,79 +68,103 @@ export default function App() {
 
   if (loading) return <div className="p-6 text-center">Cargando...</div>;
 
+  // Redirección por defecto dentro de /admin según rol
+  const AdminIndexRedirect = () => {
+    if (role === "admin") return <Navigate to="bills" replace />;
+    if (role === "vendedor_pollo") return <Navigate to="salesV2" replace />;
+    if (role === "vendedor_ropa") return <Navigate to="salesClothes" replace />;
+    return <Navigate to="/" replace />;
+    // ^ si no hay rol válido, vuelve al login
+  };
+
   return (
     <Router>
       <Routes>
         <Route path="/" element={<Login />} />
+
         {/* Árbol ADMIN protegido con layout + rutas hijas */}
         <Route
           path="/admin"
           element={
-            <PrivateRoute allowedRoles={["admin", "vendedor"]}>
+            <PrivateRoute
+              allowedRoles={["admin", "vendedor_pollo", "vendedor_ropa"]}
+            >
               <AdminLayout role={role} />
             </PrivateRoute>
           }
         >
-          {/* Redirige /admin a /admin/ventas */}
-          <Route index element={<Navigate to="bills" replace />} />
-          {/* Cierre del día */}
+          {/* Redirección inicial dentro de /admin según rol */}
+          <Route index element={<AdminIndexRedirect />} />
+
+          {/* ======== POLLO ======== */}
+          {/* Cierre del día (admin y vendedor_pollo) */}
           <Route
             path="bills"
             element={
-              <PrivateRoute allowedRoles={["vendedor", "admin"]}>
+              <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
                 <CierreVentas />
               </PrivateRoute>
             }
           />
-          <Route
-            path="fix"
-            element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <FixBatchesPages />
-              </PrivateRoute>
-            }
-          />
-          {/* Ventas (vendedor y admin) */}
+          {/* Ventas pollo (admin y vendedor_pollo) */}
           <Route
             path="salesV2"
             element={
-              <PrivateRoute allowedRoles={["vendedor", "admin"]}>
+              <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
                 <SaleFormV2 user={user} />
               </PrivateRoute>
             }
           />
-          {/* Historial de cierres (solo admin) */}
+          {/* Panel financiero pollo (solo admin) */}
           <Route
-            path="billhistoric"
+            path="financialDashboard"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
-                <HistorialCierres />
+                <FinancialDashboard />
               </PrivateRoute>
             }
           />
-          {/* Usuarios (solo admin) – usa tu componente de usuarios/registro */}
+          {/* Gastos pollo (solo admin) */}
           <Route
-            path="users"
+            path="expenses"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
-                <UserRegisterForm />
+                <ExpensesAdmin />
               </PrivateRoute>
             }
           />
-          {/* Productos (solo admin) */}
+          {/* Billing / cierre manual (solo admin) */}
           <Route
-            path="products"
+            path="billing"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
-                <ProductForm />
+                <Billing />
               </PrivateRoute>
             }
           />
+          {/* Inventarios pollo (solo admin) */}
           <Route
             path="batches"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <InventoryBatches />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="paidBatches"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <PaidBatches />
+              </PrivateRoute>
+            }
+          />
+          {/* Otros (solo admin) */}
+          <Route
+            path="fix"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <FixBatchesPages />
               </PrivateRoute>
             }
           />
@@ -146,87 +177,62 @@ export default function App() {
             }
           />
           <Route
-            path="financialDashboard"
+            path="billhistoric"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
-                <FinancialDashboard />
-              </PrivateRoute>
-            }
-          />
-          <Route
-            path="TransactionsReportClothes"
-            element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <TransactionsReportClothes />
+                <HistorialCierres />
               </PrivateRoute>
             }
           />
 
-          {/* Registro de gastos */}
+          {/* Usuarios (solo admin) */}
           <Route
-            path="expenses"
+            path="users"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
-                <ExpensesAdmin />
+                <UserRegisterForm />
               </PrivateRoute>
             }
           />
+          {/* Productos pollo (solo admin) */}
           <Route
-            path="billing"
+            path="products"
             element={
               <PrivateRoute allowedRoles={["admin"]}>
-                <Billing />
+                <ProductForm />
               </PrivateRoute>
             }
           />
-          <Route
-            path="paidBatches"
-            element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <PaidBatches />
-              </PrivateRoute>
-            }
-          />
-          <Route
-            path="inventoryClothesBatches"
-            element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <InventoryClothesBatches />
-              </PrivateRoute>
-            }
-          />
-          <Route
-            path="productsClothes"
-            element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <ProductsClothes />
-              </PrivateRoute>
-            }
-          />
-          <Route
-            path="CustomersClothes"
-            element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <CustomersClothes />
-              </PrivateRoute>
-            }
-          />
+
+          {/* ======== ROPA ======== */}
+          {/* Venta ropa (admin y vendedor_ropa) */}
           <Route
             path="salesClothes"
             element={
-              <PrivateRoute allowedRoles={["admin"]}>
+              <PrivateRoute allowedRoles={["admin", "vendedor_ropa"]}>
                 <SalesClothesPOS />
               </PrivateRoute>
             }
           />
+          {/* Transacciones ropa (admin y vendedor_ropa) */}
+          <Route
+            path="TransactionsReportClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_ropa"]}>
+                <TransactionsReportClothes />
+              </PrivateRoute>
+            }
+          />
+          {/* Dashboard ropa (admin y vendedor_ropa) */}
           <Route
             path="financialDashboardClothes"
             element={
-              <PrivateRoute allowedRoles={["admin"]}>
+              <PrivateRoute allowedRoles={["admin", "vendedor_ropa"]}>
                 <FinancialDashboardClothes />
               </PrivateRoute>
             }
           />
+          {/* Gastos ropa (solo admin) — si quieres permitir también a vendedor_ropa, agrega el rol */}
           <Route
             path="ExpensesClothes"
             element={
@@ -235,17 +241,45 @@ export default function App() {
               </PrivateRoute>
             }
           />
+          {/* Inventario ropa (solo admin) */}
+          <Route
+            path="inventoryClothesBatches"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <InventoryClothesBatches />
+              </PrivateRoute>
+            }
+          />
+          {/* Productos ropa (admin y vendedor_ropa si deseas que cree productos; de momento admin) */}
+          <Route
+            path="productsClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_ropa"]}>
+                <ProductsClothes />
+              </PrivateRoute>
+            }
+          />
+          {/* Clientes ropa (admin y vendedor_ropa) */}
+          <Route
+            path="CustomersClothes"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_ropa"]}>
+                <CustomersClothes />
+              </PrivateRoute>
+            }
+          />
         </Route>
 
-        {/* Ruta legacy para vendedores si la usas aún */}
+        {/* Ruta legacy directa a ventas pollo (si la sigues usando) */}
         <Route
           path="/salesV2"
           element={
-            <PrivateRoute allowedRoles={["vendedor", "admin"]}>
+            <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
               <SaleFormV2 user={user} />
             </PrivateRoute>
           }
         />
+
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Router>

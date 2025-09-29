@@ -26,6 +26,7 @@ interface SaleDoc {
   total: number;
   items: SaleItem[];
   customerId?: string;
+  customerName?: string; // 👈 nuevo
 }
 
 interface BatchRow {
@@ -163,6 +164,7 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
         discount: Number(it.discount || 0),
       })),
       customerId: raw.customerId || undefined,
+      customerName: raw.customerName || undefined, // 👈 agregado
     };
   }
 
@@ -188,6 +190,7 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
       },
     ],
     customerId: raw.customerId || undefined,
+    customerName: raw.customerName || undefined, // 👈 agregado
   };
 }
 
@@ -260,7 +263,6 @@ export default function FinancialDashboardClothes() {
   const [toDate, setToDate] = useState(
     format(endOfMonth(new Date()), "yyyy-MM-dd")
   );
-  
 
   const [salesRange, setSalesRange] = useState<SaleDoc[]>([]);
   const [salesUpToToDate, setSalesUpToToDate] = useState<SaleDoc[]>([]);
@@ -471,6 +473,42 @@ export default function FinancialDashboardClothes() {
       .sort((a, b) => b.saldo - a.saldo);
   }, [customers, salesRange]);
 
+  // === Mapa clienteId -> nombre (para mostrar en tabla) ===
+  const customersById = useMemo(() => {
+    const m: Record<string, string> = {};
+    customers.forEach((c) => (m[c.id] = c.name));
+    return m;
+  }, [customers]);
+
+  // === Ventas del periodo como filas para tabla (orden desc) ===
+const salesRows = useMemo(() => {
+  return [...salesRange]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map((s) => {
+      const piezas = (s.items || []).reduce(
+        (acc, it) => acc + (Number(it.qty) || 0),
+        0
+      );
+
+      let cliente = "Cash";
+      if (s.type === "CREDITO" && s.customerId) {
+        cliente = customersById[s.customerId] || "—";
+      } else if (s.type === "CONTADO") {
+        cliente = s.customerName?.trim() || "Cash";
+      }
+
+      return {
+        id: s.id,
+        date: s.date,
+        type: s.type === "CREDITO" ? "Crédito" : "Cash",
+        customer: cliente,
+        piezas,
+        total: Number(s.total || 0),
+      };
+    });
+}, [salesRange, customersById]);
+
+
   // ===== Modal detalle cliente =====
   const openCustomerModal = async (row: {
     customerId: string;
@@ -551,15 +589,10 @@ export default function FinancialDashboardClothes() {
 
   return (
     <div className="max-w-6xl mx-auto">
-    
-
       {/* Filtro */}
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Finanzas (Ropa)</h2>
-        <RefreshButton
-          onClick={refresh}
-          loading={loading}
-        />
+        <RefreshButton onClick={refresh} loading={loading} />
       </div>
       <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
         <div className="flex flex-col">
@@ -702,6 +735,47 @@ export default function FinancialDashboardClothes() {
                     </button>
                   </td>
                   <td className="p-2 border font-semibold">{money(r.saldo)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Transacciones del periodo (sin acciones) */}
+      <h3 className="text-lg font-semibold mb-2">Transacciones del periodo</h3>
+      <div className="bg-white p-2 rounded shadow border w-full mb-6">
+        <table className="min-w-full w-full text-sm">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="p-2 border">Fecha</th>
+              <th className="p-2 border">Cliente</th>
+              <th className="p-2 border">Tipo</th>
+              <th className="p-2 border">Piezas</th>
+              <th className="p-2 border">Monto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td className="p-4 text-center" colSpan={5}>
+                  Cargando…
+                </td>
+              </tr>
+            ) : salesRows.length === 0 ? (
+              <tr>
+                <td className="p-4 text-center" colSpan={5}>
+                  Sin transacciones en el rango seleccionado.
+                </td>
+              </tr>
+            ) : (
+              salesRows.map((r) => (
+                <tr key={r.id} className="text-center">
+                  <td className="p-2 border">{r.date}</td>
+                  <td className="p-2 border">{r.customer}</td>
+                  <td className="p-2 border">{r.type}</td>
+                  <td className="p-2 border">{r.piezas}</td>
+                  <td className="p-2 border">{money(r.total)}</td>
                 </tr>
               ))
             )}

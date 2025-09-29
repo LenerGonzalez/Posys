@@ -76,6 +76,51 @@ async function deleteARMovesBySaleId(saleId: string) {
 }
 
 export default function CustomersClothes() {
+  // ===== Modal Detalle de Ítems (venta) =====
+  const [itemsModalOpen, setItemsModalOpen] = useState(false);
+  const [itemsModalLoading, setItemsModalLoading] = useState(false);
+  const [itemsModalSaleId, setItemsModalSaleId] = useState<string | null>(null);
+  const [itemsModalRows, setItemsModalRows] = useState<
+    {
+      productName: string;
+      qty: number;
+      unitPrice: number;
+      discount?: number;
+      total: number;
+    }[]
+  >([]);
+
+  const openItemsModal = async (saleId: string) => {
+    setItemsModalOpen(true);
+    setItemsModalLoading(true);
+    setItemsModalSaleId(saleId);
+    setItemsModalRows([]);
+    try {
+      const snap = await getDocs(
+        query(collection(db, "sales_clothes"), where("__name__", "==", saleId))
+      );
+      const docSnap = snap.docs[0];
+      const data = docSnap?.data() as any;
+      const arr = Array.isArray(data?.items)
+        ? data.items
+        : data?.item
+        ? [data.item]
+        : [];
+      const rows = arr.map((it: any) => ({
+        productName: String(it.productName || ""),
+        qty: Number(it.qty || 0),
+        unitPrice: Number(it.unitPrice || 0),
+        discount: Number(it.discount || 0),
+        total: Number(it.total || 0),
+      }));
+      setItemsModalRows(rows);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setItemsModalLoading(false);
+    }
+  };
+
   // ===== Formulario =====
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("+505 ");
@@ -1054,15 +1099,26 @@ export default function CustomersClothes() {
                             )}
                           </td>
                           <td className="p-2 border">
-                            <span
-                              className={`px-2 py-0.5 rounded text-xs ${
-                                m.amount >= 0
-                                  ? "bg-yellow-100 text-yellow-700"
-                                  : "bg-green-100 text-green-700"
-                              }`}
-                            >
-                              {m.amount >= 0 ? "COMPRA (CARGO)" : "ABONO"}
-                            </span>
+                            {m.amount >= 0 ? (
+                              m.ref?.saleId ? (
+                                <button
+                                  type="button"
+                                  className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700 underline"
+                                  title="Ver piezas de esta compra"
+                                  onClick={() => openItemsModal(m.ref!.saleId!)}
+                                >
+                                  COMPRA (CARGO)
+                                </button>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">
+                                  COMPRA (CARGO)
+                                </span>
+                              )
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
+                                ABONO
+                              </span>
+                            )}
                           </td>
                           <td className="p-2 border">
                             {m.ref?.saleId ? `Venta #${m.ref.saleId}` : "—"}
@@ -1230,6 +1286,72 @@ export default function CustomersClothes() {
               >
                 {savingAbono ? "Guardando..." : "Guardar abono"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal: Detalle de piezas de la venta */}
+      {itemsModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[65]">
+          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-bold">
+                Piezas vendidas{" "}
+                {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
+              </h3>
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => setItemsModalOpen(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="bg-white rounded border overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border">Producto</th>
+                    <th className="p-2 border text-right">Cantidad</th>
+                    <th className="p-2 border text-right">Precio</th>
+                    <th className="p-2 border text-right">Descuento</th>
+                    <th className="p-2 border text-right">Monto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemsModalLoading ? (
+                    <tr>
+                      <td colSpan={5} className="p-4 text-center">
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : itemsModalRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-4 text-center">
+                        Sin ítems en esta venta.
+                      </td>
+                    </tr>
+                  ) : (
+                    itemsModalRows.map((it, idx) => (
+                      <tr key={idx} className="text-center">
+                        <td className="p-2 border text-left">
+                          {it.productName}
+                        </td>
+                        <td className="p-2 border text-right">{it.qty}</td>
+                        <td className="p-2 border text-right">
+                          {money(it.unitPrice)}
+                        </td>
+                        <td className="p-2 border text-right">
+                          {money(it.discount || 0)}
+                        </td>
+                        <td className="p-2 border text-right">
+                          {money(it.total)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

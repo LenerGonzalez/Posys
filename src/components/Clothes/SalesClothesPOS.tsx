@@ -117,6 +117,11 @@ export default function SalesClothesPOS() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
+  // 🔵 Stock por producto (para mostrar/en gris en el selector)
+  const [stockByProduct, setStockByProduct] = useState<Record<string, number>>(
+    {}
+  );
+
   // Generales
   const [clientType, setClientType] = useState<ClientType>("CONTADO");
   const [customerId, setCustomerId] = useState<string>("");
@@ -221,6 +226,22 @@ export default function SalesClothesPOS() {
         });
       });
       setProducts(listP);
+
+      // 🔵 cargar stock disponible por productId (solo remaining > 0)
+      const qStock = query(
+        collection(db, "inventory_clothes_batches"),
+        where("remaining", ">", 0)
+      );
+      const sSnap = await getDocs(qStock);
+      const map: Record<string, number> = {};
+      sSnap.forEach((d) => {
+        const b = d.data() as any;
+        const pid = b.productId || "";
+        const rem = Number(b.remaining || 0);
+        if (!pid) return;
+        map[pid] = (map[pid] || 0) + rem;
+      });
+      setStockByProduct(map);
     })();
   }, []);
 
@@ -454,6 +475,24 @@ export default function SalesClothesPOS() {
       }
 
       setMsg("✅ Venta registrada");
+
+      // 🔵 Actualizar mapa de stock tras la venta (para el selector)
+      (async () => {
+        const qStock = query(
+          collection(db, "inventory_clothes_batches"),
+          where("remaining", ">", 0)
+        );
+        const sSnap = await getDocs(qStock);
+        const map: Record<string, number> = {};
+        sSnap.forEach((d) => {
+          const b = d.data() as any;
+          const pid = b.productId || "";
+          const rem = Number(b.remaining || 0);
+          if (!pid) return;
+          map[pid] = (map[pid] || 0) + rem;
+        });
+        setStockByProduct(map);
+      })();
     } catch (err) {
       console.error(err);
       setMsg("❌ Error al guardar la venta");
@@ -588,21 +627,24 @@ export default function SalesClothesPOS() {
             <option value="">Selecciona un producto</option>
             {products.map((p) => {
               const already = items.some((it) => it.productId === p.id);
+              const stock = stockByProduct[p.id] || 0;
+              const disabled = already || stock <= 0;
               return (
                 <option
                   key={p.id}
-                  value={already ? "" : p.id}
-                  disabled={already}
+                  value={disabled ? "" : p.id}
+                  disabled={disabled}
                 >
-                  {/* Concatenar SKU en el nombre del producto */}
                   {p.name} {p.sku ? `— ${p.sku}` : ""}{" "}
+                  {stock > 0 ? `(disp: ${stock})` : "(sin stock)"}
                   {already ? " (seleccionado)" : ""}
                 </option>
               );
             })}
           </select>
           <div className="text-xs text-gray-500 mt-1">
-            Los productos ya añadidos quedan bloqueados para evitar duplicados.
+            Productos sin existencias se muestran en gris y no se pueden
+            seleccionar.
           </div>
         </div>
 
@@ -877,6 +919,34 @@ export default function SalesClothesPOS() {
                 Guardar cliente
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🔵 Overlay de guardado */}
+      {saving && (
+        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center">
+          <div className="bg-white rounded-lg shadow-xl border px-4 py-3 flex items-center gap-3">
+            <svg
+              className="h-5 w-5 animate-spin"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+              />
+            </svg>
+            <span className="font-medium">Guardando venta…</span>
           </div>
         </div>
       )}

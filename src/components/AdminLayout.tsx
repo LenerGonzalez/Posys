@@ -12,11 +12,11 @@ export default function AdminLayout({ role }: { role: string }) {
       isActive ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-gray-100"
     }`;
 
-  // Sidebar ancho/colapsado (lo que ya tenías)
+  // Sidebar ancho/colapsado
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // ====== NUEVO: estados de menús colapsables ======
+  // ====== estados de menús colapsables ======
   // Operaciones Pollo
   const [openPollo, setOpenPollo] = useState(false);
   const [openPolloInv, setOpenPolloInv] = useState(false);
@@ -28,7 +28,7 @@ export default function AdminLayout({ role }: { role: string }) {
   const [openRopaInv, setOpenRopaInv] = useState(false);
   const [openRopaProd, setOpenRopaProd] = useState(false);
   const [openClients, setOpenClients] = useState(false);
-  const [openRopaFin, setOpenRopaFin] = useState(false); // 👈 se usará abajo
+  const [openRopaFin, setOpenRopaFin] = useState(false);
   const [openDashboardClothes, setOpenDashboardClothes] = useState(false);
 
   // Operaciones Otras
@@ -78,6 +78,11 @@ export default function AdminLayout({ role }: { role: string }) {
     </button>
   );
 
+  // ===== util de roles =====
+  const isAdmin = role === "admin";
+  const isVendPollo = role === "vendedor_pollo" || role === "vendedor"; // compat: "vendedor" → pollo
+  const isVendRopa = role === "vendedor_ropa";
+
   return (
     <div className="min-h-screen flex">
       <aside
@@ -103,7 +108,7 @@ export default function AdminLayout({ role }: { role: string }) {
           <>
             <nav className="space-y-1">
               {/* ================== ADMIN ================== */}
-              {role === "admin" && (
+              {isAdmin && (
                 <>
                   {/* -------- Operaciones Pollo -------- */}
                   <div className="border rounded mb-1">
@@ -333,14 +338,14 @@ export default function AdminLayout({ role }: { role: string }) {
                 </>
               )}
 
-              {/* ================== VENDEDOR ================== */}
-              {role === "vendedor" && (
+              {/* ================== VENDEDOR POLLO ================== */}
+              {isVendPollo && (
                 <div className="border rounded">
                   <SectionBtn
                     open={openPolloFin}
                     onClick={() => setOpenPolloFin((v) => !v)}
                   >
-                    Finanzas
+                    Finanzas (Pollo)
                   </SectionBtn>
                   {openPolloFin && (
                     <div className="pb-2 ml-4 mt-1 space-y-1">
@@ -350,6 +355,79 @@ export default function AdminLayout({ role }: { role: string }) {
                       <NavLink to={`${base}/bills`} className={linkCls}>
                         Cierre
                       </NavLink>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ================== VENDEDOR ROPA ================== */}
+              {isVendRopa && (
+                <div className="border rounded">
+                  <SectionBtn
+                    open={openRopa}
+                    onClick={() => setOpenRopa((v) => !v)}
+                  >
+                    Operaciones Ropa
+                  </SectionBtn>
+
+                  {openRopa && (
+                    <div className="pb-2">
+                      {/* Venta (Ropa) */}
+                      <SubSectionBtn
+                        open={openRopaFin}
+                        onClick={() => setOpenRopaFin((v) => !v)}
+                        title="Ventas"
+                      />
+                      {openRopaFin && (
+                        <div className="ml-4 mt-1 space-y-1">
+                          <NavLink
+                            to={`${base}/salesClothes`}
+                            className={linkCls}
+                          >
+                            Venta Ropa
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/TransactionsReportClothes`}
+                            className={linkCls}
+                          >
+                            Transacciones
+                          </NavLink>
+                        </div>
+                      )}
+
+                      {/* Productos (Ropa) */}
+                      <SubSectionBtn
+                        open={openRopaProd}
+                        onClick={() => setOpenRopaProd((v) => !v)}
+                        title="Productos"
+                      />
+                      {openRopaProd && (
+                        <div className="ml-4 mt-1 space-y-1">
+                          <NavLink
+                            to={`${base}/productsClothes`}
+                            className={linkCls}
+                          >
+                            Agregar Productos
+                          </NavLink>
+                        </div>
+                      )}
+
+                      {/* Clientes (Ropa) */}
+                      <SubSectionBtn
+                        open={openClients}
+                        onClick={() => setOpenClients((v) => !v)}
+                        title="Clientes"
+                      />
+                      {openClients && (
+                        <div className="ml-4 mt-1 space-y-1">
+                          <NavLink
+                            to={`${base}/CustomersClothes`}
+                            className={linkCls}
+                          >
+                            Listado de Clientes
+                          </NavLink>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
