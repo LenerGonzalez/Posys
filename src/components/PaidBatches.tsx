@@ -1,3 +1,4 @@
+// src/pages/PaidBatches.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -13,7 +14,6 @@ import { format } from "date-fns";
 import InvoiceModal from "../components/InvoiceModal";
 import RefreshButton from "../components/common/RefreshButton";
 import useManualRefresh from "../hooks/useManualRefresh";
-import { ref } from "process";
 
 type Batch = {
   id: string;
@@ -25,8 +25,8 @@ type Batch = {
   remaining: number;
   purchasePrice: number;
   salePrice: number;
-  invoiceTotal?: number;
-  expectedTotal?: number;
+  invoiceTotal?: number; // costo (qty * purchasePrice)
+  expectedTotal?: number; // venta (qty * salePrice)
   date: string; // yyyy-MM-dd (fecha del lote)
   status: "PENDIENTE" | "PAGADO";
   paidAt?: any; // Timestamp | string
@@ -42,7 +42,7 @@ export default function PaidBatches() {
   const [rows, setRows] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // filtros mínimos (opcional)
+  // filtros
   const [fromDate, setFromDate] = useState<string>(
     format(
       new Date(new Date().getFullYear(), new Date().getMonth(), 1),
@@ -67,28 +67,40 @@ export default function PaidBatches() {
       );
       const snap = await getDocs(qy);
       const out: Batch[] = [];
+
       snap.forEach((d) => {
         const b = d.data() as any;
+
+        // Normalizamos números
+        const qty = Number(b.quantity || 0);
+        const rem = Number(b.remaining || 0);
+        const pBuy = Number(b.purchasePrice || 0);
+        const pSell = Number(b.salePrice || 0);
+
+        // 🔧 Derivamos como en InventoryBatches (clave del desfase)
+        const derivedInvoice = Number((qty * pBuy).toFixed(2));
+        const derivedExpected = Number((qty * pSell).toFixed(2));
+
         out.push({
           id: d.id,
           productId: b.productId,
           productName: b.productName,
           category: b.category,
           unit: b.unit,
-          quantity: Number(b.quantity || 0),
-          remaining: Number(b.remaining || 0),
-          purchasePrice: Number(b.purchasePrice || 0),
-          salePrice: Number(b.salePrice || 0),
-          invoiceTotal: Number(b.invoiceTotal || 0),
-          expectedTotal: Number(
-            b.expectedTotal ||
-              Number(b.quantity || 0) * Number(b.salePrice || 0)
-          ),
+          quantity: qty,
+          remaining: rem,
+          purchasePrice: pBuy,
+          salePrice: pSell,
+          invoiceTotal:
+            b.invoiceTotal != null ? Number(b.invoiceTotal) : derivedInvoice,
+          expectedTotal:
+            b.expectedTotal != null ? Number(b.expectedTotal) : derivedExpected,
           date: b.date,
           status: b.status,
           paidAt: b.paidAt,
         });
       });
+
       setRows(out);
       setLoading(false);
     })();
@@ -103,7 +115,7 @@ export default function PaidBatches() {
     });
   }, [rows, fromDate, toDate, product]);
 
-  // totales segmentados
+  // Totales del filtro
   const totals = useMemo(() => {
     let lbsIng = 0,
       lbsRem = 0,
@@ -111,6 +123,7 @@ export default function PaidBatches() {
       udsRem = 0,
       totalEsperado = 0,
       totalFact = 0;
+
     for (const r of filtered) {
       if (isLB(r.unit)) {
         lbsIng += r.quantity;
@@ -122,6 +135,7 @@ export default function PaidBatches() {
       totalEsperado += Number(r.expectedTotal || 0);
       totalFact += Number(r.invoiceTotal || 0);
     }
+
     return {
       lbsIng,
       lbsRem,
@@ -248,7 +262,6 @@ export default function PaidBatches() {
           <div className="col-span-3">
             <span className="font-semibold">Ganancia sin gastos:</span>{" "}
             {money(totals.gross)}
-            
           </div>
           <div>
             <span className="font-semibold">
