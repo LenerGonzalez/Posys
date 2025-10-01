@@ -30,6 +30,7 @@ type SaleDoc = {
   amount: number; // ingreso
   allocations?: Allocation[];
   avgUnitCost?: number;
+  measurement?: string; // "lb" o "unidad"
 };
 
 type ExpenseDoc = {
@@ -94,6 +95,7 @@ export default function FinancialDashboard(): React.ReactElement {
                 ? it.allocations
                 : x.allocations,
               avgUnitCost: Number(it.avgUnitCost ?? x.avgUnitCost ?? 0),
+              measurement: it.measurement ?? x.measurement ?? "",
             });
           });
           return;
@@ -108,6 +110,7 @@ export default function FinancialDashboard(): React.ReactElement {
           amount: Number(x.amount ?? x.amountCharged ?? 0),
           allocations: Array.isArray(x.allocations) ? x.allocations : [],
           avgUnitCost: Number(x.avgUnitCost ?? 0),
+          measurement: x.measurement ?? "",
         });
       });
 
@@ -163,9 +166,35 @@ export default function FinancialDashboard(): React.ReactElement {
     return { revenue, cogsReal, grossProfit, expensesSum, netProfit };
   }, [sales, expenses]);
 
-  // KPI: Libras vendidas (suma de quantity)
+  // Helpers para cantidades vendidas
+  const mStr = (v: unknown) =>
+    String(v ?? "")
+      .toLowerCase()
+      .trim();
+  const getQty = (s: any) => Number(s.qty ?? s.quantity ?? 0);
+
+  // Libras: acepta varias variantes
+  const isLb = (m: unknown) =>
+    ["lb", "lbs", "libra", "libras"].includes(mStr(m));
+
+  // Unidades: SOLO si explícitamente es unidad/pieza (no undefined)
+  const isUnit = (m: unknown) =>
+    ["unidad", "unidades", "ud", "uds", "pieza", "piezas"].includes(mStr(m));
+
+  // KPI: Libras vendidas
+  const totalLbs = useMemo(
+    () =>
+      sales.reduce((a, s: any) => (isLb(s.measurement) ? a + getQty(s) : a), 0),
+    [sales]
+  );
+
+  // KPI: Unidades vendidas
   const totalUnits = useMemo(
-    () => sales.reduce((a, s) => a + (Number(s.quantity) || 0), 0),
+    () =>
+      sales.reduce(
+        (a, s: any) => (isUnit(s.measurement) ? a + getQty(s) : a),
+        0
+      ),
     [sales]
   );
 
@@ -228,9 +257,9 @@ export default function FinancialDashboard(): React.ReactElement {
   }, [byProduct]);
 
   return (
-    <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow ">
+    <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl ">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Finanzas (Ropa)</h2>
+        <h2 className="text-2xl font-bold">Finanzas: Ingresos y Egresos</h2>
         <RefreshButton onClick={refresh} loading={loading} />
       </div>
 
@@ -261,25 +290,22 @@ export default function FinancialDashboard(): React.ReactElement {
       ) : (
         <>
           {/* KPIs principales (igual tamaño que antes) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
-            <Kpi title="Ventas Totales" value={money(kpis.revenue)} />
-            <Kpi title="Costo de Mercaderia" value={money(kpis.cogsReal)} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3 rounded-2xl shadow-lg p-4 bg-gray-50">
+            <Kpi title="Ventas" value={money(kpis.revenue)} />
+            <Kpi title="Costo" value={money(kpis.cogsReal)} />
             <Kpi
-              title="Ganancia antes de Gastos"
+              title="Ganancia Bruta"
               value={money(kpis.grossProfit)}
               positive
             />
-            <Kpi title="Gastos del Negocio" value={money(kpis.expensesSum)} />
-            <Kpi
-              title="Ganancia despues de Gastos"
-              value={money(kpis.netProfit)}
-              positive
-            />
+            <Kpi title="Gastos" value={money(kpis.expensesSum)} />
+            <Kpi title="Ganancia Neta" value={money(kpis.netProfit)} positive />
           </div>
 
           {/* KPIs secundarios (debajo y compactos) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-            <KpiCompact title="Libras Vendidas" value={qty3(totalUnits)} />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 rounded-lg shadow-2xl p-4 bg-gray-50">
+            <KpiCompact title="Libras Vendidas" value={qty3(totalLbs)} />
+            <KpiCompact title="Unidades Vendidas" value={qty3(totalUnits)} />
             <KpiList
               title="Productos más vendidos"
               items={topProducts.map((t) => ({
@@ -395,9 +421,9 @@ function Kpi({
   positive?: boolean;
 }) {
   return (
-    <div className="border rounded-lg p-3">
-      <div className="text-xs text-gray-500">{title}</div>
-      <div className={`text-xl font-bold ${positive ? "text-green-700" : ""}`}>
+    <div className="border rounded-2xl p-3">
+      <div className="text-[17px] text-gray-500">{title}</div>
+      <div className={`text-[30px] font-bold ${positive ? "text-green-700" : ""}`}>
         {value}
       </div>
     </div>
@@ -408,8 +434,8 @@ function Kpi({
 function KpiCompact({ title, value }: { title: string; value: string }) {
   return (
     <div className="border rounded-lg p-3">
-      <div className="text-[11px] text-gray-500">{title}</div>
-      <div className="text-base font-semibold">{value}</div>
+      <div className="text-[17px] text-gray-500">{title}</div>
+      <div className="text-[20px] font-semibold">{value}</div>
     </div>
   );
 }

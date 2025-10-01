@@ -496,11 +496,11 @@ export default function InventoryBatches() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="max-w-6xl mx-auto shadows-2xl">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Inventario (Pollo)</h2>
         <button
-          className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+          className="px-3 py-2 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
           type="button"
           onClick={() => setShowCreateModal(true)}
         >
@@ -509,7 +509,7 @@ export default function InventoryBatches() {
       </div>
 
       {/* 🔎 Barra de filtro por fecha */}
-      <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
+      <div className="bg-white p-3 rounded shadow-2xl border mb-4 flex flex-wrap items-end gap-3 text-sm">
         <div className="flex flex-col">
           <label className="font-semibold">Desde</label>
           <input
@@ -547,7 +547,7 @@ export default function InventoryBatches() {
         </div>
 
         <button
-          className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+          className="px-3 rounded-2xl shadow-2xl py-1 rounded bg-gray-200 hover:bg-gray-300"
           onClick={() => {
             setFromDate("");
             setToDate("");
@@ -559,7 +559,7 @@ export default function InventoryBatches() {
 
         {/* 🖨️ Imprimir/Exportar PDF */}
         <button
-          className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+          className="px-3 py-1 rounded-2xl shadow-2xl bg-blue-600 text-white hover:bg-blue-700"
           onClick={handlePrintPDF}
         >
           Imprimir PDF
@@ -572,7 +572,7 @@ export default function InventoryBatches() {
       </div>
 
       {/* Totales (sobre el filtro) */}
-      <div className="bg-gray-50 p-3 rounded shadow border mb-3 text-base">
+      <div className="bg-gray-50 p-3 rounded-2xl shadow-2xl border mb-3 text-base">
         <div className="grid grid-cols-3 gap-y-2 gap-x-8">
           <div>
             <span className="font-semibold">Libras ingresadas:</span>{" "}
@@ -606,12 +606,18 @@ export default function InventoryBatches() {
             <span className="font-semibold">Ganancia sin gastos:</span> C${" "}
             {(totals.totalEsperado - totals.totalFacturado).toFixed(2)}
           </div>
+          <div>
+            <span className="font-semibold">
+              Cantidad de Lotes (por filtro):
+            </span>{" "}
+            {filteredBatches.length.toLocaleString()}
+          </div>
         </div>
       </div>
 
       {/* Tabla de lotes (filtrada) */}
       <div className="bg-white p-2 rounded shadow border w-full">
-        <table className="min-w-full w-full text-sm">
+        <table className="min-w-full w-full text-sm shadow-2xl">
           <thead className="bg-gray-100">
             <tr>
               <th className="p-2 border">Fecha</th>

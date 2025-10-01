@@ -404,7 +404,7 @@ export default function SaleForm({ user }: { user: any }) {
           </label>
           <div className="flex gap-2">
             <select
-              className="flex-1 border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+              className="flex-1 border border-gray-300 p-2 rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-400"
               value={selectedProductId}
               onChange={(e) => setSelectedProductId(e.target.value)}
             >
@@ -431,7 +431,7 @@ export default function SaleForm({ user }: { user: any }) {
               type="button"
               onClick={addSelectedProduct}
               disabled={!selectedProductId || chosenIds.has(selectedProductId)}
-              className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              className="px-3 py-2 rounded-2xl shadow-2xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
             >
               Agregar
             </button>
@@ -446,7 +446,7 @@ export default function SaleForm({ user }: { user: any }) {
             </label>
             <input
               type="date"
-              className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-blue-400"
+              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-400"
               value={saleDate}
               onChange={(e) => setSaleDate(e.target.value)}
             />
@@ -457,7 +457,7 @@ export default function SaleForm({ user }: { user: any }) {
               Cliente
             </label>
             <input
-              className="w-full border border-gray-300 p-2 rounded"
+              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
               placeholder="Opcional"
@@ -466,8 +466,8 @@ export default function SaleForm({ user }: { user: any }) {
         </div>
 
         {/* Lista de ítems */}
-        <div className="rounded border overflow-x-auto">
-          <table className="min-w-full text-sm">
+        <div className="rounded border overflow-x-auto shadow-2xl">
+          <table className="min-w-full text-sm r">
             <thead className="bg-gray-100">
               <tr className="text-center">
                 <th className="p-2 border whitespace-nowrap">Producto</th>
@@ -560,13 +560,13 @@ export default function SaleForm({ user }: { user: any }) {
         </div>
 
         {/* Total de la venta (readOnly) */}
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
+        <div className="space-y-1 ">
+          <label className="block text-sm font-semibold text-gray-700 ">
             💵 Monto total
           </label>
           <input
             type="text"
-            className="w-full border border-gray-300 p-2 rounded bg-gray-100"
+            className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl bg-gray-100"
             value={`C$ ${amountCharged.toFixed(2)}`}
             readOnly
             title="Suma de (precio × cantidad − descuento) de cada producto."
@@ -583,7 +583,7 @@ export default function SaleForm({ user }: { user: any }) {
               type="number"
               step="0.01"
               inputMode="decimal"
-              className="w-full border border-gray-300 p-2 rounded"
+              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
               value={amountReceived === 0 ? "" : amountReceived}
               onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
             />
@@ -594,7 +594,7 @@ export default function SaleForm({ user }: { user: any }) {
             </label>
             <input
               type="text"
-              className="w-full border border-gray-300 p-2 rounded bg-gray-100"
+              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl bg-gray-100"
               value={`C$ ${amountChange}`}
               readOnly
             />
@@ -604,7 +604,7 @@ export default function SaleForm({ user }: { user: any }) {
         {/* Guardar */}
         <button
           type="submit"
-          className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50"
+          className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-2xl shadow-2xl font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50"
           disabled={items.length === 0 || saving}
         >
           {saving ? "Guardando..." : "Guardar venta"}

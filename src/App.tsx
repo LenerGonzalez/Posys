@@ -28,7 +28,7 @@ import FinancialDashboard from "./components/FinancialDashboard";
 import ExpensesAdmin from "./components/ExpensesAdmin";
 import FixBatchesPages from "./components/FixBatchesPages";
 import Billing from "./components/Billing";
-import PaidBatches from "./components/paidBatches";
+import PaidBatches from "./components/PaidBatches";
 import InventoryClothesBatches from "./components/Clothes/InventoryClothesBatches";
 import ProductsClothes from "./components/Clothes/ClothesProducts";
 import CustomersClothes from "./components/Clothes/CustomersClothes";
@@ -70,7 +70,7 @@ export default function App() {
 
   // Redirección por defecto dentro de /admin según rol
   const AdminIndexRedirect = () => {
-    if (role === "admin") return <Navigate to="bills" replace />;
+    if (role === "admin") return <Navigate to="FinancialDashboard" replace />;
     if (role === "vendedor_pollo") return <Navigate to="salesV2" replace />;
     if (role === "vendedor_ropa") return <Navigate to="salesClothes" replace />;
     return <Navigate to="/" replace />;

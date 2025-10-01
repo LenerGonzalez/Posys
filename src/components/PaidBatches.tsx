@@ -163,7 +163,7 @@ export default function PaidBatches() {
       </div>
 
       {/* Filtros */}
-      <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">
+      <div className="bg-white p-3 rounded shadow-2xl border mb-4 flex flex-wrap items-end gap-3 text-sm">
         <div className="flex flex-col">
           <label className="font-semibold">Desde</label>
           <input
@@ -198,7 +198,7 @@ export default function PaidBatches() {
           </select>
         </div>
         <button
-          className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+          className="px-3 py-1 rounded-2xl bg-gray-200 hover:bg-gray-300"
           onClick={() => {
             setFromDate("");
             setToDate("");
@@ -209,7 +209,7 @@ export default function PaidBatches() {
         </button>
 
         <button
-          className="ml-auto px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+          className="ml-auto px-3 py-1 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
           onClick={() => setOpenInvoice(true)}
         >
           Crear factura
@@ -217,8 +217,8 @@ export default function PaidBatches() {
       </div>
 
       {/* Totales */}
-      <div className="bg-gray-50 p-3 rounded shadow border mb-3 text-base">
-        <div className="grid grid-cols-3 gap-y-2 gap-x-8">
+      <div className="bg-gray-50 p-3 rounded-2xl shadow-2xl border mb-3 text-base">
+        <div className="grid grid-cols-2 gap-y-2 gap-x-8">
           <div>
             <span className="font-semibold">Libras ingresadas:</span>{" "}
             {qty3(totals.lbsIng)}
@@ -248,12 +248,19 @@ export default function PaidBatches() {
           <div className="col-span-3">
             <span className="font-semibold">Ganancia sin gastos:</span>{" "}
             {money(totals.gross)}
+            
+          </div>
+          <div>
+            <span className="font-semibold">
+              Cantidad de Lotes (por filtro):
+            </span>{" "}
+            {filtered.length.toLocaleString()}
           </div>
         </div>
       </div>
 
       {/* Tabla */}
-      <div className="bg-white p-2 rounded shadow border w-full">
+      <div className="bg-white p-2 rounded shadow-2xl border w-full">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>

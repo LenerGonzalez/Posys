@@ -223,7 +223,7 @@ export default function HistorialCierres() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-6 bg-white rounded shadow">
+    <div className="max-w-7xl mx-auto p-6 bg-white rounded-2xl shadow-2xl">
       <h1 className="text-2xl font-bold mb-4">Histórico de cierres</h1>
 
       {/* Filtro por rango */}
@@ -265,7 +265,7 @@ export default function HistorialCierres() {
           Sin cierres en el rango seleccionado.
         </p>
       ) : (
-        <table className="min-w-full border text-sm mb-6">
+        <table className="min-w-full text-sm mb-6  shadow-lg p-4 bg-white border-gray-100">
           <thead className="bg-gray-100">
             <tr>
               <th className="border p-2">Fecha</th>
@@ -319,8 +319,8 @@ export default function HistorialCierres() {
 
       {/* Detalle del cierre seleccionado */}
       {selected && (
-        <div className="mt-6">
-          <div className="flex items-center gap-3 mb-2">
+        <div className="mt-6 rounded-2xl shadow-lg p-4 bg-white border-solid border-2 border-gray-100">
+          <div className="flex items-center gap-3 mb-2 ">
             <h2 className="text-xl font-semibold">Detalle {selected.date}</h2>
             <button
               onClick={() => setSelected(null)}
@@ -330,7 +330,7 @@ export default function HistorialCierres() {
             </button>
             <button
               onClick={handleDownloadPDF}
-              className="ml-auto bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-sm"
+              className="ml-auto bg-green-600 text-white px-3 py-1 rounded-2xl hover:bg-green-700 text-sm"
             >
               Descargar PDF
             </button>
@@ -341,7 +341,7 @@ export default function HistorialCierres() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
               <div>
                 {/* ⬇️ total unidades a 3 decimales */}
-                Total unidades: <strong>{qty3(totalsForSelected.units)}</strong>
+                Total Libras/Unidades: <strong>{qty3(totalsForSelected.units)}</strong>
               </div>
               {/* <div>
                 Total sugerido:{" "}

@@ -91,10 +91,10 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen grid place-items-center">
+    <div className="min-h-screen grid place-items-center ">
       <form
         onSubmit={handleSubmit}
-        className="w-[92%] max-w-md bg-white p-6 rounded-lg shadow border"
+        className="w-[92%] max-w-md bg-white p-6 rounded-2xl shadow-2xl"
       >
         <h2 className="text-2xl font-bold text-center mb-4">Iniciar Sesión</h2>
 
@@ -103,7 +103,7 @@ export default function Login() {
         </label>
         <input
           type="email"
-          className="w-full border rounded px-3 py-2 mb-3"
+          className="w-full border rounded-2xl px-3 py-2 mb-3 shadow-2xl"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           autoComplete="username"
@@ -113,7 +113,7 @@ export default function Login() {
         <div className="flex gap-2 mb-2">
           <input
             type={showPw ? "text" : "password"}
-            className="flex-1 border rounded px-3 py-2"
+            className="flex-1 border rounded-2xl px-3 py-2 shadow-2xl"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             minLength={6}
@@ -121,7 +121,7 @@ export default function Login() {
           />
           <button
             type="button"
-            className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+            className="px-3 py-2 rounded-2xl shadow-2xl bg-gray-200 hover:bg-gray-300"
             onClick={() => setShowPw((v) => !v)}
           >
             {showPw ? "Ocultar" : "Mostrar"}
@@ -132,7 +132,7 @@ export default function Login() {
         </div>
 
         <button
-          className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+          className="w-full bg-blue-600 text-white px-4 py-2 rounded-2xl shadow-2xl hover:bg-blue-700 disabled:opacity-60"
           disabled={loading}
         >
           {loading ? "Entrando..." : "Entrar"}

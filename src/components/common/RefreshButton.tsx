@@ -16,8 +16,8 @@ export default function RefreshButton({
     <button
       onClick={onClick}
       disabled={loading}
-      className={`flex items-center gap-2 px-3 py-1.5 rounded border 
-        bg-white hover:bg-gray-100 text-sm font-medium shadow-sm
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-2xl  border 
+        bg-white hover:bg-gray-100 text-sm font-medium shadow-2xl
         disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
       title="Refrescar datos"
     >

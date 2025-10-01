@@ -465,11 +465,8 @@ export default function CierreVentas({
   const isAdmin = !role || role === "admin";
 
   return (
-    <div className="max-w-7xl mx-auto bg-white p-6 rounded shadow">
+    <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
       <h2 className="text-2xl font-bold mb-4">Cierre de Ventas - {today}</h2>
-      <div className="flex items-center justify-between mb-3">
-        <RefreshButton onClick={refresh} loading={loading}  />
-      </div>
 
       <div className="flex items-center gap-2 mb-3">
         <label className="text-sm">Filtrar:</label>
@@ -488,7 +485,7 @@ export default function CierreVentas({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          <table className="min-w-full border text-sm mb-4">
+          <table className="min-w-full border text-sm mb-4  shadow-2xl">
             <thead className="bg-gray-100">
               <tr>
                 <th className="border p-2">Estado</th>
@@ -574,7 +571,7 @@ export default function CierreVentas({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-2">
             <div>
               {" "}
-              Total unidades: <strong>{qty3(totalUnits)}</strong>
+              Total Libras/Unidades: <strong>{qty3(totalUnits)}</strong>
             </div>
             <div>
               {" "}
@@ -598,7 +595,7 @@ export default function CierreVentas({
           )}
 
           <h3 className="font-semibold mb-2">Consolidado por producto</h3>
-          <table className="min-w-full border text-sm mb-2">
+          <table className="min-w-full border text-sm mb-2 shadow-2xl">
             <thead className="bg-gray-100">
               <tr>
                 <th className="border p-2">Producto</th>
