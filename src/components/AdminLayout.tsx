@@ -125,7 +125,7 @@ export default function AdminLayout({ role }: { role: string }) {
                         <SubSectionBtn
                           open={openPolloInv}
                           onClick={() => setOpenPolloInv((v) => !v)}
-                          title="Inventario"
+                          title="Inventarios"
                         />
                         {openPolloInv && (
                           <div className="ml-4 mt-1 space-y-1">
@@ -164,7 +164,7 @@ export default function AdminLayout({ role }: { role: string }) {
                             >
                               Gastos
                             </NavLink>
-                            <NavLink to={`${base}/salesV2`} className={linkCls}>
+                            {/* <NavLink to={`${base}/salesV2`} className={linkCls}>
                               Venta
                             </NavLink>
                             <NavLink to={`${base}/bills`} className={linkCls}>
@@ -175,7 +175,7 @@ export default function AdminLayout({ role }: { role: string }) {
                               className={linkCls}
                             >
                               Historial de Cierres
-                            </NavLink>
+                            </NavLink> */}
                           </div>
                         )}
 

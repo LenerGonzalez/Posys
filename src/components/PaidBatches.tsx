@@ -8,6 +8,7 @@ import {
   updateDoc,
   doc,
   where,
+  deleteDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { format } from "date-fns";
@@ -41,6 +42,8 @@ const isLB = (u: string) =>
 export default function PaidBatches() {
   const [rows, setRows] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
 
   // filtros
   const [fromDate, setFromDate] = useState<string>(
@@ -77,7 +80,7 @@ export default function PaidBatches() {
         const pBuy = Number(b.purchasePrice || 0);
         const pSell = Number(b.salePrice || 0);
 
-        // 🔧 Derivamos como en InventoryBatches (clave del desfase)
+        // 🔧 Derivamos como en InventoryBatches
         const derivedInvoice = Number((qty * pBuy).toFixed(2));
         const derivedExpected = Number((qty * pSell).toFixed(2));
 
@@ -147,17 +150,55 @@ export default function PaidBatches() {
     };
   }, [filtered]);
 
-  const markPending = async (b: Batch) => {
-    if (
-      !window.confirm(`Marcar PENDIENTE el lote ${b.productName} (${b.date})?`)
-    )
-      return;
-    await updateDoc(doc(db, "inventory_batches", b.id), {
-      status: "PENDIENTE",
-    });
-    setRows((prev) =>
-      prev.map((x) => (x.id === b.id ? { ...x, status: "PENDIENTE" } : x))
-    );
+  // 👉 abrir modal de confirmación
+  const askMarkPending = (b: Batch) => {
+    setSelectedBatch(b);
+    setShowConfirm(true);
+  };
+
+  // ✅ confirmar acción (reversión completa con búsqueda avanzada)
+  const confirmMarkPending = async () => {
+    if (!selectedBatch) return;
+    try {
+      // 1️⃣ Cambiar estado del lote
+      const batchRef = doc(db, "inventory_batches", selectedBatch.id);
+      await updateDoc(batchRef, {
+        status: "PENDIENTE",
+        remaining: selectedBatch.quantity, // restaurar libras
+      });
+
+      // 2️⃣ Buscar y eliminar ventas en salesV2 (batchId o coincidencia por producto+fecha)
+      const salesRef = collection(db, "salesV2");
+      const salesSnap1 = await getDocs(
+        query(salesRef, where("batchId", "==", selectedBatch.id))
+      );
+      const salesSnap2 = await getDocs(
+        query(
+          salesRef,
+          where("productName", "==", selectedBatch.productName),
+          where("date", "==", selectedBatch.date)
+        )
+      );
+
+      const allSales = [...salesSnap1.docs, ...salesSnap2.docs];
+      for (const s of allSales) {
+        await deleteDoc(doc(db, "salesV2", s.id));
+      }
+
+      // 3️⃣ Actualizar estado local + refrescar lista
+      setRows((prev) =>
+        prev.map((x) =>
+          x.id === selectedBatch.id
+            ? { ...x, status: "PENDIENTE", remaining: selectedBatch.quantity }
+            : x
+        )
+      );
+      setShowConfirm(false);
+      setSelectedBatch(null);
+      refresh();
+    } catch (e) {
+      console.error("Error al marcar pendiente:", e);
+    }
   };
 
   // productos para filtro
@@ -327,7 +368,7 @@ export default function PaidBatches() {
                   <td className="p-2 border">
                     <button
                       className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                      onClick={() => markPending(b)}
+                      onClick={() => askMarkPending(b)}
                     >
                       Marcar PENDIENTE
                     </button>
@@ -346,6 +387,35 @@ export default function PaidBatches() {
           onClose={() => setOpenInvoice(false)}
           onCreated={() => setOpenInvoice(false)}
         />
+      )}
+
+      {/* 🟢 Modal visual de confirmación */}
+      {showConfirm && selectedBatch && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50">
+          <div className="bg-white rounded-lg shadow-2xl p-6 w-[90%] max-w-md">
+            <h3 className="text-lg font-semibold mb-3">Confirmar acción</h3>
+            <p className="text-gray-700 mb-4">
+              ¿Seguro que quieres marcar pendiente este inventario?
+              <br />
+              Al hacerlo, las libras se restaurarán y se eliminarán las ventas
+              generadas del dashboard.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmMarkPending}
+                className="px-4 py-2 bg-yellow-600 text-white hover:bg-yellow-700 rounded"
+              >
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
