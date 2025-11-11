@@ -121,6 +121,19 @@ export default function ProductsClothes() {
   const [sku, setSku] = useState("");
   const [notes, setNotes] = useState("");
 
+  // [ADD] Campos NUEVOS para crear lote desde aquí
+  const [salePrice, setSalePrice] = useState<string>(""); // precio de venta (producto y lote)
+  const [quantity, setQuantity] = useState<string>("0"); // cantidad de piezas
+  const [batchDate, setBatchDate] = useState<string>(""); // yyyy-MM-dd
+  const [lotNotes, setLotNotes] = useState<string>(""); // notas del lote (NO toca tus notes del producto)
+
+  // [ADD] Total esperado auto (solo visual y para guardar en lote)
+  const expectedTotal = useMemo(() => {
+    const q = Number(quantity || 0);
+    const p = Number(salePrice || 0);
+    return Math.floor(q * p * 100) / 100;
+  }, [quantity, salePrice]);
+
   // lista
   const [rows, setRows] = useState<ProductRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,6 +195,11 @@ export default function ProductsClothes() {
     setGender("");
     setClientCode("");
     setNotes("");
+    // [ADD] limpiar campos nuevos
+    setSalePrice("");
+    setQuantity("0");
+    setBatchDate("");
+    setLotNotes("");
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -195,7 +213,20 @@ export default function ProductsClothes() {
       setMsg("Código del cliente inválido");
       return;
     }
+    // [ADD] Validaciones suaves para los nuevos campos (no bloquean crear solo producto)
+    const quantityNum = Number(quantity || 0);
+    const salePriceNum = Number(salePrice || 0);
+    if (quantityNum < 0) {
+      setMsg("La cantidad de piezas debe ser 0 o mayor.");
+      return;
+    }
+    if (salePriceNum < 0) {
+      setMsg("El precio de venta no puede ser negativo.");
+      return;
+    }
+
     try {
+      // 1) Crear PRODUCTO (mantengo TODO tu flujo + agrego price)
       const ref = await addDoc(collection(db, "products_clothes"), {
         name: name.trim(),
         category,
@@ -208,7 +239,10 @@ export default function ProductsClothes() {
         clientCode: clientCode || "",
         notes: notes || "",
         createdAt: Timestamp.now(),
+        // [ADD] guardo precio de venta en el producto para que lo lean otros módulos
+        price: salePriceNum || 0,
       });
+
       setRows((prev) => [
         {
           id: ref.id,
@@ -226,9 +260,47 @@ export default function ProductsClothes() {
         },
         ...prev,
       ]);
+
+      // 2) [ADD] Crear LOTE si quantity > 0 (NO toco tu SKU ni lógicas existentes)
+      if (quantityNum > 0) {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const dateStr = batchDate ? batchDate : todayStr;
+
+        await addDoc(collection(db, "inventory_clothes_batches"), {
+          productId: ref.id,
+          productName: name.trim(),
+          category,
+          unit: "unidad",
+          quantity: quantityNum,
+          remaining: quantityNum,
+          purchasePrice: 0, // sin costo por ahora
+          salePrice: salePriceNum || 0, // referencia al crear lote
+          invoiceTotal: 0, // sin costo
+          expectedTotal: expectedTotal || 0,
+          date: dateStr, // yyyy-MM-dd
+          createdAt: Timestamp.now(),
+          status: "PENDIENTE",
+          // extras existentes en Inventario
+          notes: lotNotes || "",
+          sku: sku || "",
+          size: size || "",
+          color: color || "",
+          gender: gender || "",
+          brand: brand || "",
+          clientCode: clientCode || "",
+        });
+      }
+
+      setMsg(
+        quantityNum > 0
+          ? "✅ Producto creado y lote de inventario registrado"
+          : "✅ Producto de ropa creado"
+      );
+      // [ADD] no cierro el modal si quieres seguir creando; si prefieres cerrarlo, descomenta:
+      // setOpenForm(false);
       resetForm();
-      setOpenForm(false);
-      setMsg("✅ Producto de ropa creado");
+      // opcional: refrescar lista externa
+      // refresh();
     } catch (err) {
       console.error(err);
       setMsg("❌ Error al crear producto");
@@ -387,7 +459,61 @@ export default function ProductsClothes() {
                   onChange={(e) => setClientCode(e.target.value)}
                 />
               </div>
-              <div className="md:col-span-2">
+
+              {/* ====== CAMPOS NUEVOS PARA LOTE ====== */}
+              <div>
+                <label className="block text-sm font-semibold">
+                  Precio de venta (pza)
+                </label>
+                <input
+                  className="w-full border p-2 rounded"
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  value={salePrice}
+                  onChange={(e) => setSalePrice(e.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">
+                  Cantidad de piezas (crea lote si &gt; 0)
+                </label>
+                <input
+                  className="w-full border p-2 rounded"
+                  type="number"
+                  min={0}
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">
+                  Fecha de lote
+                </label>
+                <input
+                  className="w-full border p-2 rounded"
+                  type="date"
+                  value={batchDate}
+                  onChange={(e) => setBatchDate(e.target.value)}
+                />
+              </div>
+              {/* <div className="md:col-span-2">
+                <label className="block text-sm font-semibold">
+                  Notas del lote
+                </label>
+                <textarea
+                  className="w-full border p-2 rounded resize-y min-h-20"
+                  value={lotNotes}
+                  onChange={(e) => setLotNotes(e.target.value)}
+                  placeholder="Observaciones específicas del lote (opcional)"
+                  maxLength={500}
+                />
+              </div> */}
+              {/* ====== FIN CAMPOS NUEVOS ====== */}
+
+              {/* <div className="md:col-span-2">
                 <label className="block text-sm font-semibold">
                   Comentario
                 </label>
@@ -397,8 +523,28 @@ export default function ProductsClothes() {
                   onChange={(e) => setNotes(e.target.value)}
                   maxLength={500}
                 />
+              </div> */}
+
+              {/* [ADD] Línea de totales visual */}
+              <div className="md:col-span-2 flex items-center justify-between border-t pt-3 mt-2 text-sm">
+                <div>
+                  <span className="font-semibold">Medición:</span> unidad
+                </div>
+                <div>
+                  <span className="font-semibold">Total esperado (auto): </span>
+                  {isNaN(expectedTotal) ? "—" : expectedTotal.toFixed(2)}
+                </div>
               </div>
+
               <div className="md:col-span-2 flex justify-end gap-2 mt-2">
+                {/* [ADD] Botón Limpiar */}
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                >
+                  Limpiar
+                </button>
                 <button
                   type="button"
                   onClick={() => setOpenForm(false)}
