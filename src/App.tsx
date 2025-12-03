@@ -36,6 +36,7 @@ import SalesClothesPOS from "./components/Clothes/SalesClothesPOS";
 import FinancialDashboardClothes from "./components/Clothes/FinancialDashboardClothes";
 import ExpensesClothes from "./components/Clothes/ExpensesClothes";
 import TransactionsReportClothes from "./components/Clothes/TransactionsReportClothes";
+import CandiesProducts from "./components/Candies/CandiesProducts";
 
 type Role = "" | "admin" | "vendedor_pollo" | "vendedor_ropa";
 
@@ -200,6 +201,16 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <ProductForm />
+              </PrivateRoute>
+            }
+          />
+
+          {/* ======== CANDIES ======== */}
+          <Route
+            path="CandiesProducts"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <CandiesProducts />
               </PrivateRoute>
             }
           />

@@ -31,6 +31,12 @@ export default function AdminLayout({ role }: { role: string }) {
   const [openRopaFin, setOpenRopaFin] = useState(false);
   const [openDashboardClothes, setOpenDashboardClothes] = useState(false);
 
+  //Operaciones dulces
+  const [openDulces, setOpenDulces] = useState(false);
+  const [openDulcesInv, setOpenDulcesInv] = useState(false);
+  const [openDulcesProd, setOpenDulcesProd] = useState(false);
+  const [openDulcesFin, setOpenDulcesFin] = useState(false);
+
   // Operaciones Otras
   const [openOtras, setOpenOtras] = useState(false);
 
@@ -271,6 +277,101 @@ export default function AdminLayout({ role }: { role: string }) {
                               className={linkCls}
                             >
                               Venta Ropa
+                            </NavLink>
+                          </div>
+                        )}
+                        {openRopaFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/financialDashboardClothes`}
+                              className={linkCls}
+                            >
+                              Dashboard Financiero
+                            </NavLink>
+                          </div>
+                        )}
+                        {openRopaFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/TransactionsReportClothes`}
+                              className={linkCls}
+                            >
+                              Transacciones
+                            </NavLink>
+                          </div>
+                        )}
+
+                        {openRopaFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/ExpensesClothes`}
+                              className={linkCls}
+                            >
+                              Gastos Ropa
+                            </NavLink>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* -------- Operaciones Dulces -------- */}
+                  <div className="border rounded mb-1">
+                    <SectionBtn
+                      open={openDulces}
+                      onClick={() => setOpenDulces((v) => !v)}
+                    >
+                      Operaciones Dulces
+                    </SectionBtn>
+
+                    {openDulces && (
+                      <div className="pb-2">
+                        {/* Inventario (Dulces) */}
+                        <SubSectionBtn
+                          open={openDulcesInv}
+                          onClick={() => setOpenDulcesInv((v) => !v)}
+                          title="Inventario"
+                        />
+                        {openDulcesInv && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/CandiesProducts`}
+                              className={linkCls}
+                            >
+                              Inventario/Productos
+                            </NavLink>
+                          </div>
+                        )}
+                        {/* Productos (Dulces) */}
+                        <SubSectionBtn
+                          open={openDulcesProd}
+                          onClick={() => setOpenDulcesProd((v) => !v)}
+                          title="Productos"
+                        />
+                        {openDulcesProd && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/productsDulces`}
+                              className={linkCls}
+                            >
+                              Agregar Productos
+                            </NavLink>
+                          </div>
+                        )}
+
+                        {/* Finanzas (Dulces) */}
+                        <SubSectionBtn
+                          open={openDulcesFin}
+                          onClick={() => setOpenDulcesFin((v) => !v)}
+                          title="Finanzas"
+                        />
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/salesDulces`}
+                              className={linkCls}
+                            >
+                              Venta Dulces
                             </NavLink>
                           </div>
                         )}
