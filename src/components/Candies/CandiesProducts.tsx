@@ -9,13 +9,14 @@ import {
   orderBy,
   query,
   Timestamp,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import { calcPriceByBranch } from "../../Services/pricing_candies";
 
 // REFRESH
 import RefreshButton from "../../components/common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
-
 
 // ====== Catálogos ======
 const CANDY_CATEGORIES = [
@@ -26,6 +27,11 @@ const CANDY_CATEGORIES = [
   "Bombones",
   "Chocolate",
   "Galleta",
+  "Bolsas Tematicas",
+  "Bolsas Dulceras",
+  "Mochilas",
+  "Juguetes",
+  "Platos y Vasos",
 ] as const;
 
 type CandyCategory = (typeof CANDY_CATEGORIES)[number];
@@ -58,7 +64,7 @@ function roundToInt(value: number): number {
 }
 
 export default function ProductsCandy() {
-  // ====== STATE FORM ======
+  // ====== STATE FORM (crear) ======
   const [category, setCategory] = useState<CandyCategory>("Caramelo");
   const [productName, setProductName] = useState(""); // Producto
   const [providerPrice, setProviderPrice] = useState<string>(""); // Precio Proveedor
@@ -77,7 +83,159 @@ export default function ProductsCandy() {
   // Modal
   const [openForm, setOpenForm] = useState(false);
 
-  // ====== CÁLCULOS MEMO ======
+  // ====== EDICIÓN INLINE ======
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<Partial<CandyRow> | null>(null);
+
+  const startEdit = (row: CandyRow) => {
+    setEditingId(row.id);
+    setEditValues({ ...row });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValues(null);
+  };
+
+  const handleEditChange = (field: keyof CandyRow, value: string) => {
+    if (!editValues) return;
+    setEditValues((prev) => ({
+      ...prev,
+      [field]:
+        field === "name" || field === "category" || field === "inventoryDate"
+          ? value
+          : Number(value || 0),
+    }));
+  };
+
+  const saveEdit = async () => {
+    if (!editingId || !editValues) return;
+
+    const rowOriginal = rows.find((r) => r.id === editingId);
+    if (!rowOriginal) return;
+
+    const name = (editValues.name ?? rowOriginal.name).toString().trim();
+    if (!name) {
+      setMsg("El nombre del producto no puede estar vacío.");
+      return;
+    }
+
+    const category: CandyCategory =
+      (editValues.category as CandyCategory) ?? rowOriginal.category;
+
+    const providerPriceNum = Number(
+      editValues.providerPrice ?? rowOriginal.providerPrice ?? 0
+    );
+    const packagesNum = Number(
+      editValues.packages ?? rowOriginal.packages ?? 0
+    );
+    const unitsPerPackageNum = Number(
+      editValues.unitsPerPackage ?? rowOriginal.unitsPerPackage ?? 0
+    );
+    const subtotalNum = Number(
+      editValues.subtotal ?? rowOriginal.subtotal ?? 0
+    );
+    const totalRivasNum = Number(
+      editValues.totalRivas ?? rowOriginal.totalRivas ?? 0
+    );
+    const totalSanJorgeNum = Number(
+      editValues.totalSanJorge ?? rowOriginal.totalSanJorge ?? 0
+    );
+    const totalIslaNum = Number(
+      editValues.totalIsla ?? rowOriginal.totalIsla ?? 0
+    );
+    const gainRivasNum = Number(
+      editValues.gainRivas ?? rowOriginal.gainRivas ?? 0
+    );
+    const gainSanJorgeNum = Number(
+      editValues.gainSanJorge ?? rowOriginal.gainSanJorge ?? 0
+    );
+    const gainIslaNum = Number(
+      editValues.gainIsla ?? rowOriginal.gainIsla ?? 0
+    );
+    const unitPriceRivasNum = Number(
+      editValues.unitPriceRivas ?? rowOriginal.unitPriceRivas ?? 0
+    );
+    const unitPriceSanJorgeNum = Number(
+      editValues.unitPriceSanJorge ?? rowOriginal.unitPriceSanJorge ?? 0
+    );
+    const unitPriceIslaNum = Number(
+      editValues.unitPriceIsla ?? rowOriginal.unitPriceIsla ?? 0
+    );
+    const inventoryDateStr = (
+      editValues.inventoryDate ??
+      rowOriginal.inventoryDate ??
+      ""
+    ).toString();
+
+    if (providerPriceNum < 0) {
+      setMsg("El precio proveedor no puede ser negativo.");
+      return;
+    }
+    if (packagesNum < 0) {
+      setMsg("Los paquetes deben ser 0 o más.");
+      return;
+    }
+    if (unitsPerPackageNum <= 0) {
+      setMsg("Las unidades por paquete deben ser mayor que 0.");
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, "products_candies", editingId), {
+        name,
+        category,
+        providerPrice: providerPriceNum,
+        packages: packagesNum,
+        unitsPerPackage: unitsPerPackageNum,
+        subtotal: subtotalNum,
+        totalRivas: totalRivasNum,
+        totalSanJorge: totalSanJorgeNum,
+        totalIsla: totalIslaNum,
+        gainRivas: gainRivasNum,
+        gainSanJorge: gainSanJorgeNum,
+        gainIsla: gainIslaNum,
+        unitPriceRivas: unitPriceRivasNum,
+        unitPriceSanJorge: unitPriceSanJorgeNum,
+        unitPriceIsla: unitPriceIslaNum,
+        inventoryDate: inventoryDateStr,
+      });
+
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === editingId
+            ? {
+                ...r,
+                name,
+                category,
+                providerPrice: providerPriceNum,
+                packages: packagesNum,
+                unitsPerPackage: unitsPerPackageNum,
+                subtotal: subtotalNum,
+                totalRivas: totalRivasNum,
+                totalSanJorge: totalSanJorgeNum,
+                totalIsla: totalIslaNum,
+                gainRivas: gainRivasNum,
+                gainSanJorge: gainSanJorgeNum,
+                gainIsla: gainIslaNum,
+                unitPriceRivas: unitPriceRivasNum,
+                unitPriceSanJorge: unitPriceSanJorgeNum,
+                unitPriceIsla: unitPriceIslaNum,
+                inventoryDate: inventoryDateStr,
+              }
+            : r
+        )
+      );
+
+      setMsg("✅ Producto actualizado");
+      cancelEdit();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al actualizar producto");
+    }
+  };
+
+  // ====== CÁLCULOS MEMO (crear) ======
   const {
     subtotal,
     totalRivas,
@@ -95,8 +253,8 @@ export default function ProductsCandy() {
 
     const subtotalCalc = providerPriceNum * packagesNum;
 
-    const totalR = packagesNum > 0 ? subtotalCalc / 0.8 : 0; // Total Rivas
-    const totalSJ = packagesNum > 0 ? subtotalCalc / 0.85 : 0; // Total San Jorge
+    const totalR = packagesNum > 0 ? subtotalCalc / 0.75 : 0; // Total Rivas
+    const totalSJ = packagesNum > 0 ? subtotalCalc / 0.75 : 0; // Total San Jorge
     const totalIO = packagesNum > 0 ? subtotalCalc / 0.7 : 0; // Total Isla
 
     const gainR = totalR - subtotalCalc;
@@ -120,6 +278,36 @@ export default function ProductsCandy() {
       unitPriceIsla: unitIO,
     };
   }, [providerPrice, packages]);
+
+  // ====== KPIs (lista de productos) ======
+  const kpis = useMemo(() => {
+    const totalProducts = rows.length;
+    let totalPackages = 0;
+    let totalUnits = 0;
+    let totalSubtotal = 0;
+    let totalTotalRivas = 0;
+    let totalTotalSanJorge = 0;
+    let totalTotalIsla = 0;
+
+    for (const r of rows) {
+      totalPackages += r.packages;
+      totalUnits += r.packages * r.unitsPerPackage;
+      totalSubtotal += r.subtotal;
+      totalTotalRivas += r.totalRivas;
+      totalTotalSanJorge += r.totalSanJorge;
+      totalTotalIsla += r.totalIsla;
+    }
+
+    return {
+      totalProducts,
+      totalPackages,
+      totalUnits,
+      totalSubtotal,
+      totalTotalRivas,
+      totalTotalSanJorge,
+      totalTotalIsla,
+    };
+  }, [rows]);
 
   // ====== LOAD LISTA ======
   useEffect(() => {
@@ -199,7 +387,7 @@ export default function ProductsCandy() {
       const todayStr = new Date().toISOString().slice(0, 10);
       const dateStr = inventoryDate || todayStr;
 
-      // 1) Crear PRODUCTO en products_candies
+      // Crear PRODUCTO en products_candies (YA NO CREA INVENTARIO AQUÍ)
       const productDoc = {
         name: productName.trim(),
         category,
@@ -230,48 +418,8 @@ export default function ProductsCandy() {
         ...prev,
       ]);
 
-      // 2) Crear INVENTARIO (lote) solo si hay paquetes
-      if (packagesNum > 0) {
-        const totalUnits = packagesNum * unitsPerPackageNum;
-
-        await addDoc(collection(db, "inventory_candies"), {
-          productId: ref.id,
-          productName: productName.trim(),
-          category,
-          // Info de stock
-          measurement: "unidad",
-          quantity: totalUnits,
-          remaining: totalUnits,
-          packages: packagesNum,
-          unitsPerPackage: unitsPerPackageNum,
-          totalUnits,
-          // Info económica
-          providerPrice: providerPriceNum,
-          subtotal,
-          totalRivas,
-          totalSanJorge,
-          totalIsla,
-          gainRivas,
-          gainSanJorge,
-          gainIsla,
-          unitPriceRivas,
-          unitPriceSanJorge,
-          unitPriceIsla,
-          // Fecha
-          date: dateStr,
-          createdAt: Timestamp.now(),
-          status: "PENDIENTE",
-        });
-      }
-
-      setMsg(
-        packagesNum > 0
-          ? "✅ Producto de dulces creado y lote de inventario registrado."
-          : "✅ Producto de dulces creado (sin inventario, paquetes = 0)."
-      );
+      setMsg("✅ Producto de dulces creado.");
       resetForm();
-      // Si querés cerrar el modal después de guardar, descomenta:
-      // setOpenForm(false);
     } catch (err) {
       console.error(err);
       setMsg("❌ Error al crear producto de dulces");
@@ -286,10 +434,17 @@ export default function ProductsCandy() {
     setRows((prev) => prev.filter((x) => x.id !== row.id));
   };
 
+  // Helper para tomar valores en modo edición
+  const getEdit = (field: keyof CandyRow, fallback: any) => {
+    if (!editValues) return fallback;
+    const v = (editValues as any)[field];
+    return v ?? fallback;
+  };
+
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Productos de Dulces</h2>
+        <h2 className="text-2xl font-bold">Productos</h2>
         <div className="flex gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
           <button
@@ -317,7 +472,39 @@ export default function ProductsCandy() {
         </div>
       </div>
 
-      {/* MODAL */}
+      {/* KPIs ARRIBA DE LA TABLA */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-xs md:text-sm">
+        <div className="bg-gray-100 p-2 rounded border">
+          <div className="font-semibold">Total productos</div>
+          <div>{kpis.totalProducts}</div>
+        </div>
+        <div className="bg-gray-100 p-2 rounded border">
+          <div className="font-semibold">Total paquetes</div>
+          <div>{kpis.totalPackages}</div>
+        </div>
+        <div className="bg-gray-100 p-2 rounded border">
+          <div className="font-semibold">Total unidades</div>
+          <div>{kpis.totalUnits}</div>
+        </div>
+        <div className="bg-gray-100 p-2 rounded border">
+          <div className="font-semibold">Subtotal proveedor</div>
+          <div>{kpis.totalSubtotal.toFixed(2)}</div>
+        </div>
+        <div className="bg-gray-100 p-2 rounded border">
+          <div className="font-semibold">Total Rivas</div>
+          <div>{kpis.totalTotalRivas.toFixed(2)}</div>
+        </div>
+        <div className="bg-gray-100 p-2 rounded border">
+          <div className="font-semibold">Total San Jorge</div>
+          <div>{kpis.totalTotalSanJorge.toFixed(2)}</div>
+        </div>
+        <div className="bg-gray-100 p-2 rounded border">
+          <div className="font-semibold">Total Isla</div>
+          <div>{kpis.totalTotalIsla.toFixed(2)}</div>
+        </div>
+      </div>
+
+      {/* MODAL NUEVO PRODUCTO */}
       {openForm && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -461,7 +648,7 @@ export default function ProductsCandy() {
               {/* G. Paquete R */}
               <div>
                 <label className="block text-sm font-semibold">
-                  G. Paquete R (auto)
+                  Ganancia Paquete Rivas (auto)
                 </label>
                 <input
                   className="w-full border p-2 rounded bg-gray-100"
@@ -473,7 +660,7 @@ export default function ProductsCandy() {
               {/* G. Paquete SJ */}
               <div>
                 <label className="block text-sm font-semibold">
-                  G. Paquete SJ (auto)
+                  Ganancia Paquete San Jorge (auto)
                 </label>
                 <input
                   className="w-full border p-2 rounded bg-gray-100"
@@ -485,7 +672,7 @@ export default function ProductsCandy() {
               {/* G. Paquete IO */}
               <div>
                 <label className="block text-sm font-semibold">
-                  G. Paquete IO (auto)
+                  Ganancia Paquete Isla (auto)
                 </label>
                 <input
                   className="w-full border p-2 rounded bg-gray-100"
@@ -497,7 +684,7 @@ export default function ProductsCandy() {
               {/* P. Unidad R */}
               <div>
                 <label className="block text-sm font-semibold">
-                  P. Unidad R (auto)
+                  Precio Unidad Rivas (auto)
                 </label>
                 <input
                   className="w-full border p-2 rounded bg-gray-100"
@@ -511,7 +698,7 @@ export default function ProductsCandy() {
               {/* P. Unidad SJ */}
               <div>
                 <label className="block text-sm font-semibold">
-                  P. Unidad SJ (auto)
+                  Precio Unidad San Jorge (auto)
                 </label>
                 <input
                   className="w-full border p-2 rounded bg-gray-100"
@@ -527,7 +714,7 @@ export default function ProductsCandy() {
               {/* P. Unidad IO */}
               <div>
                 <label className="block text-sm font-semibold">
-                  P. Unidad IO (auto)
+                  Precio Unidad Isla (auto)
                 </label>
                 <input
                   className="w-full border p-2 rounded bg-gray-100"
@@ -566,81 +753,383 @@ export default function ProductsCandy() {
         </div>
       )}
 
-      {/* TABLA */}
-      <div className="bg-white p-2 rounded shadow border w-full">
-        <table className="min-w-full text-xs md:text-sm">
+      {/* TABLA (más ancha, sin wrap) */}
+      <div className="bg-white p-2 rounded shadow border w-full overflow-x-auto">
+        <table className="min-w-[1600px] text-xs md:text-sm">
           <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">Categoría</th>
-              <th className="p-2 border">Producto</th>
-              <th className="p-2 border">Precio Prov.</th>
-              <th className="p-2 border">Paquetes</th>
-              <th className="p-2 border">Und x Paq.</th>
-              <th className="p-2 border">Subtotal</th>
-              <th className="p-2 border">Total Rivas</th>
-              <th className="p-2 border">Total SJ</th>
-              <th className="p-2 border">Total Isla</th>
-              <th className="p-2 border">G. R</th>
-              <th className="p-2 border">G. SJ</th>
-              <th className="p-2 border">G. IO</th>
-              <th className="p-2 border">P. U R</th>
-              <th className="p-2 border">P. U SJ</th>
-              <th className="p-2 border">P. U IO</th>
-              <th className="p-2 border">Acciones</th>
+            <tr className="whitespace-nowrap">
+              <th className="p-2 border whitespace-nowrap">Fecha</th>
+              <th className="p-2 border whitespace-nowrap">Categoría</th>
+              <th className="p-2 border whitespace-nowrap">Producto</th>
+              <th className="p-2 border whitespace-nowrap">Precio Proveedor</th>
+              <th className="p-2 border whitespace-nowrap">Paquetes/Bolsas</th>
+              <th className="p-2 border whitespace-nowrap">Und x Paquetes</th>
+              <th className="p-2 border whitespace-nowrap">Subtotal</th>
+              <th className="p-2 border whitespace-nowrap">Total Rivas</th>
+              <th className="p-2 border whitespace-nowrap">Total San Jorge</th>
+              <th className="p-2 border whitespace-nowrap">Total Isla</th>
+              <th className="p-2 border whitespace-nowrap">Ganancia Rivas</th>
+              <th className="p-2 border whitespace-nowrap">
+                Ganancia San Jorge
+              </th>
+              <th className="p-2 border whitespace-nowrap">Ganancia Isla</th>
+              <th className="p-2 border whitespace-nowrap">Precio Rivas</th>
+              <th className="p-2 border whitespace-nowrap">Precio San Jorge</th>
+              <th className="p-2 border whitespace-nowrap">Precio Isla</th>
+              <th className="p-2 border whitespace-nowrap">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={17} className="p-4 text-center">
+                <td colSpan={17} className="p-4 text-center whitespace-nowrap">
                   Cargando…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={17} className="p-4 text-center">
+                <td colSpan={17} className="p-4 text-center whitespace-nowrap">
                   Sin productos
                 </td>
               </tr>
             ) : (
-              rows.map((r) => (
-                <tr key={r.id} className="text-center">
-                  <td className="p-2 border">
-                    {r.inventoryDate ||
-                      (r.createdAt?.toDate
-                        ? r.createdAt.toDate().toISOString().slice(0, 10)
-                        : "—")}
-                  </td>
-                  <td className="p-2 border">{r.category}</td>
-                  <td className="p-2 border">{r.name}</td>
-                  <td className="p-2 border">{r.providerPrice.toFixed(2)}</td>
-                  <td className="p-2 border">{r.packages}</td>
-                  <td className="p-2 border">{r.unitsPerPackage}</td>
-                  <td className="p-2 border">{r.subtotal.toFixed(2)}</td>
-                  <td className="p-2 border">{r.totalRivas.toFixed(2)}</td>
-                  <td className="p-2 border">{r.totalSanJorge.toFixed(2)}</td>
-                  <td className="p-2 border">{r.totalIsla.toFixed(2)}</td>
-                  <td className="p-2 border">{r.gainRivas.toFixed(2)}</td>
-                  <td className="p-2 border">{r.gainSanJorge.toFixed(2)}</td>
-                  <td className="p-2 border">{r.gainIsla.toFixed(2)}</td>
-                  <td className="p-2 border">{r.unitPriceRivas}</td>
-                  <td className="p-2 border">{r.unitPriceSanJorge}</td>
-                  <td className="p-2 border">{r.unitPriceIsla}</td>
-                  <td className="p-2 border">
-                    <button
-                      className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
-                      onClick={() => handleDelete(r)}
-                    >
-                      Borrar
-                    </button>
-                  </td>
-                </tr>
-              ))
+              rows.map((r) => {
+                const isEditing = editingId === r.id;
+                return (
+                  <tr key={r.id} className="text-center whitespace-nowrap">
+                    {/* Fecha */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="date"
+                          className="border p-1 rounded text-xs"
+                          value={
+                            getEdit(
+                              "inventoryDate",
+                              r.inventoryDate ||
+                                (r.createdAt?.toDate
+                                  ? r.createdAt
+                                      .toDate()
+                                      .toISOString()
+                                      .slice(0, 10)
+                                  : "")
+                            ) || ""
+                          }
+                          onChange={(e) =>
+                            handleEditChange("inventoryDate", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.inventoryDate ||
+                        (r.createdAt?.toDate
+                          ? r.createdAt.toDate().toISOString().slice(0, 10)
+                          : "—")
+                      )}
+                    </td>
+
+                    {/* Categoría */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <select
+                          className="border p-1 rounded text-xs"
+                          value={getEdit("category", r.category) as string}
+                          onChange={(e) =>
+                            handleEditChange(
+                              "category",
+                              e.target.value as CandyCategory
+                            )
+                          }
+                        >
+                          {CANDY_CATEGORIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        r.category
+                      )}
+                    </td>
+
+                    {/* Producto */}
+                    <td className="p-2 border whitespace-nowrap max-w-xs">
+                      {isEditing ? (
+                        <input
+                          className="border p-1 rounded text-xs w-full"
+                          value={getEdit("name", r.name) as string}
+                          onChange={(e) =>
+                            handleEditChange("name", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.name
+                      )}
+                    </td>
+
+                    {/* Precio Proveedor */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("providerPrice", r.providerPrice)}
+                          onChange={(e) =>
+                            handleEditChange("providerPrice", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.providerPrice.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* Paquetes */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("packages", r.packages)}
+                          onChange={(e) =>
+                            handleEditChange("packages", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.packages
+                      )}
+                    </td>
+
+                    {/* Und x Paq */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("unitsPerPackage", r.unitsPerPackage)}
+                          onChange={(e) =>
+                            handleEditChange("unitsPerPackage", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.unitsPerPackage
+                      )}
+                    </td>
+
+                    {/* Subtotal */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("subtotal", r.subtotal)}
+                          onChange={(e) =>
+                            handleEditChange("subtotal", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.subtotal.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* Total Rivas */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("totalRivas", r.totalRivas)}
+                          onChange={(e) =>
+                            handleEditChange("totalRivas", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.totalRivas.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* Total SJ */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("totalSanJorge", r.totalSanJorge)}
+                          onChange={(e) =>
+                            handleEditChange("totalSanJorge", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.totalSanJorge.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* Total Isla */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("totalIsla", r.totalIsla)}
+                          onChange={(e) =>
+                            handleEditChange("totalIsla", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.totalIsla.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* G. R */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("gainRivas", r.gainRivas)}
+                          onChange={(e) =>
+                            handleEditChange("gainRivas", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.gainRivas.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* G. SJ */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("gainSanJorge", r.gainSanJorge)}
+                          onChange={(e) =>
+                            handleEditChange("gainSanJorge", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.gainSanJorge.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* G. IO */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("gainIsla", r.gainIsla)}
+                          onChange={(e) =>
+                            handleEditChange("gainIsla", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.gainIsla.toFixed(2)
+                      )}
+                    </td>
+
+                    {/* P. U R */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("unitPriceRivas", r.unitPriceRivas)}
+                          onChange={(e) =>
+                            handleEditChange("unitPriceRivas", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.unitPriceRivas
+                      )}
+                    </td>
+
+                    {/* P. U SJ */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit(
+                            "unitPriceSanJorge",
+                            r.unitPriceSanJorge
+                          )}
+                          onChange={(e) =>
+                            handleEditChange(
+                              "unitPriceSanJorge",
+                              e.target.value
+                            )
+                          }
+                        />
+                      ) : (
+                        r.unitPriceSanJorge
+                      )}
+                    </td>
+
+                    {/* P. U IO */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          className="border p-1 rounded text-right text-xs"
+                          value={getEdit("unitPriceIsla", r.unitPriceIsla)}
+                          onChange={(e) =>
+                            handleEditChange("unitPriceIsla", e.target.value)
+                          }
+                        />
+                      ) : (
+                        r.unitPriceIsla
+                      )}
+                    </td>
+
+                    {/* Acciones */}
+                    <td className="p-2 border whitespace-nowrap">
+                      {isEditing ? (
+                        <div className="flex gap-1 justify-center">
+                          <button
+                            className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                            onClick={saveEdit}
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-xs"
+                            onClick={cancelEdit}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-1 justify-center">
+                          <button
+                            className="px-2 py-1 rounded bg-yellow-500 text-white hover:bg-yellow-600 text-xs"
+                            onClick={() => startEdit(r)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                            onClick={() => handleDelete(r)}
+                          >
+                            Borrar
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
+
       {msg && <p className="mt-2 text-sm">{msg}</p>}
     </div>
   );

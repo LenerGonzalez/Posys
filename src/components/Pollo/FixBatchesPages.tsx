@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import {
   fixAllBatchProductIds,
   fixBatchesByProductName,
-} from "../Services/fixAllBatchProductIds";
+} from "../../Services/fixAllBatchProductIds";
 
 export default function FixBatchesPage() {
   const [busy, setBusy] = useState(false);

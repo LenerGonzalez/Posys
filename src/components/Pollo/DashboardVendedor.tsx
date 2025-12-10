@@ -1,10 +1,10 @@
 // DashboardVendedor.tsx - Vista para vendedores (solo VentaForm visible)
 import React from "react";
-import VentaForm from "./SaleForm";
-import Sidebar from "./Sidebar";
-import SaleForm from "./SaleForm";
-import CierreVentas from "./CierreVentas";
-import { Role } from "../apis/apis";
+import VentaForm from "../../components/Pollo/SaleForm";
+import Sidebar from "../../components/Pollo/Sidebar";
+import SaleForm from "../../components/Pollo/SaleForm";
+import CierreVentas from "../../components/Pollo/CierreVentas";
+import { Role } from "../../apis/apis";
 
 export default function DashboardVendedor(): React.ReactElement {
   return (

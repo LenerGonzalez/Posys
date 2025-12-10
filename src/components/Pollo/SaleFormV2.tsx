@@ -1,6 +1,6 @@
 // src/components/SaleForm.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import {
   collection,
   addDoc,
@@ -13,9 +13,9 @@ import {
 } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { format } from "date-fns";
-import { Role } from "../apis/apis";
-import allocateFIFOAndUpdateBatches from "../Services/allocateFIFO";
-import { roundQty, addQty, gteQty } from "../Services/decimal";
+import { Role } from "../../apis/apis";
+import allocateFIFOAndUpdateBatches from "../../Services/allocateFIFO";
+import { roundQty, addQty, gteQty } from "../../Services/decimal";
 
 // --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
 async function fixBatchesProductIdByName(

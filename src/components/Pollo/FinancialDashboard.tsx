@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import {
   collection,
   getDocs,
@@ -8,8 +8,8 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { format } from "date-fns";
-import RefreshButton from "../components/common/RefreshButton";
-import useManualRefresh from "../hooks/useManualRefresh";
+import RefreshButton from "../../components/common/RefreshButton";
+import useManualRefresh from "../../hooks/useManualRefresh";
 
 const money = (n: unknown) => `C$${Number(n ?? 0).toFixed(2)}`;
 const todayStr = () => format(new Date(), "yyyy-MM-dd");

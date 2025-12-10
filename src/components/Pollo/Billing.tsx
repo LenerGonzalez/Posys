@@ -1,6 +1,6 @@
 // src/pages/Billing.tsx
 import React, { useEffect, useState, useRef } from "react";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import {
   collection,
   getDocs,

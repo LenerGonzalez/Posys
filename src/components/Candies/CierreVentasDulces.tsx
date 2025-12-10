@@ -1,6 +1,6 @@
-// src/components/CierreVentas.tsx
+// src/components/Candies/CierreVentasDulces.tsx
 import React, { useEffect, useRef, useState } from "react";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import {
   collection,
   getDocs,
@@ -16,27 +16,29 @@ import {
 import { format } from "date-fns";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
-import { restoreSaleAndDelete } from "../Services/inventory";
-import RefreshButton from "../components/common/RefreshButton";
-import useManualRefresh from "../hooks/useManualRefresh";
+import { restoreCandySaleAndDelete } from "../../Services/inventory_candies";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
 interface SaleDataRaw {
   id?: string;
   productName?: string;
-  quantity?: number;
+  quantity?: number; // en BD: puede ser unidades totales
+  packagesTotal?: number; // total paquetes (root)
   amount?: number;
   amountCharged?: number;
   amountSuggested?: number;
   date?: string;
-  userEmail?: string;
+  userEmail?: string; // email del usuario que hizo la venta
   vendor?: string;
+  vendorName?: string;
+  vendorId?: string;
   clientName?: string;
   amountReceived?: number;
   change?: string | number;
   status?: "FLOTANTE" | "PROCESADA";
   timestamp?: FireTimestamp;
+  items?: any[]; // multi-ítems
   allocations?: {
     batchId: string;
     qty: number;
@@ -45,17 +47,17 @@ interface SaleDataRaw {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
-  items?: any[]; // ← importante para multi-ítems
 }
 
 interface SaleData {
   id: string;
   productName: string;
-  quantity: number;
+  quantity: number; // PAQUETES vendidos (para la UI)
   amount: number;
   amountSuggested: number;
   date: string;
-  userEmail: string;
+  userEmail: string; // etiqueta que mostramos en la tabla (nombre / vendedor)
+  sellerEmail?: string; // 👈 email real del usuario logueado que hizo la venta
   clientName: string;
   amountReceived: number;
   change: string;
@@ -75,7 +77,7 @@ interface ClosureData {
   date: string;
   createdAt: any;
   products: { productName: string; quantity: number; amount: number }[];
-  totalUnits: number;
+  totalUnits: number; // paquetes (nombre legacy)
   totalCharged: number;
   totalSuggested: number;
   totalDifference: number;
@@ -89,13 +91,13 @@ interface ClosureData {
   grossProfit?: number;
 }
 
-// 🔧 helpers
+// helpers
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 
-// 🔵 Normaliza UNA venta en MÚLTIPLES filas si trae items[]
+// Normaliza UNA venta en MÚLTIPLES filas si trae items[]
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const date =
     raw.date ??
@@ -104,24 +106,34 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       : "");
   if (!date) return [];
 
-  // Si trae items, retornar una fila por ítem
+  const sellerEmail = raw.userEmail ?? ""; // email real del usuario
+  const vendedorLabel =
+    raw.vendorName ||
+    raw.vendor ||
+    sellerEmail ||
+    raw.vendorId ||
+    "(sin vendedor)";
+
+  // Venta multi-ítem
   if (Array.isArray(raw.items) && raw.items.length > 0) {
     return raw.items.map((it, idx) => {
-      const qty = Number(it?.qty ?? 0);
+      const qtyPacks = Number(it?.packages ?? it?.qty ?? it?.quantity ?? 0); // PAQUETES
       const lineFinal =
         Number(it?.lineFinal ?? 0) ||
         Math.max(
           0,
-          Number(it?.unitPrice || 0) * qty - Number(it?.discount || 0)
+          Number(it?.unitPricePackage || it?.unitPrice || 0) * qtyPacks -
+            Number(it?.discount || 0)
         );
       return {
         id: `${id}#${idx}`,
         productName: String(it?.productName ?? "(sin nombre)"),
-        quantity: qty,
+        quantity: qtyPacks,
         amount: round2(lineFinal),
-        amountSuggested: Number(raw.amountSuggested ?? 0), // (si te sirve)
+        amountSuggested: Number(raw.amountSuggested ?? 0),
         date,
-        userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
+        userEmail: vendedorLabel,
+        sellerEmail,
         clientName: raw.clientName ?? "",
         amountReceived: Number(raw.amountReceived ?? 0),
         change: String(raw.change ?? "0"),
@@ -135,16 +147,19 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
     });
   }
 
-  // Fallback: una sola fila
+  // Fallback: una sola fila (sin items[])
+  const qtyPacksFallback = Number(raw.packagesTotal ?? raw.quantity ?? 0); // paquetes totales
+
   return [
     {
       id,
       productName: raw.productName ?? "(sin nombre)",
-      quantity: Number(raw.quantity ?? 0),
+      quantity: qtyPacksFallback,
       amount: Number(raw.amount ?? raw.amountCharged ?? 0),
       amountSuggested: Number(raw.amountSuggested ?? 0),
       date,
-      userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
+      userEmail: vendedorLabel,
+      sellerEmail,
       clientName: raw.clientName ?? "",
       amountReceived: Number(raw.amountReceived ?? 0),
       change: String(raw.change ?? "0"),
@@ -156,10 +171,18 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   ];
 };
 
-export default function CierreVentas({
+type RoleCandies =
+  | "admin"
+  | "vendedor_pollo"
+  | "vendedor_ropa"
+  | "vendedor_dulces";
+
+export default function CierreVentasDulces({
   role,
+  currentUserEmail,
 }: {
-  role?: "admin" | "vendedor";
+  role?: RoleCandies;
+  currentUserEmail?: string;
 }): React.ReactElement {
   const [salesV2, setSales] = useState<SaleData[]>([]);
   const [floatersExtra, setFloatersExtra] = useState<SaleData[]>([]);
@@ -177,12 +200,18 @@ export default function CierreVentas({
 
   const today = format(new Date(), "yyyy-MM-dd");
   const pdfRef = useRef<HTMLDivElement>(null);
-  const { refreshKey, refresh } = useManualRefresh();
 
-  // Ventas de HOY
+  const isAdmin = !role || role === "admin";
+  const isVendDulces = role === "vendedor_dulces";
+  const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
+
+  // Ventas de HOY (colección de DULCES)
   useEffect(() => {
-    const q = query(collection(db, "salesV2"), where("date", "==", today));
-    const unsub = onSnapshot(q, (snap) => {
+    const qSales = query(
+      collection(db, "sales_candies"),
+      where("date", "==", today)
+    );
+    const unsub = onSnapshot(qSales, (snap) => {
       const rows: SaleData[] = [];
       snap.forEach((d) => {
         const parts = normalizeMany(d.data() as SaleDataRaw, d.id);
@@ -192,12 +221,12 @@ export default function CierreVentas({
       setLoading(false);
     });
     return () => unsub();
-  }, [today, refreshKey]);
+  }, [today]);
 
-  // FLOTANTE de cualquier fecha
+  // FLOTANTE (de cualquier fecha) en sales_candies
   useEffect(() => {
     const qFlo = query(
-      collection(db, "salesV2"),
+      collection(db, "sales_candies"),
       where("status", "==", "FLOTANTE")
     );
     const unsub = onSnapshot(qFlo, (snap) => {
@@ -209,16 +238,16 @@ export default function CierreVentas({
       setFloatersExtra(rows);
     });
     return () => unsub();
-  }, [refreshKey]);
+  }, []);
 
   // Cierre guardado (informativo)
   useEffect(() => {
     const fetchClosure = async () => {
-      const q = query(
-        collection(db, "daily_closures"),
+      const qC = query(
+        collection(db, "daily_closures_candies"),
         where("date", "==", today)
       );
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(qC);
       if (!snapshot.empty) {
         const d = snapshot.docs[0];
         setClosure({ id: d.id, ...d.data() } as ClosureData);
@@ -227,33 +256,44 @@ export default function CierreVentas({
       }
     };
     fetchClosure();
-  }, [today, refreshKey]);
+  }, [today]);
 
-  // Ventas visibles
+  // Ventas visibles (aplicamos filtro + rol)
   const visibleSales = React.useMemo(() => {
+    let base: SaleData[];
+
     if (filter === "FLOTANTE") {
       const all = [...salesV2, ...floatersExtra];
       const map = new Map<string, SaleData>();
       for (const s of all) if (s.status === "FLOTANTE") map.set(s.id, s);
-      return Array.from(map.values());
-    }
-    if (filter === "ALL") {
+      base = Array.from(map.values());
+    } else if (filter === "ALL") {
       const all = [...salesV2, ...floatersExtra];
       const map = new Map<string, SaleData>();
       for (const s of all) map.set(s.id, s);
-      return Array.from(map.values());
+      base = Array.from(map.values());
+    } else {
+      base = salesV2.filter((s) => s.status === "PROCESADA");
     }
-    return salesV2.filter((s) => s.status === "PROCESADA");
-  }, [filter, salesV2, floatersExtra]);
 
-  // Totales visibles
+    // 🔐 Restricción para vendedor_dulces: solo sus ventas
+    if (isVendDulces && currentEmailNorm) {
+      base = base.filter(
+        (s) => (s.sellerEmail || "").toLowerCase() === currentEmailNorm
+      );
+    }
+
+    return base;
+  }, [filter, salesV2, floatersExtra, isVendDulces, currentEmailNorm]);
+
+  // Totales visibles (quantity = paquetes)
   const totalSuggested = round2(
     visibleSales.reduce((sum, s) => sum + (s.amountSuggested || 0), 0)
   );
   const totalCharged = round2(
     visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0)
   );
-  const totalUnits = round3(
+  const totalPaquetes = round3(
     visibleSales.reduce((sum, s) => sum + (s.quantity || 0), 0)
   );
   const totalCOGSVisible = round2(
@@ -261,7 +301,7 @@ export default function CierreVentas({
   );
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
-  // Consolidado por producto
+  // Consolidado por producto (en paquetes)
   const productMap: Record<
     string,
     { totalQuantity: number; totalAmount: number }
@@ -285,8 +325,9 @@ export default function CierreVentas({
     })
   );
 
-  // Guardar cierre (misma lógica tuya)
+  // Guardar cierre (solo ADMIN)
   const handleSaveClosure = async () => {
+    if (!isAdmin) return; // seguridad extra
     try {
       const candidatesVisible = visibleSales.filter(
         (s) => s.status === "FLOTANTE"
@@ -318,7 +359,7 @@ export default function CierreVentas({
       const diff = round2(totals.totalCharged - totals.totalSuggested);
       const grossProfit = round2(totals.totalCharged - totals.totalCOGS);
 
-      const ref = await addDoc(collection(db, "daily_closures"), {
+      const ref = await addDoc(collection(db, "daily_closures_candies"), {
         date: today,
         createdAt: Timestamp.now(),
         totalCharged: totals.totalCharged,
@@ -332,7 +373,7 @@ export default function CierreVentas({
           quantity: s.quantity,
           amount: s.amount,
         })),
-        salesV2: toProcess.map((s) => ({
+        sales: toProcess.map((s) => ({
           id: s.id,
           productName: s.productName,
           quantity: s.quantity,
@@ -367,7 +408,7 @@ export default function CierreVentas({
 
       const batch = writeBatch(db);
       toProcess.forEach((s) => {
-        batch.update(doc(db, "salesV2", s.id.split("#")[0]), {
+        batch.update(doc(db, "sales_candies", s.id.split("#")[0]), {
           status: "PROCESADA",
           closureId: ref.id,
           closureDate: today,
@@ -375,20 +416,23 @@ export default function CierreVentas({
       });
       await batch.commit();
 
-      setMessage(`✅ Cierre guardado. Ventas procesadas: ${toProcess.length}.`);
+      setMessage(
+        `✅ Cierre de dulces guardado. Ventas procesadas: ${toProcess.length}.`
+      );
     } catch (error) {
       console.error(error);
-      setMessage("❌ Error al guardar el cierre.");
+      setMessage("❌ Error al guardar el cierre de dulces.");
     }
   };
 
   const handleRevert = async (saleId: string) => {
+    if (!isAdmin) return;
     if (
       !window.confirm("¿Revertir esta venta? Esta acción no se puede deshacer.")
     )
       return;
     try {
-      await updateDoc(doc(db, "salesV2", saleId.split("#")[0]), {
+      await updateDoc(doc(db, "sales_candies", saleId.split("#")[0]), {
         status: "FLOTANTE",
         closureId: null,
         closureDate: null,
@@ -401,6 +445,7 @@ export default function CierreVentas({
   };
 
   const openEdit = (s: SaleData) => {
+    if (!isAdmin) return;
     setEditing(s);
     setEditQty(s.quantity);
     setEditAmount(s.amount);
@@ -410,10 +455,10 @@ export default function CierreVentas({
   };
 
   const saveEdit = async () => {
-    if (!editing) return;
+    if (!editing || !isAdmin) return;
     try {
-      await updateDoc(doc(db, "salesV2", editing.id.split("#")[0]), {
-        quantity: editQty,
+      await updateDoc(doc(db, "sales_candies", editing.id.split("#")[0]), {
+        packagesTotal: editQty,
         amount: editAmount,
         amountCharged: editAmount,
         clientName: editClient,
@@ -421,28 +466,33 @@ export default function CierreVentas({
         change: editChange,
       });
       setEditing(null);
-      setMessage("✅ Venta actualizada.");
+      setMessage("✅ Venta de dulces actualizada.");
     } catch (e) {
       console.error(e);
-      setMessage("❌ No se pudo actualizar la venta.");
+      setMessage("❌ No se pudo actualizar la venta de dulces.");
     }
   };
 
   const deleteSale = async (saleId: string) => {
+    if (!isAdmin) return;
     if (
       !window.confirm(
-        "¿Eliminar esta venta? Se restaurará el stock en los lotes asignados."
+        "¿Eliminar esta venta? Se restaurará el stock (paquetes) en los lotes asignados."
       )
     )
       return;
     try {
-      const { restored } = await restoreSaleAndDelete(saleId.split("#")[0]);
+      const { restored } = await restoreCandySaleAndDelete(
+        saleId.split("#")[0]
+      );
       setMessage(
-        `🗑️ Venta eliminada. Stock restaurado: ${Number(restored).toFixed(2)}.`
+        `🗑️ Venta de dulces eliminada. Stock restaurado (unidades internas): ${Number(
+          restored
+        ).toFixed(2)}.`
       );
     } catch (e) {
       console.error(e);
-      setMessage("❌ No se pudo eliminar la venta.");
+      setMessage("❌ No se pudo eliminar la venta de dulces.");
     }
   };
 
@@ -456,17 +506,17 @@ export default function CierreVentas({
       const imgData = canvas.toDataURL("image/png");
       const pdf = new jsPDF();
       pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
-      pdf.save(`cierre_${today}.pdf`);
+      pdf.save(`cierre_dulces_${today}.pdf`);
     } finally {
       pdfRef.current.classList.remove("force-pdf-colors");
     }
   };
 
-  const isAdmin = !role || role === "admin";
-
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
-      <h2 className="text-2xl font-bold mb-4">Cierre de Ventas - {today}</h2>
+      <h2 className="text-2xl font-bold mb-4">
+        Cierre de Ventas de Dulces - {today}
+      </h2>
 
       <div className="flex items-center gap-2 mb-3">
         <label className="text-sm">Filtrar:</label>
@@ -485,12 +535,12 @@ export default function CierreVentas({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          <table className="min-w-full border text-sm mb-4  shadow-2xl">
+          <table className="min-w-full border text-sm mb-4 shadow-2xl">
             <thead className="bg-gray-100">
               <tr>
                 <th className="border p-2">Estado</th>
                 <th className="border p-2">Producto</th>
-                <th className="border p-2">Libras - Unidad</th>
+                <th className="border p-2">Paquetes</th>
                 <th className="border p-2">Monto</th>
                 <th className="border p-2">Fecha venta</th>
                 <th className="border p-2">Vendedor</th>
@@ -519,7 +569,7 @@ export default function CierreVentas({
                   <td className="border p-1">
                     {s.status === "FLOTANTE" ? (
                       <div className="flex gap-2 justify-center">
-                        {isAdmin && (
+                        {isAdmin ? (
                           <>
                             <button
                               onClick={() => openEdit(s)}
@@ -534,8 +584,7 @@ export default function CierreVentas({
                               Eliminar
                             </button>
                           </>
-                        )}
-                        {!isAdmin && (
+                        ) : (
                           <span className="text-gray-400 text-xs">—</span>
                         )}
                       </div>
@@ -570,11 +619,9 @@ export default function CierreVentas({
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-2">
             <div>
-              {" "}
-              Total Libras/Unidades: <strong>{qty3(totalUnits)}</strong>
+              Total paquetes vendidos: <strong>{qty3(totalPaquetes)}</strong>
             </div>
             <div>
-              {" "}
               Total cobrado: <strong>C${money(totalCharged)}</strong>
             </div>
           </div>
@@ -582,12 +629,9 @@ export default function CierreVentas({
           {(totalCOGSVisible > 0 || grossProfitVisible !== totalCharged) && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm mb-6">
               <div>
-                {" "}
-                Calculo a Precio compra:{" "}
-                <strong>C${money(totalCOGSVisible)}</strong>
+                Costo total (COGS): <strong>C${money(totalCOGSVisible)}</strong>
               </div>
               <div>
-                {" "}
                 Ganancia antes de gasto:{" "}
                 <strong>C${money(grossProfitVisible)}</strong>
               </div>
@@ -599,7 +643,7 @@ export default function CierreVentas({
             <thead className="bg-gray-100">
               <tr>
                 <th className="border p-2">Producto</th>
-                <th className="border p-2">Total libras/unidades</th>
+                <th className="border p-2">Total paquetes</th>
                 <th className="border p-2">Total dinero</th>
               </tr>
             </thead>
@@ -624,12 +668,14 @@ export default function CierreVentas({
       )}
 
       <div className="flex gap-2">
-        <button
-          onClick={handleSaveClosure}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-        >
-          Cerrar ventas del día
-        </button>
+        {isAdmin && (
+          <button
+            onClick={handleSaveClosure}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >
+            Cerrar ventas del día
+          </button>
+        )}
         <button
           onClick={handleDownloadPDF}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
@@ -641,15 +687,15 @@ export default function CierreVentas({
       {message && <p className="mt-2 text-sm">{message}</p>}
 
       {/* Panel de edición */}
-      {editing && (
+      {editing && isAdmin && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4 space-y-3">
-            <h4 className="font-semibold text-lg">Editar venta</h4>
+            <h4 className="font-semibold text-lg">Editar venta de dulces</h4>
             <div className="text-sm text-gray-500">
               {editing.productName} • {editing.userEmail}
             </div>
 
-            <label className="text-sm">Cantidad</label>
+            <label className="text-sm">Paquetes</label>
             <input
               type="number"
               step="0.01"

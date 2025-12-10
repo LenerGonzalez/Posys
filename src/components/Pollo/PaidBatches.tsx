@@ -10,11 +10,11 @@ import {
   where,
   deleteDoc,
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import { format } from "date-fns";
-import InvoiceModal from "../components/InvoiceModal";
-import RefreshButton from "../components/common/RefreshButton";
-import useManualRefresh from "../hooks/useManualRefresh";
+import InvoiceModal from "../../components/Pollo/InvoiceModal";
+import RefreshButton from "../../components/common/RefreshButton";
+import useManualRefresh from "../../hooks/useManualRefresh";
 
 type Batch = {
   id: string;

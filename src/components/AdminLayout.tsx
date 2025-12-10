@@ -34,7 +34,7 @@ export default function AdminLayout({ role }: { role: string }) {
   //Operaciones dulces
   const [openDulces, setOpenDulces] = useState(false);
   const [openDulcesInv, setOpenDulcesInv] = useState(false);
-  const [openDulcesProd, setOpenDulcesProd] = useState(false);
+  const [openDulcesVendors, setOpenDulcesVendors] = useState(false);
   const [openDulcesFin, setOpenDulcesFin] = useState(false);
 
   // Operaciones Otras
@@ -88,6 +88,7 @@ export default function AdminLayout({ role }: { role: string }) {
   const isAdmin = role === "admin";
   const isVendPollo = role === "vendedor_pollo" || role === "vendedor"; // compat: "vendedor" → pollo
   const isVendRopa = role === "vendedor_ropa";
+  const isVendDulces = role === "vendedor_dulces";
 
   return (
     <div className="min-h-screen flex">
@@ -96,17 +97,17 @@ export default function AdminLayout({ role }: { role: string }) {
           isCollapsed
             ? "w-15 bg-gray-50 border-r p-3 transition-all duration-300 flex flex-col items-center"
             : "w-55"
-        } bg-gray-50 border-r p-3 transition-all duration-300 flex flex-col`}
+        } bg-[#f1f3f7] border-r p-3 transition-all duration-300 flex flex-col`}
       >
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="mb-2 p-2 rounded bg-gray-200 hover:bg-gray-300"
+          className="mb-2 p-2 rounded-2xl shadow-2xl bg-gray-300 hover:bg-gray-400"
           aria-label={isCollapsed ? "Expandir menú" : "Colapsar menú"}
         >
           {isCollapsed ? (
-            <span title="Expandir menú">▶</span>
+            <span title="Expandir menú">Menu ▶</span>
           ) : (
-            <span title="Colapsar menú">◀</span>
+            <span title="Colapsar menú">Cerrar ◀</span>
           )}
         </button>
 
@@ -117,12 +118,12 @@ export default function AdminLayout({ role }: { role: string }) {
               {isAdmin && (
                 <>
                   {/* -------- Operaciones Pollo -------- */}
-                  <div className="border rounded mb-1">
+                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
                     <SectionBtn
                       open={openPollo}
                       onClick={() => setOpenPollo((v) => !v)}
                     >
-                      Operaciones Pollo
+                      Pollos Bea
                     </SectionBtn>
 
                     {openPollo && (
@@ -170,18 +171,18 @@ export default function AdminLayout({ role }: { role: string }) {
                             >
                               Gastos
                             </NavLink>
-                            {/* <NavLink to={`${base}/salesV2`} className={linkCls}>
+                            <NavLink to={`${base}/salesV2`} className={linkCls}>
                               Venta
                             </NavLink>
                             <NavLink to={`${base}/bills`} className={linkCls}>
                               Cierre
                             </NavLink>
-                            <NavLink
+                            {/* <NavLink
                               to={`${base}/billhistoric`}
                               className={linkCls}
                             >
                               Historial de Cierres
-                            </NavLink> */}
+                            </NavLink>  */}
                           </div>
                         )}
 
@@ -206,12 +207,12 @@ export default function AdminLayout({ role }: { role: string }) {
                   </div>
 
                   {/* -------- Operaciones Ropa -------- */}
-                  <div className="border rounded mb-1">
+                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
                     <SectionBtn
                       open={openRopa}
                       onClick={() => setOpenRopa((v) => !v)}
                     >
-                      Operaciones Ropa
+                      Chiqui Look
                     </SectionBtn>
 
                     {openRopa && (
@@ -316,45 +317,86 @@ export default function AdminLayout({ role }: { role: string }) {
                   </div>
 
                   {/* -------- Operaciones Dulces -------- */}
-                  <div className="border rounded mb-1">
+                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
                     <SectionBtn
                       open={openDulces}
                       onClick={() => setOpenDulces((v) => !v)}
                     >
-                      Operaciones Dulces
+                      CandyShop
                     </SectionBtn>
 
                     {openDulces && (
                       <div className="pb-2">
                         {/* Inventario (Dulces) */}
                         <SubSectionBtn
+                          open={openDulcesVendors}
+                          onClick={() => setOpenDulcesVendors((v) => !v)}
+                          title="Vendedores"
+                        />
+                        {openDulcesVendors && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/salesCandies`}
+                              className={linkCls}
+                            >
+                              Venta
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesVendors && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/productsVendorsCandies`}
+                              className={linkCls}
+                            >
+                              Sub ordenes
+                            </NavLink>
+                          </div>
+                        )}
+                        <SubSectionBtn
                           open={openDulcesInv}
                           onClick={() => setOpenDulcesInv((v) => !v)}
                           title="Inventario"
                         />
+
                         {openDulcesInv && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
-                              to={`${base}/CandiesProducts`}
+                              to={`${base}/mainordersCandies`}
                               className={linkCls}
                             >
-                              Inventario/Productos
+                              Ordenes Maestras
                             </NavLink>
                           </div>
                         )}
-                        {/* Productos (Dulces) */}
-                        <SubSectionBtn
-                          open={openDulcesProd}
-                          onClick={() => setOpenDulcesProd((v) => !v)}
-                          title="Productos"
-                        />
-                        {openDulcesProd && (
+                        {openDulcesInv && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
-                              to={`${base}/productsDulces`}
+                              to={`${base}/inventoryMainOrderCandies`}
                               className={linkCls}
                             >
-                              Agregar Productos
+                              Lista de Ordenes
+                            </NavLink>
+                          </div>
+                        )}
+
+                        {openDulcesInv && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/productsCandies`}
+                              className={linkCls}
+                            >
+                              Productos
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesInv && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/inventoryCandies`}
+                              className={linkCls}
+                            >
+                              Lista Productos
                             </NavLink>
                           </div>
                         )}
@@ -365,30 +407,11 @@ export default function AdminLayout({ role }: { role: string }) {
                           onClick={() => setOpenDulcesFin((v) => !v)}
                           title="Finanzas"
                         />
+
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
-                              to={`${base}/salesDulces`}
-                              className={linkCls}
-                            >
-                              Venta Dulces
-                            </NavLink>
-                          </div>
-                        )}
-                        {openRopaFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/financialDashboardClothes`}
-                              className={linkCls}
-                            >
-                              Dashboard Financiero
-                            </NavLink>
-                          </div>
-                        )}
-                        {openRopaFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/TransactionsReportClothes`}
+                              to={`${base}/transactionCandies`}
                               className={linkCls}
                             >
                               Transacciones
@@ -396,13 +419,64 @@ export default function AdminLayout({ role }: { role: string }) {
                           </div>
                         )}
 
-                        {openRopaFin && (
+                        {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
-                              to={`${base}/ExpensesClothes`}
+                              to={`${base}/cierreVentasCandies`}
                               className={linkCls}
                             >
-                              Gastos Ropa
+                              Cierres
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/consolidatedVendors`}
+                              className={linkCls}
+                            >
+                              Consolidado Vendedores
+                            </NavLink>
+                          </div>
+                        )}
+
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/dashboardCandies`}
+                              className={linkCls}
+                            >
+                              Dashboard
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/customersCandies`}
+                              className={linkCls}
+                            >
+                              Clientes
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/vendorsCandies`}
+                              className={linkCls}
+                            >
+                              Vendedores
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/expensesCandies`}
+                              className={linkCls}
+                            >
+                              Gastos
                             </NavLink>
                           </div>
                         )}
@@ -411,7 +485,7 @@ export default function AdminLayout({ role }: { role: string }) {
                   </div>
 
                   {/* -------- Operaciones Otras -------- */}
-                  <div className="border rounded">
+                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
                     <SectionBtn
                       open={openOtras}
                       onClick={() => setOpenOtras((v) => !v)}
@@ -537,7 +611,7 @@ export default function AdminLayout({ role }: { role: string }) {
 
             <button
               onClick={handleLogout}
-              className="mt-4 bg-red-500 text-white px-3 py-2 rounded hover:bg-red-600"
+              className="mt-4 bg-red-500 text-white px-3 py-2 rounded-2xl shadow-2xl hover:bg-red-600"
             >
               Cerrar sesión
             </button>

@@ -1,4 +1,4 @@
-// src/components/Chicken/ExpensesAdmin.tsx (o donde tengas el de Pollo)
+// src/components/Candies/ExpensesCandies.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
@@ -11,10 +11,9 @@ import {
   Timestamp,
   updateDoc,
 } from "firebase/firestore";
-import { db } from "../firebase"; // ajusta la ruta si cambia
+import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 
-// Puedes ajustar estas categorías cuando quieras
 const CATEGORIES = [
   "Energia",
   "Bolsas",
@@ -22,7 +21,6 @@ const CATEGORIES = [
   "Limpieza de Freezer",
   "Delivery",
   "Pago a Personal",
-  "Varios",
 ] as const;
 
 type Category = (typeof CATEGORIES)[number];
@@ -41,7 +39,7 @@ interface ExpenseRow {
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
-export default function ExpensesAdmin() {
+export default function ExpensesCandies() {
   // ====== Filtros por fecha ======
   const [fromDate, setFromDate] = useState<string>(
     format(startOfMonth(new Date()), "yyyy-MM-dd")
@@ -74,12 +72,15 @@ export default function ExpensesAdmin() {
   const [eStatus, setEStatus] = useState<Status>("PENDIENTE");
   const [eNotes, setENotes] = useState<string>("");
 
-  // ====== Cargar gastos (colección de Pollo) ======
+  // ====== Cargar gastos ======
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const qE = query(collection(db, "expenses"), orderBy("date", "desc"));
+        const qE = query(
+          collection(db, "expenses_candies"),
+          orderBy("date", "desc")
+        );
         const snap = await getDocs(qE);
         const list: ExpenseRow[] = [];
         snap.forEach((d) => {
@@ -152,7 +153,7 @@ export default function ExpensesAdmin() {
     }
 
     try {
-      const ref = await addDoc(collection(db, "expenses"), {
+      const ref = await addDoc(collection(db, "expenses_candies"), {
         date: dateStr,
         category,
         description: description.trim(),
@@ -220,7 +221,7 @@ export default function ExpensesAdmin() {
     }
 
     try {
-      await updateDoc(doc(db, "expenses", editingId), {
+      await updateDoc(doc(db, "expenses_candies", editingId), {
         date: eDate,
         category: eCategory,
         description: eDescription.trim(),
@@ -255,14 +256,14 @@ export default function ExpensesAdmin() {
   const handleDelete = async (r: ExpenseRow) => {
     const ok = confirm(`¿Eliminar el gasto "${r.description}"?`);
     if (!ok) return;
-    await deleteDoc(doc(db, "expenses", r.id));
+    await deleteDoc(doc(db, "expenses_candies", r.id));
     setRows((prev) => prev.filter((x) => x.id !== r.id));
     setMsg("🗑️ Gasto borrado");
   };
 
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Gastos (Pollo)</h2>
+      <h2 className="text-2xl font-bold mb-3">Gastos (Dulces)</h2>
 
       {/* ===== Filtros ===== */}
       <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap items-end gap-3 text-sm">

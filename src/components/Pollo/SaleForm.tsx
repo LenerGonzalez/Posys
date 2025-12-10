@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import { collection, addDoc, getDocs, Timestamp } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { format } from "date-fns";
-import { Role } from "../apis/apis";
+import { Role } from "../../apis/apis";
 
 interface Product {
   id: string;

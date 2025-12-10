@@ -11,13 +11,13 @@ import {
   doc,
   addDoc, // <-- NUEVO: para crear venta en salesV2
 } from "firebase/firestore";
-import { db } from "../firebase";
-import { newBatch, markBatchAsPaid } from "../Services/inventory";
+import { db } from "../../firebase";
+import { newBatch, markBatchAsPaid } from "../../Services/inventory";
 import { Timestamp } from "firebase/firestore";
 import { format, startOfMonth, endOfMonth } from "date-fns";
-import { roundQty } from "../Services/decimal";
-import RefreshButton from "../components/common/RefreshButton";
-import useManualRefresh from "../hooks/useManualRefresh";
+import { roundQty } from "../../Services/decimal";
+import RefreshButton from "../common/RefreshButton";
+import useManualRefresh from "../../hooks/useManualRefresh";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 

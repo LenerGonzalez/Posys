@@ -1,15 +1,15 @@
 // DashboardAdmin.tsx - Vista exclusiva para administradores
 import React from "react";
-import VentaForm from "./SaleForm";
-import InventarioForm from "./InventarioForm";
-import CierreVentas from "./CierreVentas";
+import VentaForm from "../../components/Pollo/SaleForm";
+import InventarioForm from "../../components/Pollo/InventarioForm";
+import CierreVentas from "../../components/Pollo/CierreVentas";
 import PDFGenerator from "./PDFGenerator";
-import Sidebar from "./Sidebar";
-import ProductForm from "./ProductForm";
-import SaleForm from "./SaleForm";
-import { Role } from "../apis/apis";
-import HistorialCierres from "./HistorialCierres";
-import UserRegisterForm from "./UserRegisterForm";
+import Sidebar from "../../components/Pollo/Sidebar";
+import ProductForm from "../../components/Pollo/ProductForm";
+import SaleForm from "../../components/Pollo/SaleForm";
+import { Role } from "../../apis/apis";
+import HistorialCierres from "../../components/Pollo/HistorialCierres";
+import UserRegisterForm from "../UserRegisterForm";
 
 export default function DashboardAdmin(): React.JSX.Element {
   return (

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import { addDoc, collection } from "firebase/firestore";
 
 const InventarioForm = () => {

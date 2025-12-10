@@ -14,13 +14,26 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 
-type Role = "admin" | "vendedor_pollo" | "vendedor_ropa" | "vendedor";
+type Role =
+  | "admin"
+  | "vendedor_pollo"
+  | "vendedor_ropa"
+  | "vendedor_dulces"
+  | "vendedor"; // compatibilidad vieja
 
 interface UserRow {
   id: string; // uid
   email: string;
   name: string;
   role: Role;
+  sellerCandyId?: string; // id del vendedor (sellers_candies) si es vendedor_dulces
+}
+
+interface SellerCandy {
+  id: string;
+  name: string;
+  branchLabel: string;
+  commissionPercent: number;
 }
 
 export default function UserRegisterForm() {
@@ -32,6 +45,9 @@ export default function UserRegisterForm() {
   const [role, setRole] = useState<Role>("vendedor_pollo");
   const [message, setMessage] = useState("");
 
+  // vendedor de dulces asignado al crear
+  const [sellerCandyIdCreate, setSellerCandyIdCreate] = useState<string>("");
+
   // listado / tabla
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -39,15 +55,25 @@ export default function UserRegisterForm() {
   // edición en tabla
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editRole, setEditRole] = useState<Role>("vendedor_pollo");
+  const [editSellerCandyId, setEditSellerCandyId] = useState<string>("");
 
   // modal crear
   const [showCreateModal, setShowCreateModal] = useState(false);
 
+  // catálogo de vendedores de dulces
+  const [sellersCandy, setSellersCandy] = useState<SellerCandy[]>([]);
+
   const normalizeRole = (r?: string): Role => {
     if (!r) return "vendedor_pollo";
-    if (r === "vendedor") return "vendedor_pollo"; // compat
-    if (r === "admin" || r === "vendedor_pollo" || r === "vendedor_ropa")
+    if (r === "vendedor") return "vendedor_pollo"; // compat antigua
+    if (
+      r === "admin" ||
+      r === "vendedor_pollo" ||
+      r === "vendedor_ropa" ||
+      r === "vendedor_dulces"
+    ) {
       return r;
+    }
     return "vendedor_pollo";
   };
 
@@ -62,14 +88,35 @@ export default function UserRegisterForm() {
         email: it.email ?? "",
         name: it.name ?? "",
         role: normalizeRole(it.role),
+        sellerCandyId: it.sellerCandyId ?? "",
       });
     });
     setUsers(rows);
     setLoadingList(false);
   };
 
+  const loadSellersCandy = async () => {
+    try {
+      const snap = await getDocs(collection(db, "sellers_candies"));
+      const list: SellerCandy[] = [];
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        list.push({
+          id: d.id,
+          name: x.name ?? "(sin nombre)",
+          branchLabel: x.branch ?? "",
+          commissionPercent: Number(x.commissionPercent ?? 0),
+        });
+      });
+      setSellersCandy(list);
+    } catch (e) {
+      console.error("Error cargando sellers_candies:", e);
+    }
+  };
+
   useEffect(() => {
     loadUsers();
+    loadSellersCandy();
   }, []);
 
   const resetCreateForm = () => {
@@ -77,6 +124,7 @@ export default function UserRegisterForm() {
     setEmail("");
     setPassword("");
     setRole("vendedor_pollo");
+    setSellerCandyIdCreate("");
   };
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -109,10 +157,15 @@ export default function UserRegisterForm() {
       );
 
       // 3) Guardar su perfil en Firestore (colección users)
+      const finalRole = normalizeRole(role);
+      const sellerCandyIdToSave =
+        finalRole === "vendedor_dulces" ? sellerCandyIdCreate || "" : "";
+
       await setDoc(doc(collection(db, "users"), userCred.user.uid), {
         email,
         name: name.trim(),
-        role: normalizeRole(role),
+        role: finalRole,
+        sellerCandyId: sellerCandyIdToSave,
       });
 
       // 4) Cerrar sesión de la instancia secundaria y limpiarla
@@ -120,9 +173,14 @@ export default function UserRegisterForm() {
       await deleteApp(secondaryApp);
 
       // 5) Refrescar UI localmente
-      const finalRole = normalizeRole(role);
       setUsers((prev) => [
-        { id: userCred.user.uid, email, name: name.trim(), role: finalRole },
+        {
+          id: userCred.user.uid,
+          email,
+          name: name.trim(),
+          role: finalRole,
+          sellerCandyId: sellerCandyIdToSave,
+        },
         ...prev,
       ]);
       setMessage("✅ Usuario creado correctamente.");
@@ -138,20 +196,33 @@ export default function UserRegisterForm() {
   const startEdit = (u: UserRow) => {
     setEditingId(u.id);
     setEditRole(normalizeRole(u.role));
+    setEditSellerCandyId(u.sellerCandyId || "");
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setEditRole("vendedor_pollo");
+    setEditSellerCandyId("");
   };
 
   const saveEdit = async () => {
     if (!editingId) return;
     const ref = doc(db, "users", editingId);
     const finalRole = normalizeRole(editRole);
-    await updateDoc(ref, { role: finalRole });
+    const sellerCandyIdToSave =
+      finalRole === "vendedor_dulces" ? editSellerCandyId || "" : "";
+
+    await updateDoc(ref, {
+      role: finalRole,
+      sellerCandyId: sellerCandyIdToSave,
+    });
+
     setUsers((prev) =>
-      prev.map((x) => (x.id === editingId ? { ...x, role: finalRole } : x))
+      prev.map((x) =>
+        x.id === editingId
+          ? { ...x, role: finalRole, sellerCandyId: sellerCandyIdToSave }
+          : x
+      )
     );
     cancelEdit();
   };
@@ -169,20 +240,28 @@ export default function UserRegisterForm() {
         ? "admin"
         : r === "vendedor_ropa"
         ? "vendedor_ropa"
-        : r === "vendedor_pollo" || r === "vendedor"
-        ? "vendedor_pollo"
-        : r;
+        : r === "vendedor_dulces"
+        ? "vendedor_dulces"
+        : "vendedor_pollo";
 
     const cls =
       label === "admin"
         ? "bg-blue-100 text-blue-700"
         : label === "vendedor_ropa"
         ? "bg-indigo-100 text-indigo-700"
+        : label === "vendedor_dulces"
+        ? "bg-pink-100 text-pink-700"
         : "bg-green-100 text-green-700";
+
     return (
       <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>
     );
   };
+
+  const sellerLabel = (s: SellerCandy) =>
+    `${s.name} — ${
+      s.branchLabel || "Sin sucursal"
+    } — ${s.commissionPercent.toFixed(2)}%`;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -225,23 +304,62 @@ export default function UserRegisterForm() {
             ) : (
               users.map((u) => {
                 const isEditing = editingId === u.id;
+                const isVendDulcesRow =
+                  (isEditing ? editRole : u.role) === "vendedor_dulces";
+
                 return (
                   <tr key={u.id} className="text-center">
                     <td className="p-2 border">{u.name || "—"}</td>
                     <td className="p-2 border">{u.email}</td>
                     <td className="p-2 border">
                       {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded"
-                          value={editRole}
-                          onChange={(e) => setEditRole(e.target.value as Role)}
-                        >
-                          <option value="admin">Admin</option>
-                          <option value="vendedor_pollo">Vendedor Pollo</option>
-                          <option value="vendedor_ropa">Vendedor Ropa</option>
-                        </select>
+                        <div className="space-y-2">
+                          <select
+                            className="w-full border p-1 rounded"
+                            value={editRole}
+                            onChange={(e) =>
+                              setEditRole(e.target.value as Role)
+                            }
+                          >
+                            <option value="admin">Admin</option>
+                            <option value="vendedor_pollo">
+                              Vendedor Pollo
+                            </option>
+                            <option value="vendedor_ropa">Vendedor Ropa</option>
+                            <option value="vendedor_dulces">
+                              Vendedor Dulces
+                            </option>
+                          </select>
+
+                          {editRole === "vendedor_dulces" && (
+                            <select
+                              className="w-full border p-1 rounded text-xs"
+                              value={editSellerCandyId}
+                              onChange={(e) =>
+                                setEditSellerCandyId(e.target.value)
+                              }
+                            >
+                              <option value="">
+                                Selecciona vendedor de dulces
+                              </option>
+                              {sellersCandy.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {sellerLabel(s)}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                       ) : (
-                        roleBadge(u.role)
+                        <>
+                          {roleBadge(u.role)}
+                          {isVendDulcesRow && u.sellerCandyId && (
+                            <div className="mt-1 text-[11px] text-gray-500">
+                              {/* Solo texto pequeño informativo, sin cambiar columnas */}
+                              Vendedor asignado
+                            </div>
+                          )}
+                        </>
                       )}
                     </td>
                     <td className="p-2 border space-x-2">
@@ -366,8 +484,31 @@ export default function UserRegisterForm() {
                   <option value="admin">Admin</option>
                   <option value="vendedor_pollo">Vendedor Pollo</option>
                   <option value="vendedor_ropa">Vendedor Ropa</option>
+                  <option value="vendedor_dulces">Vendedor Dulces</option>
                 </select>
               </div>
+
+              {role === "vendedor_dulces" && (
+                <div className="space-y-1">
+                  <label className="block text-sm font-semibold text-gray-700">
+                    Vendedor (dulces)
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded text-sm"
+                    value={sellerCandyIdCreate}
+                    onChange={(e) => setSellerCandyIdCreate(e.target.value)}
+                  >
+                    <option value="">
+                      Selecciona vendedor de dulces asignado
+                    </option>
+                    {sellersCandy.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {sellerLabel(s)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2">
                 <button

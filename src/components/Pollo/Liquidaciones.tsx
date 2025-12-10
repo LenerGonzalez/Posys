@@ -3,9 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   allocationsByBatchInRange,
   markBatchAsPaid,
-} from "../Services/inventory";
+} from "../../Services/inventory";
 import { doc, getDoc } from "firebase/firestore";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 
 const money = (n: number) => `C$${(Number(n) || 0).toFixed(2)}`;

@@ -1,6 +1,6 @@
 // src/components/HistorialCierres.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { db } from "../firebase";
+import { db } from "../../firebase";
 import {
   collection,
   deleteDoc,

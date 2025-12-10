@@ -5,7 +5,7 @@ import { signInWithEmailAndPassword } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 
-type AllowedRole = "admin" | "vendedor_pollo" | "vendedor_ropa";
+type AllowedRole = "admin" | "vendedor_pollo" | "vendedor_ropa" | "vendedor_dulces";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -22,6 +22,7 @@ export default function Login() {
     if (role === "admin") return navigate("/admin");
     if (role === "vendedor_pollo") return navigate("/admin/salesV2");
     if (role === "vendedor_ropa") return navigate("/admin/salesClothes");
+    if (role === "vendedor_dulces") return navigate("/admin/salesCandies");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -59,6 +60,7 @@ export default function Login() {
         "admin",
         "vendedor_pollo",
         "vendedor_ropa",
+        "vendedor_dulces",
       ];
       if (!allowed.includes(role as AllowedRole)) {
         setMsg("Rol no válido. Consulta al administrador.");
