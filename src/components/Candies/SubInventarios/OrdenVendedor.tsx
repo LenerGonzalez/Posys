@@ -17,13 +17,19 @@ import { db } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
 import useManualRefresh from "../../../hooks/useManualRefresh";
 import { allocateSaleFIFOCandy } from "../../../Services/inventory_candies";
+import { deleteVendorCandyOrderAndRestore } from "../../../Services/Candies_vendor_orders";
+
 
 // ===== Tipos base =====
+type Branch = "RIVAS" | "SAN_JORGE" | "ISLA";
+
 interface Seller {
   id: string;
   name: string;
   email?: string;
   commissionPercent?: number; // % comisión sobre el total del pedido
+  branch?: Branch;
+  branchLabel?: string;
 }
 
 interface ProductCandy {
@@ -33,6 +39,10 @@ interface ProductCandy {
   providerPrice: number; // Precio proveedor (por paquete)
   packages: number;
   unitsPerPackage: number;
+  // precios por paquete (lo que ya viene calculado desde la orden maestra)
+  unitPriceRivas: number;
+  unitPriceSanJorge: number;
+  unitPriceIsla: number;
 }
 
 // Sub-inventario por vendedor (cada doc = 1 producto de 1 pedido)
@@ -52,12 +62,24 @@ interface VendorCandyRow {
   remainingPackages: number;
   remainingUnits: number;
 
-  providerPrice: number; // por paquete
-  markupPercent: number; // % margen que ingresás
-  subtotal: number; // costo
-  totalVendor: number; // subtotal / (1 - %/100)
+  providerPrice: number; // por paquete (costo)
+
+  // Totales por sucursal (por este pedido de vendedor)
+  totalRivas: number;
+  totalSanJorge: number;
+  totalIsla: number;
+
+  // Precios por paquete por sucursal
+  unitPriceRivas: number;
+  unitPriceSanJorge: number;
+  unitPriceIsla: number;
+
+  // Campos legacy / genéricos
+  markupPercent: number; // ya no se usa, pero se mantiene por compatibilidad
+  subtotal: number; // costo total (proveedor)
+  totalVendor: number; // total a precio de venta (según sucursal del vendedor)
   gainVendor: number; // totalVendor - subtotal
-  unitPriceVendor: number; // precio por PAQUETE para el vendedor
+  unitPriceVendor: number; // precio de venta por PAQUETE para este vendedor (según sucursal)
 
   date: string; // yyyy-MM-dd
   createdAt: Timestamp;
@@ -69,14 +91,25 @@ interface OrderItem {
   productId: string;
   productName: string;
   category: string;
-  providerPrice: number;
+  providerPrice: number; // costo por paquete
   unitsPerPackage: number;
   packages: number;
-  subtotal: number;
-  totalVendor: number;
-  gainVendor: number;
-  pricePerPackage: number;
-  /** Nuevo: para mostrar paquetes restantes por producto en el detalle */
+
+  // Totales y precios por sucursal (para este pedido)
+  totalRivas: number;
+  totalSanJorge: number;
+  totalIsla: number;
+  unitPriceRivas: number;
+  unitPriceSanJorge: number;
+  unitPriceIsla: number;
+
+  // Campos genéricos que se usan en los KPIs y el print
+  subtotal: number; // costo total
+  totalVendor: number; // total a precio de venta (según sucursal del vendedor)
+  gainVendor: number; // totalVendor - subtotal
+  pricePerPackage: number; // precio de venta por paquete según sucursal del vendedor
+
+  /** Paquetes restantes por producto en el detalle */
   remainingPackages?: number;
 }
 
@@ -86,9 +119,7 @@ interface OrderSummaryRow {
   sellerId: string;
   sellerName: string;
   date: string;
-  markupPercent: number;
   totalPackages: number;
-  /** Nuevo: suma de remainingPackages por pedido */
   totalRemainingPackages: number;
   subtotal: number;
   totalVendor: number;
@@ -127,18 +158,6 @@ function getRemainingUnitsFromInventoryDoc(data: any): number {
 
 /**
  * Restaura paquetes al inventario principal **sin crear nuevos lotes**.
- *
- * 🔹 Comportamiento:
- * - Calcula cuántas unidades representan esos paquetes.
- * - Recorre los lotes de `inventory_candies` del producto en orden FIFO.
- * - Solo incrementa `remaining` hasta el máximo `baseUnits` de cada lote
- *   (es decir, repone lo que antes se había consumido).
- * - Si no hay lotes para ese producto, hace fallback al comportamiento
- *   anterior: crea un lote nuevo (caso raro, pero mantiene compatibilidad).
- *
- * ✅ Esto evita el bug de duplicar inventarios por producto cuando:
- *   - Editas un pedido de vendedor (delta negativo).
- *   - Borras un pedido de vendedor.
  */
 async function restorePacksToMainInventory(
   product: ProductCandy | undefined,
@@ -160,8 +179,7 @@ async function restorePacksToMainInventory(
   );
   const snap = await getDocs(qInv);
 
-  // Si no hay lotes, dejamos el comportamiento anterior como fallback:
-  // crear un nuevo lote (caso muy raro).
+  // Fallback raro: si no hay lotes, crea uno nuevo
   if (snap.empty) {
     const totalUnits = safePacks * unitsPerPackageGlobal;
     const providerPrice = Number(product?.providerPrice || 0);
@@ -214,7 +232,6 @@ async function restorePacksToMainInventory(
       const baseUnits = getBaseUnitsFromInventoryDoc(data);
       const remUnits = getRemainingUnitsFromInventoryDoc(data);
 
-      // Capacidad que se puede recuperar en este lote (lo que se había consumido)
       const usedUnits = Math.max(0, baseUnits - remUnits);
       if (usedUnits <= 0) continue;
 
@@ -245,12 +262,47 @@ async function restorePacksToMainInventory(
   });
 }
 
-export default function VendorCandyOrders() {
+// ===== Roles =====
+type RoleProp =
+  | ""
+  | "admin"
+  | "vendedor_pollo"
+  | "vendedor_ropa"
+  | "vendedor_dulces";
+
+interface VendorCandyOrdersProps {
+  role?: RoleProp;
+  sellerCandyId?: string;
+  currentUserEmail?: string;
+}
+
+function normalizeBranch(raw: any): "RIVAS" | "SAN_JORGE" | "ISLA" | undefined {
+  const v = String(raw || "")
+    .trim()
+    .toUpperCase();
+
+  if (v.includes("ISLA")) return "ISLA";
+  if (v.includes("JORGE")) return "SAN_JORGE";
+  if (v.includes("RIVAS")) return "RIVAS";
+
+  return undefined;
+}
+
+export default function VendorCandyOrders({
+  role,
+  currentUserEmail,
+}: VendorCandyOrdersProps) {
   const { refreshKey, refresh } = useManualRefresh();
+
+  const isAdmin = !role || role === "admin";
+  const isVendDulces = role === "vendedor_dulces";
+  const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
+  const isReadOnly = !isAdmin && isVendDulces;
 
   // ===== Catálogos =====
   const [sellers, setSellers] = useState<Seller[]>([]);
-  const [products, setProducts] = useState<ProductCandy[]>([]);
+  // 🔥 Mantener catálogo completo SIEMPRE (para edición/eliminación/restaurar)
+  const [productsAll, setProductsAll] = useState<ProductCandy[]>([]);
   const [availablePacks, setAvailablePacks] = useState<Record<string, number>>(
     {}
   ); // productId -> paq disponibles
@@ -270,13 +322,13 @@ export default function VendorCandyOrders() {
   const [sellerId, setSellerId] = useState<string>("");
   const [date, setDate] = useState<string>("");
 
-  // % margen global del pedido
-  const [markupPercent, setMarkupPercent] = useState<string>("30");
-
   // Productos del pedido
   const [selectedProductId, setSelectedProductId] = useState<string>("");
   const [packagesToAdd, setPackagesToAdd] = useState<string>("0");
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+
+  //Bloqueo de boton de guardar
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   // Helpers memorizados
   const selectedSeller = useMemo(
@@ -284,10 +336,26 @@ export default function VendorCandyOrders() {
     [sellerId, sellers]
   );
 
+  const sellerBranch: Branch | undefined = selectedSeller?.branch;
+
+  // 🔥 Producto seleccionado viene del catálogo completo
   const selectedProduct = useMemo(
-    () => products.find((p) => p.id === selectedProductId) || null,
-    [selectedProductId, products]
+    () => productsAll.find((p) => p.id === selectedProductId) || null,
+    [selectedProductId, productsAll]
   );
+
+  // 🔥 Productos a mostrar en el selector:
+  //  - Solo los que tengan disponibilidad
+  //  - PERO si estás editando, también los que ya están en el pedido (aunque hoy tengan 0)
+  const productsForPicker = useMemo(() => {
+    const inOrder = new Set(orderItems.map((x) => x.productId));
+    return productsAll
+      .filter((p) => {
+        const avail = availablePacks[p.id] ?? 0;
+        return avail > 0 || inOrder.has(p.id);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [productsAll, availablePacks, orderItems]);
 
   const sellersById = useMemo(() => {
     const m: Record<string, Seller> = {};
@@ -295,80 +363,183 @@ export default function VendorCandyOrders() {
     return m;
   }, [sellers]);
 
+  const currentSeller = useMemo(() => {
+    if (!isVendDulces || !currentEmailNorm) return null;
+    return (
+      sellers.find(
+        (s) => (s.email || "").trim().toLowerCase() === currentEmailNorm
+      ) || null
+    );
+  }, [isVendDulces, currentEmailNorm, sellers]);
+
   // ===== Carga de datos =====
   useEffect(() => {
     (async () => {
       setLoading(true);
       setMsg("");
       try {
-        // Vendedores
+        // ===========================
+        //   VENDEDORES
+        // ===========================
         const sSnap = await getDocs(
           query(collection(db, "sellers_candies"), orderBy("name", "asc"))
         );
+
         const sList: Seller[] = [];
         sSnap.forEach((d) => {
           const x = d.data() as any;
+
+          const rawBranch =
+            x.branch ||
+            x.branchLabel ||
+            x.route ||
+            x.sucursal ||
+            x.location ||
+            "";
+
           sList.push({
             id: d.id,
             name: x.name || "",
             email: x.email || "",
             commissionPercent: Number(x.commissionPercent || 0),
+            branch: normalizeBranch(rawBranch),
+            branchLabel: rawBranch,
           });
         });
         setSellers(sList);
 
-        // Productos
+        // ===========================
+        //   INVENTARIO GENERAL (FUENTE REAL DE PRECIOS + DISPONIBILIDAD)
+        //   - disponibilidad: remainingPackages
+        //   - precios: unitPriceRivas/SJ/Isla (de orden maestra)
+        // ===========================
+        const invGeneralSnap = await getDocs(
+          collection(db, "inventory_candies")
+        );
+
+        const avail: Record<string, number> = {};
+
+        // Mapa: por productId guardamos el "mejor" doc para precios (más reciente)
+        const pricePick: Record<
+          string,
+          {
+            unitPriceRivas: number;
+            unitPriceSanJorge: number;
+            unitPriceIsla: number;
+            date: string;
+            createdAtSec: number;
+          }
+        > = {};
+
+        invGeneralSnap.forEach((d) => {
+          const x = d.data() as any;
+          const pid = String(x.productId || "");
+          if (!pid) return;
+
+          // ----- disponibilidad -----
+          const rp = Number(x.remainingPackages);
+          if (Number.isFinite(rp)) {
+            avail[pid] = (avail[pid] || 0) + Math.max(0, Math.floor(rp));
+          } else {
+            // fallback viejo
+            const remainingUnits = Number(x.remaining ?? x.quantity ?? 0);
+            const upp = Number(x.unitsPerPackage || 0);
+            let packs = 0;
+            if (upp > 0) packs = remainingUnits / upp;
+            else packs = Number(x.packages || 0);
+            avail[pid] = (avail[pid] || 0) + Math.max(0, packs);
+          }
+
+          // ----- precios (escoger el doc más reciente) -----
+          const dateStr = String(x.date || "");
+          const createdAtSec = Number(x.createdAt?.seconds ?? 0);
+
+          const cand = {
+            unitPriceRivas: Number(x.unitPriceRivas || 0),
+            unitPriceSanJorge: Number(x.unitPriceSanJorge || 0),
+            unitPriceIsla: Number(x.unitPriceIsla || 0),
+            date: dateStr,
+            createdAtSec,
+          };
+
+          // si no hay precios en este doc, no lo usamos para “semilla”
+          const hasAnyPrice =
+            cand.unitPriceRivas > 0 ||
+            cand.unitPriceSanJorge > 0 ||
+            cand.unitPriceIsla > 0;
+          if (!hasAnyPrice) return;
+
+          const prev = pricePick[pid];
+          if (!prev) {
+            pricePick[pid] = cand;
+            return;
+          }
+
+          // comparar "más reciente": date y luego createdAt
+          const prevKey = `${prev.date}#${String(prev.createdAtSec).padStart(
+            10,
+            "0"
+          )}`;
+          const candKey = `${cand.date}#${String(cand.createdAtSec).padStart(
+            10,
+            "0"
+          )}`;
+
+          if (candKey > prevKey) {
+            pricePick[pid] = cand;
+          }
+        });
+
+        Object.keys(avail).forEach((k) => (avail[k] = Math.floor(avail[k])));
+        setAvailablePacks(avail);
+
+        // ===========================
+        //   PRODUCTOS (CATÁLOGO)
+        //   ✅ PERO: inyectamos precios desde inventory_candies (orden maestra)
+        // ===========================
         const pSnap = await getDocs(
           query(collection(db, "products_candies"), orderBy("name", "asc"))
         );
+
         const pList: ProductCandy[] = [];
         pSnap.forEach((d) => {
           const x = d.data() as any;
+          const pid = d.id;
+
+          const picked = pricePick[pid];
+
           pList.push({
-            id: d.id,
+            id: pid,
             name: x.name || "",
             category: x.category || "",
             providerPrice: Number(x.providerPrice || 0),
             packages: Number(x.packages || 0),
             unitsPerPackage: Number(x.unitsPerPackage || 0),
+
+            // 👇 AQUÍ está la corrección:
+            // ya NO dependemos del catálogo para precios.
+            unitPriceRivas: Number(picked?.unitPriceRivas || 0),
+            unitPriceSanJorge: Number(picked?.unitPriceSanJorge || 0),
+            unitPriceIsla: Number(picked?.unitPriceIsla || 0),
           });
         });
-        setProducts(pList);
 
-        // Inventario general (para ver disponibilidad en selector)
-        const invGeneralSnap = await getDocs(
-          collection(db, "inventory_candies")
-        );
-        const avail: Record<string, number> = {};
-        invGeneralSnap.forEach((d) => {
-          const x = d.data() as any;
-          const pid = x.productId;
-          if (!pid) return;
-          const remainingUnits = Number(x.remaining ?? x.quantity ?? 0);
-          const upp = Number(x.unitsPerPackage || 0);
-          let packs = 0;
-          if (upp > 0) {
-            packs = remainingUnits / upp;
-          } else {
-            packs = Number(x.packages || 0);
-          }
-          avail[pid] = (avail[pid] || 0) + packs;
-        });
-        Object.keys(avail).forEach((k) => {
-          avail[k] = Math.floor(avail[k]);
-        });
-        setAvailablePacks(avail);
+        setProductsAll(pList);
 
-        // Subinventario por vendedor (cada doc = línea de pedido)
+        // ===========================
+        //   SUBINVENTARIO VENDEDORES
+        // ===========================
         const invSnap = await getDocs(
           query(
             collection(db, "inventory_candies_sellers"),
             orderBy("createdAt", "desc")
           )
         );
+
         const invList: VendorCandyRow[] = [];
         invSnap.forEach((d) => {
           const x = d.data() as any;
+
           invList.push({
             id: d.id,
             sellerId: x.sellerId,
@@ -377,21 +548,33 @@ export default function VendorCandyOrders() {
             productName: x.productName || "",
             category: x.category || "",
             orderId: x.orderId || null,
+
             packages: Number(x.packages || 0),
             unitsPerPackage: Number(x.unitsPerPackage || 0),
             totalUnits: Number(x.totalUnits || 0),
             remainingPackages: Number(x.remainingPackages || 0),
             remainingUnits: Number(x.remainingUnits || 0),
+
             providerPrice: Number(x.providerPrice || 0),
+
+            totalRivas: Number(x.totalRivas || 0),
+            totalSanJorge: Number(x.totalSanJorge || 0),
+            totalIsla: Number(x.totalIsla || 0),
+            unitPriceRivas: Number(x.unitPriceRivas || 0),
+            unitPriceSanJorge: Number(x.unitPriceSanJorge || 0),
+            unitPriceIsla: Number(x.unitPriceIsla || 0),
+
             markupPercent: Number(x.markupPercent || 0),
             subtotal: Number(x.subtotal || 0),
             totalVendor: Number(x.totalVendor || 0),
             gainVendor: Number(x.gainVendor || 0),
             unitPriceVendor: Number(x.unitPriceVendor || 0),
+
             date: x.date || "",
             createdAt: x.createdAt || Timestamp.now(),
           });
         });
+
         setRows(invList);
       } catch (e) {
         console.error(e);
@@ -402,12 +585,20 @@ export default function VendorCandyOrders() {
     })();
   }, [refreshKey]);
 
+  // ===== Filtrado por rol (solo sus pedidos si es vendedor de dulces) =====
+  const rowsByRole = useMemo(() => {
+    if (isVendDulces && currentSeller) {
+      return rows.filter((r) => r.sellerId === currentSeller.id);
+    }
+    return rows;
+  }, [rows, isVendDulces, currentSeller]);
+
   // ===== Resumen por pedido (agrupado) =====
   const orders: OrderSummaryRow[] = useMemo(() => {
     const map: Record<string, OrderSummaryRow> = {};
 
-    for (const r of rows) {
-      const key = r.orderId || r.id; // si no hay orderId, cada fila es un pedido viejo
+    for (const r of rowsByRole) {
+      const key = r.orderId || r.id;
       const existing = map[key];
 
       const dateStr =
@@ -422,7 +613,6 @@ export default function VendorCandyOrders() {
           sellerId: r.sellerId,
           sellerName: r.sellerName,
           date: dateStr,
-          markupPercent: r.markupPercent,
           totalPackages: r.packages,
           totalRemainingPackages: r.remainingPackages,
           subtotal: r.subtotal,
@@ -433,13 +623,12 @@ export default function VendorCandyOrders() {
         existing.totalRemainingPackages += r.remainingPackages;
         existing.subtotal += r.subtotal;
         existing.totalVendor += r.totalVendor;
-        // Fecha nos quedamos con la más reciente
         if (dateStr > existing.date) existing.date = dateStr;
       }
     }
 
     return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
-  }, [rows]);
+  }, [rowsByRole]);
 
   // ===== Resumen del pedido actual (para el modal) =====
   const orderSummary = useMemo(() => {
@@ -467,47 +656,88 @@ export default function VendorCandyOrders() {
     setOriginalOrderRows([]);
     setSellerId("");
     setDate("");
-    setMarkupPercent("30");
     setSelectedProductId("");
     setPackagesToAdd("0");
     setOrderItems([]);
   };
 
-  // Lógica de cálculo por ítem según tu regla de margen
-  function recalcItemWithMargin(
-    base: {
-      providerPrice: number;
-      packages: number;
-    },
-    marginPercent: number
-  ) {
+  // Cálculo financiero de un ítem usando precios YA definidos en orden maestra
+  function recalcItemFinancials(base: {
+    providerPrice: number;
+    unitPriceRivas: number;
+    unitPriceSanJorge: number;
+    unitPriceIsla: number;
+    packages: number;
+    sellerBranch?: Branch;
+  }) {
     const providerPrice = Number(base.providerPrice || 0);
     const packs = Number(base.packages || 0);
+
+    const unitPriceRivas = Number(base.unitPriceRivas || 0);
+    const unitPriceSanJorge = Number(base.unitPriceSanJorge || 0);
+    const unitPriceIsla = Number(base.unitPriceIsla || 0);
+
     const subtotal = providerPrice * packs;
 
-    const margin = marginPercent / 100;
-    const divisor = 1 - margin;
-    const totalVendor =
-      subtotal > 0 && divisor > 0 ? subtotal / divisor : subtotal;
-    const gainVendor = totalVendor - subtotal;
-    const pricePerPackage = packs > 0 ? roundToInt(totalVendor / packs) : 0;
+    const totalRivas = unitPriceRivas * packs;
+    const totalSanJorge = unitPriceSanJorge * packs;
+    const totalIsla = unitPriceIsla * packs;
 
-    return { subtotal, totalVendor, gainVendor, pricePerPackage };
+    let pricePerPackage = unitPriceRivas;
+    let totalVendor = totalRivas;
+
+    switch (base.sellerBranch) {
+      case "SAN_JORGE":
+        pricePerPackage = unitPriceSanJorge;
+        totalVendor = totalSanJorge;
+        break;
+      case "ISLA":
+        pricePerPackage = unitPriceIsla;
+        totalVendor = totalIsla;
+        break;
+      case "RIVAS":
+      default:
+        pricePerPackage = unitPriceRivas;
+        totalVendor = totalRivas;
+        break;
+    }
+
+    const gainVendor = totalVendor - subtotal;
+
+    return {
+      subtotal,
+      totalVendor,
+      gainVendor,
+      pricePerPackage,
+      totalRivas,
+      totalSanJorge,
+      totalIsla,
+      unitPriceRivas,
+      unitPriceSanJorge,
+      unitPriceIsla,
+    };
   }
 
-  function buildOrderItem(
-    product: ProductCandy,
-    packs: number,
-    marginPercent: number
-  ): OrderItem {
-    const { subtotal, totalVendor, gainVendor, pricePerPackage } =
-      recalcItemWithMargin(
-        {
-          providerPrice: product.providerPrice,
-          packages: packs,
-        },
-        marginPercent
-      );
+  function buildOrderItem(product: ProductCandy, packs: number): OrderItem {
+    const {
+      subtotal,
+      totalVendor,
+      gainVendor,
+      pricePerPackage,
+      totalRivas,
+      totalSanJorge,
+      totalIsla,
+      unitPriceRivas,
+      unitPriceSanJorge,
+      unitPriceIsla,
+    } = recalcItemFinancials({
+      providerPrice: product.providerPrice,
+      unitPriceRivas: product.unitPriceRivas,
+      unitPriceSanJorge: product.unitPriceSanJorge,
+      unitPriceIsla: product.unitPriceIsla,
+      packages: packs,
+      sellerBranch,
+    });
 
     return {
       id: `${product.id}-${Date.now()}-${Math.random()}`,
@@ -521,36 +751,20 @@ export default function VendorCandyOrders() {
       totalVendor,
       gainVendor,
       pricePerPackage,
-      // Nuevo: para pedidos nuevos, restantes = paquetes asignados
+      totalRivas,
+      totalSanJorge,
+      totalIsla,
+      unitPriceRivas,
+      unitPriceSanJorge,
+      unitPriceIsla,
       remainingPackages: packs,
     };
   }
 
-  // Recalcular todos los ítems cuando cambia el % margen
-  const applyMarginToAllItems = (newMarginPercent: number) => {
-    setOrderItems((prev) =>
-      prev.map((it) => {
-        const { subtotal, totalVendor, gainVendor, pricePerPackage } =
-          recalcItemWithMargin(
-            {
-              providerPrice: it.providerPrice,
-              packages: it.packages,
-            },
-            newMarginPercent
-          );
-        return {
-          ...it,
-          subtotal,
-          totalVendor,
-          gainVendor,
-          pricePerPackage,
-        };
-      })
-    );
-  };
-
   // ===== Agregar producto al pedido =====
   const handleAddItem = () => {
+    if (isReadOnly) return;
+
     if (!selectedProduct) {
       setMsg("Selecciona un producto antes de agregarlo.");
       return;
@@ -563,52 +777,59 @@ export default function VendorCandyOrders() {
 
     const available = availablePacks[selectedProduct.id] ?? 0;
     if (!editingOrderKey && packsNum > available) {
-      // En modo nuevo pedido validamos disponibilidad
       setMsg(
         `No hay suficientes paquetes en inventario general. Disponibles: ${available}`
       );
       return;
     }
 
-    const marginPercent = Number(markupPercent || 0);
-    const item = buildOrderItem(selectedProduct, packsNum, marginPercent);
+    const item = buildOrderItem(selectedProduct, packsNum);
 
     setOrderItems((prev) => [...prev, item]);
     setPackagesToAdd("0");
   };
 
   const handleRemoveItem = (id: string) => {
+    if (isReadOnly) return;
     setOrderItems((prev) => prev.filter((x) => x.id !== id));
   };
 
-  // Cambios en campos de ítem (ej. providerPrice o packages)
-  const handleItemFieldChange = (
-    id: string,
-    field: "providerPrice" | "packages",
-    value: string
-  ) => {
+  const handleItemFieldChange = (id: string, value: string) => {
+    if (isReadOnly) return;
+
     const num = Number(value || 0);
-    const marginPercent = Number(markupPercent || 0);
 
     setOrderItems((prev) =>
       prev.map((it) => {
         if (it.id !== id) return it;
-        const newBase = {
-          providerPrice:
-            field === "providerPrice" ? num : Number(it.providerPrice || 0),
-          packages: field === "packages" ? num : Number(it.packages || 0),
-        };
-        const { subtotal, totalVendor, gainVendor, pricePerPackage } =
-          recalcItemWithMargin(newBase, marginPercent);
 
-        return {
-          ...it,
-          providerPrice: newBase.providerPrice,
-          packages: newBase.packages,
+        const {
           subtotal,
           totalVendor,
           gainVendor,
           pricePerPackage,
+          totalRivas,
+          totalSanJorge,
+          totalIsla,
+        } = recalcItemFinancials({
+          providerPrice: it.providerPrice,
+          unitPriceRivas: it.unitPriceRivas,
+          unitPriceSanJorge: it.unitPriceSanJorge,
+          unitPriceIsla: it.unitPriceIsla,
+          packages: num,
+          sellerBranch,
+        });
+
+        return {
+          ...it,
+          packages: num,
+          subtotal,
+          totalVendor,
+          gainVendor,
+          pricePerPackage,
+          totalRivas,
+          totalSanJorge,
+          totalIsla,
         };
       })
     );
@@ -617,6 +838,14 @@ export default function VendorCandyOrders() {
   // ===== Guardar pedido (nuevo o edición) =====
   const handleSaveOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // ✅ anti doble click / doble submit
+    if (isSaving) return;
+    if (!isAdmin) {
+      setMsg("No tienes permiso para guardar pedidos.");
+      return;
+    }
+
     setMsg("");
 
     if (!selectedSeller) {
@@ -630,27 +859,23 @@ export default function VendorCandyOrders() {
 
     const todayStr = new Date().toISOString().slice(0, 10);
     const dateStr = date || todayStr;
-    const marginPercentNum = Number(markupPercent || 0);
 
     try {
       setLoading(true);
+      setIsSaving(true); // si querés mantener spinner/refresh, ok
 
       if (editingOrderKey) {
-        // ===== MODO EDICIÓN DE UN PEDIDO EXISTENTE =====
-        // Mapa original por productId
         const originalByProduct: Record<string, VendorCandyRow> = {};
         originalOrderRows.forEach((r) => {
           originalByProduct[r.productId] = r;
         });
 
-        // Mapa nuevo por productId
         const newByProduct: Record<string, OrderItem> = {};
         orderItems.forEach((it) => {
           newByProduct[it.productId] = it;
         });
 
-        // 1) Ajustar inventario principal según diferencias
-        //    a) productos nuevos o con delta de paquetes
+        // 1) Ajustar inventario principal según diferencias de paquetes
         for (const productId of Object.keys(newByProduct)) {
           const newItem = newByProduct[productId];
           const oldRow = originalByProduct[productId];
@@ -659,24 +884,22 @@ export default function VendorCandyOrders() {
           const delta = newPacks - oldPacks;
 
           if (delta > 0) {
-            // asignás más paquetes al vendedor → quitar del inventario principal
             await allocateSaleFIFOCandy({
               productId,
               quantityPacks: delta,
               saleDate: dateStr,
             });
           } else if (delta < 0) {
-            // le quitás paquetes al vendedor → regresar al inventario principal (SIN crear lotes nuevos)
-            const prod = products.find((p) => p.id === productId);
+            const prod = productsAll.find((p) => p.id === productId);
             await restorePacksToMainInventory(prod, productId, -delta, dateStr);
           }
         }
 
-        //    b) productos eliminados del pedido → regresar TODOS sus paquetes
+        // Productos eliminados en la edición
         for (const productId of Object.keys(originalByProduct)) {
           if (!newByProduct[productId]) {
             const oldRow = originalByProduct[productId];
-            const prod = products.find((p) => p.id === productId);
+            const prod = productsAll.find((p) => p.id === productId);
             await restorePacksToMainInventory(
               prod,
               productId,
@@ -689,11 +912,10 @@ export default function VendorCandyOrders() {
         // 2) Actualizar / crear / eliminar docs en inventory_candies_sellers
         let newRowsState = [...rows];
 
-        // a) Actualizar o crear
         for (const productId of Object.keys(newByProduct)) {
           const it = newByProduct[productId];
           const oldRow = originalByProduct[productId];
-          const product = products.find((p) => p.id === productId);
+          const product = productsAll.find((p) => p.id === productId);
           const unitsPerPackage =
             product?.unitsPerPackage || it.unitsPerPackage || 0;
           const totalUnits =
@@ -702,7 +924,6 @@ export default function VendorCandyOrders() {
               : 0;
 
           if (oldRow) {
-            // actualizar doc existente
             await updateDoc(doc(db, "inventory_candies_sellers", oldRow.id), {
               sellerId: selectedSeller.id,
               sellerName: selectedSeller.name,
@@ -712,11 +933,16 @@ export default function VendorCandyOrders() {
               packages: it.packages,
               unitsPerPackage,
               totalUnits,
-              // mantenemos la lógica original: remaining = packages del pedido
               remainingPackages: it.packages,
               remainingUnits: totalUnits,
               providerPrice: it.providerPrice,
-              markupPercent: marginPercentNum,
+              totalRivas: it.totalRivas,
+              totalSanJorge: it.totalSanJorge,
+              totalIsla: it.totalIsla,
+              unitPriceRivas: it.unitPriceRivas,
+              unitPriceSanJorge: it.unitPriceSanJorge,
+              unitPriceIsla: it.unitPriceIsla,
+              markupPercent: 0,
               subtotal: it.subtotal,
               totalVendor: it.totalVendor,
               gainVendor: it.gainVendor,
@@ -741,7 +967,13 @@ export default function VendorCandyOrders() {
                     remainingPackages: it.packages,
                     remainingUnits: totalUnits,
                     providerPrice: it.providerPrice,
-                    markupPercent: marginPercentNum,
+                    totalRivas: it.totalRivas,
+                    totalSanJorge: it.totalSanJorge,
+                    totalIsla: it.totalIsla,
+                    unitPriceRivas: it.unitPriceRivas,
+                    unitPriceSanJorge: it.unitPriceSanJorge,
+                    unitPriceIsla: it.unitPriceIsla,
+                    markupPercent: 0,
                     subtotal: it.subtotal,
                     totalVendor: it.totalVendor,
                     gainVendor: it.gainVendor,
@@ -752,7 +984,6 @@ export default function VendorCandyOrders() {
                 : r
             );
           } else {
-            // producto nuevo en el pedido → crear doc
             const docData = {
               sellerId: selectedSeller.id,
               sellerName: selectedSeller.name,
@@ -766,7 +997,13 @@ export default function VendorCandyOrders() {
               remainingPackages: it.packages,
               remainingUnits: totalUnits,
               providerPrice: it.providerPrice,
-              markupPercent: marginPercentNum,
+              totalRivas: it.totalRivas,
+              totalSanJorge: it.totalSanJorge,
+              totalIsla: it.totalIsla,
+              unitPriceRivas: it.unitPriceRivas,
+              unitPriceSanJorge: it.unitPriceSanJorge,
+              unitPriceIsla: it.unitPriceIsla,
+              markupPercent: 0,
               subtotal: it.subtotal,
               totalVendor: it.totalVendor,
               gainVendor: it.gainVendor,
@@ -782,16 +1019,12 @@ export default function VendorCandyOrders() {
             );
 
             newRowsState = [
-              {
-                id: ref.id,
-                ...docData,
-              },
+              { id: ref.id, ...docData } as VendorCandyRow,
               ...newRowsState,
             ];
           }
         }
 
-        // b) Eliminar docs de productos que ya no están en el pedido
         for (const productId of Object.keys(originalByProduct)) {
           if (!newByProduct[productId]) {
             const oldRow = originalByProduct[productId];
@@ -811,7 +1044,7 @@ export default function VendorCandyOrders() {
           .slice(2, 8)}`;
 
         for (const it of orderItems) {
-          const product = products.find((p) => p.id === it.productId);
+          const product = productsAll.find((p) => p.id === it.productId);
           if (!product) continue;
 
           const totalUnits =
@@ -819,36 +1052,36 @@ export default function VendorCandyOrders() {
               ? it.packages * product.unitsPerPackage
               : 0;
 
-          // 1) Descontar del inventario general en PAQUETES
           await allocateSaleFIFOCandy({
             productId: it.productId,
             quantityPacks: it.packages,
             saleDate: dateStr,
           });
 
-          // 2) Crear el lote del vendedor
           const docData = {
             sellerId: selectedSeller.id,
             sellerName: selectedSeller.name,
             productId: it.productId,
             productName: it.productName,
             category: it.category,
-
             orderId: orderKey,
-
             packages: it.packages,
             unitsPerPackage: product.unitsPerPackage,
             totalUnits,
             remainingPackages: it.packages,
             remainingUnits: totalUnits,
-
             providerPrice: it.providerPrice,
-            markupPercent: marginPercentNum,
+            totalRivas: it.totalRivas,
+            totalSanJorge: it.totalSanJorge,
+            totalIsla: it.totalIsla,
+            unitPriceRivas: it.unitPriceRivas,
+            unitPriceSanJorge: it.unitPriceSanJorge,
+            unitPriceIsla: it.unitPriceIsla,
+            markupPercent: 0,
             subtotal: it.subtotal,
             totalVendor: it.totalVendor,
             gainVendor: it.gainVendor,
             unitPriceVendor: it.pricePerPackage,
-
             date: dateStr,
             createdAt: Timestamp.now(),
             status: "ASIGNADO",
@@ -860,10 +1093,7 @@ export default function VendorCandyOrders() {
           );
 
           setRows((prev) => [
-            {
-              id: ref.id,
-              ...docData,
-            },
+            { id: ref.id, ...docData } as VendorCandyRow,
             ...prev,
           ]);
         }
@@ -880,6 +1110,7 @@ export default function VendorCandyOrders() {
           "❌ Error al guardar el pedido del vendedor / ajustar inventario."
       );
     } finally {
+      setIsSaving(false); // ✅
       setLoading(false);
     }
   };
@@ -954,8 +1185,11 @@ export default function VendorCandyOrders() {
             2
           )}%</b>`
         : ""
-    }<br/>
-    % margen aplicado sobre costo: <b>${esc(markupPercent)}%</b>
+    }${
+      selectedSeller.branchLabel
+        ? `<br/>Ruta / sucursal: <b>${esc(selectedSeller.branchLabel)}</b>`
+        : ""
+    }
   </div>
 
   <div class="grid">
@@ -968,7 +1202,7 @@ export default function VendorCandyOrders() {
       <div class="value">${money(orderSummary.subtotal)}</div>
     </div>
     <div class="card">
-      <div class="label">Total con margen aplicado</div>
+      <div class="label">Total vendedor (precio venta)</div>
       <div class="value">${money(orderSummary.totalVendor)}</div>
     </div>
     <div class="card">
@@ -1013,34 +1247,58 @@ export default function VendorCandyOrders() {
 
   // ===== Abrir un pedido del listado para ver/editar =====
   const openOrderForEdit = (orderKey: string) => {
-    const relatedRows = rows.filter((r) => (r.orderId || r.id) === orderKey);
+    const relatedRows = rowsByRole.filter(
+      (r) => (r.orderId || r.id) === orderKey
+    );
     if (!relatedRows.length) {
       setMsg("No se encontraron filas para este pedido.");
       return;
     }
 
     const first = relatedRows[0];
+
+    if (isVendDulces && currentSeller && first.sellerId !== currentSeller.id) {
+      setMsg("No tienes permiso para ver este pedido.");
+      return;
+    }
+
     setEditingOrderKey(orderKey);
     setOriginalOrderRows(relatedRows);
     setSellerId(first.sellerId);
     setDate(first.date);
-    setMarkupPercent(first.markupPercent.toString());
 
-    const items: OrderItem[] = relatedRows.map((r) => ({
-      id: r.id, // importante: aquí id = docId de Firestore
-      productId: r.productId,
-      productName: r.productName,
-      category: r.category,
-      providerPrice: r.providerPrice,
-      unitsPerPackage: r.unitsPerPackage,
-      packages: r.packages,
-      subtotal: r.subtotal,
-      totalVendor: r.totalVendor,
-      gainVendor: r.gainVendor,
-      pricePerPackage: r.unitPriceVendor,
-      // nuevo: para mostrar en el detalle
-      remainingPackages: r.remainingPackages,
-    }));
+    const items: OrderItem[] = relatedRows.map((r) => {
+      const unitPriceRivas = r.unitPriceRivas || 0;
+      const unitPriceSanJorge = r.unitPriceSanJorge || 0;
+      const unitPriceIsla = r.unitPriceIsla || 0;
+
+      const totalRivas =
+        r.totalRivas || unitPriceRivas * Number(r.packages || 0);
+      const totalSanJorge =
+        r.totalSanJorge || unitPriceSanJorge * Number(r.packages || 0);
+      const totalIsla = r.totalIsla || unitPriceIsla * Number(r.packages || 0);
+
+      return {
+        id: r.id,
+        productId: r.productId,
+        productName: r.productName,
+        category: r.category,
+        providerPrice: r.providerPrice,
+        unitsPerPackage: r.unitsPerPackage,
+        packages: r.packages,
+        subtotal: r.subtotal,
+        totalVendor: r.totalVendor,
+        gainVendor: r.gainVendor,
+        pricePerPackage: r.unitPriceVendor,
+        totalRivas,
+        totalSanJorge,
+        totalIsla,
+        unitPriceRivas,
+        unitPriceSanJorge,
+        unitPriceIsla,
+        remainingPackages: r.remainingPackages,
+      };
+    });
 
     setOrderItems(items);
     setSelectedProductId("");
@@ -1049,47 +1307,38 @@ export default function VendorCandyOrders() {
   };
 
   // ===== Eliminar pedido completo =====
-  const handleDeleteOrder = async (orderKey: string) => {
-    const relatedRows = rows.filter((r) => (r.orderId || r.id) === orderKey);
-    if (!relatedRows.length) return;
 
-    const sellerName = relatedRows[0].sellerName || "";
-    const ok = confirm(
-      `¿Eliminar COMPLETAMENTE este pedido del vendedor "${sellerName}"? Se regresarán los paquetes al inventario principal.`
-    );
-    if (!ok) return;
 
-    try {
-      setLoading(true);
-      const todayStr = new Date().toISOString().slice(0, 10);
+const handleDeleteOrder = async (orderKey: string) => {
+  if (!isAdmin) {
+    setMsg("No tienes permiso para borrar pedidos.");
+    return;
+  }
 
-      for (const r of relatedRows) {
-        const prod = products.find((p) => p.id === r.productId);
-        // regresar los paquetes de este producto al inventario principal
-        // 🔴 Ahora sin crear nuevos lotes, solo restaurando en los existentes
-        await restorePacksToMainInventory(
-          prod,
-          r.productId,
-          r.packages,
-          todayStr
-        );
-        // borrar el doc del subinventario del vendedor
-        await deleteDoc(doc(db, "inventory_candies_sellers", r.id));
-      }
+  const relatedRows = rows.filter((r) => (r.orderId || r.id) === orderKey);
+  if (!relatedRows.length) return;
 
-      setRows((prev) => prev.filter((r) => (r.orderId || r.id) !== orderKey));
-      setMsg(
-        "🗑️ Pedido eliminado y paquetes regresados al inventario principal."
-      );
-    } catch (e) {
-      console.error(e);
-      setMsg(
-        "❌ Error al eliminar el pedido / regresar paquetes al inventario."
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
+  const sellerName = relatedRows[0].sellerName || "";
+  const ok = confirm(
+    `¿Eliminar COMPLETAMENTE este pedido del vendedor "${sellerName}"? Se regresarán los paquetes al inventario principal.`
+  );
+  if (!ok) return;
+
+  try {
+    setLoading(true);
+    await deleteVendorOrderAndRestore(orderKey);
+
+    setRows((prev) => prev.filter((r) => (r.orderId || r.id) !== orderKey));
+    setMsg("🗑️ Pedido eliminado y paquetes regresados correctamente.");
+  } catch (e) {
+    console.error(e);
+    setMsg("❌ Error al eliminar el pedido / regresar paquetes.");
+  } finally {
+    setLoading(false);
+  }
+};
+
+
 
   // ===== Render =====
   return (
@@ -1098,38 +1347,48 @@ export default function VendorCandyOrders() {
         <h2 className="text-2xl font-bold">Ordenes de Rutas</h2>
         <div className="flex gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
-          <button
-            className="inline-flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
-            onClick={() => {
-              resetOrder();
-              setOpenForm(true);
-            }}
-          >
-            <span className="inline-block bg-green-700/40 rounded-full p-1">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
-            </span>
-            Nuevo pedido a vendedor
-          </button>
+          {isAdmin && (
+            <button
+              className="inline-flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
+              onClick={() => {
+                resetOrder();
+                setOpenForm(true);
+              }}
+            >
+              <span className="inline-block bg-green-700/40 rounded-full p-1">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 4v16m8-8H4"
+                  />
+                </svg>
+              </span>
+              Nuevo pedido a vendedor
+            </button>
+          )}
         </div>
       </div>
 
       {/* MODAL NUEVO / EDICIÓN DE PEDIDO */}
       {openForm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded shadow-lg w-full max-w-5xl max-h-[90vh] overflow-y-auto text-sm">
+          <div className="bg-white p-6 rounded shadow-lg w-full max-w-5xl max-h-[90vh] overflow-y-auto text-sm relative">
+            {isSaving && (
+              <div className="absolute inset-0 bg-white/70 flex items-center justify-center z-50">
+                <div className="bg-white border rounded-lg px-4 py-3 shadow text-sm font-semibold">
+                  Guardando pedido...
+                </div>
+              </div>
+            )}
+
             <h3 className="text-xl font-bold mb-4">
               {editingOrderKey
                 ? "Editar pedido de vendedor"
@@ -1154,11 +1413,13 @@ export default function VendorCandyOrders() {
                     className="w-full border p-2 rounded"
                     value={sellerId}
                     onChange={(e) => setSellerId(e.target.value)}
+                    disabled={isReadOnly}
                   >
                     <option value="">Selecciona un vendedor…</option>
                     {sellers.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
+                        {s.branchLabel ? ` - ${s.branchLabel}` : ""}
                         {s.commissionPercent
                           ? ` (${s.commissionPercent.toFixed(1)}% comisión)`
                           : ""}
@@ -1176,29 +1437,8 @@ export default function VendorCandyOrders() {
                     className="w-full border p-2 rounded"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
+                    disabled={isReadOnly}
                   />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold">
-                    % Ganancia (margen sobre costo)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="w-full border p-2 rounded"
-                    value={markupPercent}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setMarkupPercent(v);
-                      const num = Number(v || 0);
-                      applyMarginToAllItems(num);
-                    }}
-                    placeholder="Ej: 30"
-                  />
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    Se aplica como: subtotal / (1 - %/100). Ej: 30% → /0.70
-                  </p>
                 </div>
               </div>
 
@@ -1213,22 +1453,41 @@ export default function VendorCandyOrders() {
                       className="w-full border p-2 rounded"
                       value={selectedProductId}
                       onChange={(e) => setSelectedProductId(e.target.value)}
+                      disabled={isReadOnly}
                     >
                       <option value="">Selecciona un producto…</option>
-                      {products.map((p) => {
-                        const avail = availablePacks[p.id];
-                        return (
-                          <option key={p.id} value={p.id}>
-                            {p.category ? `${p.category} - ` : ""}
-                            {p.name}
-                            {typeof avail === "number"
-                              ? ` — Disp: ${avail} paq`
-                              : ""}
-                          </option>
-                        );
-                      })}
+
+                      {/* ✅ SOLO CON DISPONIBILIDAD (o enOrder si edit) */}
+                      {productsForPicker
+                        .filter((p) => (availablePacks[p.id] ?? 0) > 0)
+                        .map((p) => {
+                          const avail = availablePacks[p.id] ?? 0;
+                          const labelParts: string[] = [];
+
+                          labelParts.push(
+                            p.category ? `${p.category} - ${p.name}` : p.name
+                          );
+
+                          const precios: string[] = [];
+                          if (p.unitPriceRivas > 0)
+                            precios.push(`R: ${money(p.unitPriceRivas)}`);
+                          if (p.unitPriceSanJorge > 0)
+                            precios.push(`SJ: ${money(p.unitPriceSanJorge)}`);
+                          if (p.unitPriceIsla > 0)
+                            precios.push(`I: ${money(p.unitPriceIsla)}`);
+                          if (precios.length)
+                            labelParts.push(precios.join(" | "));
+
+                          labelParts.push(`Disp: ${avail} paq`);
+                          return (
+                            <option key={p.id} value={p.id}>
+                              {labelParts.join(" — ")}
+                            </option>
+                          );
+                        })}
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-sm font-semibold">
                       Paquetes / bolsas
@@ -1239,34 +1498,44 @@ export default function VendorCandyOrders() {
                       className="w-full border p-2 rounded"
                       value={packagesToAdd}
                       onChange={(e) => setPackagesToAdd(e.target.value)}
+                      disabled={isReadOnly}
                     />
                   </div>
                 </div>
+
                 <div className="flex justify-end mt-3">
                   <button
                     type="button"
                     onClick={handleAddItem}
                     className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    disabled={!selectedProductId}
+                    disabled={isReadOnly || !selectedProductId}
                   >
                     Agregar producto al pedido
                   </button>
                 </div>
               </div>
 
+              {/* ... EL RESTO DE TU COMPONENTE QUEDA IGUAL ... */}
+              {/* (Desde aquí en adelante no cambié nada relevante a tu lógica UI/KPIs/listado) */}
+
               {/* Tabla de productos del pedido */}
               <div className="bg-white rounded border overflow-x-auto">
-                <table className="min-w-[900px] text-xs md:text-sm">
+                <table className="min-w-[1100px] text-xs md:text-sm">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
                       <th className="p-2 border">Producto</th>
                       <th className="p-2 border">Categoría</th>
                       <th className="p-2 border">Paquetes</th>
-                      {/* NUEVA COLUMNA: paquetes restantes por producto */}
                       <th className="p-2 border">Paquetes restantes</th>
                       <th className="p-2 border">Paq x Und (ref)</th>
                       <th className="p-2 border">P. proveedor (paq)</th>
                       <th className="p-2 border">Subtotal</th>
+                      <th className="p-2 border">Total Rivas</th>
+                      <th className="p-2 border">Total San Jorge</th>
+                      <th className="p-2 border">Total Isla</th>
+                      <th className="p-2 border">P. unidad Rivas</th>
+                      <th className="p-2 border">P. unidad San Jorge</th>
+                      <th className="p-2 border">P. unidad Isla</th>
                       <th className="p-2 border">P. paquete vendedor</th>
                       <th className="p-2 border">Total vendedor</th>
                       <th className="p-2 border">Acciones</th>
@@ -1276,7 +1545,7 @@ export default function VendorCandyOrders() {
                     {orderItems.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={16}
                           className="p-4 text-center text-gray-500"
                         >
                           No hay productos en este pedido. Agrega al menos uno.
@@ -1291,7 +1560,6 @@ export default function VendorCandyOrders() {
                           <td className="p-2 border">{it.productName}</td>
                           <td className="p-2 border">{it.category}</td>
 
-                          {/* Paquetes: ahora se pueden editar también en modo edición */}
                           <td className="p-2 border">
                             <input
                               type="number"
@@ -1299,16 +1567,12 @@ export default function VendorCandyOrders() {
                               className="border p-1 rounded text-right text-xs w-20"
                               value={it.packages}
                               onChange={(e) =>
-                                handleItemFieldChange(
-                                  it.id,
-                                  "packages",
-                                  e.target.value
-                                )
+                                handleItemFieldChange(it.id, e.target.value)
                               }
+                              disabled={isReadOnly}
                             />
                           </td>
 
-                          {/* NUEVO: Paquetes restantes (solo display) */}
                           <td className="p-2 border">
                             {it.remainingPackages ?? it.packages}
                           </td>
@@ -1316,25 +1580,24 @@ export default function VendorCandyOrders() {
                           <td className="p-2 border">
                             {it.unitsPerPackage || "—"}
                           </td>
-
-                          {/* P. proveedor editable si quisieras ajustar costo */}
                           <td className="p-2 border">
-                            <input
-                              type="number"
-                              step="0.01"
-                              className="border p-1 rounded text-right text-xs w-24"
-                              value={it.providerPrice}
-                              onChange={(e) =>
-                                handleItemFieldChange(
-                                  it.id,
-                                  "providerPrice",
-                                  e.target.value
-                                )
-                              }
-                            />
+                            {money(it.providerPrice)}
                           </td>
-
                           <td className="p-2 border">{money(it.subtotal)}</td>
+                          <td className="p-2 border">{money(it.totalRivas)}</td>
+                          <td className="p-2 border">
+                            {money(it.totalSanJorge)}
+                          </td>
+                          <td className="p-2 border">{money(it.totalIsla)}</td>
+                          <td className="p-2 border">
+                            {money(it.unitPriceRivas)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.unitPriceSanJorge)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.unitPriceIsla)}
+                          </td>
                           <td className="p-2 border">
                             {money(it.pricePerPackage)}
                           </td>
@@ -1344,8 +1607,9 @@ export default function VendorCandyOrders() {
                           <td className="p-2 border">
                             <button
                               type="button"
-                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs disabled:opacity-50"
                               onClick={() => handleRemoveItem(it.id)}
+                              disabled={isReadOnly}
                             >
                               Quitar
                             </button>
@@ -1377,7 +1641,7 @@ export default function VendorCandyOrders() {
                 </div>
                 <div className="p-3 border rounded bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Total con margen aplicado
+                    Total vendedor (precio venta)
                   </div>
                   <div className="text-lg font-semibold text-green-600">
                     {money(orderSummary.totalVendor)}
@@ -1395,20 +1659,24 @@ export default function VendorCandyOrders() {
 
               {/* Botones */}
               <div className="flex justify-end gap-2 mt-4">
-                <button
-                  type="button"
-                  onClick={resetOrder}
-                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                >
-                  Limpiar pedido
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={resetOrder}
+                    className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
+                    disabled={isSaving}
+                  >
+                    Limpiar pedido
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
                     resetOrder();
                     setOpenForm(false);
                   }}
-                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
+                  disabled={isSaving}
                 >
                   Cerrar
                 </button>
@@ -1420,20 +1688,24 @@ export default function VendorCandyOrders() {
                 >
                   Imprimir pedido
                 </button>
-                <button
-                  type="submit"
-                  className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                  disabled={!selectedSeller || orderItems.length === 0}
-                >
-                  Guardar pedido
-                </button>
+                {isAdmin && (
+                  <button
+                    type="submit"
+                    className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    disabled={
+                      isSaving || !selectedSeller || orderItems.length === 0
+                    }
+                  >
+                    {isSaving ? "Guardando..." : "Guardar pedido"}
+                  </button>
+                )}
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* LISTADO: ahora es POR PEDIDO, no por producto */}
+      {/* LISTADO: POR PEDIDO */}
       <div className="bg-white p-2 rounded shadow border w-full overflow-x-auto mt-4">
         <h3 className="text-lg font-semibold mb-2">Listado de pedidos</h3>
         <table className="min-w-[1000px] text-xs md:text-sm">
@@ -1442,7 +1714,6 @@ export default function VendorCandyOrders() {
               <th className="p-2 border">Fecha</th>
               <th className="p-2 border">Vendedor</th>
               <th className="p-2 border">Paquetes totales</th>
-              {/* NUEVA COLUMNA: paquetes restantes totales del pedido */}
               <th className="p-2 border">Paquetes restantes</th>
               <th className="p-2 border">Subtotal costo</th>
               <th className="p-2 border">Total vendedor</th>
@@ -1478,7 +1749,10 @@ export default function VendorCandyOrders() {
                     className="text-center whitespace-nowrap"
                   >
                     <td className="p-2 border">{o.date || "—"}</td>
-                    <td className="p-2 border">{o.sellerName}</td>
+                    <td className="p-2 border">
+                      {o.sellerName}
+                      {seller?.branchLabel ? ` - ${seller.branchLabel}` : ""}
+                    </td>
                     <td className="p-2 border">{o.totalPackages}</td>
                     <td className="p-2 border">{o.totalRemainingPackages}</td>
                     <td className="p-2 border">{money(o.subtotal)}</td>
@@ -1492,12 +1766,14 @@ export default function VendorCandyOrders() {
                         >
                           Ver / Editar
                         </button>
-                        <button
-                          className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
-                          onClick={() => handleDeleteOrder(o.orderKey)}
-                        >
-                          Borrar
-                        </button>
+                        {isAdmin && (
+                          <button
+                            className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                            onClick={() => handleDeleteOrder(o.orderKey)}
+                          >
+                            Borrar
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

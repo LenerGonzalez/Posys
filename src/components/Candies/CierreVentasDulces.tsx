@@ -20,6 +20,9 @@ import { restoreCandySaleAndDelete } from "../../Services/inventory_candies";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
+// Tipo de venta
+type SaleType = "CONTADO" | "CREDITO";
+
 interface SaleDataRaw {
   id?: string;
   productName?: string;
@@ -47,6 +50,8 @@ interface SaleDataRaw {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
+  // tipo de venta en sales_candies
+  type?: SaleType;
 }
 
 interface SaleData {
@@ -57,7 +62,7 @@ interface SaleData {
   amountSuggested: number;
   date: string;
   userEmail: string; // etiqueta que mostramos en la tabla (nombre / vendedor)
-  sellerEmail?: string; // 👈 email real del usuario logueado que hizo la venta
+  sellerEmail?: string; // email real del usuario logueado que hizo la venta
   clientName: string;
   amountReceived: number;
   change: string;
@@ -70,6 +75,8 @@ interface SaleData {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
+  type: SaleType;
+  vendorId?: string;
 }
 
 interface ClosureData {
@@ -89,6 +96,13 @@ interface ClosureData {
   }[];
   totalCOGS?: number;
   grossProfit?: number;
+}
+
+// vendedores dulces
+interface SellerCandy {
+  id: string;
+  name: string;
+  commissionPercent: number;
 }
 
 // helpers
@@ -113,6 +127,9 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
     sellerEmail ||
     raw.vendorId ||
     "(sin vendedor)";
+
+  const type: SaleType = (raw.type || "CONTADO") as SaleType;
+  const vendorId = raw.vendorId;
 
   // Venta multi-ítem
   if (Array.isArray(raw.items) && raw.items.length > 0) {
@@ -143,6 +160,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
           : raw.allocations,
         avgUnitCost: Number(it?.avgUnitCost ?? raw.avgUnitCost ?? 0),
         cogsAmount: Number(it?.cogsAmount ?? 0),
+        type,
+        vendorId,
       };
     });
   }
@@ -167,11 +186,14 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       allocations: raw.allocations,
       avgUnitCost: raw.avgUnitCost,
       cogsAmount: raw.cogsAmount,
+      type,
+      vendorId,
     },
   ];
 };
 
 type RoleCandies =
+  | ""
   | "admin"
   | "vendedor_pollo"
   | "vendedor_ropa"
@@ -180,9 +202,11 @@ type RoleCandies =
 export default function CierreVentasDulces({
   role,
   currentUserEmail,
+  sellerCandyId, // se acepta para mantener compatibilidad con App, aunque aquí no se usa
 }: {
   role?: RoleCandies;
   currentUserEmail?: string;
+  sellerCandyId?: string;
 }): React.ReactElement {
   const [salesV2, setSales] = useState<SaleData[]>([]);
   const [floatersExtra, setFloatersExtra] = useState<SaleData[]>([]);
@@ -204,6 +228,9 @@ export default function CierreVentasDulces({
   const isAdmin = !role || role === "admin";
   const isVendDulces = role === "vendedor_dulces";
   const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
+
+  // vendedores para comisión
+  const [sellers, setSellers] = useState<SellerCandy[]>([]);
 
   // Ventas de HOY (colección de DULCES)
   useEffect(() => {
@@ -258,6 +285,66 @@ export default function CierreVentasDulces({
     fetchClosure();
   }, [today]);
 
+  // cargar vendedores de dulces con comisión
+  useEffect(() => {
+    const fetchSellers = async () => {
+      try {
+        const snap = await getDocs(collection(db, "sellers_candies"));
+        const list: SellerCandy[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          list.push({
+            id: d.id,
+            name: data.name || "",
+            commissionPercent: Number(data.commissionPercent || 0),
+          });
+        });
+        setSellers(list);
+      } catch (e) {
+        console.error("Error cargando sellers_candies", e);
+      }
+    };
+    fetchSellers();
+  }, []);
+
+  const sellersById = React.useMemo(() => {
+    const m: Record<string, SellerCandy> = {};
+    sellers.forEach((s) => {
+      m[s.id] = s;
+    });
+    return m;
+  }, [sellers]);
+
+  // helper comisión por venta
+  const getCommissionAmount = (s: SaleData): number => {
+    // REGLA: En CRÉDITO nunca se paga comisión
+    if (s.type === "CREDITO") return 0;
+
+    let seller: SellerCandy | undefined;
+
+    // Buscar por vendorId
+    if (s.vendorId) {
+      seller = sellersById[s.vendorId];
+    }
+
+    // fallback: buscar por nombre (label mostrado en userEmail)
+    if (!seller && s.userEmail) {
+      const labelNorm = s.userEmail.toLowerCase();
+      seller = sellers.find(
+        (v) => (v.name || "").trim().toLowerCase() === labelNorm
+      );
+    }
+
+    if (!seller || !seller.commissionPercent) return 0;
+
+    // En contado la base es el monto total de la venta
+    const base = Number(s.amount || 0);
+    if (!base) return 0;
+
+    const percent = Number(seller.commissionPercent) || 0;
+    return base * (percent / 100);
+  };
+
   // Ventas visibles (aplicamos filtro + rol)
   const visibleSales = React.useMemo(() => {
     let base: SaleData[];
@@ -276,7 +363,7 @@ export default function CierreVentasDulces({
       base = salesV2.filter((s) => s.status === "PROCESADA");
     }
 
-    // 🔐 Restricción para vendedor_dulces: solo sus ventas
+    // Restricción para vendedor_dulces: solo sus ventas
     if (isVendDulces && currentEmailNorm) {
       base = base.filter(
         (s) => (s.sellerEmail || "").toLowerCase() === currentEmailNorm
@@ -287,34 +374,64 @@ export default function CierreVentasDulces({
   }, [filter, salesV2, floatersExtra, isVendDulces, currentEmailNorm]);
 
   // Totales visibles (quantity = paquetes)
-  const totalSuggested = round2(
-    visibleSales.reduce((sum, s) => sum + (s.amountSuggested || 0), 0)
-  );
-  const totalCharged = round2(
-    visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0)
-  );
   const totalPaquetes = round3(
     visibleSales.reduce((sum, s) => sum + (s.quantity || 0), 0)
   );
   const totalCOGSVisible = round2(
     visibleSales.reduce((sum, s) => sum + Number(s.cogsAmount ?? 0), 0)
   );
+  const totalCharged = round2(
+    visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0)
+  );
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
-  // Consolidado por producto (en paquetes)
+  // Totales por tipo + comisión
+  let totalPacksCredito = 0;
+  let totalPacksCash = 0;
+  let totalPendienteCredito = 0;
+  let totalCobradoCash = 0;
+  let totalCommission = 0;
+
+  visibleSales.forEach((s) => {
+    const amt = Number(s.amount || 0);
+    const received = Number(s.amountReceived || 0);
+    const commission = getCommissionAmount(s);
+    totalCommission += commission;
+
+    if (s.type === "CREDITO") {
+      totalPacksCredito += s.quantity || 0;
+      totalPendienteCredito += amt - received;
+    } else {
+      totalPacksCash += s.quantity || 0;
+      totalCobradoCash += amt;
+    }
+  });
+
+  totalPendienteCredito = round2(totalPendienteCredito);
+  totalCobradoCash = round2(totalCobradoCash);
+  totalCommission = round2(totalCommission);
+
+  // Consolidado por producto (en paquetes + comisión)
   const productMap: Record<
     string,
-    { totalQuantity: number; totalAmount: number }
+    { totalQuantity: number; totalAmount: number; totalCommission: number }
   > = {};
   visibleSales.forEach((s) => {
     const key = s.productName || "(sin nombre)";
     if (!productMap[key])
-      productMap[key] = { totalQuantity: 0, totalAmount: 0 };
+      productMap[key] = {
+        totalQuantity: 0,
+        totalAmount: 0,
+        totalCommission: 0,
+      };
     productMap[key].totalQuantity = round3(
       productMap[key].totalQuantity + (s.quantity || 0)
     );
     productMap[key].totalAmount = round2(
       productMap[key].totalAmount + (s.amount || 0)
+    );
+    productMap[key].totalCommission = round2(
+      productMap[key].totalCommission + getCommissionAmount(s)
     );
   });
   const productSummaryArray = Object.entries(productMap).map(
@@ -322,6 +439,7 @@ export default function CierreVentasDulces({
       productName,
       totalQuantity: v.totalQuantity,
       totalAmount: v.totalAmount,
+      totalCommission: v.totalCommission,
     })
   );
 
@@ -388,6 +506,7 @@ export default function CierreVentasDulces({
           avgUnitCost: s.avgUnitCost ?? null,
           allocations: s.allocations ?? [],
           date: s.date,
+          // no toco nada más aquí para no romper lecturas existentes
         })),
         productSummary: Object.entries(
           toProcess.reduce((acc, s) => {
@@ -540,73 +659,86 @@ export default function CierreVentasDulces({
               <tr>
                 <th className="border p-2">Estado</th>
                 <th className="border p-2">Producto</th>
+                <th className="border p-2">Tipo</th>
                 <th className="border p-2">Paquetes</th>
                 <th className="border p-2">Monto</th>
+                <th className="border p-2">Comisión</th>
                 <th className="border p-2">Fecha venta</th>
                 <th className="border p-2">Vendedor</th>
                 <th className="border p-2">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {visibleSales.map((s) => (
-                <tr key={s.id} className="text-center">
-                  <td className="border p-1">
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs ${
-                        s.status === "PROCESADA"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-yellow-100 text-yellow-700"
-                      }`}
-                    >
-                      {s.status}
-                    </span>
-                  </td>
-                  <td className="border p-1">{s.productName}</td>
-                  <td className="border p-1">{qty3(s.quantity)}</td>
-                  <td className="border p-1">C${money(s.amount)}</td>
-                  <td className="border p-1">{s.date}</td>
-                  <td className="border p-1">{s.userEmail}</td>
-                  <td className="border p-1">
-                    {s.status === "FLOTANTE" ? (
-                      <div className="flex gap-2 justify-center">
-                        {isAdmin ? (
-                          <>
+              {visibleSales.map((s) => {
+                const commission = getCommissionAmount(s);
+                return (
+                  <tr key={s.id} className="text-center">
+                    <td className="border p-1">
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs ${
+                          s.status === "PROCESADA"
+                            ? "bg-green-100 text-green-700"
+                            : "bg-yellow-100 text-yellow-700"
+                        }`}
+                      >
+                        {s.status}
+                      </span>
+                    </td>
+                    <td className="border p-1">{s.productName}</td>
+                    <td className="border p-1">
+                      {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                    </td>
+                    <td className="border p-1">{qty3(s.quantity)}</td>
+                    <td className="border p-1">C${money(s.amount)}</td>
+                    <td className="border p-1">
+                      {commission > 0 ? `C$${money(commission)}` : "—"}
+                    </td>
+                    <td className="border p-1">{s.date}</td>
+                    <td className="border p-1">{s.userEmail}</td>
+                    <td className="border p-1">
+                      {s.status === "FLOTANTE" ? (
+                        <div className="flex gap-2 justify-center">
+                          {isAdmin ? (
+                            <>
+                              <button
+                                onClick={() => openEdit(s)}
+                                className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                onClick={() => deleteSale(s.id)}
+                                className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                              >
+                                Eliminar
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-gray-400 text-xs">—</span>
+                          )}
+                        </div>
+                      ) : s.status === "PROCESADA" ? (
+                        <div className="flex gap-2 justify-center">
+                          {isAdmin ? (
                             <button
-                              onClick={() => openEdit(s)}
-                              className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                            >
-                              Editar
-                            </button>
-                            <button
-                              onClick={() => deleteSale(s.id)}
+                              onClick={() => handleRevert(s.id)}
                               className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
                             >
-                              Eliminar
+                              Revertir
                             </button>
-                          </>
-                        ) : (
-                          <span className="text-gray-400 text-xs">—</span>
-                        )}
-                      </div>
-                    ) : s.status === "PROCESADA" ? (
-                      <div className="flex gap-2 justify-center">
-                        {isAdmin ? (
-                          <button
-                            onClick={() => handleRevert(s.id)}
-                            className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                          >
-                            Revertir
-                          </button>
-                        ) : (
-                          <span className="text-gray-400 text-xs">—</span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-gray-400 text-xs">No options</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                          ) : (
+                            <span className="text-gray-400 text-xs">—</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400 text-xs">
+                          No options
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {visibleSales.length === 0 && (
                 <tr>
                   <td colSpan={9} className="p-3 text-center text-gray-500">
@@ -617,12 +749,23 @@ export default function CierreVentasDulces({
             </tbody>
           </table>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-2">
+          {/* Bloque de totales */}
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-2 text-sm mb-4">
             <div>
-              Total paquetes vendidos: <strong>{qty3(totalPaquetes)}</strong>
+              Total paquetes crédito: <strong>{qty3(totalPacksCredito)}</strong>
             </div>
             <div>
-              Total cobrado: <strong>C${money(totalCharged)}</strong>
+              Total paquetes cash: <strong>{qty3(totalPacksCash)}</strong>
+            </div>
+            <div>
+              Total pendiente crédito:{" "}
+              <strong>C${money(totalPendienteCredito)}</strong>
+            </div>
+            <div>
+              Total cobrado cash: <strong>C${money(totalCobradoCash)}</strong>
+            </div>
+            <div>
+              Total comisión: <strong>C${money(totalCommission)}</strong>
             </div>
           </div>
 
@@ -645,6 +788,7 @@ export default function CierreVentasDulces({
                 <th className="border p-2">Producto</th>
                 <th className="border p-2">Total paquetes</th>
                 <th className="border p-2">Total dinero</th>
+                <th className="border p-2">Comisión</th>
               </tr>
             </thead>
             <tbody>
@@ -653,11 +797,16 @@ export default function CierreVentasDulces({
                   <td className="border p-1">{row.productName}</td>
                   <td className="border p-1">{qty3(row.totalQuantity)}</td>
                   <td className="border p-1">C${money(row.totalAmount)}</td>
+                  <td className="border p-1">
+                    {row.totalCommission > 0
+                      ? `C$${money(row.totalCommission)}`
+                      : "—"}
+                  </td>
                 </tr>
               ))}
               {productSummaryArray.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="p-3 text-center text-gray-500">
+                  <td colSpan={4} className="p-3 text-center text-gray-500">
                     Sin datos para consolidar.
                   </td>
                 </tr>

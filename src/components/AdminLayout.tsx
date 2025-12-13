@@ -432,6 +432,16 @@ export default function AdminLayout({ role }: { role: string }) {
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
+                              to={`${base}/billingsCandies`}
+                              className={linkCls}
+                            >
+                              Facturas
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
                               to={`${base}/consolidatedVendors`}
                               className={linkCls}
                             >
@@ -532,6 +542,43 @@ export default function AdminLayout({ role }: { role: string }) {
                       </NavLink>
                     </div>
                   )}
+                </div>
+              )}
+              {/* ================== VENDEDOR DULCES ================== */}
+              {isVendDulces && (
+                <div className="border rounded">
+                  <div className="pb-2 ml-4 mt-1 space-y-1">
+                    <NavLink to={`${base}/salesCandies`} className={linkCls}>
+                      Venta
+                    </NavLink>
+                  </div>
+
+                  <div className="pb-2 ml-4 mt-1 space-y-1">
+                    <NavLink
+                      to={`${base}/transactionCandies`}
+                      className={linkCls}
+                    >
+                      Ventas del dia
+                    </NavLink>
+                  </div>
+
+                  <div className="pb-2 ml-4 mt-1 space-y-1">
+                    <NavLink
+                      to={`${base}/cierreVentasCandies`}
+                      className={linkCls}
+                    >
+                      Cierre de Ventas
+                    </NavLink>
+                  </div>
+
+                  <div className="ml-4 mt-1 space-y-1">
+                    <NavLink
+                      to={`${base}/productsVendorsCandies`}
+                      className={linkCls}
+                    >
+                      Pedidos
+                    </NavLink>
+                  </div>
                 </div>
               )}
 

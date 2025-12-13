@@ -22,6 +22,13 @@ interface Customer {
   name: string;
 }
 
+// === Nuevo: mismo seller que en consolidado de vendedores (dulces) ===
+interface Seller {
+  id: string;
+  name: string;
+  commissionPercent: number;
+}
+
 interface SaleDoc {
   id: string;
   date: string; // yyyy-MM-dd
@@ -121,7 +128,9 @@ export default function TransactionsReportCandies({
 }: TransactionsReportCandiesProps) {
   const isVendor = role === "vendedor_dulces";
   const canDelete = role === "admin";
-  const columnsCount = canDelete ? 7 : 6;
+
+  // NUEVO: ahora hay una columna extra (Comisión)
+  const columnsCount = canDelete ? 8 : 7;
 
   // ===== Modal Detalle de Ítems =====
   const [itemsModalOpen, setItemsModalOpen] = useState(false);
@@ -178,6 +187,10 @@ export default function TransactionsReportCandies({
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<SaleDoc[]>([]);
+
+  // NUEVO: vendedores con comisión (mismo esquema que consolidado)
+  const [sellers, setSellers] = useState<Seller[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
@@ -198,6 +211,23 @@ export default function TransactionsReportCandies({
     return m;
   }, [customers]);
 
+  // NUEVO: mapa de vendedores por id
+  const sellersById = useMemo(() => {
+    const m: Record<string, Seller> = {};
+    sellers.forEach((v) => {
+      m[v.id] = v;
+    });
+    return m;
+  }, [sellers]);
+
+  // NUEVO: helper para calcular comisión de una venta
+  const getCommissionAmount = (s: SaleDoc): number => {
+    if (!s.vendorId) return 0;
+    const v = sellersById[s.vendorId];
+    if (!v || !v.commissionPercent) return 0;
+    return ((Number(s.total) || 0) * (Number(v.commissionPercent) || 0)) / 100;
+  };
+
   // Carga inicial y recarga al cambiar rango de fechas
   useEffect(() => {
     (async () => {
@@ -211,6 +241,19 @@ export default function TransactionsReportCandies({
           cList.push({ id: d.id, name: (d.data() as any).name || "" })
         );
         setCustomers(cList);
+
+        // NUEVO: vendedores (dulces) con comisión
+        const vSnap = await getDocs(collection(db, "sellers_candies"));
+        const vList: Seller[] = [];
+        vSnap.forEach((d) => {
+          const data = d.data() as any;
+          vList.push({
+            id: d.id,
+            name: data.name || "",
+            commissionPercent: Number(data.commissionPercent || 0),
+          });
+        });
+        setSellers(vList);
 
         // ventas (dulces)
         const sSnap = await getDocs(
@@ -276,6 +319,15 @@ export default function TransactionsReportCandies({
     return filteredSales.slice(start, start + PAGE_SIZE);
   }, [filteredSales, page]);
 
+  // NUEVO: venta actual del modal (para mostrar comisión en el detalle)
+  const modalSale = useMemo(
+    () =>
+      itemsModalSaleId
+        ? sales.find((s) => s.id === itemsModalSaleId) || null
+        : null,
+    [itemsModalSaleId, sales]
+  );
+
   // --------- Eliminar venta ---------
   const confirmDelete = async (s: SaleDoc) => {
     // Por seguridad, solo admin puede eliminar
@@ -308,7 +360,7 @@ export default function TransactionsReportCandies({
 
   // --------- Exportar PDF (usa ventas filtradas) ---------
   const handleExportPDF = () => {
-    const title = `Reporte de transacciones (Dulces) — ${fromDate} a ${toDate}`;
+    const title = `Ventas del dia — ${fromDate} a ${toDate}`;
     const esc = (s: string) =>
       (s || "")
         .replace(/&/g, "&amp;")
@@ -448,9 +500,7 @@ export default function TransactionsReportCandies({
   // ----------------- Render principal -----------------
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">
-        Reporte de transacciones (Dulces)
-      </h2>
+      <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
 
       {/* Filtros */}
       <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap gap-3 items-end text-sm">
@@ -556,6 +606,8 @@ export default function TransactionsReportCandies({
               <th className="p-2 border">Tipo</th>
               <th className="p-2 border">Paquetes</th>
               <th className="p-2 border">Monto</th>
+              {/* NUEVO: columna de comisión después de Monto */}
+              <th className="p-2 border">Comisión</th>
               <th className="p-2 border">Vendedor</th>
               {canDelete && <th className="p-2 border">Acciones</th>}
             </tr>
@@ -579,6 +631,7 @@ export default function TransactionsReportCandies({
                   s.customerName ||
                   (s.customerId ? customersById[s.customerId] : "") ||
                   "Nombre cliente";
+                const commissionAmount = getCommissionAmount(s);
                 return (
                   <tr key={s.id} className="text-center">
                     <td className="p-2 border">{s.date}</td>
@@ -597,6 +650,9 @@ export default function TransactionsReportCandies({
                       </button>
                     </td>
                     <td className="p-2 border">{money(s.total)}</td>
+                    <td className="p-2 border">
+                      {commissionAmount > 0 ? money(commissionAmount) : "—"}
+                    </td>
                     <td className="p-2 border">{s.vendorName || "—"}</td>
                     {canDelete && (
                       <td className="p-2 border relative">
@@ -642,10 +698,23 @@ export default function TransactionsReportCandies({
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
           <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">
-                Productos/paquetes vendidos{" "}
-                {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
-              </h3>
+              <div>
+                <h3 className="text-lg font-bold">
+                  Productos/paquetes vendidos{" "}
+                  {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
+                </h3>
+                {/* NUEVO: comisión de esta venta en el detalle */}
+                {modalSale && (
+                  <div className="text-sm text-gray-700 mt-1">
+                    Comisión de vendedor:{" "}
+                    <span className="font-semibold">
+                      {getCommissionAmount(modalSale) > 0
+                        ? money(getCommissionAmount(modalSale))
+                        : "—"}
+                    </span>
+                  </div>
+                )}
+              </div>
               <button
                 className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
                 onClick={() => setItemsModalOpen(false)}

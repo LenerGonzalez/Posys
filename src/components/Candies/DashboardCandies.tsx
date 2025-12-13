@@ -1,6 +1,6 @@
 // src/components/Candies/FinancialDashboardCandies.tsx
-import React, { useEffect, useMemo, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { collection, getDocs, deleteDoc, doc } from "firebase/firestore";
 import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import RefreshButton from "../common/RefreshButton";
@@ -14,9 +14,10 @@ interface SaleItem {
   productId: string;
   productName: string;
   sku?: string;
-  qty: number;
+  qty: number; // paquetes
   unitPrice: number;
   discount?: number;
+  vendorCommissionAmount?: number; // comisión por ítem (C$)
 }
 
 interface SaleDoc {
@@ -27,6 +28,8 @@ interface SaleDoc {
   items: SaleItem[];
   customerId?: string;
   customerName?: string;
+  vendorId?: string;
+  vendorName?: string;
 }
 
 interface BatchRow {
@@ -74,6 +77,28 @@ interface CreditPiece {
   lineFinal: number; // neto (con descuento)
 }
 
+type VendorPieceType = "CASH" | "CREDIT" | "ASSOCIATED" | "REMAINING";
+
+interface VendorPiece {
+  saleId: string;
+  date: string;
+  productName: string;
+  sku?: string;
+  qty: number;
+  unitPrice: number;
+  lineTotal: number;
+  discount: number;
+  lineFinal: number;
+  vendorCommissionAmount: number;
+  type: VendorPieceType;
+}
+
+interface SellerCandy {
+  id: string;
+  name: string;
+  commissionPercent: number;
+}
+
 /** Devuelve yyyy-MM-dd del createdAt si no hay date string */
 function ensureDate(x: any): string {
   const d: string | undefined = x?.date;
@@ -100,6 +125,9 @@ function normalizeSaleItems(x: any): SaleItem[] {
         qty,
         unitPrice: Number(unitPrice || 0),
         discount: Number(it?.discount || 0),
+        vendorCommissionAmount: Number(
+          it?.vendorCommissionAmount ?? it?.commissionAmount ?? 0
+        ),
       };
     });
   }
@@ -120,6 +148,9 @@ function normalizeSaleItems(x: any): SaleItem[] {
         qty,
         unitPrice: Number(unitPrice || 0),
         discount: Number(it?.discount || 0),
+        vendorCommissionAmount: Number(
+          it?.vendorCommissionAmount ?? it?.commissionAmount ?? 0
+        ),
       },
     ];
   }
@@ -135,6 +166,9 @@ function normalizeSaleItems(x: any): SaleItem[] {
         qty,
         unitPrice: Number(unitPrice || 0),
         discount: Number(x?.discount || 0),
+        vendorCommissionAmount: Number(
+          x?.vendorCommissionAmount ?? x?.commissionAmount ?? 0
+        ),
       },
     ];
   }
@@ -146,51 +180,22 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
   const date = ensureDate(raw);
   if (!date) return null;
 
-  if (Array.isArray(raw.items)) {
-    return {
-      id,
-      date,
-      type: (raw.type || "CONTADO") as SaleType,
-      total: Number(raw.total ?? raw.itemsTotal ?? 0),
-      items: raw.items.map((it: any) => ({
-        productId: String(it.productId || ""),
-        productName: String(it.productName || ""),
-        sku: it.sku || "",
-        qty: Number(it.qty || 0),
-        unitPrice: Number(
-          it.unitPrice ??
-            (Number(it.total || 0) / Math.max(1, Number(it.qty || 0)) || 0)
-        ),
-        discount: Number(it.discount || 0),
-      })),
-      customerId: raw.customerId || undefined,
-      customerName: raw.customerName || undefined,
-    };
-  }
+  const vendorId = raw.vendorId || raw.sellerId || undefined;
+  const vendorName = raw.vendorName || raw.sellerName || undefined;
 
-  const single = raw.item || {};
-  const qty = Number(raw.quantity ?? single.qty ?? 0);
-  const lineTotal = Number(raw.total ?? raw.itemsTotal ?? single.total ?? 0);
+  const items = normalizeSaleItems(raw);
+  const lineTotal = Number(raw.total ?? raw.itemsTotal ?? 0);
 
   return {
     id,
     date,
     type: (raw.type || "CONTADO") as SaleType,
     total: Number(raw.total ?? raw.itemsTotal ?? lineTotal ?? 0),
-    items: [
-      {
-        productId: String(single.productId || raw.productId || ""),
-        productName: String(single.productName || raw.productName || ""),
-        sku: single.sku || raw.sku || "",
-        qty,
-        unitPrice: Number(
-          single.unitPrice ?? (lineTotal && qty ? lineTotal / qty : 0)
-        ),
-        discount: Number(single.discount || 0),
-      },
-    ],
+    items,
     customerId: raw.customerId || undefined,
     customerName: raw.customerName || undefined,
+    vendorId,
+    vendorName,
   };
 }
 
@@ -273,6 +278,18 @@ export default function FinancialDashboardCandies() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
+  // Sellers (para comisión)
+  const [sellers, setSellers] = useState<SellerCandy[]>([]);
+
+  // Pedidos por vendedor (ordenes vendedor)
+  const [vendorOrderDetails, setVendorOrderDetails] = useState<
+    Record<string, { associated: VendorPiece[]; remaining: VendorPiece[] }>
+  >({});
+  const [vendorAssociatedPacks, setVendorAssociatedPacks] = useState<
+    Record<string, number>
+  >({});
+
+  // Modal detalle cliente
   const [modalOpen, setModalOpen] = useState(false);
   const [modalCustomer, setModalCustomer] = useState<Customer | null>(null);
   const [modalPieces, setModalPieces] = useState<CreditPiece[]>([]);
@@ -284,6 +301,45 @@ export default function FinancialDashboardCandies() {
     saldoActual: 0,
     abonadoPeriodo: 0,
   });
+
+  // Modal detalle vendedor
+  const [vendorModalOpen, setVendorModalOpen] = useState(false);
+  const [vendorModalTitle, setVendorModalTitle] = useState("");
+  const [vendorModalPieces, setVendorModalPieces] = useState<VendorPiece[]>([]);
+  const [vendorModalLoading, setVendorModalLoading] = useState(false);
+
+  // Modal detalle venta (transacciones)
+  const [saleModalOpen, setSaleModalOpen] = useState(false);
+  const [saleModalSale, setSaleModalSale] = useState<SaleDoc | null>(null);
+
+  // ===== Cargar sellers (dulces) una sola vez =====
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "sellers_candies"));
+        const list: SellerCandy[] = [];
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          list.push({
+            id: d.id,
+            name: x.name || "",
+            commissionPercent: Number(x.commissionPercent || 0),
+          });
+        });
+        setSellers(list);
+      } catch (e) {
+        console.error("Error cargando sellers_candies", e);
+      }
+    })();
+  }, []);
+
+  const sellersById = useMemo(() => {
+    const m: Record<string, SellerCandy> = {};
+    sellers.forEach((s) => {
+      m[s.id] = s;
+    });
+    return m;
+  }, [sellers]);
 
   // ===== Carga de datos =====
   useEffect(() => {
@@ -298,11 +354,12 @@ export default function FinancialDashboardCandies() {
 
         sSnap.forEach((d) => {
           const x = d.data() as any;
-          const doc = normalizeSale(x, d.id);
-          if (!doc) return;
+          const docN = normalizeSale(x, d.id);
+          if (!docN) return;
 
-          if (doc.date <= toDate) allSales.push(doc);
-          if (doc.date >= fromDate && doc.date <= toDate) rangeSales.push(doc);
+          if (docN.date <= toDate) allSales.push(docN);
+          if (docN.date >= fromDate && docN.date <= toDate)
+            rangeSales.push(docN);
         });
         setSalesUpToToDate(allSales);
         setSalesRange(rangeSales);
@@ -381,6 +438,113 @@ export default function FinancialDashboardCandies() {
           });
         });
         setCustomers(cList);
+
+        // Pedidos por vendedor (inventory_candies_sellers)
+        const ivSnap = await getDocs(
+          collection(db, "inventory_candies_sellers")
+        );
+        const orderDetailsTmp: Record<
+          string,
+          { associated: VendorPiece[]; remaining: VendorPiece[] }
+        > = {};
+        const assocPacksByVendor: Record<string, number> = {};
+
+        ivSnap.forEach((d) => {
+          const x = d.data() as any;
+          const date = ensureDate(x);
+          if (!date) return;
+          if (date < fromDate || date > toDate) return;
+
+          const vendorId = x.sellerId || x.vendorId || "NO_VENDOR";
+          const productName = x.productName || "";
+          const sku = x.sku || "";
+
+          const unitsPerPackage = Math.max(
+            1,
+            Math.floor(Number(x.unitsPerPackage || 1))
+          );
+          const totalUnits = Number(x.totalUnits ?? 0);
+          const packagesField = Number(x.packages ?? 0);
+          const remainingUnits = Number(x.remainingUnits ?? x.remaining ?? 0);
+          const remainingPackagesField = Number(x.remainingPackages ?? 0);
+
+          const packagesOrdered =
+            packagesField > 0
+              ? packagesField
+              : totalUnits > 0
+              ? Math.floor(totalUnits / unitsPerPackage)
+              : 0;
+
+          const remainingPacks =
+            remainingPackagesField > 0
+              ? remainingPackagesField
+              : remainingUnits > 0
+              ? Math.floor(remainingUnits / unitsPerPackage)
+              : 0;
+
+          const totalVendorDoc = Number(x.totalVendor ?? 0);
+          const gainVendorDoc = Number(x.gainVendor ?? 0);
+          const originalPackages =
+            packagesField > 0
+              ? packagesField
+              : totalUnits > 0
+              ? Math.floor(totalUnits / unitsPerPackage)
+              : 0;
+
+          const moneyPerPackage =
+            originalPackages > 0 ? totalVendorDoc / originalPackages : 0;
+          const commissionPerPackage =
+            originalPackages > 0 ? gainVendorDoc / originalPackages : 0;
+
+          if (!orderDetailsTmp[vendorId]) {
+            orderDetailsTmp[vendorId] = { associated: [], remaining: [] };
+          }
+
+          if (packagesOrdered > 0) {
+            const qty = packagesOrdered;
+            const lineTotal = qty * moneyPerPackage;
+            const lineFinal = lineTotal;
+            const commission = qty * commissionPerPackage;
+            orderDetailsTmp[vendorId].associated.push({
+              saleId: d.id,
+              date,
+              productName,
+              sku,
+              qty,
+              unitPrice: moneyPerPackage,
+              lineTotal,
+              discount: 0,
+              lineFinal,
+              vendorCommissionAmount: commission,
+              type: "ASSOCIATED",
+            });
+            assocPacksByVendor[vendorId] =
+              (assocPacksByVendor[vendorId] || 0) + qty;
+          }
+
+          if (remainingPacks > 0) {
+            const qty = remainingPacks;
+            const lineTotal = qty * moneyPerPackage;
+            const lineFinal = lineTotal;
+            const commission = qty * commissionPerPackage;
+            orderDetailsTmp[vendorId].remaining.push({
+              saleId: d.id,
+              date,
+              productName,
+              sku,
+              qty,
+              unitPrice: moneyPerPackage,
+              lineTotal,
+              discount: 0,
+              lineFinal,
+              vendorCommissionAmount: commission,
+              type: "REMAINING",
+            });
+          }
+        });
+
+        setVendorOrderDetails(orderDetailsTmp);
+        setVendorAssociatedPacks(assocPacksByVendor);
       } catch (e) {
         console.error(e);
         setMsg("❌ Error cargando datos del dashboard.");
@@ -389,6 +553,42 @@ export default function FinancialDashboardCandies() {
       }
     })();
   }, [fromDate, toDate, refreshKey]);
+
+  // ===== helpers de comisión =====
+  const getSellerForSale = useCallback(
+    (s: SaleDoc): SellerCandy | undefined => {
+      if (s.vendorId && sellersById[s.vendorId]) {
+        return sellersById[s.vendorId];
+      }
+      const nameNorm = (s.vendorName || "").trim().toLowerCase();
+      if (!nameNorm) return undefined;
+      return sellers.find(
+        (v) => (v.name || "").trim().toLowerCase() === nameNorm
+      );
+    },
+    [sellersById, sellers]
+  );
+
+  const getItemCommission = useCallback(
+    (s: SaleDoc, it: SaleItem): number => {
+      const stored = Number(it.vendorCommissionAmount || 0);
+      if (stored) return stored;
+
+      const seller = getSellerForSale(s);
+      if (!seller || !seller.commissionPercent) return 0;
+
+      const qty = Number(it.qty || 0);
+      const unitPrice = Number(it.unitPrice || 0);
+      const lineTotal = qty * unitPrice;
+      const discount = Math.max(0, Number(it.discount || 0));
+      const lineFinal = Math.max(0, lineTotal - discount);
+      if (!lineFinal) return 0;
+
+      const percent = Number(seller.commissionPercent) || 0;
+      return (lineFinal * percent) / 100;
+    },
+    [getSellerForSale]
+  );
 
   // ====== COGS por FIFO ======
   const cogsFIFO = useMemo(() => {
@@ -423,15 +623,29 @@ export default function FinancialDashboardCandies() {
       0
     );
 
-    let piezasCash = 0;
-    let piezasCredito = 0;
+    let paquetesCash = 0;
+    let paquetesCredito = 0;
+    let comisionCash = 0;
+    let comisionCredito = 0;
+
     for (const s of salesRange) {
-      const qty = (s.items || []).reduce(
+      const saleQty = (s.items || []).reduce(
         (a, it) => a + (Number(it.qty) || 0),
         0
       );
-      if (s.type === "CONTADO") piezasCash += qty;
-      else piezasCredito += qty;
+
+      const saleCommission = (s.items || []).reduce(
+        (a, it) => a + getItemCommission(s, it),
+        0
+      );
+
+      if (s.type === "CONTADO") {
+        paquetesCash += saleQty;
+        comisionCash += saleCommission;
+      } else {
+        paquetesCredito += saleQty;
+        comisionCredito += saleCommission;
+      }
     }
 
     return {
@@ -443,21 +657,31 @@ export default function FinancialDashboardCandies() {
       abonosRecibidos,
       saldosPendientes,
       clientesConSaldo: clientesConSaldo.length,
-      piezasCash,
-      piezasCredito,
+      paquetesCash,
+      paquetesCredito,
+      comisionCash,
+      comisionCredito,
     };
-  }, [salesRange, expenses, abonos, customers, cogsFIFO]);
+  }, [salesRange, expenses, abonos, customers, cogsFIFO, getItemCommission]);
 
-  // ===== Consolidado por cliente con saldo =====
+  // ===== Consolidado por cliente con saldo ======
   const creditCustomersRows = useMemo(() => {
-    const countByCust: Record<string, number> = {};
+    const qtyByCust: Record<string, number> = {};
+    const fiadoByCust: Record<string, number> = {};
+
     for (const s of salesRange) {
       if (s.type !== "CREDITO" || !s.customerId) continue;
-      const count = (s.items || []).reduce(
-        (a, it) => a + (Number(it.qty) || 0),
-        0
-      );
-      countByCust[s.customerId] = (countByCust[s.customerId] || 0) + count;
+      for (const it of s.items || []) {
+        const qty = Number(it.qty || 0);
+        const unitPrice = Number(it.unitPrice || 0);
+        const lineTotal = qty * unitPrice;
+        const discount = Math.max(0, Number(it.discount || 0));
+        const lineFinal = Math.max(0, lineTotal - discount);
+
+        qtyByCust[s.customerId] = (qtyByCust[s.customerId] || 0) + qty;
+        fiadoByCust[s.customerId] =
+          (fiadoByCust[s.customerId] || 0) + lineFinal;
+      }
     }
 
     return customers
@@ -465,10 +689,11 @@ export default function FinancialDashboardCandies() {
       .map((c) => ({
         customerId: c.id,
         name: c.name,
-        piezasCredito: countByCust[c.id] || 0,
-        saldo: c.balance || 0,
+        paquetesAsociados: qtyByCust[c.id] || 0,
+        saldoTotal: fiadoByCust[c.id] || 0,
+        saldoPendiente: c.balance || 0,
       }))
-      .sort((a, b) => b.saldo - a.saldo);
+      .sort((a, b) => b.saldoPendiente - a.saldoPendiente);
   }, [customers, salesRange]);
 
   // === Mapa clienteId -> nombre (para mostrar en tabla) ===
@@ -483,7 +708,7 @@ export default function FinancialDashboardCandies() {
     return [...salesRange]
       .sort((a, b) => b.date.localeCompare(a.date))
       .map((s) => {
-        const piezas = (s.items || []).reduce(
+        const paquetes = (s.items || []).reduce(
           (acc, it) => acc + (Number(it.qty) || 0),
           0
         );
@@ -495,18 +720,119 @@ export default function FinancialDashboardCandies() {
           cliente = s.customerName?.trim() || "Cash";
         }
 
+        const avgPrice = paquetes > 0 ? s.total / paquetes : 0;
+
         return {
           id: s.id,
           date: s.date,
           type: s.type === "CREDITO" ? "Crédito" : "Cash",
           customer: cliente,
-          piezas,
+          paquetes,
           total: Number(s.total || 0),
+          avgPrice,
         };
       });
   }, [salesRange, customersById]);
 
-  // ===== Modal detalle cliente =====
+  // ===== Consolidado de vendedores =====
+  const vendorRows = useMemo(() => {
+    type Row = {
+      vendorId: string;
+      vendorName: string;
+      paquetesAsociados: number;
+      paquetesVendidos: number;
+      paquetesFiados: number;
+      totalVendido: number;
+      totalFiado: number;
+      comisionCash: number;
+      comisionCredito: number;
+      paquetesRestantes: number;
+    };
+
+    const map = new Map<string, Row>();
+
+    // Primero consolidamos las ventas (vendidos / fiados + comisiones)
+    for (const s of salesRange) {
+      const vId = s.vendorId || "NO_VENDOR";
+      const vName =
+        s.vendorName ||
+        sellersById[vId]?.name ||
+        (vId === "NO_VENDOR" ? "Sin vendedor" : "Sin vendedor");
+
+      if (!map.has(vId)) {
+        map.set(vId, {
+          vendorId: vId,
+          vendorName: vName,
+          paquetesAsociados: 0,
+          paquetesVendidos: 0,
+          paquetesFiados: 0,
+          totalVendido: 0,
+          totalFiado: 0,
+          comisionCash: 0,
+          comisionCredito: 0,
+          paquetesRestantes: 0,
+        });
+      }
+
+      const row = map.get(vId)!;
+
+      for (const it of s.items || []) {
+        const qty = Number(it.qty || 0);
+        const unitPrice = Number(it.unitPrice || 0);
+        const lineTotal = qty * unitPrice;
+        const discount = Math.max(0, Number(it.discount || 0));
+        const lineFinal = Math.max(0, lineTotal - discount);
+        const commission = getItemCommission(s, it);
+
+        if (s.type === "CONTADO") {
+          row.paquetesVendidos += qty;
+          row.totalVendido += lineFinal;
+          row.comisionCash += commission;
+        } else {
+          row.paquetesFiados += qty;
+          row.totalFiado += lineFinal;
+          row.comisionCredito += commission;
+        }
+      }
+    }
+
+    // Luego inyectamos paquetes asociados desde los pedidos del vendedor
+    for (const [vId, assocPacks] of Object.entries(vendorAssociatedPacks)) {
+      const existing = map.get(vId);
+      const vName =
+        existing?.vendorName ||
+        sellersById[vId]?.name ||
+        (vId === "NO_VENDOR" ? "Sin vendedor" : "Sin vendedor");
+
+      const row: Row = existing || {
+        vendorId: vId,
+        vendorName: vName,
+        paquetesAsociados: 0,
+        paquetesVendidos: 0,
+        paquetesFiados: 0,
+        totalVendido: 0,
+        totalFiado: 0,
+        comisionCash: 0,
+        comisionCredito: 0,
+        paquetesRestantes: 0,
+      };
+
+      row.paquetesAsociados = assocPacks;
+      // Restantes = asociados - vendidos - fiados (regla que mencionaste)
+      row.paquetesRestantes = Math.max(
+        assocPacks - row.paquetesVendidos - row.paquetesFiados,
+        0
+      );
+
+      map.set(vId, row);
+    }
+
+    return Array.from(map.values()).sort(
+      (a, b) => b.totalVendido + b.totalFiado - (a.totalVendido + a.totalFiado)
+    );
+  }, [salesRange, vendorAssociatedPacks, sellersById, getItemCommission]);
+
+  // ===== Modal detalle cliente (fiados) =====
   const openCustomerModal = async (row: {
     customerId: string;
     name: string;
@@ -584,6 +910,118 @@ export default function FinancialDashboardCandies() {
     }
   };
 
+  // ===== Modal detalle vendedor =====
+  const openVendorModal = (
+    vendorId: string,
+    vendorName: string,
+    mode: VendorPieceType
+  ) => {
+    setVendorModalOpen(true);
+    let title = "";
+
+    if (mode === "ASSOCIATED") {
+      title = `Paquetes asociados — ${vendorName}`;
+    } else if (mode === "REMAINING") {
+      title = `Paquetes restantes — ${vendorName}`;
+    } else if (mode === "CASH") {
+      title = `Paquetes vendidos (Cash) — ${vendorName}`;
+    } else {
+      title = `Paquetes fiados (Crédito) — ${vendorName}`;
+    }
+
+    setVendorModalTitle(title);
+    setVendorModalPieces([]);
+    setVendorModalLoading(true);
+
+    try {
+      // Modal desde pedidos del vendedor
+      if (mode === "ASSOCIATED" || mode === "REMAINING") {
+        const details = vendorOrderDetails[vendorId];
+        const pieces =
+          mode === "ASSOCIATED"
+            ? details?.associated || []
+            : details?.remaining || [];
+        setVendorModalPieces(
+          [...pieces].sort((a, b) => a.date.localeCompare(b.date))
+        );
+        setVendorModalLoading(false);
+        return;
+      }
+
+      // Modal desde ventas (Cash / Crédito)
+      const list: VendorPiece[] = [];
+
+      for (const s of salesRange) {
+        const sameVendor =
+          (s.vendorId || "NO_VENDOR") === vendorId ||
+          (!s.vendorId && vendorId === "NO_VENDOR");
+        if (!sameVendor) continue;
+
+        if (mode === "CASH" && s.type !== "CONTADO") continue;
+        if (mode === "CREDIT" && s.type !== "CREDITO") continue;
+
+        for (const it of s.items || []) {
+          const qty = Number(it.qty || 0);
+          const unitPrice = Number(it.unitPrice || 0);
+          const lineTotal = qty * unitPrice;
+          const discount = Math.max(0, Number(it.discount || 0));
+          const lineFinal = Math.max(0, lineTotal - discount);
+          const vendorCommissionAmount = getItemCommission(s, it);
+
+          list.push({
+            saleId: s.id,
+            date: s.date,
+            productName: it.productName,
+            sku: it.sku || "",
+            qty,
+            unitPrice,
+            lineTotal,
+            discount,
+            lineFinal,
+            vendorCommissionAmount,
+            type: mode,
+          });
+        }
+      }
+
+      setVendorModalPieces(list.sort((a, b) => a.date.localeCompare(b.date)));
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ No se pudo cargar el detalle del vendedor.");
+    } finally {
+      setVendorModalLoading(false);
+    }
+  };
+
+  // ===== Modal detalle venta (transacciones) =====
+  const openSaleModal = (saleId: string) => {
+    const sale = salesRange.find((s) => s.id === saleId) || null;
+    setSaleModalSale(sale);
+    setSaleModalOpen(true);
+  };
+
+  const handleDeleteSale = async (saleId: string) => {
+    if (
+      !window.confirm("¿Eliminar esta venta? Esta acción no se puede deshacer.")
+    ) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, "sales_candies", saleId));
+
+      setSalesRange((prev) => prev.filter((s) => s.id !== saleId));
+      setSalesUpToToDate((prev) => prev.filter((s) => s.id !== saleId));
+      setSaleModalOpen(false);
+      setSaleModalSale(null);
+    } catch (e) {
+      console.error(e);
+      alert(
+        "No se pudo eliminar la venta. Revisa la consola para más detalles."
+      );
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto">
       {/* Filtro */}
@@ -613,7 +1051,7 @@ export default function FinancialDashboardCandies() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-4">
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">Ventas Totales</div>
           <div className="text-xl font-semibold">
@@ -677,37 +1115,56 @@ export default function FinancialDashboardCandies() {
         </div>
 
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Piezas Contado</div>
-          <div className="text-xl font-semibold">{kpis.piezasCash}</div>
+          <div className="text-xs text-gray-600">Paquetes Cash</div>
+          <div className="text-xl font-semibold">{kpis.paquetesCash}</div>
         </div>
 
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Piezas Crédito (vendidas)</div>
-          <div className="text-xl font-semibold">{kpis.piezasCredito}</div>
+          <div className="text-xs text-gray-600">
+            Paquetes Crédito (vendidos)
+          </div>
+          <div className="text-xl font-semibold">{kpis.paquetesCredito}</div>
+        </div>
+
+        <div className="p-3 border rounded bg-gray-50">
+          <div className="text-xs text-gray-600">Comisión Cash</div>
+          <div className="text-xl font-semibold">
+            {money(kpis.comisionCash)}
+          </div>
+        </div>
+
+        <div className="p-3 border rounded bg-gray-50">
+          <div className="text-xs text-gray-600">Comisión Crédito</div>
+          <div className="text-xl font-semibold">
+            {money(kpis.comisionCredito)}
+          </div>
         </div>
       </div>
 
       {/* Consolidado por cliente */}
-      <h3 className="text-lg font-semibold mb-2">Consolidado por cliente</h3>
+      <h3 className="text-lg font-semibold mb-2">
+        Consolidado por cliente (Crédito)
+      </h3>
       <div className="bg-white p-2 rounded shadow border w-full mb-6">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
               <th className="p-2 border">Cliente</th>
-              <th className="p-2 border">Piezas Crédito (periodo)</th>
-              <th className="p-2 border">Saldo actual</th>
+              <th className="p-2 border">Paquetes asociados (periodo)</th>
+              <th className="p-2 border">Saldo total (periodo)</th>
+              <th className="p-2 border">Saldo pendiente</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-center" colSpan={3}>
+                <td className="p-4 text-center" colSpan={4}>
                   Cargando…
                 </td>
               </tr>
             ) : creditCustomersRows.length === 0 ? (
               <tr>
-                <td className="p-4 text-center" colSpan={3}>
+                <td className="p-4 text-center" colSpan={4}>
                   Sin clientes con saldo
                 </td>
               </tr>
@@ -724,12 +1181,15 @@ export default function FinancialDashboardCandies() {
                           name: r.name,
                         })
                       }
-                      title="Ver piezas fiadas del periodo"
+                      title="Ver paquetes fiados del periodo"
                     >
-                      {r.piezasCredito}
+                      {r.paquetesAsociados}
                     </button>
                   </td>
-                  <td className="p-2 border font-semibold">{money(r.saldo)}</td>
+                  <td className="p-2 border">{money(r.saldoTotal)}</td>
+                  <td className="p-2 border font-semibold">
+                    {money(r.saldoPendiente)}
+                  </td>
                 </tr>
               ))
             )}
@@ -737,40 +1197,171 @@ export default function FinancialDashboardCandies() {
         </table>
       </div>
 
-      {/* Transacciones del periodo (sin acciones) */}
-      <h3 className="text-lg font-semibold mb-2">Transacciones del periodo</h3>
-      <div className="bg-white p-2 rounded shadow border w-full mb-6">
+      {/* Consolidado de vendedores */}
+      <h3 className="text-lg font-semibold mb-2">Consolidado vendedores</h3>
+      <div className="bg-white p-2 rounded shadow border w-full mb-6 overflow-x-auto">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">Cliente</th>
-              <th className="p-2 border">Tipo</th>
-              <th className="p-2 border">Piezas</th>
-              <th className="p-2 border">Monto</th>
+              <th className="p-2 border whitespace-nowrap">Vendedor</th>
+              <th className="p-2 border whitespace-nowrap">
+                Paquetes asociados
+              </th>
+              <th className="p-2 border whitespace-nowrap">
+                Paquetes restantes
+              </th>
+              <th className="p-2 border whitespace-nowrap">
+                Paquetes vendidos (Cash)
+              </th>
+              <th className="p-2 border whitespace-nowrap">
+                Total vendido (Cash)
+              </th>
+              <th className="p-2 border whitespace-nowrap">Comisión Cash</th>
+              <th className="p-2 border whitespace-nowrap">
+                Paquetes fiados (Crédito)
+              </th>
+              <th className="p-2 border whitespace-nowrap">
+                Total fiado (Crédito)
+              </th>
+              <th className="p-2 border whitespace-nowrap">Comisión Crédito</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-center" colSpan={5}>
+                <td className="p-4 text-center" colSpan={9}>
+                  Cargando…
+                </td>
+              </tr>
+            ) : vendorRows.length === 0 ? (
+              <tr>
+                <td className="p-4 text-center" colSpan={9}>
+                  Sin datos de vendedores en el rango seleccionado.
+                </td>
+              </tr>
+            ) : (
+              vendorRows.map((v) => (
+                <tr key={v.vendorId} className="text-center">
+                  <td className="p-2 border whitespace-nowrap">
+                    {v.vendorName}
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    <button
+                      className="underline text-blue-600 hover:text-blue-800"
+                      onClick={() =>
+                        openVendorModal(v.vendorId, v.vendorName, "ASSOCIATED")
+                      }
+                    >
+                      {v.paquetesAsociados}
+                    </button>
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    <button
+                      className="underline text-blue-600 hover:text-blue-800"
+                      onClick={() =>
+                        openVendorModal(v.vendorId, v.vendorName, "REMAINING")
+                      }
+                    >
+                      {v.paquetesRestantes}
+                    </button>
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    <button
+                      className="underline text-blue-600 hover:text-blue-800"
+                      onClick={() =>
+                        openVendorModal(v.vendorId, v.vendorName, "CASH")
+                      }
+                    >
+                      {v.paquetesVendidos}
+                    </button>
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {money(v.totalVendido)}
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {money(v.comisionCash)}
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    <button
+                      className="underline text-blue-600 hover:text-blue-800"
+                      onClick={() =>
+                        openVendorModal(v.vendorId, v.vendorName, "CREDIT")
+                      }
+                    >
+                      {v.paquetesFiados}
+                    </button>
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {money(v.totalFiado)}
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {money(v.comisionCredito)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Transacciones del periodo */}
+      <h3 className="text-lg font-semibold mb-2">Transacciones del periodo</h3>
+      <div className="bg-white p-2 rounded shadow border w-full mb-6 overflow-x-auto">
+        <table className="min-w-full w-full text-sm">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="p-2 border whitespace-nowrap">Fecha</th>
+              <th className="p-2 border whitespace-nowrap">Cliente</th>
+              <th className="p-2 border whitespace-nowrap">Tipo</th>
+              <th className="p-2 border whitespace-nowrap">Paquetes</th>
+              <th className="p-2 border whitespace-nowrap">
+                Precio venta (prom.)
+              </th>
+              <th className="p-2 border whitespace-nowrap">Total</th>
+              <th className="p-2 border whitespace-nowrap">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td className="p-4 text-center" colSpan={7}>
                   Cargando…
                 </td>
               </tr>
             ) : salesRows.length === 0 ? (
               <tr>
-                <td className="p-4 text-center" colSpan={5}>
+                <td className="p-4 text-center" colSpan={7}>
                   Sin transacciones en el rango seleccionado.
                 </td>
               </tr>
             ) : (
               salesRows.map((r) => (
                 <tr key={r.id} className="text-center">
-                  <td className="p-2 border">{r.date}</td>
-                  <td className="p-2 border">{r.customer}</td>
-                  <td className="p-2 border">{r.type}</td>
-                  <td className="p-2 border">{r.piezas}</td>
-                  <td className="p-2 border">{money(r.total)}</td>
+                  <td className="p-2 border whitespace-nowrap">{r.date}</td>
+                  <td className="p-2 border whitespace-nowrap">{r.customer}</td>
+                  <td className="p-2 border whitespace-nowrap">{r.type}</td>
+                  <td className="p-2 border whitespace-nowrap">
+                    <button
+                      className="underline text-blue-600 hover:text-blue-800"
+                      onClick={() => openSaleModal(r.id)}
+                    >
+                      {r.paquetes}
+                    </button>
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {money(r.avgPrice)}
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    {money(r.total)}
+                  </td>
+                  <td className="p-2 border whitespace-nowrap">
+                    <button
+                      className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                      onClick={() => handleDeleteSale(r.id)}
+                    >
+                      Eliminar
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -839,7 +1430,7 @@ export default function FinancialDashboardCandies() {
           <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-5xl p-4">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-lg font-bold">
-                Detalle del cliente — {modalCustomer?.name || ""}
+                Detalle cliente — {modalCustomer?.name || ""}
               </h3>
               <button
                 className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
@@ -853,7 +1444,7 @@ export default function FinancialDashboardCandies() {
             <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-3">
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">
-                  Total Bruto (periodo)
+                  Total bruto (periodo)
                 </div>
                 <div className="text-xl font-semibold">
                   {money(modalKpis.totalBruto)}
@@ -867,7 +1458,7 @@ export default function FinancialDashboardCandies() {
               </div>
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">
-                  Monto Total Fiado (periodo)
+                  Monto total fiado (periodo)
                 </div>
                 <div className="text-xl font-semibold">
                   {money(modalKpis.totalFiado)}
@@ -894,7 +1485,7 @@ export default function FinancialDashboardCandies() {
                     <th className="p-2 border">Fecha compra</th>
                     <th className="p-2 border">Producto</th>
                     <th className="p-2 border">SKU</th>
-                    <th className="p-2 border">Cant.</th>
+                    <th className="p-2 border">Paquetes</th>
                     <th className="p-2 border">P. Unit</th>
                     <th className="p-2 border">Monto</th>
                     <th className="p-2 border">Descuento</th>
@@ -911,7 +1502,7 @@ export default function FinancialDashboardCandies() {
                   ) : modalPieces.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="p-4 text-center">
-                        Sin piezas fiadas en el periodo.
+                        Sin paquetes fiados en el periodo.
                       </td>
                     </tr>
                   ) : (
@@ -932,6 +1523,138 @@ export default function FinancialDashboardCandies() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal detalle vendedor */}
+      {vendorModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-5xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-bold">{vendorModalTitle}</h3>
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => setVendorModalOpen(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="bg-white rounded border overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border">Fecha</th>
+                    <th className="p-2 border">Producto</th>
+                    <th className="p-2 border">SKU</th>
+                    <th className="p-2 border">Paquetes</th>
+                    <th className="p-2 border">P. Unit</th>
+                    <th className="p-2 border">Monto</th>
+                    <th className="p-2 border">Descuento</th>
+                    <th className="p-2 border">Monto final</th>
+                    <th className="p-2 border">Comisión</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {vendorModalLoading ? (
+                    <tr>
+                      <td colSpan={9} className="p-4 text-center">
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : vendorModalPieces.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="p-4 text-center">
+                        Sin paquetes para este vendedor en el periodo.
+                      </td>
+                    </tr>
+                  ) : (
+                    vendorModalPieces.map((p, i) => (
+                      <tr key={`${p.saleId}-${i}`} className="text-center">
+                        <td className="p-2 border">{p.date}</td>
+                        <td className="p-2 border">{p.productName}</td>
+                        <td className="p-2 border">{p.sku || "—"}</td>
+                        <td className="p-2 border">{p.qty}</td>
+                        <td className="p-2 border">{money(p.unitPrice)}</td>
+                        <td className="p-2 border">{money(p.lineTotal)}</td>
+                        <td className="p-2 border">{money(p.discount)}</td>
+                        <td className="p-2 border">{money(p.lineFinal)}</td>
+                        <td className="p-2 border">
+                          {money(p.vendorCommissionAmount)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal detalle venta (transacciones) */}
+      {saleModalOpen && saleModalSale && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-4xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-bold">
+                Detalle de venta — {saleModalSale.date}
+              </h3>
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => setSaleModalOpen(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="bg-white rounded border overflow-x-auto mb-3">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border">Producto</th>
+                    <th className="p-2 border">SKU</th>
+                    <th className="p-2 border">Paquetes</th>
+                    <th className="p-2 border">P. Unit</th>
+                    <th className="p-2 border">Monto</th>
+                    <th className="p-2 border">Comisión</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(saleModalSale.items || []).map((it, i) => {
+                    const qty = Number(it.qty || 0);
+                    const unitPrice = Number(it.unitPrice || 0);
+                    const lineTotal = qty * unitPrice;
+                    const commission = getItemCommission(saleModalSale, it);
+
+                    return (
+                      <tr key={i} className="text-center">
+                        <td className="p-2 border">{it.productName}</td>
+                        <td className="p-2 border">{it.sku || "—"}</td>
+                        <td className="p-2 border">{qty}</td>
+                        <td className="p-2 border">{money(unitPrice)}</td>
+                        <td className="p-2 border">{money(lineTotal)}</td>
+                        <td className="p-2 border">{money(commission)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-between items-center">
+              <div className="text-sm">
+                <span className="font-semibold">Total venta:&nbsp;</span>
+                {money(saleModalSale.total)}
+              </div>
+              <button
+                className="text-xs bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700"
+                onClick={() => handleDeleteSale(saleModalSale.id)}
+              >
+                Eliminar venta
+              </button>
             </div>
           </div>
         </div>

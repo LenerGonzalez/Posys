@@ -11,9 +11,10 @@ import {
   updateDoc,
   where,
   deleteDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../../firebase";
-import RefreshButton from "../../components/common/RefreshButton";
+import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
 // Catálogo (solo para el select de categoría)
@@ -34,13 +35,35 @@ const CANDY_CATEGORIES = [
 
 type CandyCategory = (typeof CANDY_CATEGORIES)[number];
 
-interface CandyOrderItem {
-  id: string; // en modo edición, este es el id del doc en products_candies
+function roundToInt(value: number): number {
+  if (!isFinite(value)) return 0;
+  return Math.round(value);
+}
+
+type CatalogCandyProduct = {
+  id: string; // doc id en products_candies (CATÁLOGO)
   name: string;
   category: CandyCategory;
-  providerPrice: number;
+  providerPrice: number; // precio base en catálogo (por paquete)
+  unitsPerPackage: number; // und x paquete base en catálogo
+  // si tenés más campos en catálogo, acá los agregás (opcional)
+};
+
+interface CandyOrderItem {
+  // ✅ ahora este id es el ID del producto en CATÁLOGO
+  id: string; // productId (catalog)
+  name: string;
+  category: CandyCategory;
+
+  providerPrice: number; // tomado de catálogo
   packages: number;
   unitsPerPackage: number;
+
+  // ✅ márgenes por producto (editables en columnas)
+  marginRivas: number;
+  marginSanJorge: number;
+  marginIsla: number;
+
   subtotal: number;
   totalRivas: number;
   totalSanJorge: number;
@@ -51,7 +74,8 @@ interface CandyOrderItem {
   unitPriceRivas: number;
   unitPriceSanJorge: number;
   unitPriceIsla: number;
-  // NUEVO: paquetes restantes por producto (según inventario)
+
+  // paquetes restantes por producto (según inventario)
   remainingPackages?: number;
 }
 
@@ -59,14 +83,17 @@ interface CandyOrderSummaryRow {
   id: string; // id del doc en candy_main_orders
   name: string;
   date: string;
+
   totalPackages: number;
   subtotal: number;
   totalRivas: number;
   totalSanJorge: number;
   totalIsla: number;
+
   marginRivas: number;
   marginSanJorge: number;
   marginIsla: number;
+
   createdAt: Timestamp;
 }
 
@@ -76,19 +103,38 @@ interface OrderInventoryAgg {
   remainingPackages: number;
 }
 
-function roundToInt(value: number): number {
-  if (!isFinite(value)) return 0;
-  return Math.round(value);
-}
+type CandyMainOrderDoc = {
+  name: string;
+  date: string;
+
+  totalPackages: number;
+  subtotal: number;
+  totalRivas: number;
+  totalSanJorge: number;
+  totalIsla: number;
+
+  marginRivas: number;
+  marginSanJorge: number;
+  marginIsla: number;
+
+  createdAt: Timestamp;
+
+  // ✅ items quedan dentro del pedido (ya no se crean productos)
+  items: CandyOrderItem[];
+};
 
 export default function CandyMainOrders() {
   const { refreshKey, refresh } = useManualRefresh();
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
 
+  // ====== CATÁLOGO (products_candies) ======
+  const [catalog, setCatalog] = useState<CatalogCandyProduct[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+
   // listado de pedidos
   const [orders, setOrders] = useState<CandyOrderSummaryRow[]>([]);
-  // NUEVO: agregados de paquetes por pedido
+  // agregados de paquetes por pedido
   const [orderInventoryAgg, setOrderInventoryAgg] = useState<
     Record<string, OrderInventoryAgg>
   >({});
@@ -100,22 +146,28 @@ export default function CandyMainOrders() {
   const [orderName, setOrderName] = useState<string>("");
   const [orderDate, setOrderDate] = useState<string>("");
 
-  // % de ganancia por sucursal (para calcular precios)
-  const [marginRivas, setMarginRivas] = useState<string>("20"); // 20% → /0.80
-  const [marginSanJorge, setMarginSanJorge] = useState<string>("15"); // 15% → /0.85
-  const [marginIsla, setMarginIsla] = useState<string>("30"); // 30% → /0.70
+  // % de ganancia por sucursal (inputs de arriba)
+  const [marginRivas, setMarginRivas] = useState<string>("20");
+  const [marginSanJorge, setMarginSanJorge] = useState<string>("15");
+  const [marginIsla, setMarginIsla] = useState<string>("30");
 
   // items del pedido
   const [orderItems, setOrderItems] = useState<CandyOrderItem[]>([]);
 
   // campos para agregar item (solo en nuevo pedido)
   const [orderCategory, setOrderCategory] = useState<CandyCategory>("Caramelo");
+
+  // ✅ ahora se selecciona producto del CATÁLOGO
+  const [orderProductId, setOrderProductId] = useState<string>("");
+
+  // estos se auto-llenan desde catálogo (solo lectura)
   const [orderProductName, setOrderProductName] = useState<string>("");
   const [orderProviderPrice, setOrderProviderPrice] = useState<string>("");
-  const [orderPackages, setOrderPackages] = useState<string>("0");
   const [orderUnitsPerPackage, setOrderUnitsPerPackage] = useState<string>("1");
 
-  // ==== cálculos de un item en base a los % actuales ====
+  const [orderPackages, setOrderPackages] = useState<string>("0");
+
+  // ==== cálculos de un item en base a márgenes ====
   const calcOrderItemValues = (
     providerPriceNum: number,
     packagesNum: number,
@@ -127,6 +179,7 @@ export default function CandyMainOrders() {
     const mSJ = Math.min(Math.max(margins.marginSJ, 0), 99.9) / 100;
     const mIsla = Math.min(Math.max(margins.marginIsla, 0), 99.9) / 100;
 
+    // 🔥 Respeto tu lógica actual: total = subtotal / (1 - margen)
     const totalR =
       packagesNum > 0 && mR < 1 ? subtotalCalc / (1 - mR) : subtotalCalc;
     const totalSJ =
@@ -156,17 +209,95 @@ export default function CandyMainOrders() {
     };
   };
 
+  const resetOrderForm = () => {
+    setEditingOrderId(null);
+    setOrderName("");
+    setOrderDate("");
+    setOrderItems([]);
+    setOrderCategory("Caramelo");
+
+    setOrderProductId("");
+    setOrderProductName("");
+    setOrderProviderPrice("");
+    setOrderPackages("0");
+    setOrderUnitsPerPackage("1");
+
+    setMarginRivas("20");
+    setMarginSanJorge("15");
+    setMarginIsla("30");
+  };
+
+  // ===== Cargar catálogo =====
+  const loadCatalog = async () => {
+    setCatalogLoading(true);
+    try {
+      const snap = await getDocs(
+        query(collection(db, "products_candies"), orderBy("createdAt", "desc"))
+      );
+      const list: CatalogCandyProduct[] = [];
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        list.push({
+          id: d.id,
+          name: String(x.name ?? "").trim(),
+          category: (x.category as CandyCategory) ?? "Caramelo",
+          providerPrice: Number(x.providerPrice ?? 0),
+          unitsPerPackage: Number(x.unitsPerPackage ?? 1),
+        });
+      });
+      setCatalog(list);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error cargando catálogo de dulces.");
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCatalog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  // productos disponibles para categoría seleccionada (nuevo pedido)
+  const catalogByCategory = useMemo(() => {
+    return catalog
+      .filter((p) => p.category === orderCategory)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [catalog, orderCategory]);
+
+  // al seleccionar producto (nuevo pedido), auto-llenar datos
+  useEffect(() => {
+    if (!orderProductId) {
+      setOrderProductName("");
+      setOrderProviderPrice("");
+      setOrderUnitsPerPackage("1");
+      return;
+    }
+    const p = catalog.find((x) => x.id === orderProductId);
+    if (!p) return;
+    setOrderProductName(p.name);
+    setOrderProviderPrice(String(p.providerPrice ?? 0));
+    setOrderUnitsPerPackage(String(p.unitsPerPackage ?? 1));
+  }, [orderProductId, catalog]);
+
   const addItemToOrder = () => {
     setMsg("");
 
-    if (!orderProductName.trim()) {
-      setMsg("Ingresa el nombre del producto del pedido general.");
+    if (!orderProductId) {
+      setMsg("Selecciona un producto del catálogo.");
       return;
     }
 
-    const providerPriceNum = Number(orderProviderPrice || 0);
+    const catProd = catalog.find((x) => x.id === orderProductId);
+    if (!catProd) {
+      setMsg("Producto de catálogo no encontrado (refresca).");
+      return;
+    }
+
+    const providerPriceNum = Number(catProd.providerPrice || 0);
     const packagesNum = Number(orderPackages || 0);
-    const unitsNum = Number(orderUnitsPerPackage || 0);
+    const unitsNum = Number(catProd.unitsPerPackage || 0);
 
     if (providerPriceNum < 0) {
       setMsg("El precio proveedor no puede ser negativo.");
@@ -181,58 +312,78 @@ export default function CandyMainOrders() {
       return;
     }
 
+    // ✅ Márgenes actuales (inputs de arriba) se guardan en la fila
+    const mR = Number(marginRivas || 0);
+    const mSJ = Number(marginSanJorge || 0);
+    const mI = Number(marginIsla || 0);
+
     const vals = calcOrderItemValues(providerPriceNum, packagesNum, {
-      marginR: Number(marginRivas || 0),
-      marginSJ: Number(marginSanJorge || 0),
-      marginIsla: Number(marginIsla || 0),
+      marginR: mR,
+      marginSJ: mSJ,
+      marginIsla: mI,
     });
 
-    const newItem: CandyOrderItem = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: orderProductName.trim(),
-      category: orderCategory,
-      providerPrice: providerPriceNum,
-      packages: packagesNum,
-      unitsPerPackage: unitsNum,
-      subtotal: vals.subtotal,
-      totalRivas: vals.totalRivas,
-      totalSanJorge: vals.totalSanJorge,
-      totalIsla: vals.totalIsla,
-      gainRivas: vals.gainRivas,
-      gainSanJorge: vals.gainSanJorge,
-      gainIsla: vals.gainIsla,
-      unitPriceRivas: vals.unitPriceRivas,
-      unitPriceSanJorge: vals.unitPriceSanJorge,
-      unitPriceIsla: vals.unitPriceIsla,
-      remainingPackages: packagesNum, // al crear, todo está disponible
-    };
+    // si ya existe ese producto en la orden, sumamos paquetes (para no duplicar filas)
+    const existing = orderItems.find((it) => it.id === catProd.id);
+    if (existing) {
+      setOrderItems((prev) =>
+        prev.map((it) => {
+          if (it.id !== catProd.id) return it;
+          const newPackages = Number(it.packages || 0) + packagesNum;
+          const newVals = calcOrderItemValues(providerPriceNum, newPackages, {
+            marginR: Number(it.marginRivas || mR),
+            marginSJ: Number(it.marginSanJorge || mSJ),
+            marginIsla: Number(it.marginIsla || mI),
+          });
+          return {
+            ...it,
+            // mantenemos precio/und de catálogo
+            providerPrice: providerPriceNum,
+            unitsPerPackage: unitsNum,
+            packages: newPackages,
+            remainingPackages:
+              (it.remainingPackages ?? it.packages) + packagesNum,
+            ...newVals,
+          };
+        })
+      );
+    } else {
+      const newItem: CandyOrderItem = {
+        id: catProd.id,
+        name: catProd.name,
+        category: catProd.category,
+        providerPrice: providerPriceNum,
+        packages: packagesNum,
+        unitsPerPackage: unitsNum,
 
-    setOrderItems((prev) => [...prev, newItem]);
+        marginRivas: mR,
+        marginSanJorge: mSJ,
+        marginIsla: mI,
+
+        subtotal: vals.subtotal,
+        totalRivas: vals.totalRivas,
+        totalSanJorge: vals.totalSanJorge,
+        totalIsla: vals.totalIsla,
+        gainRivas: vals.gainRivas,
+        gainSanJorge: vals.gainSanJorge,
+        gainIsla: vals.gainIsla,
+        unitPriceRivas: vals.unitPriceRivas,
+        unitPriceSanJorge: vals.unitPriceSanJorge,
+        unitPriceIsla: vals.unitPriceIsla,
+
+        remainingPackages: packagesNum,
+      };
+
+      setOrderItems((prev) => [...prev, newItem]);
+    }
 
     // limpiar campos de item
-    setOrderProductName("");
-    setOrderProviderPrice("");
+    setOrderProductId("");
     setOrderPackages("0");
-    setOrderUnitsPerPackage("1");
   };
 
   const removeItemFromOrder = (id: string) => {
     setOrderItems((prev) => prev.filter((it) => it.id !== id));
-  };
-
-  const resetOrderForm = () => {
-    setEditingOrderId(null);
-    setOrderName("");
-    setOrderDate("");
-    setOrderItems([]);
-    setOrderCategory("Caramelo");
-    setOrderProductName("");
-    setOrderProviderPrice("");
-    setOrderPackages("0");
-    setOrderUnitsPerPackage("1");
-    setMarginRivas("20");
-    setMarginSanJorge("15");
-    setMarginIsla("30");
   };
 
   const orderSummary = useMemo(() => {
@@ -266,27 +417,35 @@ export default function CandyMainOrders() {
 
         let updated: CandyOrderItem = { ...it };
 
-        if (field === "name") {
-          updated.name = value;
-        } else if (field === "category") {
-          updated.category = value as CandyCategory;
-        } else if (field === "providerPrice") {
-          updated.providerPrice = Number(value || 0);
-        } else if (field === "packages") {
+        if (field === "packages") {
           updated.packages = Number(value || 0);
         } else if (field === "unitsPerPackage") {
           updated.unitsPerPackage = Number(value || 0);
+        } else if (field === "marginRivas") {
+          updated.marginRivas = Number(value || 0);
+        } else if (field === "marginSanJorge") {
+          updated.marginSanJorge = Number(value || 0);
+        } else if (field === "marginIsla") {
+          updated.marginIsla = Number(value || 0);
         }
 
-        // Si cambian precio proveedor o paquetes, recalculamos totales
-        if (field === "providerPrice" || field === "packages") {
+        // ✅ providerPrice se toma del catálogo; si cambió en catálogo y querés refrescarlo:
+        // lo dejamos como está en el item, pero en open/edit lo normalizamos.
+
+        // ✅ Recalcular si cambia packages o márgenes
+        if (
+          field === "packages" ||
+          field === "marginRivas" ||
+          field === "marginSanJorge" ||
+          field === "marginIsla"
+        ) {
           const vals = calcOrderItemValues(
             updated.providerPrice,
             updated.packages,
             {
-              marginR: Number(marginRivas || 0),
-              marginSJ: Number(marginSanJorge || 0),
-              marginIsla: Number(marginIsla || 0),
+              marginR: Number(updated.marginRivas || 0),
+              marginSJ: Number(updated.marginSanJorge || 0),
+              marginIsla: Number(updated.marginIsla || 0),
             }
           );
           updated = { ...updated, ...vals };
@@ -327,7 +486,7 @@ export default function CandyMainOrders() {
         });
         setOrders(ordersList);
 
-        // NUEVO: agregados de paquetes por pedido desde inventory_candies
+        // agregados por orden desde inventory_candies
         const invSnap = await getDocs(collection(db, "inventory_candies"));
         const agg: Record<string, OrderInventoryAgg> = {};
 
@@ -391,72 +550,55 @@ export default function CandyMainOrders() {
       const marginSJ = Number(marginSanJorge || 0);
       const marginI = Number(marginIsla || 0);
 
-      if (editingOrderId) {
-        // Validar items antes de guardar
-        for (const it of orderItems) {
-          if (!it.name.trim()) {
-            setMsg("Hay un producto sin nombre en el pedido.");
-            return;
-          }
-          if (it.providerPrice < 0) {
-            setMsg(
-              `El precio proveedor no puede ser negativo (producto: ${it.name}).`
-            );
-            return;
-          }
-          if (it.packages <= 0) {
-            setMsg(
-              `Los paquetes deben ser mayor que 0 (producto: ${it.name}).`
-            );
-            return;
-          }
-          if (it.unitsPerPackage <= 0) {
-            setMsg(
-              `Las unidades por paquete deben ser mayor que 0 (producto: ${it.name}).`
-            );
-            return;
-          }
+      // Validar items antes de guardar
+      for (const it of orderItems) {
+        if (!it.name.trim()) {
+          setMsg("Hay un producto sin nombre en el pedido.");
+          return;
         }
+        if (it.providerPrice < 0) {
+          setMsg(
+            `El precio proveedor no puede ser negativo (producto: ${it.name}).`
+          );
+          return;
+        }
+        if (it.packages <= 0) {
+          setMsg(`Los paquetes deben ser mayor que 0 (producto: ${it.name}).`);
+          return;
+        }
+        if (it.unitsPerPackage <= 0) {
+          setMsg(
+            `Las unidades por paquete deben ser mayor que 0 (producto: ${it.name}).`
+          );
+          return;
+        }
+      }
 
-        // Actualizar cabecera
+      const header: Omit<CandyMainOrderDoc, "createdAt"> & {
+        createdAt?: Timestamp;
+      } = {
+        name: orderName || `Pedido ${dateStr}`,
+        date: dateStr,
+        totalPackages: summary.totalPackages,
+        subtotal: summary.subtotal,
+        totalRivas: summary.totalRivas,
+        totalSanJorge: summary.totalSanJorge,
+        totalIsla: summary.totalIsla,
+        marginRivas: marginR,
+        marginSanJorge: marginSJ,
+        marginIsla: marginI,
+        items: orderItems,
+      };
+
+      if (editingOrderId) {
+        // ✅ actualizar pedido (cabecera + items)
         await updateDoc(doc(db, "candy_main_orders", editingOrderId), {
-          name: orderName || `Pedido ${editingOrderId}`,
-          date: dateStr,
-          totalPackages: summary.totalPackages,
-          subtotal: summary.subtotal,
-          totalRivas: summary.totalRivas,
-          totalSanJorge: summary.totalSanJorge,
-          totalIsla: summary.totalIsla,
-          marginRivas: marginR,
-          marginSanJorge: marginSJ,
-          marginIsla: marginI,
+          ...header,
         });
 
-        // Actualizar productos e inventarios de este pedido
+        // ✅ actualizar inventarios de esa orden (1 doc por producto de la orden)
+        // estrategia: para cada item -> upsert en inventory_candies por (orderId, productId)
         for (const it of orderItems) {
-          const productUpdate = {
-            name: it.name.trim(),
-            category: it.category,
-            providerPrice: it.providerPrice,
-            packages: it.packages,
-            unitsPerPackage: it.unitsPerPackage,
-            subtotal: it.subtotal,
-            totalRivas: it.totalRivas,
-            totalSanJorge: it.totalSanJorge,
-            totalIsla: it.totalIsla,
-            gainRivas: it.gainRivas,
-            gainSanJorge: it.gainSanJorge,
-            gainIsla: it.gainIsla,
-            unitPriceRivas: it.unitPriceRivas,
-            unitPriceSanJorge: it.unitPriceSanJorge,
-            unitPriceIsla: it.unitPriceIsla,
-            inventoryDate: dateStr,
-          };
-
-          // it.id = id del producto en products_candies
-          await updateDoc(doc(db, "products_candies", it.id), productUpdate);
-
-          // Buscar inventario asociado a este producto y pedido
           const invSnap = await getDocs(
             query(
               collection(db, "inventory_candies"),
@@ -465,33 +607,24 @@ export default function CandyMainOrders() {
             )
           );
 
-          const newTotalUnits = it.packages * it.unitsPerPackage;
+          const totalUnitsNew = it.packages * it.unitsPerPackage;
+          const remainingPackagesCurrent = it.remainingPackages ?? it.packages;
 
-          for (const invDoc of invSnap.docs) {
-            const data = invDoc.data() as any;
-            const oldTotalUnits = Number(data.totalUnits ?? 0);
-            const oldQuantity = Number(data.quantity ?? oldTotalUnits);
-            const oldRemaining = Number(data.remaining ?? oldTotalUnits);
-
-            const deltaUnits = newTotalUnits - oldTotalUnits;
-            const newQuantity = Math.max(0, oldQuantity + deltaUnits);
-            const newRemaining = Math.max(0, oldRemaining + deltaUnits);
-
-            const unitsPerPackageLocal =
-              Number(data.unitsPerPackage || it.unitsPerPackage || 1) || 1;
-            const newRemainingPackages = Math.round(
-              newRemaining / unitsPerPackageLocal
-            );
-
-            await updateDoc(doc(db, "inventory_candies", invDoc.id), {
-              productName: it.name.trim(),
+          if (invSnap.empty) {
+            // crear inventario si no existía
+            await addDoc(collection(db, "inventory_candies"), {
+              productId: it.id,
+              productName: it.name,
               category: it.category,
-              quantity: newQuantity,
-              remaining: newRemaining,
-              packages: newRemainingPackages,
-              remainingPackages: newRemainingPackages,
+              measurement: "unidad",
+
+              quantity: totalUnitsNew,
+              remaining: totalUnitsNew,
+              packages: it.packages,
+              remainingPackages: remainingPackagesCurrent,
               unitsPerPackage: it.unitsPerPackage,
-              totalUnits: newTotalUnits,
+              totalUnits: totalUnitsNew,
+
               providerPrice: it.providerPrice,
               subtotal: it.subtotal,
               totalRivas: it.totalRivas,
@@ -503,63 +636,126 @@ export default function CandyMainOrders() {
               unitPriceRivas: it.unitPriceRivas,
               unitPriceSanJorge: it.unitPriceSanJorge,
               unitPriceIsla: it.unitPriceIsla,
+
               date: dateStr,
+              createdAt: Timestamp.now(),
+              status: "PENDIENTE",
+              orderId: editingOrderId,
             });
+          } else {
+            // update coherente sin “inventario duplicado”
+            for (const invDoc of invSnap.docs) {
+              const data = invDoc.data() as any;
+              const oldTotalUnits = Number(data.totalUnits ?? 0);
+              const oldRemaining = Number(data.remaining ?? oldTotalUnits);
+
+              // mantenemos proporción: delta totalUnits ajusta remaining
+              const deltaUnits = totalUnitsNew - oldTotalUnits;
+              const newRemaining = Math.max(0, oldRemaining + deltaUnits);
+
+              const newRemainingPackages = Math.round(
+                newRemaining / (Number(it.unitsPerPackage || 1) || 1)
+              );
+
+              await updateDoc(doc(db, "inventory_candies", invDoc.id), {
+                productName: it.name,
+                category: it.category,
+
+                unitsPerPackage: it.unitsPerPackage,
+                totalUnits: totalUnitsNew,
+
+                quantity: totalUnitsNew,
+                remaining: newRemaining,
+
+                packages: it.packages,
+                remainingPackages: newRemainingPackages,
+
+                providerPrice: it.providerPrice,
+                subtotal: it.subtotal,
+                totalRivas: it.totalRivas,
+                totalSanJorge: it.totalSanJorge,
+                totalIsla: it.totalIsla,
+                gainRivas: it.gainRivas,
+                gainSanJorge: it.gainSanJorge,
+                gainIsla: it.gainIsla,
+                unitPriceRivas: it.unitPriceRivas,
+                unitPriceSanJorge: it.unitPriceSanJorge,
+                unitPriceIsla: it.unitPriceIsla,
+
+                date: dateStr,
+              });
+            }
           }
         }
 
-        // Refrescar resumen en la tabla de pedidos
+        // ✅ eliminar inventarios de productos que ya no estén en la orden
+        const invAll = await getDocs(
+          query(
+            collection(db, "inventory_candies"),
+            where("orderId", "==", editingOrderId)
+          )
+        );
+        const itemIds = new Set(orderItems.map((x) => x.id));
+        for (const invDoc of invAll.docs) {
+          const x = invDoc.data() as any;
+          const pid = String(x.productId || "");
+          if (pid && !itemIds.has(pid)) {
+            await deleteDoc(doc(db, "inventory_candies", invDoc.id));
+          }
+        }
+
+        // refrescar lista
         setOrders((prev) =>
           prev.map((o) =>
             o.id === editingOrderId
               ? {
                   ...o,
-                  name: orderName || `Pedido ${editingOrderId}`,
-                  date: dateStr,
-                  totalPackages: summary.totalPackages,
-                  subtotal: summary.subtotal,
-                  totalRivas: summary.totalRivas,
-                  totalSanJorge: summary.totalSanJorge,
-                  totalIsla: summary.totalIsla,
-                  marginRivas: marginR,
-                  marginSanJorge: marginSJ,
-                  marginIsla: marginI,
+                  name: header.name,
+                  date: header.date,
+                  totalPackages: header.totalPackages,
+                  subtotal: header.subtotal,
+                  totalRivas: header.totalRivas,
+                  totalSanJorge: header.totalSanJorge,
+                  totalIsla: header.totalIsla,
+                  marginRivas: header.marginRivas,
+                  marginSanJorge: header.marginSanJorge,
+                  marginIsla: header.marginIsla,
                 }
               : o
           )
         );
 
-        setMsg("✅ Pedido general actualizado (productos e inventario).");
+        setMsg("✅ Orden maestra actualizada (pedido + inventario).");
       } else {
-        // crear nuevo pedido
-        const header = {
-          name: orderName || `Pedido ${todayStr}`,
-          date: dateStr,
-          totalPackages: summary.totalPackages,
-          subtotal: summary.subtotal,
-          totalRivas: summary.totalRivas,
-          totalSanJorge: summary.totalSanJorge,
-          totalIsla: summary.totalIsla,
-          marginRivas: marginR,
-          marginSanJorge: marginSJ,
-          marginIsla: marginI,
+        // ✅ crear nuevo pedido
+        const orderRef = await addDoc(collection(db, "candy_main_orders"), {
+          ...header,
           createdAt: Timestamp.now(),
-        };
+        } as CandyMainOrderDoc);
 
-        const orderRef = await addDoc(
-          collection(db, "candy_main_orders"),
-          header
-        );
         const orderId = orderRef.id;
 
-        // por cada item: crear producto + inventario, marcando orderId
+        // ✅ crear inventario por cada item (con productId del catálogo)
+        const batch = writeBatch(db);
+
         for (const it of orderItems) {
-          const productDoc = {
-            name: it.name,
+          const totalUnits = it.packages * it.unitsPerPackage;
+
+          const invRef = doc(collection(db, "inventory_candies"));
+          batch.set(invRef, {
+            productId: it.id,
+            productName: it.name,
             category: it.category,
-            providerPrice: it.providerPrice,
+            measurement: "unidad",
+
+            quantity: totalUnits,
+            remaining: totalUnits,
             packages: it.packages,
+            remainingPackages: it.packages,
             unitsPerPackage: it.unitsPerPackage,
+            totalUnits,
+
+            providerPrice: it.providerPrice,
             subtotal: it.subtotal,
             totalRivas: it.totalRivas,
             totalSanJorge: it.totalSanJorge,
@@ -570,48 +766,15 @@ export default function CandyMainOrders() {
             unitPriceRivas: it.unitPriceRivas,
             unitPriceSanJorge: it.unitPriceSanJorge,
             unitPriceIsla: it.unitPriceIsla,
-            inventoryDate: dateStr,
+
+            date: dateStr,
             createdAt: Timestamp.now(),
+            status: "PENDIENTE",
             orderId,
-          };
-
-          const prodRef = await addDoc(
-            collection(db, "products_candies"),
-            productDoc
-          );
-
-          if (it.packages > 0) {
-            const totalUnits = it.packages * it.unitsPerPackage;
-
-            await addDoc(collection(db, "inventory_candies"), {
-              productId: prodRef.id,
-              productName: it.name,
-              category: it.category,
-              measurement: "unidad",
-              quantity: totalUnits,
-              remaining: totalUnits,
-              packages: it.packages,
-              remainingPackages: it.packages,
-              unitsPerPackage: it.unitsPerPackage,
-              totalUnits,
-              providerPrice: it.providerPrice,
-              subtotal: it.subtotal,
-              totalRivas: it.totalRivas,
-              totalSanJorge: it.totalSanJorge,
-              totalIsla: it.totalIsla,
-              gainRivas: it.gainRivas,
-              gainSanJorge: it.gainSanJorge,
-              gainIsla: it.gainIsla,
-              unitPriceRivas: it.unitPriceRivas,
-              unitPriceSanJorge: it.unitPriceSanJorge,
-              unitPriceIsla: it.unitPriceIsla,
-              date: dateStr,
-              createdAt: Timestamp.now(),
-              status: "PENDIENTE",
-              orderId,
-            });
-          }
+          });
         }
+
+        await batch.commit();
 
         setOrders((prev) => [
           {
@@ -626,19 +789,20 @@ export default function CandyMainOrders() {
             marginRivas: header.marginRivas,
             marginSanJorge: header.marginSanJorge,
             marginIsla: header.marginIsla,
-            createdAt: header.createdAt,
+            createdAt: Timestamp.now(),
           },
           ...prev,
         ]);
 
-        setMsg("✅ Pedido general creado y registrado en inventario.");
+        setMsg("✅ Orden maestra creada y registrada en inventario.");
       }
 
       resetOrderForm();
       setOpenOrderModal(false);
+      refresh();
     } catch (err) {
       console.error(err);
-      setMsg("❌ Error al guardar pedido general.");
+      setMsg("❌ Error al guardar orden maestra.");
     }
   };
 
@@ -646,6 +810,8 @@ export default function CandyMainOrders() {
   const openOrderForEdit = async (order: CandyOrderSummaryRow) => {
     try {
       setLoading(true);
+      setMsg("");
+
       setEditingOrderId(order.id);
       setOrderName(order.name);
       setOrderDate(order.date);
@@ -653,7 +819,24 @@ export default function CandyMainOrders() {
       setMarginSanJorge(String(order.marginSanJorge ?? 15));
       setMarginIsla(String(order.marginIsla ?? 30));
 
-      // Inventario de este pedido para saber paquetes restantes por producto
+      // leer pedido con items
+      const orderDocRef = doc(db, "candy_main_orders", order.id);
+      const orderSnap = await getDocs(
+        query(
+          collection(db, "candy_main_orders"),
+          where("__name__", "==", order.id)
+        )
+      );
+      if (orderSnap.empty) {
+        setMsg("❌ No se encontró la orden.");
+        return;
+      }
+      const orderData = orderSnap.docs[0].data() as any;
+      const itemsFromDoc: CandyOrderItem[] = Array.isArray(orderData.items)
+        ? (orderData.items as CandyOrderItem[])
+        : [];
+
+      // inventario para paquetes restantes por producto
       const invSnap = await getDocs(
         query(
           collection(db, "inventory_candies"),
@@ -663,7 +846,7 @@ export default function CandyMainOrders() {
       const remainingByProduct: Record<string, number> = {};
       invSnap.forEach((d) => {
         const x = d.data() as any;
-        const productId = x.productId as string | undefined;
+        const productId = String(x.productId || "");
         if (!productId) return;
 
         const unitsPerPackage = Number(x.unitsPerPackage || 1) || 1;
@@ -677,66 +860,62 @@ export default function CandyMainOrders() {
           (remainingByProduct[productId] || 0) + remainingPackages;
       });
 
-      const snap = await getDocs(
-        query(
-          collection(db, "products_candies"),
-          where("orderId", "==", order.id)
-        )
-      );
-      const items: CandyOrderItem[] = [];
-      snap.forEach((d) => {
-        const x = d.data() as any;
-        items.push({
-          id: d.id, // importante: aquí usamos el id del producto
-          name: x.name ?? "",
-          category: (x.category as CandyCategory) ?? "Caramelo",
-          providerPrice: Number(x.providerPrice ?? 0),
-          packages: Number(x.packages ?? 0),
-          unitsPerPackage: Number(x.unitsPerPackage ?? 0),
-          subtotal: Number(x.subtotal ?? 0),
-          totalRivas: Number(x.totalRivas ?? 0),
-          totalSanJorge: Number(x.totalSanJorge ?? 0),
-          totalIsla: Number(x.totalIsla ?? 0),
-          gainRivas: Number(x.gainRivas ?? 0),
-          gainSanJorge: Number(x.gainSanJorge ?? 0),
-          gainIsla: Number(x.gainIsla ?? 0),
-          unitPriceRivas: Number(x.unitPriceRivas ?? 0),
-          unitPriceSanJorge: Number(x.unitPriceSanJorge ?? 0),
-          unitPriceIsla: Number(x.unitPriceIsla ?? 0),
-          remainingPackages: remainingByProduct[d.id] ?? x.packages ?? 0,
-        });
+      // normalizar: si el precio/und cambió en catálogo, lo actualizamos en memoria del modal
+      const normalized = itemsFromDoc.map((it) => {
+        const cat = catalog.find((c) => c.id === it.id);
+        const providerPrice = Number(
+          cat?.providerPrice ?? it.providerPrice ?? 0
+        );
+        const unitsPerPackage = Number(
+          cat?.unitsPerPackage ?? it.unitsPerPackage ?? 1
+        );
+
+        const vals = calcOrderItemValues(
+          providerPrice,
+          Number(it.packages || 0),
+          {
+            marginR: Number(it.marginRivas || 0),
+            marginSJ: Number(it.marginSanJorge || 0),
+            marginIsla: Number(it.marginIsla || 0),
+          }
+        );
+
+        return {
+          ...it,
+          name: String(cat?.name ?? it.name ?? ""),
+          category: (cat?.category ??
+            it.category ??
+            "Caramelo") as CandyCategory,
+          providerPrice,
+          unitsPerPackage,
+          remainingPackages:
+            remainingByProduct[it.id] ??
+            it.remainingPackages ??
+            it.packages ??
+            0,
+          ...vals,
+        };
       });
-      setOrderItems(items);
+
+      setOrderItems(normalized);
       setOpenOrderModal(true);
     } catch (e) {
       console.error(e);
-      setMsg("❌ Error al abrir pedido general.");
+      setMsg("❌ Error al abrir orden maestra.");
     } finally {
       setLoading(false);
     }
   };
 
-  // ====== ELIMINAR PEDIDO GENERAL (Y SUS PRODUCTOS/INVENTARIOS) ======
+  // ====== ELIMINAR PEDIDO GENERAL (Y SU INVENTARIO) ======
   const handleDeleteOrder = async (order: CandyOrderSummaryRow) => {
     const ok = confirm(
-      `¿Eliminar el pedido "${order.name}" y todo su inventario asociado?`
+      `¿Eliminar la orden "${order.name}" y todo su inventario asociado?`
     );
     if (!ok) return;
     setMsg("");
 
     try {
-      // borrar productos ligados al pedido
-      const prodSnap = await getDocs(
-        query(
-          collection(db, "products_candies"),
-          where("orderId", "==", order.id)
-        )
-      );
-      for (const d of prodSnap.docs) {
-        await deleteDoc(doc(db, "products_candies", d.id));
-      }
-
-      // borrar inventarios ligados al pedido
       const invSnap = await getDocs(
         query(
           collection(db, "inventory_candies"),
@@ -747,14 +926,14 @@ export default function CandyMainOrders() {
         await deleteDoc(doc(db, "inventory_candies", d.id));
       }
 
-      // borrar cabecera del pedido
       await deleteDoc(doc(db, "candy_main_orders", order.id));
 
       setOrders((prev) => prev.filter((o) => o.id !== order.id));
-      setMsg("✅ Pedido general eliminado.");
+      setMsg("✅ Orden maestra eliminada.");
+      refresh();
     } catch (e) {
       console.error(e);
-      setMsg("❌ Error al eliminar pedido general.");
+      setMsg("❌ Error al eliminar orden maestra.");
     }
   };
 
@@ -763,7 +942,10 @@ export default function CandyMainOrders() {
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Ordenes Maestras</h2>
         <div className="flex gap-2">
-          <RefreshButton onClick={refresh} loading={loading} />
+          <RefreshButton
+            onClick={refresh}
+            loading={loading || catalogLoading}
+          />
           <button
             className="inline-flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded hover:bg-indigo-700"
             onClick={() => {
@@ -797,9 +979,7 @@ export default function CandyMainOrders() {
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded shadow-lg w-full max-w-5xl max-h-[90vh] overflow-y-auto text-sm">
             <h3 className="text-xl font-bold mb-4">
-              {editingOrderId
-                ? "Editar Orden Maestra"
-                : "Nueva Orden Maestra"}
+              {editingOrderId ? "Editar Orden Maestra" : "Nueva Orden Maestra"}
             </h3>
 
             <form onSubmit={handleSaveOrder} className="space-y-4">
@@ -878,9 +1058,10 @@ export default function CandyMainOrders() {
                       <select
                         className="w-full border p-2 rounded"
                         value={orderCategory}
-                        onChange={(e) =>
-                          setOrderCategory(e.target.value as CandyCategory)
-                        }
+                        onChange={(e) => {
+                          setOrderCategory(e.target.value as CandyCategory);
+                          setOrderProductId("");
+                        }}
                       >
                         {CANDY_CATEGORIES.map((c) => (
                           <option key={c} value={c}>
@@ -889,30 +1070,41 @@ export default function CandyMainOrders() {
                         ))}
                       </select>
                     </div>
+
                     <div className="md:col-span-2">
                       <label className="block text-sm font-semibold">
-                        Producto
+                        Producto (catálogo)
                       </label>
-                      <input
+                      <select
                         className="w-full border p-2 rounded"
-                        value={orderProductName}
-                        onChange={(e) => setOrderProductName(e.target.value)}
-                        placeholder="Ej: Chicles menta"
-                      />
+                        value={orderProductId}
+                        onChange={(e) => setOrderProductId(e.target.value)}
+                      >
+                        <option value="">
+                          {catalogLoading
+                            ? "Cargando catálogo..."
+                            : "Selecciona producto"}
+                        </option>
+                        {catalogByCategory.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
                     </div>
+
                     <div>
                       <label className="block text-sm font-semibold">
                         Precio proveedor (paq)
                       </label>
                       <input
                         type="number"
-                        min={0}
-                        step="0.01"
-                        className="w-full border p-2 rounded"
+                        className="w-full border p-2 rounded bg-gray-100"
                         value={orderProviderPrice}
-                        onChange={(e) => setOrderProviderPrice(e.target.value)}
+                        readOnly
                       />
                     </div>
+
                     <div>
                       <label className="block text-sm font-semibold">
                         Paquetes
@@ -925,21 +1117,20 @@ export default function CandyMainOrders() {
                         onChange={(e) => setOrderPackages(e.target.value)}
                       />
                     </div>
+
                     <div>
                       <label className="block text-sm font-semibold">
                         Unidades por paquete
                       </label>
                       <input
                         type="number"
-                        min={1}
-                        className="w-full border p-2 rounded"
+                        className="w-full border p-2 rounded bg-gray-100"
                         value={orderUnitsPerPackage}
-                        onChange={(e) =>
-                          setOrderUnitsPerPackage(e.target.value)
-                        }
+                        readOnly
                       />
                     </div>
                   </div>
+
                   <div className="flex justify-end mt-3">
                     <button
                       type="button"
@@ -954,7 +1145,7 @@ export default function CandyMainOrders() {
 
               {/* tabla de productos del pedido */}
               <div className="bg-white rounded border overflow-x-auto">
-                <table className="min-w-[900px] text-xs md:text-sm">
+                <table className="min-w-[1100px] text-xs md:text-sm">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
                       <th className="p-2 border">Producto</th>
@@ -963,6 +1154,12 @@ export default function CandyMainOrders() {
                       <th className="p-2 border">Paquetes restantes</th>
                       <th className="p-2 border">Und x Paq</th>
                       <th className="p-2 border">P. proveedor (paq)</th>
+
+                      {/* ✅ 3 COLUMNAS DE MARGEN */}
+                      <th className="p-2 border">Margen Rivas (%)</th>
+                      <th className="p-2 border">Margen San Jorge (%)</th>
+                      <th className="p-2 border">Margen Isla (%)</th>
+
                       <th className="p-2 border">Subtotal</th>
                       <th className="p-2 border">Total Rivas</th>
                       <th className="p-2 border">Total San Jorge</th>
@@ -970,19 +1167,21 @@ export default function CandyMainOrders() {
                       <th className="p-2 border">P. unidad Rivas</th>
                       <th className="p-2 border">P. unidad San Jorge</th>
                       <th className="p-2 border">P. unidad Isla</th>
+
                       {!editingOrderId && (
                         <th className="p-2 border">Acciones</th>
                       )}
                     </tr>
                   </thead>
+
                   <tbody>
                     {orderItems.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={editingOrderId ? 13 : 14}
+                          colSpan={editingOrderId ? 16 : 17}
                           className="p-4 text-center text-gray-500"
                         >
-                          No hay productos en este pedido.
+                          No hay productos en esta orden.
                         </td>
                       </tr>
                     ) : (
@@ -991,122 +1190,94 @@ export default function CandyMainOrders() {
                           key={it.id}
                           className="text-center whitespace-nowrap"
                         >
-                          {/* Producto */}
+                          <td className="p-2 border text-left">{it.name}</td>
+                          <td className="p-2 border">{it.category}</td>
+
                           <td className="p-2 border">
-                            {editingOrderId ? (
-                              <input
-                                className="w-full border p-1 rounded"
-                                value={it.name}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "name",
-                                    e.target.value
-                                  )
-                                }
-                              />
-                            ) : (
-                              it.name
-                            )}
+                            <input
+                              type="number"
+                              className="w-24 border p-1 rounded text-right"
+                              value={it.packages}
+                              onChange={(e) =>
+                                handleItemFieldChange(
+                                  it.id,
+                                  "packages",
+                                  e.target.value
+                                )
+                              }
+                            />
                           </td>
 
-                          {/* Categoría */}
-                          <td className="p-2 border">
-                            {editingOrderId ? (
-                              <select
-                                className="w-full border p-1 rounded"
-                                value={it.category}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "category",
-                                    e.target.value
-                                  )
-                                }
-                              >
-                                {CANDY_CATEGORIES.map((c) => (
-                                  <option key={c} value={c}>
-                                    {c}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              it.category
-                            )}
-                          </td>
-
-                          {/* Paquetes */}
-                          <td className="p-2 border">
-                            {editingOrderId ? (
-                              <input
-                                type="number"
-                                className="w-full border p-1 rounded text-right"
-                                value={it.packages}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "packages",
-                                    e.target.value
-                                  )
-                                }
-                              />
-                            ) : (
-                              it.packages
-                            )}
-                          </td>
-
-                          {/* Paquetes restantes (solo lectura) */}
                           <td className="p-2 border">
                             {it.remainingPackages ?? it.packages}
                           </td>
 
-                          {/* Und x Paq */}
                           <td className="p-2 border">
-                            {editingOrderId ? (
-                              <input
-                                type="number"
-                                className="w-full border p-1 rounded text-right"
-                                value={it.unitsPerPackage}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "unitsPerPackage",
-                                    e.target.value
-                                  )
-                                }
-                              />
-                            ) : (
-                              it.unitsPerPackage
-                            )}
+                            {/* si querés bloquear esto, lo pongo readOnly */}
+                            <input
+                              type="number"
+                              className="w-20 border p-1 rounded text-right"
+                              value={it.unitsPerPackage}
+                              onChange={(e) =>
+                                handleItemFieldChange(
+                                  it.id,
+                                  "unitsPerPackage",
+                                  e.target.value
+                                )
+                              }
+                            />
                           </td>
 
-                          {/* P. proveedor */}
                           <td className="p-2 border">
-                            {editingOrderId ? (
-                              <input
-                                type="number"
-                                step="0.01"
-                                className="w-full border p-1 rounded text-right"
-                                value={it.providerPrice}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "providerPrice",
-                                    e.target.value
-                                  )
-                                }
-                              />
-                            ) : (
-                              it.providerPrice.toFixed(2)
-                            )}
+                            {Number(it.providerPrice || 0).toFixed(2)}
                           </td>
 
-                          {/* Subtotal */}
+                          <td className="p-2 border">
+                            <input
+                              type="number"
+                              className="w-20 border p-1 rounded text-right"
+                              value={it.marginRivas ?? 0}
+                              onChange={(e) =>
+                                handleItemFieldChange(
+                                  it.id,
+                                  "marginRivas",
+                                  e.target.value
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="p-2 border">
+                            <input
+                              type="number"
+                              className="w-20 border p-1 rounded text-right"
+                              value={it.marginSanJorge ?? 0}
+                              onChange={(e) =>
+                                handleItemFieldChange(
+                                  it.id,
+                                  "marginSanJorge",
+                                  e.target.value
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="p-2 border">
+                            <input
+                              type="number"
+                              className="w-20 border p-1 rounded text-right"
+                              value={it.marginIsla ?? 0}
+                              onChange={(e) =>
+                                handleItemFieldChange(
+                                  it.id,
+                                  "marginIsla",
+                                  e.target.value
+                                )
+                              }
+                            />
+                          </td>
+
                           <td className="p-2 border">
                             {it.subtotal.toFixed(2)}
                           </td>
-
-                          {/* Totales */}
                           <td className="p-2 border">
                             {it.totalRivas.toFixed(2)}
                           </td>
@@ -1117,7 +1288,6 @@ export default function CandyMainOrders() {
                             {it.totalIsla.toFixed(2)}
                           </td>
 
-                          {/* P. unidad */}
                           <td className="p-2 border">{it.unitPriceRivas}</td>
                           <td className="p-2 border">{it.unitPriceSanJorge}</td>
                           <td className="p-2 border">{it.unitPriceIsla}</td>
@@ -1144,7 +1314,7 @@ export default function CandyMainOrders() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
                 <div className="p-3 border rounded bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Paquetes totales del pedido
+                    Paquetes totales de la orden
                   </div>
                   <div className="text-lg font-semibold">
                     {orderSummary.totalPackages}
@@ -1160,7 +1330,7 @@ export default function CandyMainOrders() {
                 </div>
                 <div className="p-3 border rounded bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Total Rivas (pedido)
+                    Total Rivas (orden)
                   </div>
                   <div className="text-lg font-semibold">
                     {orderSummary.totalRivas.toFixed(2)}
@@ -1185,7 +1355,7 @@ export default function CandyMainOrders() {
                   onClick={resetOrderForm}
                   className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
                 >
-                  Limpiar pedido
+                  Limpiar orden
                 </button>
                 <button
                   type="button"
@@ -1202,7 +1372,7 @@ export default function CandyMainOrders() {
                   className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
                   disabled={orderItems.length === 0}
                 >
-                  Guardar pedido
+                  Guardar orden
                 </button>
               </div>
             </form>
@@ -1229,6 +1399,7 @@ export default function CandyMainOrders() {
               <th className="p-2 border">Acciones</th>
             </tr>
           </thead>
+
           <tbody>
             {loading ? (
               <tr>
@@ -1239,7 +1410,7 @@ export default function CandyMainOrders() {
             ) : orders.length === 0 ? (
               <tr>
                 <td colSpan={12} className="p-4 text-center">
-                  Sin pedidos generales.
+                  Sin ordenes maestras.
                 </td>
               </tr>
             ) : (

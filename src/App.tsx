@@ -35,19 +35,20 @@ import SalesClothesPOS from "./components/Clothes/SalesClothesPOS";
 import FinancialDashboardClothes from "./components/Clothes/FinancialDashboardClothes";
 import ExpensesClothes from "./components/Clothes/ExpensesClothes";
 import TransactionsReportClothes from "./components/Clothes/TransactionsReportClothes";
-import CandiesProducts from "./components/Candies/CandiesProducts";
-import InventoryCandies from "./components/Candies/InventoryCandies";
+import CandiesProducts from "./components/Candies/CatalogoProductos";
+import InventoryCandies from "./components/Candies/InventarioProductos";
 import CustomersCandies from "./components/Candies/CustomersCandies";
 import SalesCandies from "./components/Candies/SalesCandies";
 import ExpensesCandies from "./components/Candies/ExpensesCandies";
 import TransactionCandies from "./components/Candies/TransactionCandies";
 import DashboardCandies from "./components/Candies/DashboardCandies";
-import Vendors from "./components/Candies/SubInventarios/Vendors";
-import ProductsVendors from "./components/Candies/SubInventarios/ProductsVendors";
-import ProductMainOrder from "./components/Candies/ProductMainOrder";
-import InventoryMainOrders from "./components/Candies/InventoryMainOrders";
+import Vendors from "./components/Candies/SubInventarios/Vendedores";
+import ProductsVendors from "./components/Candies/SubInventarios/OrdenVendedor";
+import ProductMainOrder from "./components/Candies/OrdenMaestra";
+import InventoryMainOrders from "./components/Candies/InventarioOrdenesMaestras";
 import CierreVentasDulces from "./components/Candies/CierreVentasDulces";
 import ConsolidadoVendedores from "./components/Candies/ConsolidadoVendedores";
+import BillingCandies from "./components/Candies/BillingCandies";
 
 // Definición de roles
 type Role =
@@ -132,7 +133,6 @@ export default function App() {
         >
           {/* Redirección inicial dentro de /admin según rol */}
           <Route index element={<AdminIndexRedirect />} />
-
           {/* ======== POLLO ======== */}
           {/* Cierre del día (admin y vendedor_pollo) */}
           <Route
@@ -239,7 +239,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           {/* ======== CANDIES ======== */}
           <Route
             path="productsCandies"
@@ -273,6 +272,15 @@ export default function App() {
               </PrivateRoute>
             }
           />
+          <Route
+            path="billingsCandies"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+                <BillingCandies />
+              </PrivateRoute>
+            }
+          />
+
           <Route
             path="customersCandies"
             element={
@@ -361,7 +369,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           {/* ======== ROPA ======== */}
           {/* Venta ropa (admin y vendedor_ropa) */}
           <Route

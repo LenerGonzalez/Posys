@@ -1,5 +1,6 @@
+// src/components/Candies/ConsolidadoVendedoresDulces.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, getDocs, query, where, doc } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "../../firebase";
 
 type Branch = "RIVAS" | "SAN_JORGE" | "ISLA";
@@ -12,15 +13,6 @@ interface Seller {
   commissionPercent: number;
 }
 
-interface SellerInventoryDoc {
-  id: string;
-  sellerId: string;
-  productId: string;
-  date: string; // yyyy-MM-dd
-  packages: number; // paquetes ordenados (campo packages, si no lo calculamos)
-  remainingPackages: number; // paquetes restantes
-}
-
 interface Product {
   id: string;
   name: string;
@@ -31,12 +23,16 @@ interface SaleDoc {
   date: string; // yyyy-MM-dd
   type: "CONTADO" | "CREDITO" | string;
   vendorId?: string;
+  sellerId?: string; // compat
   vendorName?: string;
   vendorBranch?: Branch;
   vendorBranchLabel?: string;
   vendorCommissionPercent?: number;
   vendorCommissionAmount?: number;
   total?: number;
+  itemsTotal?: number;
+  packagesTotal?: number;
+  quantity?: number;
   items?: {
     productId: string;
     productName: string;
@@ -44,7 +40,9 @@ interface SaleDoc {
     qty?: number;
     quantity?: number;
     unitsPerPackage?: number;
+    units?: number;
     unitPricePackage?: number;
+    unitPrice?: number;
     discount?: number;
     total?: number;
   }[];
@@ -72,6 +70,8 @@ interface VendorSummary {
   totalSoldMoney: number;
   totalCreditMoney: number;
   ordersCreated: number;
+  commissionCash: number;
+  commissionCredit: number;
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -105,7 +105,7 @@ function getDefaultFrom(): string {
   )}-01`;
 }
 
-// Último día de mes actual (rápido: sumar 1 mes, día 1, restar 1 día)
+// Último día de mes actual
 function getDefaultTo(): string {
   const now = new Date();
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -163,17 +163,18 @@ export default function ConsolidadoVendedoresDulces() {
     [vendorSummary]
   );
 
-  // Cargar catálogos básicos (vendedores y productos) una sola vez
+  const commissionCashByVendor: Record<string, number> = {};
+  const commissionCreditByVendor: Record<string, number> = {};
+
+  // ==== Cargar catálogos (vendedores y productos) una sola vez ====
   useEffect(() => {
     (async () => {
       try {
-        // sellers_candies
         const vSnap = await getDocs(collection(db, "sellers_candies"));
         const sellersMap: Record<string, Seller> = {};
         vSnap.forEach((d) => {
           const x = d.data() as any;
           const rawBranch: string = x.branch || "Rivas";
-          // Reutilizamos la misma lógica que en SalesCandiesPOS
           let normalized: Branch = "RIVAS";
           if (rawBranch === "San Jorge") normalized = "SAN_JORGE";
           else if (rawBranch === "Isla Ometepe") normalized = "ISLA";
@@ -186,7 +187,6 @@ export default function ConsolidadoVendedoresDulces() {
           };
         });
 
-        // products_candies
         const pSnap = await getDocs(collection(db, "products_candies"));
         const productsMap: Record<string, Product> = {};
         pSnap.forEach((d) => {
@@ -212,6 +212,12 @@ export default function ConsolidadoVendedoresDulces() {
       return;
     }
 
+    // ✅ Si aún no hay vendedores cargados, no calculamos nada
+    if (!Object.keys(sellers).length) {
+      setMessage("Cargando vendedores, intenta de nuevo en unos segundos.");
+      return;
+    }
+
     setLoading(true);
     setMessage("");
 
@@ -224,10 +230,11 @@ export default function ConsolidadoVendedoresDulces() {
       );
       const invSnap = await getDocs(qInv);
 
-      // Por vendedor
       const orderedPackagesByVendor: Record<string, number> = {};
       const remainingPackagesByVendor: Record<string, number> = {};
-      const ordersCountByVendor: Record<string, number> = {};
+
+      // Para contar órdenes únicas por vendedor
+      const ordersKeysByVendor: Record<string, Set<string>> = {};
 
       // drilldown para pedidos/stock
       const invDrill: Record<
@@ -273,12 +280,43 @@ export default function ConsolidadoVendedoresDulces() {
         remainingPackagesByVendor[sellerId] =
           (remainingPackagesByVendor[sellerId] || 0) + remainingPacks;
 
-        // órdenes creadas (una por doc en rango)
-        ordersCountByVendor[sellerId] =
-          (ordersCountByVendor[sellerId] || 0) + 1;
+        // ==== ÓRDENES ÚNICAS POR VENDEDOR ====
+        const orderKey: string =
+          x.orderId || x.vendorOrderId || x.orderNumber || x.order || d.id;
 
-        const sellerName = sellers[sellerId]?.name || "(sin vendedor)";
+        if (!ordersKeysByVendor[sellerId]) {
+          ordersKeysByVendor[sellerId] = new Set<string>();
+        }
+        ordersKeysByVendor[sellerId].add(orderKey);
+
+        const sellerName =
+          sellers[sellerId]?.name || x.sellerName || "(sin vendedor)";
         const dateStr = String(x.date || "");
+
+        // ==== DINERO Y COMISIÓN POR PAQUETE (desde el pedido) ====
+        const totalVendorDoc = Number(x.totalVendor ?? 0); // dinero total para todos los paquetes asignados
+        const gainVendorDoc = Number(x.gainVendor ?? 0); // ganancia total para todos los paquetes
+        const originalPackages =
+          packagesField > 0
+            ? packagesField
+            : totalUnits > 0
+            ? Math.floor(totalUnits / unitsPerPackage)
+            : 0;
+
+        const moneyPerPackage =
+          originalPackages > 0 ? totalVendorDoc / originalPackages : 0;
+        const commissionPerPackage =
+          originalPackages > 0 ? gainVendorDoc / originalPackages : 0;
+
+        const orderedMoney = round2(packagesOrdered * moneyPerPackage);
+        const orderedCommission = round2(
+          packagesOrdered * commissionPerPackage
+        );
+
+        const remainingMoney = round2(remainingPacks * moneyPerPackage);
+        const remainingCommission = round2(
+          remainingPacks * commissionPerPackage
+        );
 
         if (!invDrill[sellerId]) {
           invDrill[sellerId] = {
@@ -287,29 +325,34 @@ export default function ConsolidadoVendedoresDulces() {
           };
         }
 
-        // Para "paquetes ordenados"
+        // 🔹 Paquetes ordenados: ya con dinero + comisión
         if (packagesOrdered > 0) {
           invDrill[sellerId].ordered.push({
             date: dateStr,
             vendorName: sellerName,
             productName,
             packages: packagesOrdered,
-            totalMoney: 0, // aquí no hay dinero real (es pedido)
-            vendorCommission: 0,
+            totalMoney: orderedMoney,
+            vendorCommission: orderedCommission,
           });
         }
 
-        // Para "paquetes restantes"
+        // 🔹 Paquetes restantes: también con dinero + comisión asociada
         if (remainingPacks > 0) {
           invDrill[sellerId].remaining.push({
             date: dateStr,
             vendorName: sellerName,
             productName,
             packages: remainingPacks,
-            totalMoney: 0, // stock, sin venta
-            vendorCommission: 0,
+            totalMoney: remainingMoney,
+            vendorCommission: remainingCommission,
           });
         }
+      });
+
+      const ordersCountByVendor: Record<string, number> = {};
+      Object.keys(ordersKeysByVendor).forEach((vendorId) => {
+        ordersCountByVendor[vendorId] = ordersKeysByVendor[vendorId].size;
       });
 
       /* --------------------------------- VENTAS (sales_candies) --------------------------------- */
@@ -325,103 +368,142 @@ export default function ConsolidadoVendedoresDulces() {
       const totalSoldMoneyByVendor: Record<string, number> = {};
       const totalCreditMoneyByVendor: Record<string, number> = {};
 
-      // drilldown ventas (sold/credit)
       const salesDrill: Record<
         string,
         { sold: DrilldownRow[]; credit: DrilldownRow[] }
       > = {};
 
-      // top productos (global)
       const productAgg: Record<
         string,
         { productName: string; packages: number; totalMoney: number }
       > = {};
 
       salesSnap.forEach((d) => {
-        const x = d.data() as any as SaleDoc;
-        const saleId = d.id;
-        const saleDate = x.date || "";
-        const vendorId = x.vendorId || "";
-        if (!vendorId) return; // sin vendedor, lo ignoramos
+        const raw = d.data() as any as SaleDoc;
 
-        const vendorName =
-          x.vendorName || sellers[vendorId]?.name || "(sin vendedor)";
-        const commissionPercent = Number(
-          x.vendorCommissionPercent ?? sellers[vendorId]?.commissionPercent ?? 0
-        );
-        const commissionTotal = Number(x.vendorCommissionAmount ?? 0);
-        const saleTotal = Number(x.total ?? 0);
-        const isCredit = String(x.type || "").toUpperCase() === "CREDITO";
+        const saleDate = raw.date || "";
 
-        if (!salesDrill[vendorId]) {
-          salesDrill[vendorId] = {
-            sold: [],
-            credit: [],
-          };
-        }
+        // Compat: vendorId o sellerId
+        const vendorId = raw.vendorId || raw.sellerId || "";
+        if (!vendorId) return; // sin vendedor -> no lo contamos
 
-        const items = Array.isArray(x.items) ? x.items : [];
+        const seller = sellers[vendorId];
+        const vendorName = raw.vendorName || seller?.name || "(sin vendedor)";
+
+        const items = Array.isArray(raw.items) ? raw.items : [];
         if (!items.length) return;
 
+        // Total de la venta
+        let saleTotal = Number(raw.total ?? raw.itemsTotal ?? 0);
+        if (!saleTotal) {
+          saleTotal = items.reduce((acc, it) => {
+            const packsRaw = it.packages ?? it.qty ?? it.quantity ?? 0;
+            const packs = Number(packsRaw || 0);
+            const unitPrice = Number(it.unitPricePackage ?? it.unitPrice ?? 0);
+            const lineTotal =
+              Number(it.total ?? 0) ||
+              (packs > 0 && unitPrice > 0 ? packs * unitPrice : 0);
+            return acc + lineTotal;
+          }, 0);
+        }
+        saleTotal = round2(saleTotal);
+
+        const isCredit = String(raw.type || "").toUpperCase() === "CREDITO";
+
+        // Comisión total
+        let commissionTotal = Number(raw.vendorCommissionAmount ?? 0);
+        const commissionPercent =
+          Number(
+            raw.vendorCommissionPercent ?? seller?.commissionPercent ?? 0
+          ) || 0;
+
+        if (!commissionTotal && commissionPercent > 0 && saleTotal > 0) {
+          commissionTotal = round2((saleTotal * commissionPercent) / 100);
+        }
+
+        if (!salesDrill[vendorId]) {
+          salesDrill[vendorId] = { sold: [], credit: [] };
+        }
+
         items.forEach((it) => {
-          const productName =
+          const pName =
             it.productName ||
             products[it.productId || ""]?.name ||
             "(sin nombre)";
 
-          const packagesRaw = it.packages ?? it.qty ?? it.quantity ?? 0;
-          const packages = Number(packagesRaw || 0);
+          const packsRaw = it.packages ?? it.qty ?? it.quantity ?? 0;
+          const packages = Number(packsRaw || 0);
 
-          const lineTotal = Number(it.total ?? 0);
+          const unitPrice = Number(it.unitPricePackage ?? it.unitPrice ?? 0);
+
+          let lineTotal = Number(it.total ?? 0);
+          if (!lineTotal && packages > 0 && unitPrice > 0) {
+            lineTotal = packages * unitPrice;
+          }
+          lineTotal = round2(lineTotal);
+
           if (packages <= 0 || lineTotal <= 0) return;
 
-          // agregados por vendedor
-          soldPackagesByVendor[vendorId] =
-            (soldPackagesByVendor[vendorId] || 0) + packages;
-          totalSoldMoneyByVendor[vendorId] =
-            (totalSoldMoneyByVendor[vendorId] || 0) + lineTotal;
-
+          // ✅ Acumulados por vendedor: separar CASH vs CRÉDITO
           if (isCredit) {
+            // SOLO crédito
             creditPackagesByVendor[vendorId] =
               (creditPackagesByVendor[vendorId] || 0) + packages;
             totalCreditMoneyByVendor[vendorId] =
               (totalCreditMoneyByVendor[vendorId] || 0) + lineTotal;
+          } else {
+            // SOLO contado
+            soldPackagesByVendor[vendorId] =
+              (soldPackagesByVendor[vendorId] || 0) + packages;
+            totalSoldMoneyByVendor[vendorId] =
+              (totalSoldMoneyByVendor[vendorId] || 0) + lineTotal;
           }
 
-          // comisión prorrateada por línea (según % de la venta total)
+          // Comisión prorrateada por línea
           let lineCommission = 0;
           if (saleTotal > 0 && commissionTotal > 0) {
             const ratio = lineTotal / saleTotal;
             lineCommission = round2(commissionTotal * ratio);
           }
 
-          // drilldown "vendidos"
-          salesDrill[vendorId].sold.push({
-            date: saleDate,
-            vendorName,
-            productName,
-            packages,
-            totalMoney: lineTotal,
-            vendorCommission: lineCommission,
-          });
-
-          // drilldown "fiados"
-          if (isCredit) {
-            salesDrill[vendorId].credit.push({
+          // 🔹 Drilldown vendidos (SOLO CONTADO)
+          if (!isCredit) {
+            salesDrill[vendorId].sold.push({
               date: saleDate,
               vendorName,
-              productName,
+              productName: pName,
               packages,
               totalMoney: lineTotal,
               vendorCommission: lineCommission,
             });
           }
 
-          // top productos (global)
-          const key = productName;
+          // Sumatoria de comisiones Cash y Crédito
+          if (!isCredit) {
+            commissionCashByVendor[vendorId] =
+              (commissionCashByVendor[vendorId] || 0) + lineCommission;
+          } else {
+            commissionCreditByVendor[vendorId] =
+              (commissionCreditByVendor[vendorId] || 0) + lineCommission;
+          }
+
+          // 🔹 Drilldown fiados (SOLO CREDITO)
+          if (isCredit) {
+            salesDrill[vendorId].credit.push({
+              date: saleDate,
+              vendorName,
+              productName: pName,
+              packages,
+              totalMoney: lineTotal,
+              vendorCommission: lineCommission,
+            });
+          }
+
+          // Top productos global
+          const key = pName;
           if (!productAgg[key]) {
             productAgg[key] = {
-              productName: productName,
+              productName: pName,
               packages: 0,
               totalMoney: 0,
             };
@@ -445,8 +527,7 @@ export default function ConsolidadoVendedoresDulces() {
       allVendorIds.forEach((vendorId) => {
         const s = sellers[vendorId];
         const vendorName = s?.name || "(sin vendedor)";
-        const branchLbl =
-          s?.branchLabel || branchLabel(s?.branch || "RIVAS") || "";
+        const branchLbl = s ? s.branchLabel || branchLabel(s.branch) : "—";
 
         const orderedPackages = orderedPackagesByVendor[vendorId] || 0;
         const remainingPackages = remainingPackagesByVendor[vendorId] || 0;
@@ -469,24 +550,37 @@ export default function ConsolidadoVendedoresDulces() {
           totalSoldMoney,
           totalCreditMoney,
           ordersCreated,
+          commissionCash: round2(commissionCashByVendor[vendorId] || 0),
+          commissionCredit: round2(commissionCreditByVendor[vendorId] || 0),
         });
 
         fullDrill[vendorId] = {
-          ordered: invDrill[vendorId]?.ordered || [],
-          remaining: invDrill[vendorId]?.remaining || [],
-          sold: salesDrill[vendorId]?.sold || [],
-          credit: salesDrill[vendorId]?.credit || [],
+          ordered: (invDrill[vendorId]?.ordered || []).sort((a, b) =>
+            a.date.localeCompare(b.date)
+          ),
+          remaining: (invDrill[vendorId]?.remaining || []).sort((a, b) =>
+            a.date.localeCompare(b.date)
+          ),
+          sold: (salesDrill[vendorId]?.sold || []).sort((a, b) =>
+            a.date.localeCompare(b.date)
+          ),
+          credit: (salesDrill[vendorId]?.credit || []).sort((a, b) =>
+            a.date.localeCompare(b.date)
+          ),
         };
       });
 
-      // ordenar por nombre de vendedor
       summaries.sort((a, b) => a.vendorName.localeCompare(b.vendorName, "es"));
 
       setVendorSummary(summaries);
       setDrilldownData(fullDrill);
 
-      // top 10 productos
       const topArray = Object.values(productAgg)
+        .map((p) => ({
+          productName: p.productName,
+          packages: p.packages,
+          totalMoney: round2(p.totalMoney),
+        }))
         .sort((a, b) => b.packages - a.packages)
         .slice(0, 10);
       setTopProducts(topArray);
@@ -502,11 +596,13 @@ export default function ConsolidadoVendedoresDulces() {
     }
   };
 
-  // carga inicial
+  // ✅ Carga inicial automática cuando ya hay vendedores cargados
   useEffect(() => {
-    loadData();
+    if (Object.keys(sellers).length) {
+      loadData();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sellers]);
 
   const openDrilldown = (vendorId: string, metric: MetricKey) => {
     setModalVendorId(vendorId);
@@ -534,7 +630,9 @@ export default function ConsolidadoVendedoresDulces() {
       "Paquetes vendidos",
       "Paquetes fiados",
       "Total vendidos (C$)",
+      "Comisión Cash (C$)",
       "Total fiado (C$)",
+      "Comisión Crédito (C$)",
       "Órdenes creadas",
     ];
 
@@ -546,7 +644,9 @@ export default function ConsolidadoVendedoresDulces() {
       v.soldPackages.toString(),
       v.creditPackages.toString(),
       v.totalSoldMoney.toFixed(2),
+      v.commissionCash.toFixed(2),
       v.totalCreditMoney.toFixed(2),
+      v.commissionCredit.toFixed(2),
       v.ordersCreated.toString(),
     ]);
 
@@ -644,7 +744,9 @@ export default function ConsolidadoVendedoresDulces() {
               <th className="border p-2">Paquetes vendidos</th>
               <th className="border p-2">Paquetes fiados</th>
               <th className="border p-2">Total vendidos (C$)</th>
+              <th className="border p-2">Comisión Cash (C$)</th>
               <th className="border p-2">Total fiado (C$)</th>
+              <th className="border p-2">Comisión Crédito (C$)</th>
               <th className="border p-2">Órdenes creadas</th>
             </tr>
           </thead>
@@ -690,13 +792,15 @@ export default function ConsolidadoVendedoresDulces() {
                   </button>
                 </td>
                 <td className="border p-1">{money(v.totalSoldMoney)}</td>
+                <td className="border p-1">{money(v.commissionCash)}</td>
                 <td className="border p-1">{money(v.totalCreditMoney)}</td>
+                <td className="border p-1">{money(v.commissionCredit)}</td>
                 <td className="border p-1">{v.ordersCreated}</td>
               </tr>
             ))}
             {vendorSummary.length === 0 && !loading && (
               <tr>
-                <td colSpan={9} className="p-3 text-center text-gray-500">
+                <td colSpan={11} className="p-3 text-center text-gray-500">
                   Sin datos para mostrar.
                 </td>
               </tr>
@@ -726,7 +830,7 @@ export default function ConsolidadoVendedoresDulces() {
                   <td className="border p-1">{idx + 1}</td>
                   <td className="border p-1">{p.productName}</td>
                   <td className="border p-1">{p.packages}</td>
-                  <td className="border p-1">{money(round2(p.totalMoney))}</td>
+                  <td className="border p-1">{money(p.totalMoney)}</td>
                 </tr>
               ))}
               {topProducts.length === 0 && !loading && (
