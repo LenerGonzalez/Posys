@@ -252,6 +252,12 @@ async function getAvailableUnitsForCandyFromVendor(
 
   return available;
 }
+const todayLocalISO = () => {
+  const d = new Date();
+  // convierte a "fecha local" pero en formato ISO yyyy-mm-dd
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+};
 
 // Descuenta unidades desde inventory_candies_sellers (pedido del vendedor) en FIFO
 async function allocateSaleFIFOCandyFromVendor(args: {
@@ -379,9 +385,7 @@ export default function SalesCandiesPOS({
   const [branch, setBranch] = useState<Branch>("RIVAS");
   const [customerId, setCustomerId] = useState<string>("");
   const [customerNameCash, setCustomerNameCash] = useState<string>("");
-  const [saleDate, setSaleDate] = useState<string>(
-    new Date().toISOString().slice(0, 10)
-  );
+  const [saleDate, setSaleDate] = useState(todayLocalISO());
 
   // Vendedor seleccionado
   const [vendorId, setVendorId] = useState<string>("");
@@ -686,41 +690,40 @@ export default function SalesCandiesPOS({
     );
   }, [branch, products]);
 
- async function getPricePerPackageFromVendorOrder(args: {
-   productId: string;
-   vendorId: string;
-   branch: Branch;
- }): Promise<number> {
-   const { productId, vendorId, branch } = args;
-   if (!productId || !vendorId) return 0;
+  async function getPricePerPackageFromVendorOrder(args: {
+    productId: string;
+    vendorId: string;
+    branch: Branch;
+  }): Promise<number> {
+    const { productId, vendorId, branch } = args;
+    if (!productId || !vendorId) return 0;
 
-   const qRef = query(
-     collection(db, "inventory_candies_sellers"),
-     where("sellerId", "==", vendorId),
-     where("productId", "==", productId)
-   );
+    const qRef = query(
+      collection(db, "inventory_candies_sellers"),
+      where("sellerId", "==", vendorId),
+      where("productId", "==", productId)
+    );
 
-   const snap = await getDocs(qRef);
-   if (snap.empty) return 0;
+    const snap = await getDocs(qRef);
+    if (snap.empty) return 0;
 
-   // tomamos el primero (para precio da igual, todos vienen del master)
-   const x = snap.docs[0].data() as any;
+    // tomamos el primero (para precio da igual, todos vienen del master)
+    const x = snap.docs[0].data() as any;
 
-   // ✅ prioridad: precio específico del vendedor si existe
-   const pVendor = Number(x.unitPriceVendor ?? 0);
-   if (pVendor > 0) return pVendor;
+    // ✅ prioridad: precio específico del vendedor si existe
+    const pVendor = Number(x.unitPriceVendor ?? 0);
+    if (pVendor > 0) return pVendor;
 
-   // ✅ si no hay vendor price, usamos por sucursal
-   const p =
-     branch === "RIVAS"
-       ? Number(x.unitPriceRivas ?? 0)
-       : branch === "SAN_JORGE"
-       ? Number(x.unitPriceSanJorge ?? 0)
-       : Number(x.unitPriceIsla ?? 0);
+    // ✅ si no hay vendor price, usamos por sucursal
+    const p =
+      branch === "RIVAS"
+        ? Number(x.unitPriceRivas ?? 0)
+        : branch === "SAN_JORGE"
+        ? Number(x.unitPriceSanJorge ?? 0)
+        : Number(x.unitPriceIsla ?? 0);
 
-   return Number(p || 0);
- }
-
+    return Number(p || 0);
+  }
 
   // Añadir producto (bloquea duplicados, usa stock del PEDIDO DEL VENDEDOR)
   const addProductToList = async (pid: string) => {
@@ -1008,7 +1011,7 @@ export default function SalesCandiesPOS({
       // branch se mantiene según el vendedor (no lo tocamos)
       setCustomerId("");
       setCustomerNameCash("");
-      setSaleDate(new Date().toISOString().slice(0, 10));
+      setSaleDate(todayLocalISO());
       setItems([]);
       setDownPayment(0);
       // mantenemos vendorId (útil cuando es vendedor logueado)
