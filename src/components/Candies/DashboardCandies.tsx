@@ -1,10 +1,18 @@
 // src/components/Candies/FinancialDashboardCandies.tsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { collection, getDocs, deleteDoc, doc } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  deleteDoc,
+  doc,
+  query,
+  where,
+} from "firebase/firestore";
 import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -15,7 +23,7 @@ interface SaleItem {
   productName: string;
   sku?: string;
   qty: number; // paquetes
-  unitPrice: number;
+  unitPrice: number; // precio por paquete
   discount?: number;
   vendorCommissionAmount?: number; // comisión por ítem (C$)
 }
@@ -37,9 +45,10 @@ interface BatchRow {
   productId: string;
   productName: string;
   date: string; // yyyy-MM-dd
-  quantity: number;
-  remaining: number;
-  purchasePrice: number;
+  quantity: number; // PAQUETES (para FIFO)
+  remaining: number; // PAQUETES (informativo)
+  purchasePrice: number; // costo por PAQUETE (providerPrice)
+  unitsPerPackage: number; // informativo
 }
 
 interface Movement {
@@ -111,13 +120,16 @@ function ensureDate(x: any): string {
 
 /** Normaliza ítems de venta: lee items[] o cae a item {} */
 function normalizeSaleItems(x: any): SaleItem[] {
+  // ✅ nuevo POS: items[] con packages + unitPricePackage
   if (Array.isArray(x?.items)) {
     return x.items.map((it: any) => {
-      const qty = Number(it?.qty || 0);
+      const qty = Number(it?.packages ?? it?.qty ?? it?.quantity ?? 0) || 0;
+
       const unitPrice =
-        Number(it?.unitPrice || 0) ||
-        (qty > 0 ? Number(it?.total || 0) / qty : 0) ||
+        Number(it?.unitPricePackage ?? it?.unitPrice ?? 0) ||
+        (qty > 0 ? Number(it?.total ?? it?.lineFinal ?? 0) / qty : 0) ||
         0;
+
       return {
         productId: String(it?.productId || ""),
         productName: String(it?.productName || ""),
@@ -132,12 +144,17 @@ function normalizeSaleItems(x: any): SaleItem[] {
     });
   }
 
+  // legacy item
   if (x?.item) {
     const it = x.item;
-    const qty = Number(it?.qty || 0) || Number(x?.quantity || 0) || 0;
+    const qty =
+      Number(it?.packages ?? it?.qty ?? it?.quantity ?? 0) ||
+      Number(x?.packagesTotal ?? x?.quantity ?? 0) ||
+      0;
+
     const unitPrice =
-      Number(it?.unitPrice || 0) ||
-      (qty > 0 ? Number(it?.total || x?.total || 0) / qty : 0) ||
+      Number(it?.unitPricePackage ?? it?.unitPrice ?? 0) ||
+      (qty > 0 ? Number(it?.total ?? x?.total ?? 0) / qty : 0) ||
       0;
 
     return [
@@ -155,7 +172,8 @@ function normalizeSaleItems(x: any): SaleItem[] {
     ];
   }
 
-  const qty = Number(x?.quantity || 0);
+  // ultra legacy
+  const qty = Number(x?.packagesTotal ?? x?.quantity ?? 0) || 0;
   const unitPrice = qty > 0 ? Number(x?.total || 0) / qty : 0;
   if (qty > 0) {
     return [
@@ -184,13 +202,28 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
   const vendorName = raw.vendorName || raw.sellerName || undefined;
 
   const items = normalizeSaleItems(raw);
-  const lineTotal = Number(raw.total ?? raw.itemsTotal ?? 0);
+
+  // ✅ total confiable:
+  // 1) raw.total
+  // 2) raw.itemsTotal
+  // 3) suma de ítems (total/lineFinal o qty*unitPrice - discount)
+  let total =
+    Number(raw.total ?? raw.itemsTotal ?? 0) ||
+    items.reduce((acc, it) => {
+      const lineTotal =
+        (Number(it.qty || 0) || 0) * (Number(it.unitPrice || 0) || 0);
+      const disc = Math.max(0, Number(it.discount || 0));
+      const lineFinal = Math.max(0, lineTotal - disc);
+      return acc + lineFinal;
+    }, 0);
+
+  total = Number(total || 0);
 
   return {
     id,
     date,
     type: (raw.type || "CONTADO") as SaleType,
-    total: Number(raw.total ?? raw.itemsTotal ?? lineTotal ?? 0),
+    total,
     items,
     customerId: raw.customerId || undefined,
     customerName: raw.customerName || undefined,
@@ -199,7 +232,7 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
   };
 }
 
-/** COGS por FIFO */
+/** COGS por FIFO (EN PAQUETES) */
 function computeFifoCogs(
   batches: BatchRow[],
   salesUpToToDate: SaleDoc[],
@@ -220,8 +253,8 @@ function computeFifoCogs(
     }
     byProd[b.productId].lots.push({
       date: b.date,
-      qtyLeft: Number(b.quantity || 0),
-      cost: Number(b.purchasePrice || 0),
+      qtyLeft: Number(b.quantity || 0), // PAQUETES disponibles al inicio
+      cost: Number(b.purchasePrice || 0), // costo por PAQUETE
     });
   }
 
@@ -239,7 +272,8 @@ function computeFifoCogs(
     for (const it of s.items || []) {
       const map = byProd[it.productId];
       if (!map) continue;
-      let need = Number(it.qty || 0);
+
+      let need = Number(it.qty || 0); // PAQUETES vendidos
       if (need <= 0) continue;
 
       for (const lot of map.lots) {
@@ -257,6 +291,17 @@ function computeFifoCogs(
   }
 
   return cogsPeriod;
+}
+
+async function deleteARMovesBySaleId(saleId: string) {
+  const qMov = query(
+    collection(db, "ar_movements"),
+    where("ref.saleId", "==", saleId)
+  );
+  const snap = await getDocs(qMov);
+  await Promise.all(
+    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id)))
+  );
 }
 
 export default function FinancialDashboardCandies() {
@@ -364,21 +409,46 @@ export default function FinancialDashboardCandies() {
         setSalesUpToToDate(allSales);
         setSalesRange(rangeSales);
 
-        // Lotes (dulces)
+        // Lotes (dulces) => FIFO EN PAQUETES, costo por paquete = providerPrice
         const bSnap = await getDocs(collection(db, "inventory_candies"));
         const allBatches: BatchRow[] = [];
         bSnap.forEach((d) => {
           const x = d.data() as any;
           const date = ensureDate(x);
           if (!date || date > toDate) return;
+
+          const unitsPerPackage = Math.max(
+            1,
+            Math.floor(Number(x.unitsPerPackage || 1))
+          );
+          const totalUnits = Number(x.totalUnits ?? x.quantity ?? 0);
+          const packagesField = Number(x.packages ?? 0);
+          const remainingUnits = Number(x.remaining ?? 0);
+          const remainingPackagesField = Number(x.remainingPackages ?? 0);
+
+          const packagesTotal =
+            packagesField > 0
+              ? packagesField
+              : totalUnits > 0
+              ? Math.floor(totalUnits / unitsPerPackage)
+              : 0;
+
+          const remainingPacks =
+            remainingPackagesField > 0
+              ? remainingPackagesField
+              : remainingUnits > 0
+              ? Math.floor(remainingUnits / unitsPerPackage)
+              : 0;
+
           allBatches.push({
             id: d.id,
             productId: x.productId,
             productName: x.productName || "",
             date,
-            quantity: Number(x.quantity || 0),
-            remaining: Number(x.remaining || 0),
-            purchasePrice: Number(x.purchasePrice || 0),
+            quantity: Number(packagesTotal || 0), // PAQUETES
+            remaining: Number(remainingPacks || 0), // PAQUETES
+            purchasePrice: Number(x.providerPrice || x.purchasePrice || 0), // costo por paquete
+            unitsPerPackage,
           });
         });
         setBatchesUpToToDate(allBatches);
@@ -484,12 +554,8 @@ export default function FinancialDashboardCandies() {
 
           const totalVendorDoc = Number(x.totalVendor ?? 0);
           const gainVendorDoc = Number(x.gainVendor ?? 0);
-          const originalPackages =
-            packagesField > 0
-              ? packagesField
-              : totalUnits > 0
-              ? Math.floor(totalUnits / unitsPerPackage)
-              : 0;
+
+          const originalPackages = packagesOrdered;
 
           const moneyPerPackage =
             originalPackages > 0 ? totalVendorDoc / originalPackages : 0;
@@ -505,6 +571,7 @@ export default function FinancialDashboardCandies() {
             const lineTotal = qty * moneyPerPackage;
             const lineFinal = lineTotal;
             const commission = qty * commissionPerPackage;
+
             orderDetailsTmp[vendorId].associated.push({
               saleId: d.id,
               date,
@@ -518,6 +585,7 @@ export default function FinancialDashboardCandies() {
               vendorCommissionAmount: commission,
               type: "ASSOCIATED",
             });
+
             assocPacksByVendor[vendorId] =
               (assocPacksByVendor[vendorId] || 0) + qty;
           }
@@ -527,6 +595,7 @@ export default function FinancialDashboardCandies() {
             const lineTotal = qty * moneyPerPackage;
             const lineFinal = lineTotal;
             const commission = qty * commissionPerPackage;
+
             orderDetailsTmp[vendorId].remaining.push({
               saleId: d.id,
               date,
@@ -571,6 +640,9 @@ export default function FinancialDashboardCandies() {
 
   const getItemCommission = useCallback(
     (s: SaleDoc, it: SaleItem): number => {
+      // ✅ regla del sistema: crédito NO paga comisión
+      //if (s.type === "CREDITO") return 0;
+
       const stored = Number(it.vendorCommissionAmount || 0);
       if (stored) return stored;
 
@@ -644,6 +716,7 @@ export default function FinancialDashboardCandies() {
         comisionCash += saleCommission;
       } else {
         paquetesCredito += saleQty;
+        // aquí por regla queda 0 (getItemCommission devuelve 0)
         comisionCredito += saleCommission;
       }
     }
@@ -751,7 +824,7 @@ export default function FinancialDashboardCandies() {
 
     const map = new Map<string, Row>();
 
-    // Primero consolidamos las ventas (vendidos / fiados + comisiones)
+    // consolidar ventas
     for (const s of salesRange) {
       const vId = s.vendorId || "NO_VENDOR";
       const vName =
@@ -791,12 +864,12 @@ export default function FinancialDashboardCandies() {
         } else {
           row.paquetesFiados += qty;
           row.totalFiado += lineFinal;
-          row.comisionCredito += commission;
+          row.comisionCredito += commission; // por regla = 0
         }
       }
     }
 
-    // Luego inyectamos paquetes asociados desde los pedidos del vendedor
+    // inyectar asociados
     for (const [vId, assocPacks] of Object.entries(vendorAssociatedPacks)) {
       const existing = map.get(vId);
       const vName =
@@ -818,7 +891,6 @@ export default function FinancialDashboardCandies() {
       };
 
       row.paquetesAsociados = assocPacks;
-      // Restantes = asociados - vendidos - fiados (regla que mencionaste)
       row.paquetesRestantes = Math.max(
         assocPacks - row.paquetesVendidos - row.paquetesFiados,
         0
@@ -860,9 +932,9 @@ export default function FinancialDashboardCandies() {
         for (const it of s.items || []) {
           const qty = Number(it.qty || 0);
           const unitPrice = Number(it.unitPrice || 0);
-          const lineTotal = qty * unitPrice; // BRUTO
+          const lineTotal = qty * unitPrice;
           const discount = Math.max(0, Number(it.discount || 0));
-          const lineFinal = Math.max(0, lineTotal - discount); // NETO
+          const lineFinal = Math.max(0, lineTotal - discount);
 
           list.push({
             saleId: s.id,
@@ -882,7 +954,6 @@ export default function FinancialDashboardCandies() {
         }
       }
 
-      // Abonos del periodo del cliente
       let abonadoPeriodo = 0;
       for (const a of abonos) {
         if (a.customerId === row.customerId) {
@@ -890,7 +961,6 @@ export default function FinancialDashboardCandies() {
         }
       }
 
-      // Saldo actual (histórico)
       const cust = customers.find((c) => c.id === row.customerId);
       const saldoActual = cust?.balance || 0;
 
@@ -919,22 +989,17 @@ export default function FinancialDashboardCandies() {
     setVendorModalOpen(true);
     let title = "";
 
-    if (mode === "ASSOCIATED") {
-      title = `Paquetes asociados — ${vendorName}`;
-    } else if (mode === "REMAINING") {
-      title = `Paquetes restantes — ${vendorName}`;
-    } else if (mode === "CASH") {
+    if (mode === "ASSOCIATED") title = `Paquetes asociados — ${vendorName}`;
+    else if (mode === "REMAINING") title = `Paquetes restantes — ${vendorName}`;
+    else if (mode === "CASH")
       title = `Paquetes vendidos (Cash) — ${vendorName}`;
-    } else {
-      title = `Paquetes fiados (Crédito) — ${vendorName}`;
-    }
+    else title = `Paquetes fiados (Crédito) — ${vendorName}`;
 
     setVendorModalTitle(title);
     setVendorModalPieces([]);
     setVendorModalLoading(true);
 
     try {
-      // Modal desde pedidos del vendedor
       if (mode === "ASSOCIATED" || mode === "REMAINING") {
         const details = vendorOrderDetails[vendorId];
         const pieces =
@@ -948,7 +1013,6 @@ export default function FinancialDashboardCandies() {
         return;
       }
 
-      // Modal desde ventas (Cash / Crédito)
       const list: VendorPiece[] = [];
 
       for (const s of salesRange) {
@@ -1003,12 +1067,13 @@ export default function FinancialDashboardCandies() {
   const handleDeleteSale = async (saleId: string) => {
     if (
       !window.confirm("¿Eliminar esta venta? Esta acción no se puede deshacer.")
-    ) {
+    )
       return;
-    }
 
     try {
-      await deleteDoc(doc(db, "sales_candies", saleId));
+      // ✅ elimina correctamente y restaura inventario (y borra CxC si aplica)
+      await restoreSaleAndDeleteCandy(saleId);
+      await deleteARMovesBySaleId(saleId);
 
       setSalesRange((prev) => prev.filter((s) => s.id !== saleId));
       setSalesUpToToDate((prev) => prev.filter((s) => s.id !== saleId));
@@ -1440,7 +1505,6 @@ export default function FinancialDashboardCandies() {
               </button>
             </div>
 
-            {/* Mini-resumen del periodo para este cliente */}
             <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-3">
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">

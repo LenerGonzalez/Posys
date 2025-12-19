@@ -65,6 +65,7 @@ function pickCol(row: Record<string, any>, candidates: string[]) {
 }
 
 type ImportRow = {
+  id?: string; // ✅ opcional: si viene, actualiza directo por docId
   category: string;
   name: string;
   providerPrice: number;
@@ -146,6 +147,16 @@ export default function ProductsCandies() {
     });
   }, [products, search]);
 
+  // ✅ categorías existentes (para ayudarte en UI / import)
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>();
+    products.forEach((p) => {
+      const c = String(p.category || "").trim();
+      if (c) set.add(c);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "es"));
+  }, [products]);
+
   // ============================
   //  CRUD MANUAL
   // ============================
@@ -190,7 +201,7 @@ export default function ProductsCandies() {
       const ref = await addDoc(collection(db, "products_candies"), payload);
       setProducts((prev) =>
         [...prev, { id: ref.id, ...payload } as CandyProduct].sort((a, b) =>
-          a.name.localeCompare(b.name)
+          a.name.localeCompare(b.name, "es")
         )
       );
       setMsg("✅ Producto creado.");
@@ -267,7 +278,7 @@ export default function ProductsCandies() {
                 }
               : p
           )
-          .sort((a, b) => a.name.localeCompare(b.name))
+          .sort((a, b) => a.name.localeCompare(b.name, "es"))
       );
 
       setMsg("✅ Producto actualizado.");
@@ -303,6 +314,7 @@ export default function ProductsCandies() {
   const downloadTemplateXlsx = () => {
     const data = [
       {
+        Id: "", // ✅ opcional (si lo llenás, actualiza directo)
         Categoria: "Gomitas",
         Producto: "Gomita Fresa",
         PrecioProveedor: 120,
@@ -336,6 +348,10 @@ export default function ProductsCandies() {
     json.forEach((r: any, idx: number) => {
       if (!r || typeof r !== "object") return;
       if (isEmptyRow(r)) return;
+
+      const id = String(
+        pickCol(r, ["Id", "ID", "productId", "docId"]) ?? ""
+      ).trim();
 
       const cat = String(
         pickCol(r, ["Categoria", "Categoría", "Category", "cat", "category"]) ??
@@ -376,6 +392,7 @@ export default function ProductsCandies() {
 
       const rowNumber = idx + 2; // asumiendo fila 1 header
 
+      // si viene id, permitimos que cat/name vengan en blanco? NO: igual exigimos.
       if (!cat) errors.push(`Fila ${rowNumber}: falta Categoria.`);
       if (!prod) errors.push(`Fila ${rowNumber}: falta Producto/Nombre.`);
       if (providerPrice <= 0)
@@ -385,6 +402,7 @@ export default function ProductsCandies() {
 
       if (cat && prod && providerPrice > 0 && unitsPerPackage > 0) {
         rows.push({
+          id: id || undefined,
           category: cat,
           name: prod,
           providerPrice,
@@ -394,10 +412,13 @@ export default function ProductsCandies() {
       }
     });
 
-    // Deduplicar dentro del archivo por (cat+name): gana la última fila
+    // Deduplicar dentro del archivo:
+    // - si viene id => key por id
+    // - si no viene id => key por (cat+name)
     const map = new Map<string, ImportRow>();
     for (const r of rows) {
-      map.set(`${norm(r.category)}::${norm(r.name)}`, r);
+      const k = r.id ? `id::${r.id}` : `${norm(r.category)}::${norm(r.name)}`;
+      map.set(k, r); // gana la última fila
     }
 
     return {
@@ -456,6 +477,17 @@ export default function ProductsCandies() {
     }
   };
 
+  // ✅ editar filas del import antes de confirmar
+  const updateImportRow = (index: number, patch: Partial<ImportRow>) => {
+    setImportRows((prev) => {
+      const copy = [...prev];
+      const current = copy[index];
+      if (!current) return prev;
+      copy[index] = { ...current, ...patch };
+      return copy;
+    });
+  };
+
   const importToFirestore = async () => {
     setMsg("");
     if (importErrors.length > 0) {
@@ -470,9 +502,11 @@ export default function ProductsCandies() {
     try {
       setImportLoading(true);
 
-      // index por (cat+name) del catálogo actual
+      // index por id y por (cat+name)
+      const existingById: Record<string, CandyProduct> = {};
       const existingByKey: Record<string, CandyProduct> = {};
       products.forEach((p) => {
+        existingById[p.id] = p;
         existingByKey[`${norm(p.category)}::${norm(p.name)}`] = p;
       });
 
@@ -482,27 +516,39 @@ export default function ProductsCandies() {
       let toUpdate = 0;
 
       for (const r of importRows) {
-        const key = `${norm(r.category)}::${norm(r.name)}`;
-        const existing = existingByKey[key];
+        const c = String(r.category || "").trim();
+        const n = String(r.name || "").trim();
+        const pp = Math.max(0, toNum(r.providerPrice, 0));
+        const upp = roundInt(r.unitsPerPackage, 1);
+
+        if (!c || !n || pp <= 0 || upp <= 0) continue;
+
+        // 1) si viene id y existe
+        let existing: CandyProduct | undefined = undefined;
+        if (r.id && existingById[r.id]) {
+          existing = existingById[r.id];
+        } else {
+          // 2) fallback por key cat+name
+          const key = `${norm(c)}::${norm(n)}`;
+          existing = existingByKey[key];
+        }
 
         if (existing) {
-          // update
           batch.update(doc(db, "products_candies", existing.id), {
-            category: r.category.trim(),
-            name: r.name.trim(),
-            providerPrice: Math.max(0, toNum(r.providerPrice, 0)),
-            unitsPerPackage: roundInt(r.unitsPerPackage, 1),
+            category: c,
+            name: n,
+            providerPrice: pp,
+            unitsPerPackage: upp,
             updatedAt: Timestamp.now(),
           });
           toUpdate += 1;
         } else {
-          // create
           const ref = doc(collection(db, "products_candies"));
           batch.set(ref, {
-            category: r.category.trim(),
-            name: r.name.trim(),
-            providerPrice: Math.max(0, toNum(r.providerPrice, 0)),
-            unitsPerPackage: roundInt(r.unitsPerPackage, 1),
+            category: c,
+            name: n,
+            providerPrice: pp,
+            unitsPerPackage: upp,
             createdAt: Timestamp.now(),
           });
           toCreate += 1;
@@ -518,7 +564,7 @@ export default function ProductsCandies() {
       setImportRows([]);
       setImportErrors([]);
       setImportFileName("");
-      refresh(); // recargar lista real desde Firestore
+      refresh();
     } catch (e) {
       console.error(e);
       setMsg("❌ Error importando productos a Firestore.");
@@ -529,16 +575,24 @@ export default function ProductsCandies() {
 
   // preview stats
   const importStats = useMemo(() => {
+    const existingById = new Set(products.map((p) => p.id));
     const existingKeys = new Set(
       products.map((p) => `${norm(p.category)}::${norm(p.name)}`)
     );
+
     let willUpdate = 0;
     let willCreate = 0;
+
     for (const r of importRows) {
+      if (r.id && existingById.has(r.id)) {
+        willUpdate += 1;
+        continue;
+      }
       const k = `${norm(r.category)}::${norm(r.name)}`;
       if (existingKeys.has(k)) willUpdate += 1;
       else willCreate += 1;
     }
+
     return { willCreate, willUpdate, total: importRows.length };
   }, [importRows, products]);
 
@@ -808,8 +862,8 @@ export default function ProductsCandies() {
                 <div>
                   <div className="font-semibold">1) Subí tu archivo</div>
                   <div className="text-xs text-gray-600">
-                    Columnas esperadas (flexible): Categoria, Producto/Nombre,
-                    PrecioProveedor, UnidadesPorPaquete.
+                    Columnas esperadas (flexible): Id (opcional), Categoria,
+                    Producto/Nombre, PrecioProveedor, UnidadesPorPaquete.
                   </div>
                 </div>
                 <button
@@ -846,18 +900,15 @@ export default function ProductsCandies() {
                     <li key={i}>{e}</li>
                   ))}
                 </ul>
-                {importErrors.length > 50 && (
-                  <div className="text-xs text-red-700 mt-2">
-                    … y {importErrors.length - 50} más.
-                  </div>
-                )}
               </div>
             )}
 
             <div className="bg-white border rounded p-3">
               <div className="flex flex-wrap gap-4 items-center justify-between mb-2">
                 <div>
-                  <div className="font-semibold">2) Previsualización</div>
+                  <div className="font-semibold">
+                    2) Previsualización (editable)
+                  </div>
                   <div className="text-xs text-gray-600">
                     Se importarán {importStats.total} filas (Crear:{" "}
                     {importStats.willCreate} / Actualizar:{" "}
@@ -880,9 +931,10 @@ export default function ProductsCandies() {
               </div>
 
               <div className="overflow-x-auto border rounded">
-                <table className="min-w-[900px] w-full text-xs">
+                <table className="min-w-[1100px] w-full text-xs">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
+                      <th className="p-2 border text-left">Id (opcional)</th>
                       <th className="p-2 border text-left">Categoría</th>
                       <th className="p-2 border text-left">Producto</th>
                       <th className="p-2 border text-right">
@@ -896,7 +948,7 @@ export default function ProductsCandies() {
                     {importRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={5}
+                          colSpan={6}
                           className="p-4 text-center text-gray-500"
                         >
                           Subí un archivo para ver la previsualización.
@@ -904,20 +956,96 @@ export default function ProductsCandies() {
                       </tr>
                     ) : (
                       importRows.slice(0, 300).map((r, i) => {
-                        const key = `${norm(r.category)}::${norm(r.name)}`;
-                        const exists = products.some(
-                          (p) => `${norm(p.category)}::${norm(p.name)}` === key
+                        const byId = r.id
+                          ? products.some((p) => p.id === r.id)
+                          : false;
+                        const byKey = products.some(
+                          (p) =>
+                            `${norm(p.category)}::${norm(p.name)}` ===
+                            `${norm(r.category)}::${norm(r.name)}`
                         );
+                        const exists = byId || byKey;
+
                         return (
-                          <tr key={`${key}-${i}`} className="whitespace-nowrap">
-                            <td className="p-2 border">{r.category}</td>
-                            <td className="p-2 border">{r.name}</td>
-                            <td className="p-2 border text-right tabular-nums">
-                              {money(r.providerPrice)}
+                          <tr
+                            key={`${r.id || ""}-${i}`}
+                            className="whitespace-nowrap"
+                          >
+                            <td className="p-2 border">
+                              <input
+                                className="w-56 border rounded px-2 py-1"
+                                value={r.id || ""}
+                                onChange={(e) =>
+                                  updateImportRow(i, {
+                                    id: e.target.value.trim() || undefined,
+                                  })
+                                }
+                                placeholder="docId (si querés update exacto)"
+                              />
                             </td>
-                            <td className="p-2 border text-right tabular-nums">
-                              {r.unitsPerPackage}
+
+                            <td className="p-2 border">
+                              <input
+                                className="w-56 border rounded px-2 py-1"
+                                value={r.category}
+                                onChange={(e) =>
+                                  updateImportRow(i, {
+                                    category: e.target.value,
+                                  })
+                                }
+                                list="categories-list"
+                              />
                             </td>
+
+                            <td className="p-2 border">
+                              <input
+                                className="w-72 border rounded px-2 py-1"
+                                value={r.name}
+                                onChange={(e) =>
+                                  updateImportRow(i, { name: e.target.value })
+                                }
+                              />
+                            </td>
+
+                            <td className="p-2 border text-right tabular-nums">
+                              <input
+                                type="number"
+                                step="0.01"
+                                inputMode="decimal"
+                                className="w-28 border rounded px-2 py-1 text-right"
+                                value={
+                                  Number.isNaN(r.providerPrice)
+                                    ? ""
+                                    : r.providerPrice
+                                }
+                                onChange={(e) =>
+                                  updateImportRow(i, {
+                                    providerPrice: Math.max(
+                                      0,
+                                      toNum(e.target.value, 0)
+                                    ),
+                                  })
+                                }
+                              />
+                            </td>
+
+                            <td className="p-2 border text-right tabular-nums">
+                              <input
+                                type="number"
+                                min={1}
+                                className="w-24 border rounded px-2 py-1 text-right"
+                                value={r.unitsPerPackage}
+                                onChange={(e) =>
+                                  updateImportRow(i, {
+                                    unitsPerPackage: roundInt(
+                                      e.target.value,
+                                      1
+                                    ),
+                                  })
+                                }
+                              />
+                            </td>
+
                             <td className="p-2 border text-center">
                               <span
                                 className={`px-2 py-0.5 rounded text-[10px] ${
@@ -935,6 +1063,12 @@ export default function ProductsCandies() {
                     )}
                   </tbody>
                 </table>
+
+                <datalist id="categories-list">
+                  {categoryOptions.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
               </div>
 
               {importRows.length > 300 && (

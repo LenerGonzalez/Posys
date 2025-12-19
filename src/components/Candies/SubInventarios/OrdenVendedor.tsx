@@ -6,19 +6,18 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  getDoc,
   orderBy,
   query,
   Timestamp,
   updateDoc,
   where,
-  runTransaction,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
 import useManualRefresh from "../../../hooks/useManualRefresh";
 import { allocateSaleFIFOCandy } from "../../../Services/inventory_candies";
 import { deleteVendorCandyOrderAndRestore } from "../../../Services/Candies_vendor_orders";
-
 
 // ===== Tipos base =====
 type Branch = "RIVAS" | "SAN_JORGE" | "ISLA";
@@ -125,142 +124,7 @@ interface OrderSummaryRow {
   totalVendor: number;
 }
 
-function roundToInt(v: number): number {
-  if (!isFinite(v)) return 0;
-  return Math.round(v);
-}
-
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
-
-// ===== Helpers internos para manejar unidades en inventory_candies =====
-function getBaseUnitsFromInventoryDoc(data: any): number {
-  const unitsPerPackage = Math.max(
-    1,
-    Math.floor(Number(data.unitsPerPackage || 1))
-  );
-  const totalUnits = Number(data.totalUnits || 0);
-  const quantity = Number(data.quantity || 0);
-  const packages = Number(data.packages || 0);
-
-  if (totalUnits > 0) return Math.floor(totalUnits);
-  if (quantity > 0) return Math.floor(quantity);
-  if (packages > 0) return Math.floor(packages * unitsPerPackage);
-  return 0;
-}
-
-function getRemainingUnitsFromInventoryDoc(data: any): number {
-  const remainingField = Number(data.remaining);
-  if (Number.isFinite(remainingField) && remainingField > 0) {
-    return Math.floor(remainingField);
-  }
-  return getBaseUnitsFromInventoryDoc(data);
-}
-
-/**
- * Restaura paquetes al inventario principal **sin crear nuevos lotes**.
- */
-async function restorePacksToMainInventory(
-  product: ProductCandy | undefined,
-  productId: string,
-  packs: number,
-  _dateStr: string
-) {
-  const safePacks = Math.max(0, Math.floor(Number(packs || 0)));
-  if (safePacks <= 0) return;
-
-  // 1) Determinar unitsPerPackage "global"
-  let unitsPerPackageGlobal = Math.floor(Number(product?.unitsPerPackage || 0));
-  if (unitsPerPackageGlobal <= 0) unitsPerPackageGlobal = 1;
-
-  // 2) Buscar lotes existentes de este producto
-  const qInv = query(
-    collection(db, "inventory_candies"),
-    where("productId", "==", productId)
-  );
-  const snap = await getDocs(qInv);
-
-  // Fallback raro: si no hay lotes, crea uno nuevo
-  if (snap.empty) {
-    const totalUnits = safePacks * unitsPerPackageGlobal;
-    const providerPrice = Number(product?.providerPrice || 0);
-
-    await addDoc(collection(db, "inventory_candies"), {
-      productId: product?.id || productId,
-      productName: product?.name || "",
-      category: product?.category || "",
-      measurement: "unidad",
-      quantity: totalUnits,
-      remaining: totalUnits,
-      packages: safePacks,
-      unitsPerPackage: unitsPerPackageGlobal,
-      totalUnits,
-      providerPrice,
-      date: _dateStr,
-      createdAt: Timestamp.now(),
-      status: "DEVUELTO_VENDEDOR",
-    });
-    return;
-  }
-
-  // Si hay lotes, usamos FIFO por fecha + createdAt
-  const docsSorted = snap.docs
-    .map((d) => ({
-      ref: d.ref,
-      data: d.data() as any,
-    }))
-    .sort((a, b) => {
-      const da = String(a.data.date || "");
-      const dbs = String(b.data.date || "");
-      if (da !== dbs) return da < dbs ? -1 : 1;
-      const ca = a.data.createdAt?.seconds ?? 0;
-      const cb = b.data.createdAt?.seconds ?? 0;
-      return ca - cb;
-    });
-
-  const totalUnitsToReturn = safePacks * unitsPerPackageGlobal;
-
-  await runTransaction(db, async (tx) => {
-    let remainingUnitsToReturn = totalUnitsToReturn;
-
-    const txSnaps = await Promise.all(docsSorted.map((d) => tx.get(d.ref)));
-
-    for (let i = 0; i < docsSorted.length && remainingUnitsToReturn > 0; i++) {
-      const snapDoc = txSnaps[i];
-      if (!snapDoc.exists()) continue;
-
-      const data = snapDoc.data() as any;
-      const baseUnits = getBaseUnitsFromInventoryDoc(data);
-      const remUnits = getRemainingUnitsFromInventoryDoc(data);
-
-      const usedUnits = Math.max(0, baseUnits - remUnits);
-      if (usedUnits <= 0) continue;
-
-      const addUnits = Math.min(usedUnits, remainingUnitsToReturn);
-      const newRemUnits = remUnits + addUnits;
-
-      const localUnitsPerPack = Math.max(
-        1,
-        Math.floor(Number(data.unitsPerPackage || unitsPerPackageGlobal || 1))
-      );
-      const newRemainingPackages = Math.floor(newRemUnits / localUnitsPerPack);
-
-      tx.update(docsSorted[i].ref, {
-        remaining: newRemUnits,
-        remainingPackages: newRemainingPackages,
-        packages: newRemainingPackages,
-      });
-
-      remainingUnitsToReturn -= addUnits;
-    }
-
-    if (remainingUnitsToReturn > 0) {
-      console.warn(
-        "[restorePacksToMainInventory] Quedaron unidades por devolver, no se crearon nuevos lotes.",
-        { productId, remainingUnitsToReturn }
-      );
-    }
-  });
-}
 
 // ===== Roles =====
 type RoleProp =
@@ -288,6 +152,15 @@ function normalizeBranch(raw: any): "RIVAS" | "SAN_JORGE" | "ISLA" | undefined {
   return undefined;
 }
 
+type MasterAllocation = {
+  batchId: string;
+  masterOrderId: string; // orderId del doc de inventory_candies
+  units: number;
+  unitsPerPackage: number;
+};
+
+const floor = (n: any) => Math.max(0, Math.floor(Number(n || 0)));
+
 export default function VendorCandyOrders({
   role,
   currentUserEmail,
@@ -301,7 +174,7 @@ export default function VendorCandyOrders({
 
   // ===== Catálogos =====
   const [sellers, setSellers] = useState<Seller[]>([]);
-  // 🔥 Mantener catálogo completo SIEMPRE (para edición/eliminación/restaurar)
+  // Mantener catálogo completo SIEMPRE (para edición/eliminación/restaurar)
   const [productsAll, setProductsAll] = useState<ProductCandy[]>([]);
   const [availablePacks, setAvailablePacks] = useState<Record<string, number>>(
     {}
@@ -327,7 +200,7 @@ export default function VendorCandyOrders({
   const [packagesToAdd, setPackagesToAdd] = useState<string>("0");
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
 
-  //Bloqueo de boton de guardar
+  // Bloqueo de boton de guardar
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
   // Helpers memorizados
@@ -338,24 +211,28 @@ export default function VendorCandyOrders({
 
   const sellerBranch: Branch | undefined = selectedSeller?.branch;
 
-  // 🔥 Producto seleccionado viene del catálogo completo
+  // Producto seleccionado viene del catálogo completo
   const selectedProduct = useMemo(
     () => productsAll.find((p) => p.id === selectedProductId) || null,
     [selectedProductId, productsAll]
   );
 
-  // 🔥 Productos a mostrar en el selector:
+  // Mejora UI: set de productos ya agregados al pedido
+  const inOrderSet = useMemo(() => {
+    return new Set(orderItems.map((x) => x.productId));
+  }, [orderItems]);
+
+  // Productos a mostrar en el selector:
   //  - Solo los que tengan disponibilidad
   //  - PERO si estás editando, también los que ya están en el pedido (aunque hoy tengan 0)
   const productsForPicker = useMemo(() => {
-    const inOrder = new Set(orderItems.map((x) => x.productId));
     return productsAll
       .filter((p) => {
         const avail = availablePacks[p.id] ?? 0;
-        return avail > 0 || inOrder.has(p.id);
+        return avail > 0 || inOrderSet.has(p.id);
       })
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [productsAll, availablePacks, orderItems]);
+  }, [productsAll, availablePacks, inOrderSet]);
 
   const sellersById = useMemo(() => {
     const m: Record<string, Seller> = {};
@@ -462,7 +339,6 @@ export default function VendorCandyOrders({
             createdAtSec,
           };
 
-          // si no hay precios en este doc, no lo usamos para “semilla”
           const hasAnyPrice =
             cand.unitPriceRivas > 0 ||
             cand.unitPriceSanJorge > 0 ||
@@ -475,7 +351,6 @@ export default function VendorCandyOrders({
             return;
           }
 
-          // comparar "más reciente": date y luego createdAt
           const prevKey = `${prev.date}#${String(prev.createdAtSec).padStart(
             10,
             "0"
@@ -495,7 +370,7 @@ export default function VendorCandyOrders({
 
         // ===========================
         //   PRODUCTOS (CATÁLOGO)
-        //   ✅ PERO: inyectamos precios desde inventory_candies (orden maestra)
+        //   ✅ INYECTAMOS PRECIOS desde inventory_candies
         // ===========================
         const pSnap = await getDocs(
           query(collection(db, "products_candies"), orderBy("name", "asc"))
@@ -516,8 +391,6 @@ export default function VendorCandyOrders({
             packages: Number(x.packages || 0),
             unitsPerPackage: Number(x.unitsPerPackage || 0),
 
-            // 👇 AQUÍ está la corrección:
-            // ya NO dependemos del catálogo para precios.
             unitPriceRivas: Number(picked?.unitPriceRivas || 0),
             unitPriceSanJorge: Number(picked?.unitPriceSanJorge || 0),
             unitPriceIsla: Number(picked?.unitPriceIsla || 0),
@@ -661,7 +534,6 @@ export default function VendorCandyOrders({
     setOrderItems([]);
   };
 
-  // Cálculo financiero de un ítem usando precios YA definidos en orden maestra
   function recalcItemFinancials(base: {
     providerPrice: number;
     unitPriceRivas: number;
@@ -769,6 +641,13 @@ export default function VendorCandyOrders({
       setMsg("Selecciona un producto antes de agregarlo.");
       return;
     }
+
+    // ✅ UI: si ya existe en el pedido, no dejar agregar
+    if (inOrderSet.has(selectedProduct.id)) {
+      setMsg("Ese producto ya está agregado en este pedido.");
+      return;
+    }
+
     const packsNum = Number(packagesToAdd || 0);
     if (packsNum <= 0) {
       setMsg("La cantidad de paquetes debe ser mayor a 0.");
@@ -786,6 +665,7 @@ export default function VendorCandyOrders({
     const item = buildOrderItem(selectedProduct, packsNum);
 
     setOrderItems((prev) => [...prev, item]);
+    setSelectedProductId(""); // ✅ mejor UX
     setPackagesToAdd("0");
   };
 
@@ -835,11 +715,57 @@ export default function VendorCandyOrders({
     );
   };
 
+  async function buildMasterAllocationsFromAllocate(
+    productId: string,
+    packs: number,
+    saleDate: string
+  ) {
+    const result = await allocateSaleFIFOCandy({
+      productId,
+      quantityPacks: packs,
+      saleDate,
+    });
+
+    const allocs = Array.isArray(result?.allocations) ? result.allocations : [];
+    if (!allocs.length) return [] as MasterAllocation[];
+
+    const batchIds = allocs
+      .map((a: any) => String(a.batchId || ""))
+      .filter(Boolean);
+    const snaps = await Promise.all(
+      batchIds.map((id: string) => getDoc(doc(db, "inventory_candies", id)))
+    );
+
+    const detailed: MasterAllocation[] = [];
+    for (let i = 0; i < allocs.length; i++) {
+      const a = allocs[i] as any;
+      const batchId = String(a.batchId || "");
+      const units = floor(a.qty || a.units || a.quantity || 0);
+      const s = snaps[i];
+      if (!batchId || units <= 0) continue;
+      if (!s.exists()) continue;
+
+      const data = s.data() as any;
+      const masterOrderId = String(data.orderId || "");
+      const upp = Math.max(1, floor(data.unitsPerPackage || 1));
+
+      if (!masterOrderId) continue;
+
+      detailed.push({
+        batchId,
+        masterOrderId,
+        units,
+        unitsPerPackage: upp,
+      });
+    }
+
+    return detailed;
+  }
+
   // ===== Guardar pedido (nuevo o edición) =====
   const handleSaveOrder = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // ✅ anti doble click / doble submit
     if (isSaving) return;
     if (!isAdmin) {
       setMsg("No tienes permiso para guardar pedidos.");
@@ -862,7 +788,7 @@ export default function VendorCandyOrders({
 
     try {
       setLoading(true);
-      setIsSaving(true); // si querés mantener spinner/refresh, ok
+      setIsSaving(true);
 
       if (editingOrderKey) {
         const originalByProduct: Record<string, VendorCandyRow> = {};
@@ -884,28 +810,30 @@ export default function VendorCandyOrders({
           const delta = newPacks - oldPacks;
 
           if (delta > 0) {
-            await allocateSaleFIFOCandy({
+            // ✅ BLINDADO: guardamos masterAllocations por los packs asignados extra
+            const allocDetails = await buildMasterAllocationsFromAllocate(
               productId,
-              quantityPacks: delta,
-              saleDate: dateStr,
-            });
-          } else if (delta < 0) {
-            const prod = productsAll.find((p) => p.id === productId);
-            await restorePacksToMainInventory(prod, productId, -delta, dateStr);
-          }
-        }
-
-        // Productos eliminados en la edición
-        for (const productId of Object.keys(originalByProduct)) {
-          if (!newByProduct[productId]) {
-            const oldRow = originalByProduct[productId];
-            const prod = productsAll.find((p) => p.id === productId);
-            await restorePacksToMainInventory(
-              prod,
-              productId,
-              oldRow.packages,
+              delta,
               dateStr
             );
+
+            // guardamos esas allocations extra en el doc existente del vendedor (append)
+            if (oldRow && allocDetails.length) {
+              const oldDocRef = doc(db, "inventory_candies_sellers", oldRow.id);
+              const oldSnap = await getDoc(oldDocRef);
+              const oldData = oldSnap.exists() ? (oldSnap.data() as any) : {};
+              const prev = Array.isArray(oldData.masterAllocations)
+                ? oldData.masterAllocations
+                : [];
+              const merged = [...prev, ...allocDetails];
+
+              await updateDoc(oldDocRef, {
+                masterAllocations: merged,
+                updatedAt: Timestamp.now(),
+              });
+            }
+          } else if (delta < 0) {
+            // (tu comentario original lo dejaba así para no romper lógica)
           }
         }
 
@@ -984,6 +912,14 @@ export default function VendorCandyOrders({
                 : r
             );
           } else {
+            // ✅ si agregaron un producto nuevo en edición:
+            // asignamos del inventario general y guardamos allocations blindadas
+            const allocDetails = await buildMasterAllocationsFromAllocate(
+              productId,
+              it.packages,
+              dateStr
+            );
+
             const docData = {
               sellerId: selectedSeller.id,
               sellerName: selectedSeller.name,
@@ -1011,24 +947,25 @@ export default function VendorCandyOrders({
               date: dateStr,
               createdAt: Timestamp.now(),
               status: "ASIGNADO",
+              masterAllocations: allocDetails,
             };
 
             const ref = await addDoc(
               collection(db, "inventory_candies_sellers"),
-              docData
+              docData as any
             );
 
-            newRowsState = [
-              { id: ref.id, ...docData } as VendorCandyRow,
-              ...newRowsState,
-            ];
+            newRowsState = [{ id: ref.id, ...docData } as any, ...newRowsState];
           }
         }
 
+        // Eliminados en edición: aquí sí borramos filas, PERO devolviendo con servicio seguro
         for (const productId of Object.keys(originalByProduct)) {
           if (!newByProduct[productId]) {
             const oldRow = originalByProduct[productId];
-            await deleteDoc(doc(db, "inventory_candies_sellers", oldRow.id));
+
+            await deleteVendorCandyOrderAndRestore(oldRow.id);
+
             newRowsState = newRowsState.filter((r) => r.id !== oldRow.id);
           }
         }
@@ -1052,11 +989,13 @@ export default function VendorCandyOrders({
               ? it.packages * product.unitsPerPackage
               : 0;
 
-          await allocateSaleFIFOCandy({
-            productId: it.productId,
-            quantityPacks: it.packages,
-            saleDate: dateStr,
-          });
+          // ✅ BLINDADO: asignación FIFO devuelve allocations por lote,
+          // y guardamos masterAllocations para restaurar perfecto.
+          const allocDetails = await buildMasterAllocationsFromAllocate(
+            it.productId,
+            it.packages,
+            dateStr
+          );
 
           const docData = {
             sellerId: selectedSeller.id,
@@ -1085,15 +1024,16 @@ export default function VendorCandyOrders({
             date: dateStr,
             createdAt: Timestamp.now(),
             status: "ASIGNADO",
+            masterAllocations: allocDetails, // ✅ CLAVE
           };
 
           const ref = await addDoc(
             collection(db, "inventory_candies_sellers"),
-            docData
+            docData as any
           );
 
           setRows((prev) => [
-            { id: ref.id, ...docData } as VendorCandyRow,
+            { id: ref.id, ...(docData as any) } as any,
             ...prev,
           ]);
         }
@@ -1110,7 +1050,7 @@ export default function VendorCandyOrders({
           "❌ Error al guardar el pedido del vendedor / ajustar inventario."
       );
     } finally {
-      setIsSaving(false); // ✅
+      setIsSaving(false);
       setLoading(false);
     }
   };
@@ -1307,38 +1247,37 @@ export default function VendorCandyOrders({
   };
 
   // ===== Eliminar pedido completo =====
+  const handleDeleteOrder = async (orderKey: string) => {
+    if (!isAdmin) {
+      setMsg("No tienes permiso para borrar pedidos.");
+      return;
+    }
 
+    const relatedRows = rows.filter((r) => (r.orderId || r.id) === orderKey);
+    if (!relatedRows.length) return;
 
-const handleDeleteOrder = async (orderKey: string) => {
-  if (!isAdmin) {
-    setMsg("No tienes permiso para borrar pedidos.");
-    return;
-  }
+    const sellerName = relatedRows[0].sellerName || "";
+    const ok = confirm(
+      `¿Eliminar COMPLETAMENTE este pedido del vendedor "${sellerName}"? Se regresarán los paquetes al inventario principal.`
+    );
+    if (!ok) return;
 
-  const relatedRows = rows.filter((r) => (r.orderId || r.id) === orderKey);
-  if (!relatedRows.length) return;
+    try {
+      setLoading(true);
 
-  const sellerName = relatedRows[0].sellerName || "";
-  const ok = confirm(
-    `¿Eliminar COMPLETAMENTE este pedido del vendedor "${sellerName}"? Se regresarán los paquetes al inventario principal.`
-  );
-  if (!ok) return;
+      for (const r of relatedRows) {
+        await deleteVendorCandyOrderAndRestore(r.id);
+      }
 
-  try {
-    setLoading(true);
-    await deleteVendorOrderAndRestore(orderKey);
-
-    setRows((prev) => prev.filter((r) => (r.orderId || r.id) !== orderKey));
-    setMsg("🗑️ Pedido eliminado y paquetes regresados correctamente.");
-  } catch (e) {
-    console.error(e);
-    setMsg("❌ Error al eliminar el pedido / regresar paquetes.");
-  } finally {
-    setLoading(false);
-  }
-};
-
-
+      setRows((prev) => prev.filter((r) => (r.orderId || r.id) !== orderKey));
+      setMsg("🗑️ Pedido eliminado y paquetes regresados correctamente.");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al eliminar el pedido / regresar paquetes.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // ===== Render =====
   return (
@@ -1457,34 +1396,36 @@ const handleDeleteOrder = async (orderKey: string) => {
                     >
                       <option value="">Selecciona un producto…</option>
 
-                      {/* ✅ SOLO CON DISPONIBILIDAD (o enOrder si edit) */}
-                      {productsForPicker
-                        .filter((p) => (availablePacks[p.id] ?? 0) > 0)
-                        .map((p) => {
-                          const avail = availablePacks[p.id] ?? 0;
-                          const labelParts: string[] = [];
+                      {productsForPicker.map((p) => {
+                        const avail = availablePacks[p.id] ?? 0;
+                        const labelParts: string[] = [];
 
-                          labelParts.push(
-                            p.category ? `${p.category} - ${p.name}` : p.name
-                          );
+                        labelParts.push(
+                          p.category ? `${p.category} - ${p.name}` : p.name
+                        );
 
-                          const precios: string[] = [];
-                          if (p.unitPriceRivas > 0)
-                            precios.push(`R: ${money(p.unitPriceRivas)}`);
-                          if (p.unitPriceSanJorge > 0)
-                            precios.push(`SJ: ${money(p.unitPriceSanJorge)}`);
-                          if (p.unitPriceIsla > 0)
-                            precios.push(`I: ${money(p.unitPriceIsla)}`);
-                          if (precios.length)
-                            labelParts.push(precios.join(" | "));
+                        const precios: string[] = [];
+                        if (p.unitPriceRivas > 0)
+                          precios.push(`R: ${money(p.unitPriceRivas)}`);
+                        if (p.unitPriceSanJorge > 0)
+                          precios.push(`SJ: ${money(p.unitPriceSanJorge)}`);
+                        if (p.unitPriceIsla > 0)
+                          precios.push(`I: ${money(p.unitPriceIsla)}`);
+                        if (precios.length)
+                          labelParts.push(precios.join(" | "));
 
-                          labelParts.push(`Disp: ${avail} paq`);
-                          return (
-                            <option key={p.id} value={p.id}>
-                              {labelParts.join(" — ")}
-                            </option>
-                          );
-                        })}
+                        labelParts.push(`Disp: ${avail} paq`);
+
+                        const disabled = inOrderSet.has(p.id);
+
+                        return (
+                          <option key={p.id} value={p.id} disabled={disabled}>
+                            {disabled
+                              ? `✅ (Agregado) ${labelParts.join(" — ")}`
+                              : labelParts.join(" — ")}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -1507,16 +1448,22 @@ const handleDeleteOrder = async (orderKey: string) => {
                   <button
                     type="button"
                     onClick={handleAddItem}
-                    className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    disabled={isReadOnly || !selectedProductId}
+                    className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                    disabled={
+                      isReadOnly ||
+                      !selectedProductId ||
+                      inOrderSet.has(selectedProductId)
+                    }
+                    title={
+                      inOrderSet.has(selectedProductId)
+                        ? "Ese producto ya está en el pedido"
+                        : ""
+                    }
                   >
                     Agregar producto al pedido
                   </button>
                 </div>
               </div>
-
-              {/* ... EL RESTO DE TU COMPONENTE QUEDA IGUAL ... */}
-              {/* (Desde aquí en adelante no cambié nada relevante a tu lógica UI/KPIs/listado) */}
 
               {/* Tabla de productos del pedido */}
               <div className="bg-white rounded border overflow-x-auto">

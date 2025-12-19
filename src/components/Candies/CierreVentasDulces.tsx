@@ -1,4 +1,3 @@
-// src/components/Candies/CierreVentasDulces.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { db } from "../../firebase";
 import {
@@ -52,6 +51,12 @@ interface SaleDataRaw {
   cogsAmount?: number;
   // tipo de venta en sales_candies
   type?: SaleType;
+
+  // ✅ NUEVO (ya existe en sales_candies del POS)
+  vendorCommissionAmount?: number;
+  vendorCommissionPercent?: number;
+  itemsTotal?: number;
+  total?: number;
 }
 
 interface SaleData {
@@ -77,6 +82,9 @@ interface SaleData {
   cogsAmount?: number;
   type: SaleType;
   vendorId?: string;
+
+  // ✅ NUEVO: comisión ya prorrateada por fila
+  vendorCommissionAmount?: number;
 }
 
 interface ClosureData {
@@ -111,7 +119,8 @@ const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 
-// Normaliza UNA venta en MÚLTIPLES filas si trae items[]
+// ✅ Normaliza UNA venta en MÚLTIPLES filas si trae items[]
+// ✅ Ajuste: prorratea vendorCommissionAmount por línea y filtra por vendorId en rol vendedor
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const date =
     raw.date ??
@@ -131,6 +140,13 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const type: SaleType = (raw.type || "CONTADO") as SaleType;
   const vendorId = raw.vendorId;
 
+  // Totales root para prorratear comisión en multi-ítem
+  const saleTotalRoot =
+    Number(
+      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0
+    ) || 0;
+  const saleCommissionRoot = Number(raw.vendorCommissionAmount ?? 0) || 0;
+
   // Venta multi-ítem
   if (Array.isArray(raw.items) && raw.items.length > 0) {
     return raw.items.map((it, idx) => {
@@ -142,6 +158,22 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
           Number(it?.unitPricePackage || it?.unitPrice || 0) * qtyPacks -
             Number(it?.discount || 0)
         );
+
+      // ✅ Comisión por línea:
+      // - En crédito: 0
+      // - En contado: usar vendorCommissionAmount del doc y prorratear por lineFinal
+      let lineCommission = 0;
+      if (
+        //type !== "CREDITO" &&
+        saleCommissionRoot > 0 &&
+        saleTotalRoot > 0 &&
+        Number(lineFinal || 0) > 0
+      ) {
+        lineCommission = round2(
+          (saleCommissionRoot * Number(lineFinal || 0)) / saleTotalRoot
+        );
+      }
+
       return {
         id: `${id}#${idx}`,
         productName: String(it?.productName ?? "(sin nombre)"),
@@ -162,19 +194,27 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         cogsAmount: Number(it?.cogsAmount ?? 0),
         type,
         vendorId,
+        vendorCommissionAmount: lineCommission,
       };
     });
   }
 
   // Fallback: una sola fila (sin items[])
   const qtyPacksFallback = Number(raw.packagesTotal ?? raw.quantity ?? 0); // paquetes totales
+  const amountFallback =
+    Number(raw.amount ?? raw.amountCharged ?? raw.total ?? 0) || 0;
+
+  let commissionFallback = 0;
+  if (type !== "CREDITO") {
+    commissionFallback = round2(Number(raw.vendorCommissionAmount ?? 0) || 0);
+  }
 
   return [
     {
       id,
       productName: raw.productName ?? "(sin nombre)",
       quantity: qtyPacksFallback,
-      amount: Number(raw.amount ?? raw.amountCharged ?? 0),
+      amount: amountFallback,
       amountSuggested: Number(raw.amountSuggested ?? 0),
       date,
       userEmail: vendedorLabel,
@@ -188,6 +228,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       cogsAmount: raw.cogsAmount,
       type,
       vendorId,
+      vendorCommissionAmount: commissionFallback,
     },
   ];
 };
@@ -202,7 +243,7 @@ type RoleCandies =
 export default function CierreVentasDulces({
   role,
   currentUserEmail,
-  sellerCandyId, // se acepta para mantener compatibilidad con App, aunque aquí no se usa
+  sellerCandyId, // ✅ ahora SÍ se usa para filtrar por vendorId
 }: {
   role?: RoleCandies;
   currentUserEmail?: string;
@@ -229,7 +270,7 @@ export default function CierreVentasDulces({
   const isVendDulces = role === "vendedor_dulces";
   const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
 
-  // vendedores para comisión
+  // vendedores para comisión (se mantienen por compat, pero ya NO se usan para calcular)
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
 
   // Ventas de HOY (colección de DULCES)
@@ -285,7 +326,7 @@ export default function CierreVentasDulces({
     fetchClosure();
   }, [today]);
 
-  // cargar vendedores de dulces con comisión
+  // cargar vendedores de dulces con comisión (se deja igual para no romper nada)
   useEffect(() => {
     const fetchSellers = async () => {
       try {
@@ -307,42 +348,11 @@ export default function CierreVentasDulces({
     fetchSellers();
   }, []);
 
-  const sellersById = React.useMemo(() => {
-    const m: Record<string, SellerCandy> = {};
-    sellers.forEach((s) => {
-      m[s.id] = s;
-    });
-    return m;
-  }, [sellers]);
-
-  // helper comisión por venta
+  // ✅ helper comisión por venta (YA VIENE EN LA VENTA)
   const getCommissionAmount = (s: SaleData): number => {
     // REGLA: En CRÉDITO nunca se paga comisión
-    if (s.type === "CREDITO") return 0;
-
-    let seller: SellerCandy | undefined;
-
-    // Buscar por vendorId
-    if (s.vendorId) {
-      seller = sellersById[s.vendorId];
-    }
-
-    // fallback: buscar por nombre (label mostrado en userEmail)
-    if (!seller && s.userEmail) {
-      const labelNorm = s.userEmail.toLowerCase();
-      seller = sellers.find(
-        (v) => (v.name || "").trim().toLowerCase() === labelNorm
-      );
-    }
-
-    if (!seller || !seller.commissionPercent) return 0;
-
-    // En contado la base es el monto total de la venta
-    const base = Number(s.amount || 0);
-    if (!base) return 0;
-
-    const percent = Number(seller.commissionPercent) || 0;
-    return base * (percent / 100);
+    //if (s.type === "CREDITO") return 0;
+    return round2(Number(s.vendorCommissionAmount ?? 0) || 0);
   };
 
   // Ventas visibles (aplicamos filtro + rol)
@@ -363,15 +373,29 @@ export default function CierreVentasDulces({
       base = salesV2.filter((s) => s.status === "PROCESADA");
     }
 
-    // Restricción para vendedor_dulces: solo sus ventas
-    if (isVendDulces && currentEmailNorm) {
-      base = base.filter(
-        (s) => (s.sellerEmail || "").toLowerCase() === currentEmailNorm
-      );
+    // ✅ Restricción para vendedor_dulces: solo sus ventas por vendorId
+    if (isVendDulces) {
+      if (sellerCandyId) {
+        base = base.filter((s) => (s.vendorId || "") === sellerCandyId);
+      } else if (currentEmailNorm) {
+        // fallback legacy si existiera
+        base = base.filter(
+          (s) => (s.sellerEmail || "").toLowerCase() === currentEmailNorm
+        );
+      } else {
+        base = [];
+      }
     }
 
     return base;
-  }, [filter, salesV2, floatersExtra, isVendDulces, currentEmailNorm]);
+  }, [
+    filter,
+    salesV2,
+    floatersExtra,
+    isVendDulces,
+    sellerCandyId,
+    currentEmailNorm,
+  ]);
 
   // Totales visibles (quantity = paquetes)
   const totalPaquetes = round3(

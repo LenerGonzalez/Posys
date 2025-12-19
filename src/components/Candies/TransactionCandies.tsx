@@ -4,6 +4,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   orderBy,
   query,
@@ -34,12 +35,20 @@ interface SaleDoc {
   date: string; // yyyy-MM-dd
   type: SaleType;
   total: number;
-  quantity: number; // TOTAL de paquetes de la venta (para la UI)
+
+  // TOTAL de PAQUETES para UI
+  quantity: number;
+
   customerId?: string;
   customerName?: string;
   downPayment?: number;
+
   vendorId?: string;
   vendorName?: string;
+
+  // ✅ NUEVO: si viene guardado en la venta, lo usamos para histórico
+  vendorCommissionPercent?: number;
+  vendorCommissionAmount?: number;
 }
 
 // ----------------- Helpers de fecha / normalización -----------------
@@ -58,12 +67,12 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
   const date = ensureDate(d);
   if (!date) return null;
 
-  let quantity = 0;
+  let quantity = 0; // paquetes
   let total = 0;
 
   // Si la venta tiene items[] (multi-producto)
   if (Array.isArray(d.items) && d.items.length > 0) {
-    // 👇 Paquetes: usamos campo packages, si no, qty/quantity
+    // 👇 Paquetes: usamos campo packages, si no, qty/quantity (fallback)
     quantity = d.items.reduce(
       (acc: number, it: any) =>
         acc + (Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0),
@@ -90,6 +99,10 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     downPayment: Number(d.downPayment || 0),
     vendorId: d.vendorId || undefined,
     vendorName: d.vendorName || d.vendor || undefined,
+
+    // ✅ HISTÓRICO desde la venta
+    vendorCommissionPercent: Number(d.vendorCommissionPercent || 0) || 0,
+    vendorCommissionAmount: Number(d.vendorCommissionAmount || 0) || 0,
   };
 }
 
@@ -151,12 +164,15 @@ export default function TransactionsReportCandies({
     setItemsModalLoading(true);
     setItemsModalSaleId(saleId);
     setItemsModalRows([]);
+
     try {
-      const snap = await getDocs(
-        query(collection(db, "sales_candies"), where("__name__", "==", saleId))
-      );
-      const docSnap = snap.docs[0];
-      const data = docSnap?.data() as any;
+      // ✅ 1 doc directo (más limpio y estable)
+      const docSnap = await getDoc(doc(db, "sales_candies", saleId));
+      const data = docSnap.exists() ? (docSnap.data() as any) : null;
+      if (!data) {
+        setItemsModalRows([]);
+        return;
+      }
 
       const arr = Array.isArray(data?.items)
         ? data.items
@@ -173,6 +189,7 @@ export default function TransactionsReportCandies({
         discount: Number(it.discount || 0),
         total: Number(it.total ?? it.lineFinal ?? 0),
       }));
+
       setItemsModalRows(rows);
     } catch (e) {
       console.error(e);
@@ -220,12 +237,19 @@ export default function TransactionsReportCandies({
     return m;
   }, [sellers]);
 
-  // NUEVO: helper para calcular comisión de una venta
+  // ✅ Ajuste: comisión HISTÓRICA desde la venta (si existe),
+  // fallback a cálculo por sellers_candies
   const getCommissionAmount = (s: SaleDoc): number => {
+    const stored = Number((s as any).vendorCommissionAmount || 0);
+    if (stored > 0) return stored;
+
     if (!s.vendorId) return 0;
     const v = sellersById[s.vendorId];
     if (!v || !v.commissionPercent) return 0;
-    return ((Number(s.total) || 0) * (Number(v.commissionPercent) || 0)) / 100;
+
+    const calc =
+      ((Number(s.total) || 0) * (Number(v.commissionPercent) || 0)) / 100;
+    return Number(calc.toFixed(2));
   };
 
   // Carga inicial y recarga al cambiar rango de fechas
@@ -242,7 +266,7 @@ export default function TransactionsReportCandies({
         );
         setCustomers(cList);
 
-        // NUEVO: vendedores (dulces) con comisión
+        // vendedores (dulces) con comisión (fallback si no viene en venta)
         const vSnap = await getDocs(collection(db, "sellers_candies"));
         const vList: Seller[] = [];
         vSnap.forEach((d) => {
@@ -319,7 +343,7 @@ export default function TransactionsReportCandies({
     return filteredSales.slice(start, start + PAGE_SIZE);
   }, [filteredSales, page]);
 
-  // NUEVO: venta actual del modal (para mostrar comisión en el detalle)
+  // venta actual del modal (para mostrar comisión en el detalle)
   const modalSale = useMemo(
     () =>
       itemsModalSaleId
@@ -330,7 +354,6 @@ export default function TransactionsReportCandies({
 
   // --------- Eliminar venta ---------
   const confirmDelete = async (s: SaleDoc) => {
-    // Por seguridad, solo admin puede eliminar
     if (!canDelete) return;
 
     setOpenMenuId(null);
@@ -606,7 +629,6 @@ export default function TransactionsReportCandies({
               <th className="p-2 border">Tipo</th>
               <th className="p-2 border">Paquetes</th>
               <th className="p-2 border">Monto</th>
-              {/* NUEVO: columna de comisión después de Monto */}
               <th className="p-2 border">Comisión</th>
               <th className="p-2 border">Vendedor</th>
               {canDelete && <th className="p-2 border">Acciones</th>}
@@ -632,6 +654,7 @@ export default function TransactionsReportCandies({
                   (s.customerId ? customersById[s.customerId] : "") ||
                   "Nombre cliente";
                 const commissionAmount = getCommissionAmount(s);
+
                 return (
                   <tr key={s.id} className="text-center">
                     <td className="p-2 border">{s.date}</td>
@@ -654,6 +677,7 @@ export default function TransactionsReportCandies({
                       {commissionAmount > 0 ? money(commissionAmount) : "—"}
                     </td>
                     <td className="p-2 border">{s.vendorName || "—"}</td>
+
                     {canDelete && (
                       <td className="p-2 border relative">
                         <button
@@ -669,7 +693,6 @@ export default function TransactionsReportCandies({
                         </button>
                         {openMenuId === s.id && (
                           <div className="absolute right-2 mt-1 w-28 bg-white border rounded shadow z-10 text-left">
-                            {/* Solo eliminar por ahora, para no dañar inventario multi-item */}
                             <button
                               className="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
                               onClick={() => confirmDelete(s)}
@@ -703,7 +726,7 @@ export default function TransactionsReportCandies({
                   Productos/paquetes vendidos{" "}
                   {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
                 </h3>
-                {/* NUEVO: comisión de esta venta en el detalle */}
+
                 {modalSale && (
                   <div className="text-sm text-gray-700 mt-1">
                     Comisión de vendedor:{" "}
@@ -715,6 +738,7 @@ export default function TransactionsReportCandies({
                   </div>
                 )}
               </div>
+
               <button
                 className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
                 onClick={() => setItemsModalOpen(false)}

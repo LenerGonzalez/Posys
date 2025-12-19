@@ -14,6 +14,9 @@ import {
 import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 
+// ✅ SYNC ORDEN MAESTRA
+import { syncCandyMainOrderFromInventory } from "../../Services/inventory_candies";
+
 // ===== Helpers =====
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -177,9 +180,13 @@ export default function InventoryCandyBatches() {
 
           const unitsPerPackage = Number(b.unitsPerPackage || 0);
           const totalUnits = Number(
-            b.totalUnits ?? (b.packages || 0) * (b.unitsPerPackage || 0)
+            b.totalUnits ??
+              b.quantity ??
+              (b.packages || 0) * (b.unitsPerPackage || 0)
           );
-          const remaining = Number(b.remaining ?? b.totalUnits ?? 0);
+          const remaining = Number(
+            b.remaining ?? b.totalUnits ?? totalUnits ?? 0
+          );
 
           rows.push({
             id: d.id,
@@ -242,7 +249,7 @@ export default function InventoryCandyBatches() {
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [products]);
 
-  // Totales del filtro (como pediste)
+  // Totales del filtro
   const totals = useMemo(() => {
     const totalPaquetes = filteredBatches.reduce(
       (a, b) => a + getInitialPacks(b),
@@ -254,7 +261,6 @@ export default function InventoryCandyBatches() {
       0
     );
 
-    // Sub total = providerPrice * paquetes iniciales (por lote)
     const totalSubtotal = filteredBatches.reduce((a, b) => {
       const packs = getInitialPacks(b);
       return a + Number(b.providerPrice || 0) * packs;
@@ -293,11 +299,7 @@ export default function InventoryCandyBatches() {
       if (b.status === "PENDIENTE") pendientes += 1;
       if (b.status === "PAGADO") pagados += 1;
     }
-    return {
-      totalLotes: filteredBatches.length,
-      pendientes,
-      pagados,
-    };
+    return { totalLotes: filteredBatches.length, pendientes, pagados };
   }, [filteredBatches]);
 
   // ===== Agrupación por producto para la tabla principal =====
@@ -323,12 +325,10 @@ export default function InventoryCandyBatches() {
         0
       );
 
-      // Para mostrar (referencia): del último lote
       const providerPrice = Number(last?.providerPrice || 0);
       const unitPriceRivas = Number(last?.unitPriceRivas || 0);
       const unitPriceIsla = Number(last?.unitPriceIsla || 0);
 
-      // ✅ SUMA REAL por lote (no “último precio * totalPackages”)
       const subtotal = list.reduce((acc, x) => {
         const packs = getInitialPacks(x);
         return acc + Number(x.providerPrice || 0) * packs;
@@ -347,7 +347,6 @@ export default function InventoryCandyBatches() {
       const gainRivas = totalRivas - subtotal;
       const gainIsla = totalIsla - subtotal;
 
-      // última fecha = max date
       let lastDate = "";
       let lastCreatedAt: Timestamp | undefined = undefined;
       for (const x of list) {
@@ -405,10 +404,8 @@ export default function InventoryCandyBatches() {
       return;
     }
 
-    // ✅ FIX: usar paquetes iniciales reales (no old.packages legacy)
     const packsInitial = getInitialPacks(old);
 
-    // === MISMA LÓGICA TUYA ORIGINAL (solo corrigiendo base de packs) ===
     const subtotal = editProviderPrice * packsInitial;
     const totalRivas = packsInitial > 0 ? subtotal / 0.8 : 0;
     const totalSanJorge = packsInitial > 0 ? subtotal / 0.85 : 0;
@@ -463,6 +460,11 @@ export default function InventoryCandyBatches() {
       )
     );
 
+    // ✅ SYNC ORDEN MAESTRA (si aplica)
+    if (old.orderId) {
+      await syncCandyMainOrderFromInventory(String(old.orderId));
+    }
+
     setMsg("✅ Lote de dulces actualizado");
     cancelEdit();
   };
@@ -472,9 +474,7 @@ export default function InventoryCandyBatches() {
       `¿Marcar PAGADO el lote del ${b.date} (${b.productName})?`
     );
     if (!ok) return;
-    await updateDoc(doc(db, "inventory_candies", b.id), {
-      status: "PAGADO",
-    });
+    await updateDoc(doc(db, "inventory_candies", b.id), { status: "PAGADO" });
     setBatches((prev) =>
       prev.map((x) => (x.id === b.id ? { ...x, status: "PAGADO" } : x))
     );
@@ -484,8 +484,15 @@ export default function InventoryCandyBatches() {
   const deleteBatch = async (b: CandyBatch) => {
     const ok = confirm(`¿Eliminar el lote del ${b.date} (${b.productName})?`);
     if (!ok) return;
+
     await deleteDoc(doc(db, "inventory_candies", b.id));
     setBatches((prev) => prev.filter((x) => x.id !== b.id));
+
+    // ✅ SYNC ORDEN MAESTRA (si aplica)
+    if (b.orderId) {
+      await syncCandyMainOrderFromInventory(String(b.orderId));
+    }
+
     setMsg("🗑️ Lote eliminado");
   };
 
@@ -508,9 +515,13 @@ export default function InventoryCandyBatches() {
 
         const unitsPerPackage = Number(b.unitsPerPackage || 0);
         const totalUnits = Number(
-          b.totalUnits ?? (b.packages || 0) * (b.unitsPerPackage || 0)
+          b.totalUnits ??
+            b.quantity ??
+            (b.packages || 0) * (b.unitsPerPackage || 0)
         );
-        const remaining = Number(b.remaining ?? b.totalUnits ?? 0);
+        const remaining = Number(
+          b.remaining ?? b.totalUnits ?? totalUnits ?? 0
+        );
 
         rows.push({
           id: d.id,
@@ -570,12 +581,26 @@ export default function InventoryCandyBatches() {
       setLoading(true);
       setMsg("");
 
+      // recolectar orderIds afectados (para sync)
+      const affectedOrderIds = Array.from(
+        new Set(
+          lotsToDelete
+            .map((b) => (b.orderId ? String(b.orderId) : ""))
+            .filter(Boolean)
+        )
+      );
+
       for (const b of lotsToDelete) {
         await deleteDoc(doc(db, "inventory_candies", b.id));
       }
 
       setBatches((prev) => prev.filter((x) => x.productId !== productId));
       setMsg("🗑️ Producto eliminado (todos sus lotes).");
+
+      // ✅ SYNC ORDENES MAESTRAS afectadas
+      for (const oid of affectedOrderIds) {
+        await syncCandyMainOrderFromInventory(oid);
+      }
 
       if (openDetail && detailProductId === productId) {
         setOpenDetail(false);
@@ -618,7 +643,6 @@ export default function InventoryCandyBatches() {
           />
         </div>
 
-        {/* (Extra) Categoría */}
         <div className="flex flex-col min-w-[220px]">
           <label className="font-semibold">Categoría</label>
           <select
@@ -849,7 +873,7 @@ export default function InventoryCandyBatches() {
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
-      {/* MODAL DETALLE (lotes reales) */}
+      {/* MODAL DETALLE */}
       {openDetail && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white p-4 rounded shadow-lg w-full max-w-6xl max-h-[90vh] overflow-y-auto text-sm">
@@ -916,13 +940,11 @@ export default function InventoryCandyBatches() {
                   ) : (
                     detailRows.map((b) => {
                       const isEditing = editingId === b.id;
-
                       const initialPacks = getInitialPacks(b);
                       const remainingPacks = getRemainingPacks(b);
 
                       return (
                         <tr key={b.id} className="text-left">
-                          {/* Fecha */}
                           <td className="p-2 border align-top">
                             {isEditing ? (
                               <input
@@ -955,17 +977,14 @@ export default function InventoryCandyBatches() {
                           <td className="p-2 border align-top text-right tabular-nums">
                             {initialPacks}
                           </td>
-
                           <td className="p-2 border align-top text-right tabular-nums">
                             {remainingPacks}
                           </td>
 
-                          {/* ✅ Unidades = totalUnits (como dice el header) */}
                           <td className="p-2 border align-top text-right tabular-nums">
                             {b.totalUnits}
                           </td>
 
-                          {/* Precio proveedor */}
                           <td className="p-2 border align-top text-right tabular-nums">
                             {isEditing ? (
                               <input

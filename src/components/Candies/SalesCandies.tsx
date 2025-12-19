@@ -632,12 +632,27 @@ export default function SalesCandiesPOS({
       if (!pid) return;
 
       const rem = Number(b.remainingUnits ?? b.remaining ?? b.totalUnits ?? 0);
-      if (rem <= 0) return;
+      if (rem <= 0) return; // ✅ mejora: no guardamos ceros
 
       map[pid] = (map[pid] || 0) + rem;
     });
 
     setStockByProduct(map);
+
+    // ✅ mejora: si algún producto ya no tiene stock, lo sacamos de la lista seleccionada
+    setItems((prev) => {
+      const kept: SelectedItem[] = [];
+      for (const it of prev) {
+        const units = map[it.productId] ?? 0;
+        if (units > 0) {
+          kept.push({
+            ...it,
+            availableUnits: units, // sincroniza stock en UI
+          });
+        }
+      }
+      return kept;
+    });
   };
 
   // Cuando cambia el vendedor → setear sucursal y cargar sub-inventario
@@ -671,6 +686,42 @@ export default function SalesCandiesPOS({
     );
   }, [branch, products]);
 
+ async function getPricePerPackageFromVendorOrder(args: {
+   productId: string;
+   vendorId: string;
+   branch: Branch;
+ }): Promise<number> {
+   const { productId, vendorId, branch } = args;
+   if (!productId || !vendorId) return 0;
+
+   const qRef = query(
+     collection(db, "inventory_candies_sellers"),
+     where("sellerId", "==", vendorId),
+     where("productId", "==", productId)
+   );
+
+   const snap = await getDocs(qRef);
+   if (snap.empty) return 0;
+
+   // tomamos el primero (para precio da igual, todos vienen del master)
+   const x = snap.docs[0].data() as any;
+
+   // ✅ prioridad: precio específico del vendedor si existe
+   const pVendor = Number(x.unitPriceVendor ?? 0);
+   if (pVendor > 0) return pVendor;
+
+   // ✅ si no hay vendor price, usamos por sucursal
+   const p =
+     branch === "RIVAS"
+       ? Number(x.unitPriceRivas ?? 0)
+       : branch === "SAN_JORGE"
+       ? Number(x.unitPriceSanJorge ?? 0)
+       : Number(x.unitPriceIsla ?? 0);
+
+   return Number(p || 0);
+ }
+
+
   // Añadir producto (bloquea duplicados, usa stock del PEDIDO DEL VENDEDOR)
   const addProductToList = async (pid: string) => {
     if (!pid) return;
@@ -696,12 +747,15 @@ export default function SalesCandiesPOS({
       vendorId
     );
 
-    const price =
-      branch === "RIVAS"
-        ? prod.priceRivas
-        : branch === "SAN_JORGE"
-        ? prod.priceSanJorge
-        : prod.priceIsla;
+    // 🔒 FIX BLINDADO: tomar sucursal REAL del vendedor, no del state todavía
+    const effectiveBranch =
+      vendors.find((v) => v.id === vendorId)?.branch ?? branch;
+
+    const price = await getPricePerPackageFromVendorOrder({
+      productId: pid,
+      vendorId,
+      branch: effectiveBranch,
+    });
 
     const newItem: SelectedItem = {
       productId: pid,
@@ -991,6 +1045,20 @@ export default function SalesCandiesPOS({
     }
   };
 
+  // ✅ AJUSTE: lista de productos MOSTRABLES en el selector:
+  // - SOLO los que existan en stockByProduct (pedido del vendedor)
+  // - SOLO los que tengan stock > 0
+  const productsForVendorPicker = useMemo(() => {
+    return products
+      .filter((p) => {
+        const units = stockByProduct[p.id] || 0;
+        const upp = Math.max(1, Number(p.unitsPerPackage || 1));
+        const packs = Math.floor(units / upp);
+        return packs > 0;
+      })
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [products, stockByProduct]);
+
   // UI
   return (
     <div className="max-w-6xl mx-auto">
@@ -1185,33 +1253,45 @@ export default function SalesCandiesPOS({
               setProductId(pid);
               await addProductToList(pid);
             }}
+            disabled={!vendorId}
           >
-            <option value="">Selecciona un producto</option>
-            {products.map((p) => {
+            <option value="">
+              {vendorId
+                ? "Selecciona un producto"
+                : "Selecciona un vendedor primero"}
+            </option>
+
+            {/* ✅ AJUSTE + MEJORA:
+                - SOLO productos del pedido del vendedor (stockByProduct)
+                - NO mostrar productos con 0 stock
+             */}
+            {productsForVendorPicker.map((p) => {
               const already = items.some((it) => it.productId === p.id);
-              const stockUnits = stockByProduct[p.id] || 0; // stock del pedido del vendedor
-              const stockPackages = p.unitsPerPackage
-                ? Math.floor(stockUnits / p.unitsPerPackage)
-                : stockUnits;
-              const disabled = already || stockPackages <= 0;
+
+              const units = stockByProduct[p.id] || 0;
+              const upp = Math.max(1, Number(p.unitsPerPackage || 1));
+              const stockPackages = Math.floor(units / upp);
+
+              // por seguridad: si por algún motivo llega 0, lo omitimos
+              if (stockPackages <= 0) return null;
+
               return (
                 <option
                   key={p.id}
-                  value={disabled ? "" : p.id}
-                  disabled={disabled}
+                  value={already ? "" : p.id}
+                  disabled={already}
                 >
-                  {p.name} {p.sku ? `— ${p.sku}` : ""}{" "}
-                  {stockPackages > 0
-                    ? `(disp vendedor: ${stockPackages} paq.)`
-                    : "(sin stock en pedido)"}
-                  {already ? " (seleccionado)" : ""}
+                  {p.name} {p.sku ? `— ${p.sku}` : ""} (disp: {stockPackages}{" "}
+                  paq.)
+                  {already ? " ✅" : ""}
                 </option>
               );
             })}
           </select>
+
           <div className="text-xs text-gray-500 mt-1">
-            El stock mostrado es el disponible en el pedido del vendedor
-            seleccionado.
+            El selector solo muestra productos disponibles del pedido del
+            vendedor seleccionado (sin ceros).
           </div>
         </div>
 
@@ -1234,9 +1314,13 @@ export default function SalesCandiesPOS({
               </div>
             ) : (
               items.map((it) => {
+                // ✅ mejora: siempre usar el stock actual del mapa (post-venta / reload)
+                const currentUnits =
+                  stockByProduct[it.productId] ?? it.availableUnits ?? 0;
                 const packagesAvailable = it.unitsPerPackage
-                  ? Math.floor((it.availableUnits || 0) / it.unitsPerPackage)
+                  ? Math.floor(currentUnits / it.unitsPerPackage)
                   : 0;
+
                 const visualStock = Math.max(
                   0,
                   packagesAvailable - (it.qtyPackages || 0)
