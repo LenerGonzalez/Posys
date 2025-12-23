@@ -254,6 +254,8 @@ export default function Liquidaciones({
   };
 
   const fetchClosures = async () => {
+    const t0 = performance.now();
+
     try {
       setLoading(true);
       const qy = query(
@@ -261,9 +263,20 @@ export default function Liquidaciones({
         where("date", ">=", startDate),
         where("date", "<=", endDate)
       );
+
       const snap = await getDocs(qy);
+      const t1 = performance.now();
+      console.log("🔥 getDocs ms:", (t1 - t0).toFixed(1), "docs:", snap.size);
+
       const rows: ClosureDoc[] = [];
       snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+      const t2 = performance.now();
+      console.log(
+        "🧠 parse+set ms:",
+        (t2 - t1).toFixed(1),
+        "rows:",
+        rows.length
+      );
       rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
       setClosures(rows);
       setSelected(null);
