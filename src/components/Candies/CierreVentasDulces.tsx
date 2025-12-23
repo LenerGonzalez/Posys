@@ -11,6 +11,7 @@ import {
   writeBatch,
   doc,
   updateDoc,
+  orderBy,
 } from "firebase/firestore";
 import { format } from "date-fns";
 import html2canvas from "html2canvas";
@@ -52,11 +53,16 @@ interface SaleDataRaw {
   // tipo de venta en sales_candies
   type?: SaleType;
 
-  // ✅ NUEVO (ya existe en sales_candies del POS)
+  // ✅ ya existe en sales_candies del POS
   vendorCommissionAmount?: number;
   vendorCommissionPercent?: number;
   itemsTotal?: number;
   total?: number;
+
+  // ✅ fecha de proceso (cuando se cierra)
+  processedDate?: string;
+  processedAt?: any;
+  closureDate?: string;
 }
 
 interface SaleData {
@@ -83,16 +89,24 @@ interface SaleData {
   type: SaleType;
   vendorId?: string;
 
-  // ✅ NUEVO: comisión ya prorrateada por fila
+  // ✅ comisión prorrateada por fila
   vendorCommissionAmount?: number;
+
+  // ✅ fecha de proceso
+  processedDate?: string;
 }
 
 interface ClosureData {
   id: string;
-  date: string;
+  date: string; // fecha de proceso (hoy)
   createdAt: any;
+
+  // ✅ rango que cerraste
+  periodStart?: string;
+  periodEnd?: string;
+
   products: { productName: string; quantity: number; amount: number }[];
-  totalUnits: number; // paquetes (nombre legacy)
+  totalUnits: number; // paquetes (legacy)
   totalCharged: number;
   totalSuggested: number;
   totalDifference: number;
@@ -120,7 +134,7 @@ const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 
 // ✅ Normaliza UNA venta en MÚLTIPLES filas si trae items[]
-// ✅ Ajuste: prorratea vendorCommissionAmount por línea y filtra por vendorId en rol vendedor
+// ✅ Ajuste: prorratea vendorCommissionAmount por línea
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const date =
     raw.date ??
@@ -147,6 +161,9 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
     ) || 0;
   const saleCommissionRoot = Number(raw.vendorCommissionAmount ?? 0) || 0;
 
+  // ✅ fecha proceso (si existe)
+  const processedDate = raw.processedDate ?? raw.closureDate ?? "";
+
   // Venta multi-ítem
   if (Array.isArray(raw.items) && raw.items.length > 0) {
     return raw.items.map((it, idx) => {
@@ -159,12 +176,9 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
             Number(it?.discount || 0)
         );
 
-      // ✅ Comisión por línea:
-      // - En crédito: 0
-      // - En contado: usar vendorCommissionAmount del doc y prorratear por lineFinal
+      // ✅ Comisión por línea (prorrateada)
       let lineCommission = 0;
       if (
-        //type !== "CREDITO" &&
         saleCommissionRoot > 0 &&
         saleTotalRoot > 0 &&
         Number(lineFinal || 0) > 0
@@ -195,6 +209,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         type,
         vendorId,
         vendorCommissionAmount: lineCommission,
+        processedDate: processedDate || "",
       };
     });
   }
@@ -204,8 +219,12 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const amountFallback =
     Number(raw.amount ?? raw.amountCharged ?? raw.total ?? 0) || 0;
 
+  // ⚠️ Aquí lo dejamos tal cual: si es crédito no fuerza 0 (para no cambiar tu lógica)
   let commissionFallback = 0;
   if (type !== "CREDITO") {
+    commissionFallback = round2(Number(raw.vendorCommissionAmount ?? 0) || 0);
+  } else {
+    // si existe, lo dejamos pasar para KPI de crédito (sin tocar tu tabla existente)
     commissionFallback = round2(Number(raw.vendorCommissionAmount ?? 0) || 0);
   }
 
@@ -229,6 +248,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       type,
       vendorId,
       vendorCommissionAmount: commissionFallback,
+      processedDate: processedDate || "",
     },
   ];
 };
@@ -243,18 +263,25 @@ type RoleCandies =
 export default function CierreVentasDulces({
   role,
   currentUserEmail,
-  sellerCandyId, // ✅ ahora SÍ se usa para filtrar por vendorId
+  sellerCandyId,
 }: {
   role?: RoleCandies;
   currentUserEmail?: string;
   sellerCandyId?: string;
 }): React.ReactElement {
   const [salesV2, setSales] = useState<SaleData[]>([]);
-  const [floatersExtra, setFloatersExtra] = useState<SaleData[]>([]);
   const [closure, setClosure] = useState<ClosureData | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState<"ALL" | "FLOTANTE" | "PROCESADA">("ALL");
+
+  // ✅ NUEVO: filtro por período
+  const today = format(new Date(), "yyyy-MM-dd");
+  const [startDate, setStartDate] = useState<string>(today);
+  const [endDate, setEndDate] = useState<string>(today);
+
+  // ✅ NUEVO: filtro por vendedor (admin)
+  const [vendorFilter, setVendorFilter] = useState<string>("ALL");
 
   const [editing, setEditing] = useState<null | SaleData>(null);
   const [editQty, setEditQty] = useState<number>(0);
@@ -263,52 +290,50 @@ export default function CierreVentasDulces({
   const [editPaid, setEditPaid] = useState<number>(0);
   const [editChange, setEditChange] = useState<string>("0");
 
-  const today = format(new Date(), "yyyy-MM-dd");
   const pdfRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = !role || role === "admin";
   const isVendDulces = role === "vendedor_dulces";
   const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
 
-  // vendedores para comisión (se mantienen por compat, pero ya NO se usan para calcular)
+  // vendedores para KPI listado + filtro
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
 
-  // Ventas de HOY (colección de DULCES)
+  // ✅ Ventas por PERIODO (sin importar estado)
   useEffect(() => {
+    if (!startDate || !endDate) return;
+
+    setLoading(true);
+
     const qSales = query(
       collection(db, "sales_candies"),
-      where("date", "==", today)
+      where("date", ">=", startDate),
+      where("date", "<=", endDate),
+      orderBy("date", "asc")
     );
-    const unsub = onSnapshot(qSales, (snap) => {
-      const rows: SaleData[] = [];
-      snap.forEach((d) => {
-        const parts = normalizeMany(d.data() as SaleDataRaw, d.id);
-        rows.push(...parts);
-      });
-      setSales(rows);
-      setLoading(false);
-    });
-    return () => unsub();
-  }, [today]);
 
-  // FLOTANTE (de cualquier fecha) en sales_candies
-  useEffect(() => {
-    const qFlo = query(
-      collection(db, "sales_candies"),
-      where("status", "==", "FLOTANTE")
+    const unsub = onSnapshot(
+      qSales,
+      (snap) => {
+        const rows: SaleData[] = [];
+        snap.forEach((d) => {
+          const parts = normalizeMany(d.data() as SaleDataRaw, d.id);
+          rows.push(...parts);
+        });
+        setSales(rows);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Error cargando ventas por periodo:", err);
+        setSales([]);
+        setLoading(false);
+      }
     );
-    const unsub = onSnapshot(qFlo, (snap) => {
-      const rows: SaleData[] = [];
-      snap.forEach((d) => {
-        const parts = normalizeMany(d.data() as SaleDataRaw, d.id);
-        rows.push(...parts);
-      });
-      setFloatersExtra(rows);
-    });
-    return () => unsub();
-  }, []);
 
-  // Cierre guardado (informativo)
+    return () => unsub();
+  }, [startDate, endDate]);
+
+  // Cierre guardado (informativo) - hoy (fecha proceso)
   useEffect(() => {
     const fetchClosure = async () => {
       const qC = query(
@@ -326,7 +351,7 @@ export default function CierreVentasDulces({
     fetchClosure();
   }, [today]);
 
-  // cargar vendedores de dulces con comisión (se deja igual para no romper nada)
+  // cargar vendedores
   useEffect(() => {
     const fetchSellers = async () => {
       try {
@@ -350,35 +375,28 @@ export default function CierreVentasDulces({
 
   // ✅ helper comisión por venta (YA VIENE EN LA VENTA)
   const getCommissionAmount = (s: SaleData): number => {
-    // REGLA: En CRÉDITO nunca se paga comisión
-    //if (s.type === "CREDITO") return 0;
     return round2(Number(s.vendorCommissionAmount ?? 0) || 0);
   };
 
-  // Ventas visibles (aplicamos filtro + rol)
+  // ✅ Ventas visibles (filtro estado + rol + vendedor) **sobre el período**
   const visibleSales = React.useMemo(() => {
-    let base: SaleData[];
+    let base = [...salesV2];
 
-    if (filter === "FLOTANTE") {
-      const all = [...salesV2, ...floatersExtra];
-      const map = new Map<string, SaleData>();
-      for (const s of all) if (s.status === "FLOTANTE") map.set(s.id, s);
-      base = Array.from(map.values());
-    } else if (filter === "ALL") {
-      const all = [...salesV2, ...floatersExtra];
-      const map = new Map<string, SaleData>();
-      for (const s of all) map.set(s.id, s);
-      base = Array.from(map.values());
-    } else {
-      base = salesV2.filter((s) => s.status === "PROCESADA");
+    if (filter === "FLOTANTE")
+      base = base.filter((s) => s.status === "FLOTANTE");
+    if (filter === "PROCESADA")
+      base = base.filter((s) => s.status === "PROCESADA");
+
+    // filtro por vendedor (solo admin; en vendedor ya viene filtrado abajo)
+    if (isAdmin && vendorFilter !== "ALL") {
+      base = base.filter((s) => (s.vendorId || "") === vendorFilter);
     }
 
-    // ✅ Restricción para vendedor_dulces: solo sus ventas por vendorId
+    // restricción para vendedor_dulces
     if (isVendDulces) {
       if (sellerCandyId) {
         base = base.filter((s) => (s.vendorId || "") === sellerCandyId);
       } else if (currentEmailNorm) {
-        // fallback legacy si existiera
         base = base.filter(
           (s) => (s.sellerEmail || "").toLowerCase() === currentEmailNorm
         );
@@ -391,11 +409,32 @@ export default function CierreVentasDulces({
   }, [
     filter,
     salesV2,
-    floatersExtra,
+    isAdmin,
+    vendorFilter,
     isVendDulces,
     sellerCandyId,
     currentEmailNorm,
   ]);
+
+  // ✅ KPIs flotantes/procesadas
+  const kpiFloCount = React.useMemo(
+    () => visibleSales.filter((s) => s.status === "FLOTANTE").length,
+    [visibleSales]
+  );
+  const kpiProCount = React.useMemo(
+    () => visibleSales.filter((s) => s.status === "PROCESADA").length,
+    [visibleSales]
+  );
+
+  // ✅ NUEVO KPI: ventas crédito / cash (conteo)
+  const kpiCreditoCount = React.useMemo(
+    () => visibleSales.filter((s) => s.type === "CREDITO").length,
+    [visibleSales]
+  );
+  const kpiCashCount = React.useMemo(
+    () => visibleSales.filter((s) => s.type !== "CREDITO").length,
+    [visibleSales]
+  );
 
   // Totales visibles (quantity = paquetes)
   const totalPaquetes = round3(
@@ -409,31 +448,91 @@ export default function CierreVentasDulces({
   );
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
-  // Totales por tipo + comisión
+  // Totales por tipo + comisión (se mantiene)
   let totalPacksCredito = 0;
   let totalPacksCash = 0;
   let totalPendienteCredito = 0;
   let totalCobradoCash = 0;
   let totalCommission = 0;
 
+  // ✅ NUEVO: comisión separada cash vs crédito
+  let totalCommissionCash = 0;
+  let totalCommissionCredito = 0;
+
   visibleSales.forEach((s) => {
     const amt = Number(s.amount || 0);
     const received = Number(s.amountReceived || 0);
     const commission = getCommissionAmount(s);
+
     totalCommission += commission;
 
     if (s.type === "CREDITO") {
       totalPacksCredito += s.quantity || 0;
       totalPendienteCredito += amt - received;
+      totalCommissionCredito += commission;
     } else {
       totalPacksCash += s.quantity || 0;
       totalCobradoCash += amt;
+      totalCommissionCash += commission;
     }
   });
 
   totalPendienteCredito = round2(totalPendienteCredito);
   totalCobradoCash = round2(totalCobradoCash);
   totalCommission = round2(totalCommission);
+  totalCommissionCash = round2(totalCommissionCash);
+  totalCommissionCredito = round2(totalCommissionCredito);
+
+  // ✅ KPI: comisiones por vendedor en el periodo (CASH / CRÉDITO separados)
+  const vendorCommissionRowsCash = React.useMemo(() => {
+    const map: Record<
+      string,
+      { vendorId: string; name: string; total: number }
+    > = {};
+    for (const s of visibleSales) {
+      const vid = (s.vendorId || "").trim();
+      if (!vid) continue;
+      if (s.type === "CREDITO") continue; // ✅ solo cash
+      const commission = getCommissionAmount(s);
+      if (!map[vid]) {
+        const seller = sellers.find((x) => x.id === vid);
+        map[vid] = {
+          vendorId: vid,
+          name: seller?.name || s.userEmail || "(sin vendedor)",
+          total: 0,
+        };
+      }
+      map[vid].total = round2(map[vid].total + commission);
+    }
+    return Object.values(map)
+      .filter((x) => x.total > 0)
+      .sort((a, b) => b.total - a.total);
+  }, [visibleSales, sellers]);
+
+  const vendorCommissionRowsCredito = React.useMemo(() => {
+    const map: Record<
+      string,
+      { vendorId: string; name: string; total: number }
+    > = {};
+    for (const s of visibleSales) {
+      const vid = (s.vendorId || "").trim();
+      if (!vid) continue;
+      if (s.type !== "CREDITO") continue; // ✅ solo crédito
+      const commission = getCommissionAmount(s);
+      if (!map[vid]) {
+        const seller = sellers.find((x) => x.id === vid);
+        map[vid] = {
+          vendorId: vid,
+          name: seller?.name || s.userEmail || "(sin vendedor)",
+          total: 0,
+        };
+      }
+      map[vid].total = round2(map[vid].total + commission);
+    }
+    return Object.values(map)
+      .filter((x) => x.total > 0)
+      .sort((a, b) => b.total - a.total);
+  }, [visibleSales, sellers]);
 
   // Consolidado por producto (en paquetes + comisión)
   const productMap: Record<
@@ -458,6 +557,7 @@ export default function CierreVentasDulces({
       productMap[key].totalCommission + getCommissionAmount(s)
     );
   });
+
   const productSummaryArray = Object.entries(productMap).map(
     ([productName, v]) => ({
       productName,
@@ -467,20 +567,17 @@ export default function CierreVentasDulces({
     })
   );
 
-  // Guardar cierre (solo ADMIN)
+  // ✅ Guardar cierre (ADMIN):
+  // - procesa SOLO FLOTANTES visibles del periodo
+  // - fecha proceso = hoy (aunque date venta sea vieja)
   const handleSaveClosure = async () => {
-    if (!isAdmin) return; // seguridad extra
+    if (!isAdmin) return;
+
     try {
-      const candidatesVisible = visibleSales.filter(
-        (s) => s.status === "FLOTANTE"
-      );
-      const toProcess =
-        candidatesVisible.length > 0
-          ? candidatesVisible
-          : salesV2.filter((s) => s.status !== "PROCESADA");
+      const toProcess = visibleSales.filter((s) => s.status === "FLOTANTE");
 
       if (toProcess.length === 0) {
-        setMessage("No hay ventas para procesar.");
+        setMessage("No hay ventas flotantes para procesar en este período.");
         return;
       }
 
@@ -498,18 +595,57 @@ export default function CierreVentasDulces({
           toProcess.reduce((a, s) => a + Number(s.cogsAmount ?? 0), 0)
         ),
       };
+
       const diff = round2(totals.totalCharged - totals.totalSuggested);
       const grossProfit = round2(totals.totalCharged - totals.totalCOGS);
+      const split = toProcess.reduce(
+        (acc, s) => {
+          const qty = Number(s.quantity || 0);
+          const amt = Number(s.amount || 0);
+          const com = Number(s.vendorCommissionAmount || 0);
+
+          if (s.type === "CREDITO") {
+            acc.packsCredit += qty;
+            acc.amountCredit += amt;
+            acc.comCredit += com;
+          } else {
+            acc.packsCash += qty;
+            acc.amountCash += amt;
+            acc.comCash += com;
+          }
+          return acc;
+        },
+        {
+          packsCash: 0,
+          packsCredit: 0,
+          amountCash: 0,
+          amountCredit: 0,
+          comCash: 0,
+          comCredit: 0,
+        }
+      );
+
+      const totalsSplit = {
+        totalPacksCash: round3(split.packsCash),
+        totalPacksCredit: round3(split.packsCredit),
+        totalAmountCash: round2(split.amountCash),
+        totalAmountCredit: round2(split.amountCredit),
+        totalCommissionCash: round2(split.comCash),
+        totalCommissionCredit: round2(split.comCredit),
+      };
 
       const ref = await addDoc(collection(db, "daily_closures_candies"), {
-        date: today,
+        date: today, // fecha proceso
         createdAt: Timestamp.now(),
+        periodStart: startDate,
+        periodEnd: endDate,
         totalCharged: totals.totalCharged,
         totalSuggested: totals.totalSuggested,
         totalDifference: diff,
         totalUnits: totals.totalUnits,
         totalCOGS: totals.totalCOGS,
         grossProfit,
+        ...totalsSplit,
         products: toProcess.map((s) => ({
           productName: s.productName,
           quantity: s.quantity,
@@ -529,9 +665,17 @@ export default function CierreVentasDulces({
           cogsAmount: s.cogsAmount ?? 0,
           avgUnitCost: s.avgUnitCost ?? null,
           allocations: s.allocations ?? [],
-          date: s.date,
-          // no toco nada más aquí para no romper lecturas existentes
+          date: s.date, // fecha venta
+
+          // ✅ NUEVOS (para Liquidaciones)
+          type: s.type ?? "CONTADO",
+          vendorId: s.vendorId ?? "",
+          vendorCommissionAmount: Number(s.vendorCommissionAmount ?? 0) || 0,
+
+          // ✅ proceso
+          processedDate: today,
         })),
+
         productSummary: Object.entries(
           toProcess.reduce((acc, s) => {
             const k = s.productName || "(sin nombre)";
@@ -550,17 +694,21 @@ export default function CierreVentasDulces({
       });
 
       const batch = writeBatch(db);
+
       toProcess.forEach((s) => {
         batch.update(doc(db, "sales_candies", s.id.split("#")[0]), {
           status: "PROCESADA",
           closureId: ref.id,
           closureDate: today,
+          processedDate: today,
+          processedAt: Timestamp.now(),
         });
       });
+
       await batch.commit();
 
       setMessage(
-        `✅ Cierre de dulces guardado. Ventas procesadas: ${toProcess.length}.`
+        `✅ Cierre guardado. Ventas procesadas: ${toProcess.length}. (Proceso: ${today})`
       );
     } catch (error) {
       console.error(error);
@@ -574,11 +722,14 @@ export default function CierreVentasDulces({
       !window.confirm("¿Revertir esta venta? Esta acción no se puede deshacer.")
     )
       return;
+
     try {
       await updateDoc(doc(db, "sales_candies", saleId.split("#")[0]), {
         status: "FLOTANTE",
         closureId: null,
         closureDate: null,
+        processedDate: null,
+        processedAt: null,
       });
       setMessage("↩️ Venta revertida a FLOTANTE.");
     } catch (e) {
@@ -629,7 +780,7 @@ export default function CierreVentasDulces({
         saleId.split("#")[0]
       );
       setMessage(
-        `🗑️ Venta de dulces eliminada. Stock restaurado (unidades internas): ${Number(
+        `🗑️ Venta eliminada. Stock restaurado (unidades internas): ${Number(
           restored
         ).toFixed(2)}.`
       );
@@ -649,7 +800,7 @@ export default function CierreVentasDulces({
       const imgData = canvas.toDataURL("image/png");
       const pdf = new jsPDF();
       pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
-      pdf.save(`cierre_dulces_${today}.pdf`);
+      pdf.save(`cierre_dulces_${startDate}_a_${endDate}_proc_${today}.pdf`);
     } finally {
       pdfRef.current.classList.remove("force-pdf-colors");
     }
@@ -658,20 +809,168 @@ export default function CierreVentasDulces({
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
       <h2 className="text-2xl font-bold mb-4">
-        Cierre de Ventas de Dulces - {today}
+        Cierre de Ventas de Dulces - Proceso: {today}
       </h2>
 
-      <div className="flex items-center gap-2 mb-3">
-        <label className="text-sm">Filtrar:</label>
-        <select
-          className="border rounded px-2 py-1"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as any)}
-        >
-          <option value="ALL">Todas</option>
-          <option value="FLOTANTE">Venta Flotante</option>
-          <option value="PROCESADA">Venta Procesada</option>
-        </select>
+      {/* filtros por periodo + estado + vendedor */}
+      <div className="flex flex-col md:flex-row md:items-end gap-3 mb-4">
+        <div className="flex items-center gap-2">
+          <label className="text-sm">Desde:</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-sm">Hasta:</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="text-sm">Filtrar:</label>
+          <select
+            className="border rounded px-2 py-1"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as any)}
+          >
+            <option value="ALL">Todas</option>
+            <option value="FLOTANTE">Venta Flotante</option>
+            <option value="PROCESADA">Venta Procesada</option>
+          </select>
+        </div>
+
+        {/* ✅ NUEVO: filtro por vendedor (solo admin) */}
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <label className="text-sm">Vendedor:</label>
+            <select
+              className="border rounded px-2 py-1"
+              value={vendorFilter}
+              onChange={(e) => setVendorFilter(e.target.value)}
+            >
+              <option value="ALL">Todos</option>
+              {sellers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {/* KPIs arriba */}
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">Ventas flotantes</div>
+          <div className="text-2xl font-bold">{kpiFloCount}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Período: {startDate} → {endDate}
+          </div>
+        </div>
+
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">Ventas procesadas</div>
+          <div className="text-2xl font-bold">{kpiProCount}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Período: {startDate} → {endDate}
+          </div>
+        </div>
+
+        {/* ✅ NUEVO */}
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">Ventas crédito</div>
+          <div className="text-2xl font-bold">{kpiCreditoCount}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Período: {startDate} → {endDate}
+          </div>
+        </div>
+
+        {/* ✅ NUEVO */}
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">Ventas cash</div>
+          <div className="text-2xl font-bold">{kpiCashCount}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Período: {startDate} → {endDate}
+          </div>
+        </div>
+
+        {/* ✅ KPI: comisión cash (sumatoria) */}
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">Comisión cash (período)</div>
+          <div className="text-2xl font-bold">
+            C${money(totalCommissionCash)}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            Período: {startDate} → {endDate}
+          </div>
+        </div>
+
+        {/* ✅ KPI: comisión crédito (sumatoria) */}
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">
+            Comisión crédito (período)
+          </div>
+          <div className="text-2xl font-bold">
+            C${money(totalCommissionCredito)}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            Período: {startDate} → {endDate}
+          </div>
+        </div>
+      </div>
+
+      {/* KPIs listados por vendedor (cash / crédito) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">
+            Vendedores (comisión CASH del período)
+          </div>
+          {vendorCommissionRowsCash.length === 0 ? (
+            <div className="text-sm text-gray-500 mt-2">—</div>
+          ) : (
+            <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
+              {vendorCommissionRowsCash.map((v) => (
+                <div
+                  key={v.vendorId}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <span className="truncate">{v.name}</span>
+                  <strong className="ml-2">C${money(v.total)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+          <div className="text-xs text-gray-600">
+            Vendedores (comisión CRÉDITO del período)
+          </div>
+          {vendorCommissionRowsCredito.length === 0 ? (
+            <div className="text-sm text-gray-500 mt-2">—</div>
+          ) : (
+            <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
+              {vendorCommissionRowsCredito.map((v) => (
+                <div
+                  key={v.vendorId}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <span className="truncate">{v.name}</span>
+                  <strong className="ml-2">C${money(v.total)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -688,6 +987,7 @@ export default function CierreVentasDulces({
                 <th className="border p-2">Monto</th>
                 <th className="border p-2">Comisión</th>
                 <th className="border p-2">Fecha venta</th>
+                <th className="border p-2">Fecha proceso</th>
                 <th className="border p-2">Vendedor</th>
                 <th className="border p-2">Acciones</th>
               </tr>
@@ -695,6 +995,8 @@ export default function CierreVentasDulces({
             <tbody>
               {visibleSales.map((s) => {
                 const commission = getCommissionAmount(s);
+                const processDate = (s.processedDate || "").trim();
+
                 return (
                   <tr key={s.id} className="text-center">
                     <td className="border p-1">
@@ -718,6 +1020,9 @@ export default function CierreVentasDulces({
                       {commission > 0 ? `C$${money(commission)}` : "—"}
                     </td>
                     <td className="border p-1">{s.date}</td>
+                    <td className="border p-1">
+                      {processDate ? processDate : "—"}
+                    </td>
                     <td className="border p-1">{s.userEmail}</td>
                     <td className="border p-1">
                       {s.status === "FLOTANTE" ? (
@@ -765,7 +1070,7 @@ export default function CierreVentasDulces({
               })}
               {visibleSales.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="p-3 text-center text-gray-500">
+                  <td colSpan={10} className="p-3 text-center text-gray-500">
                     Sin ventas para mostrar.
                   </td>
                 </tr>
@@ -773,7 +1078,7 @@ export default function CierreVentasDulces({
             </tbody>
           </table>
 
-          {/* Bloque de totales */}
+          {/* Bloque de totales (igual) */}
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-2 text-sm mb-4">
             <div>
               Total paquetes crédito: <strong>{qty3(totalPacksCredito)}</strong>
@@ -846,7 +1151,7 @@ export default function CierreVentasDulces({
             onClick={handleSaveClosure}
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           >
-            Cerrar ventas del día
+            Cerrar ventas del período
           </button>
         )}
         <button

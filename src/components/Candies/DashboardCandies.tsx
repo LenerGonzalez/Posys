@@ -1137,14 +1137,14 @@ export default function FinancialDashboardCandies() {
         </div>
 
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Ganancia antes de Gastos</div>
+          <div className="text-xs text-gray-600">Utilidad Bruta</div>
           <div className="text-xl font-semibold text-green-600">
             {money(kpis.gananciaAntes)}
           </div>
         </div>
 
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Gastos del Negocio</div>
+          <div className="text-xs text-gray-600">Gastos</div>
           <div className="text-xl font-semibold">
             {money(kpis.gastosPeriodo)}
           </div>
@@ -1152,7 +1152,7 @@ export default function FinancialDashboardCandies() {
 
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">
-            Ganancia después de Gastos
+            Utilidad Neta
           </div>
           <div className="text-xl font-semibold text-green-600">
             {money(kpis.gananciaDespues)}

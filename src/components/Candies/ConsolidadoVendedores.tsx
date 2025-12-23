@@ -392,14 +392,25 @@ export default function ConsolidadoVendedoresDulces() {
             Number(it.unitPricePackage ?? it.unitPrice ?? 0) || 0;
           const discount = Math.max(0, Number(it.discount || 0));
 
+          
           // ✅ lineFinal NETO (alineado con Dashboard)
           const lineTotal = packages * unitPrice;
           const lineFinal = round2(Math.max(0, lineTotal - discount));
           if (lineFinal <= 0) return;
 
+          console.log("DBG", {
+            isCredit,
+            vendorId,
+            commissionPercent,
+            lineFinal,
+            storedItemCommission: Number(
+              (it as any).vendorCommissionAmount ?? 0
+            ),
+          });
+
           // ✅ comisión por línea: Cash sí, Crédito NO
           let lineCommission = 0;
-          if (!isCredit) {
+          
             // si guardaste por item, lo respeta
             const storedItemCommission = Number(
               (it as any).vendorCommissionAmount ?? 0
@@ -408,9 +419,7 @@ export default function ConsolidadoVendedoresDulces() {
               lineCommission = round2(storedItemCommission);
             else if (commissionPercent > 0)
               lineCommission = round2((lineFinal * commissionPercent) / 100);
-          } else {
-            lineCommission = 0;
-          }
+        
 
           // ✅ acumulados por vendedor: CASH vs CRÉDITO
           if (isCredit) {
@@ -426,12 +435,12 @@ export default function ConsolidadoVendedoresDulces() {
           }
 
           // ✅ comisiones separadas (crédito queda 0)
-          if (!isCredit) {
+          if (isCredit) {
+            commissionCreditByVendor[vendorId] =
+              (commissionCreditByVendor[vendorId] || 0) + lineCommission;
+          } else {
             commissionCashByVendor[vendorId] =
               (commissionCashByVendor[vendorId] || 0) + lineCommission;
-          } else {
-            commissionCreditByVendor[vendorId] =
-              (commissionCreditByVendor[vendorId] || 0) + 0;
           }
 
           // ✅ drilldown
@@ -668,19 +677,19 @@ export default function ConsolidadoVendedoresDulces() {
       {/* KPIs de dinero */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 text-sm">
         <div className="border rounded-lg p-3 bg-gray-50">
-          <div className="text-xs text-gray-500">Dinero total vendido</div>
+          <div className="text-xs text-gray-500">Ventas Cash</div>
           <div className="text-xl font-semibold">
             {money(totalMoneySoldAll)}
           </div>
         </div>
         <div className="border rounded-lg p-3 bg-gray-50">
-          <div className="text-xs text-gray-500">Dinero total fiado</div>
+          <div className="text-xs text-gray-500">Ventas Credito</div>
           <div className="text-xl font-semibold">
             {money(totalMoneyCreditAll)}
           </div>
         </div>
         <div className="border rounded-lg p-3 bg-gray-50">
-          <div className="text-xs text-gray-500">Vendedores con movimiento</div>
+          <div className="text-xs text-gray-500">Vendedores con Inventario</div>
           <div className="text-xl font-semibold">{vendorSummary.length}</div>
         </div>
       </div>

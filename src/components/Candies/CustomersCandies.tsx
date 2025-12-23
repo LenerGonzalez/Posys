@@ -38,6 +38,12 @@ interface CustomerRow {
   creditLimit?: number;
   createdAt: Timestamp;
   balance?: number; // calculado
+  sellerId?: string;
+
+  // ✅ NUEVO
+  vendorId?: string; // vendedor asociado
+  vendorName?: string; // nombre vendedor (histórico/visual)
+  initialDebt?: number; // deuda inicial fija
 }
 
 interface MovementRow {
@@ -48,6 +54,12 @@ interface MovementRow {
   ref?: { saleId?: string };
   comment?: string;
   createdAt?: Timestamp;
+}
+
+interface SellerRow {
+  id: string;
+  name: string;
+  status?: string;
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -76,7 +88,29 @@ async function deleteARMovesBySaleId(saleId: string) {
   );
 }
 
-export default function CustomersCandy() {
+// ===== NUEVO: Props para restringir por vendedor / rol =====
+type RoleProp =
+  | ""
+  | "admin"
+  | "vendedor_pollo"
+  | "vendedor_ropa"
+  | "vendedor_dulces";
+
+interface CustomersCandyProps {
+  role?: RoleProp;
+  sellerCandyId?: string;
+}
+
+export default function CustomersCandy({
+  role = "",
+  sellerCandyId = "",
+}: CustomersCandyProps) {
+  const isVendor = role === "vendedor_dulces";
+  const isAdmin = role === "admin";
+
+  // ✅ lista de vendedores activos
+  const [sellers, setSellers] = useState<SellerRow[]>([]);
+
   // ===== Modal Detalle de Ítems (venta) =====
   const [itemsModalOpen, setItemsModalOpen] = useState(false);
   const [itemsModalLoading, setItemsModalLoading] = useState(false);
@@ -122,13 +156,17 @@ export default function CustomersCandy() {
     }
   };
 
-  // ===== Formulario =====
+  // ===== Formulario (crear) =====
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("+505 ");
   const [place, setPlace] = useState<Place | "">("");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<Status>("ACTIVO");
   const [creditLimit, setCreditLimit] = useState<number>(0);
+
+  // ✅ NUEVO crear: vendedor + deuda inicial
+  const [vendorId, setVendorId] = useState<string>("");
+  const [initialDebt, setInitialDebt] = useState<number>(0);
 
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -142,6 +180,9 @@ export default function CustomersCandy() {
   const [eNotes, setENotes] = useState("");
   const [eStatus, setEStatus] = useState<Status>("ACTIVO");
   const [eCreditLimit, setECreditLimit] = useState<number>(0);
+
+  // ✅ NUEVO editar: vendedor (deuda inicial NO se edita)
+  const [eVendorId, setEVendorId] = useState<string>("");
 
   // ===== Estado de cuenta (modal) =====
   const [showStatement, setShowStatement] = useState(false);
@@ -172,50 +213,84 @@ export default function CustomersCandy() {
   // 👉 Modal Crear Cliente
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // Cargar clientes y saldos
+  // Cargar vendedores + clientes y saldos
   useEffect(() => {
     (async () => {
-      const qC = query(
-        collection(db, "customers_candies"),
-        orderBy("createdAt", "desc")
-      );
-      const snap = await getDocs(qC);
-      const list: CustomerRow[] = [];
-      snap.forEach((d) => {
-        const x = d.data() as any;
-        list.push({
-          id: d.id,
-          name: x.name ?? "",
-          phone: x.phone ?? "+505 ",
-          place: (x.place as Place) ?? "",
-          notes: x.notes ?? "",
-          status: (x.status as Status) ?? "ACTIVO",
-          creditLimit: Number(x.creditLimit ?? 0),
-          createdAt: x.createdAt ?? Timestamp.now(),
-          balance: 0,
+      try {
+        setLoading(true);
+
+        // ✅ vendedores (solo activos)
+        const vSnap = await getDocs(collection(db, "sellers_candies"));
+        const vList: SellerRow[] = [];
+        vSnap.forEach((d) => {
+          const x = d.data() as any;
+          const st = String(x.status || "ACTIVO"); // si no existe, asumimos ACTIVO
+          if (st !== "ACTIVO") return;
+          vList.push({ id: d.id, name: String(x.name || ""), status: st });
         });
-      });
+        setSellers(vList);
 
-      // Saldos
-      for (const c of list) {
-        try {
-          const qMov = query(
-            collection(db, "ar_movements"),
-            where("customerId", "==", c.id)
-          );
-          const mSnap = await getDocs(qMov);
-          let sum = 0;
-          mSnap.forEach((m) => (sum += Number((m.data() as any).amount || 0)));
-          c.balance = sum;
-        } catch {
-          c.balance = 0;
+        // ✅ clientes (filtrado por vendedor si aplica)
+        const qC = isVendor
+          ? query(
+              collection(db, "customers_candies"),
+              where("vendorId", "==", sellerCandyId),
+              orderBy("createdAt", "desc")
+            )
+          : query(
+              collection(db, "customers_candies"),
+              orderBy("createdAt", "desc")
+            );
+
+        const snap = await getDocs(qC);
+        const list: CustomerRow[] = [];
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          list.push({
+            id: d.id,
+            name: x.name ?? "",
+            phone: x.phone ?? "+505 ",
+            place: (x.place as Place) ?? "",
+            notes: x.notes ?? "",
+            status: (x.status as Status) ?? "ACTIVO",
+            creditLimit: Number(x.creditLimit ?? 0),
+            createdAt: x.createdAt ?? Timestamp.now(),
+            balance: 0,
+            sellerId: x.sellerId || "",
+
+            vendorId: x.vendorId || "",
+            vendorName: x.vendorName || "",
+            initialDebt: Number(x.initialDebt || 0),
+          });
+        });
+
+        // Saldos
+        for (const c of list) {
+          try {
+            const qMov = query(
+              collection(db, "ar_movements"),
+              where("customerId", "==", c.id)
+            );
+            const mSnap = await getDocs(qMov);
+            let sum = 0;
+            mSnap.forEach(
+              (m) => (sum += Number((m.data() as any).amount || 0))
+            );
+            c.balance = sum;
+          } catch {
+            c.balance = 0;
+          }
         }
-      }
 
-      setRows(list);
-      setLoading(false);
+        setRows(list);
+      } catch (e) {
+        console.error(e);
+        setMsg("❌ Error cargando clientes.");
+      } finally {
+        setLoading(false);
+      }
     })();
-  }, []);
+  }, [isVendor, sellerCandyId]);
 
   const resetForm = () => {
     setName("");
@@ -224,6 +299,10 @@ export default function CustomersCandy() {
     setNotes("");
     setStatus("ACTIVO");
     setCreditLimit(0);
+
+    // ✅ NUEVO
+    setVendorId("");
+    setInitialDebt(0);
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -240,6 +319,12 @@ export default function CustomersCandy() {
       return;
     }
 
+    // ✅ vendor final
+    const finalVendorId = isVendor ? sellerCandyId : String(vendorId || "");
+    const finalVendorName = finalVendorId
+      ? sellers.find((s) => s.id === finalVendorId)?.name || ""
+      : "";
+
     try {
       const ref = await addDoc(collection(db, "customers_candies"), {
         name: name.trim(),
@@ -248,6 +333,12 @@ export default function CustomersCandy() {
         notes: notes || "",
         status,
         creditLimit: Number(creditLimit || 0),
+
+        // ✅ NUEVO
+        vendorId: finalVendorId,
+        vendorName: finalVendorName,
+        initialDebt: Number(initialDebt || 0),
+
         createdAt: Timestamp.now(),
       });
 
@@ -260,11 +351,18 @@ export default function CustomersCandy() {
           notes: notes || "",
           status,
           creditLimit: Number(creditLimit || 0),
+
+          // ✅ NUEVO
+          vendorId: finalVendorId,
+          vendorName: finalVendorName,
+          initialDebt: Number(initialDebt || 0),
+
           createdAt: Timestamp.now(),
           balance: 0,
         },
         ...prev,
       ]);
+
       resetForm();
       setShowCreateModal(false);
       setMsg("✅ Cliente creado");
@@ -282,6 +380,9 @@ export default function CustomersCandy() {
     setENotes(c.notes || "");
     setEStatus(c.status || "ACTIVO");
     setECreditLimit(Number(c.creditLimit || 0));
+
+    // ✅ NUEVO
+    setEVendorId(String(c.vendorId || ""));
   };
 
   const cancelEdit = () => {
@@ -292,15 +393,49 @@ export default function CustomersCandy() {
     setENotes("");
     setEStatus("ACTIVO");
     setECreditLimit(0);
+
+    // ✅ NUEVO
+    setEVendorId("");
   };
 
   const saveEdit = async () => {
     if (!editingId) return;
+
     const cleanPhone = normalizePhone(ePhone);
     if (!eName.trim()) {
       setMsg("Ingresa el nombre.");
       return;
     }
+
+    // ✅ reglas de asociación
+    const current = rows.find((x) => x.id === editingId);
+    const currentVendor = String(current?.vendorId || "");
+    const nextVendor = isVendor ? sellerCandyId : String(eVendorId || "");
+
+    // vendedor NO puede tocar clientes de otros
+    if (isVendor && currentVendor && currentVendor !== sellerCandyId) {
+      setMsg("❌ Este cliente pertenece a otro vendedor.");
+      return;
+    }
+
+    // admin: no permitir reasignar directo si ya tiene vendedor (solo desasociar primero)
+    if (
+      isAdmin &&
+      currentVendor &&
+      nextVendor &&
+      currentVendor !== nextVendor
+    ) {
+      setMsg(
+        "❌ Este cliente ya está asociado a otro vendedor. Primero desasocia (deja vendedor en —) y guarda; luego lo puedes asignar."
+      );
+      return;
+    }
+
+    const finalVendorId = isVendor ? sellerCandyId : String(eVendorId || "");
+    const finalVendorName = finalVendorId
+      ? sellers.find((s) => s.id === finalVendorId)?.name || ""
+      : "";
+
     try {
       await updateDoc(doc(db, "customers_candies", editingId), {
         name: eName.trim(),
@@ -309,7 +444,12 @@ export default function CustomersCandy() {
         notes: eNotes || "",
         status: eStatus,
         creditLimit: Number(eCreditLimit || 0),
+
+        // ✅ NUEVO
+        vendorId: finalVendorId,
+        vendorName: finalVendorName,
       });
+
       setRows((prev) =>
         prev.map((x) =>
           x.id === editingId
@@ -321,10 +461,14 @@ export default function CustomersCandy() {
                 notes: eNotes || "",
                 status: eStatus,
                 creditLimit: Number(eCreditLimit || 0),
+
+                vendorId: finalVendorId,
+                vendorName: finalVendorName,
               }
             : x
         )
       );
+
       cancelEdit();
       setMsg("✅ Cliente actualizado");
     } catch (err) {
@@ -354,7 +498,7 @@ export default function CustomersCandy() {
       for (const d of sSnap.docs) {
         const saleId = d.id;
         try {
-          await restoreSaleAndDeleteCandy(saleId); // repone inventario de dulces y borra la venta
+          await restoreSaleAndDeleteCandy(saleId);
         } catch (e) {
           console.warn("restoreSaleAndDeleteCandy error", e);
           try {
@@ -447,7 +591,7 @@ export default function CustomersCandy() {
       .reduce((acc, it) => acc + Math.abs(Number(it.amount) || 0), 0);
     const totalCargos = list
       .filter((x) => Number(x.amount) > 0)
-      .reduce((acc, it) => acc + Number(it.amount) || 0, 0);
+      .reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
 
     setStKpis({
       saldoActual: total,
@@ -672,7 +816,10 @@ export default function CustomersCandy() {
         <h2 className="text-2xl font-bold">Clientes (Dulces)</h2>
         <button
           className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => {
+            setShowCreateModal(true);
+            if (isVendor) setVendorId(sellerCandyId);
+          }}
           type="button"
         >
           Crear Cliente
@@ -687,6 +834,7 @@ export default function CustomersCandy() {
               <th className="p-2 border">Fecha</th>
               <th className="p-2 border">Nombre</th>
               <th className="p-2 border">Teléfono</th>
+              <th className="p-2 border">Vendedor</th>
               <th className="p-2 border">Lugar</th>
               <th className="p-2 border">Estado</th>
               <th className="p-2 border">Límite</th>
@@ -695,16 +843,17 @@ export default function CustomersCandy() {
               <th className="p-2 border">Acciones</th>
             </tr>
           </thead>
+
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-center" colSpan={9}>
+                <td className="p-4 text-center" colSpan={10}>
                   Cargando…
                 </td>
               </tr>
             ) : orderedRows.length === 0 ? (
               <tr>
-                <td className="p-4 text-center" colSpan={9}>
+                <td className="p-4 text-center" colSpan={10}>
                   Sin clientes
                 </td>
               </tr>
@@ -719,7 +868,7 @@ export default function CustomersCandy() {
                         : "—"}
                     </td>
 
-                    <td className="p-2 border">
+                    <td className="p-2 border text-left">
                       {isEditing ? (
                         <input
                           className="w-full border p-1 rounded"
@@ -727,7 +876,7 @@ export default function CustomersCandy() {
                           onChange={(e) => setEName(e.target.value)}
                         />
                       ) : (
-                        c.name
+                        <div className="font-medium">{c.name}</div>
                       )}
                     </td>
 
@@ -745,6 +894,29 @@ export default function CustomersCandy() {
                       )}
                     </td>
 
+                    {/* ✅ FIX: esta celda AHORA es “Vendedor” de verdad */}
+                    <td className="p-2 border">
+                      {isEditing ? (
+                        <select
+                          className="w-full border p-1 rounded text-xs"
+                          value={isVendor ? sellerCandyId : eVendorId}
+                          onChange={(e) => setEVendorId(e.target.value)}
+                          disabled={isVendor}
+                          title="Vendedor asociado"
+                        >
+                          <option value="">— Sin vendedor —</option>
+                          {sellers.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        c.vendorName || "—"
+                      )}
+                    </td>
+
+                    {/* ✅ Lugar (antes estaba ocupando la columna “Vendedor”) */}
                     <td className="p-2 border">
                       {isEditing ? (
                         <select
@@ -764,6 +936,7 @@ export default function CustomersCandy() {
                       )}
                     </td>
 
+                    {/* ✅ Estado */}
                     <td className="p-2 border">
                       {isEditing ? (
                         <select
@@ -787,6 +960,7 @@ export default function CustomersCandy() {
                       )}
                     </td>
 
+                    {/* ✅ Límite */}
                     <td className="p-2 border">
                       {isEditing ? (
                         <input
@@ -806,10 +980,12 @@ export default function CustomersCandy() {
                       )}
                     </td>
 
+                    {/* ✅ Saldo */}
                     <td className="p-2 border font-semibold">
                       {money(c.balance || 0)}
                     </td>
 
+                    {/* ✅ Comentario */}
                     <td className="p-2 border">
                       {isEditing ? (
                         <textarea
@@ -827,6 +1003,7 @@ export default function CustomersCandy() {
                       )}
                     </td>
 
+                    {/* ✅ Acciones */}
                     <td className="p-2 border">
                       <div className="flex gap-2 justify-center">
                         {isEditing ? (
@@ -852,13 +1029,17 @@ export default function CustomersCandy() {
                             >
                               Editar
                             </button>
+
+                            {/* vendedor no debería borrar clientes si no es admin */}
                             <button
-                              className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                              className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
                               onClick={() => handleDelete(c)}
+                              disabled={!isAdmin}
+                              title={!isAdmin ? "Solo admin" : "Borrar"}
                             >
                               Borrar
                             </button>
-                            {/* 👇 Estado de cuenta */}
+
                             <button
                               className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
                               onClick={() => openStatement(c)}
@@ -955,6 +1136,47 @@ export default function CustomersCandy() {
                   </select>
                 </div>
 
+                {/* ✅ NUEVO: Vendedor asociado */}
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Vendedor asociado
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={isVendor ? sellerCandyId : vendorId}
+                    onChange={(e) => setVendorId(e.target.value)}
+                    disabled={isVendor}
+                  >
+                    <option value="">— Sin vendedor —</option>
+                    {sellers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* ✅ NUEVO: Deuda inicial */}
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Deuda inicial
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded"
+                    value={initialDebt === 0 ? "" : initialDebt}
+                    onChange={(e) =>
+                      setInitialDebt(Math.max(0, Number(e.target.value || 0)))
+                    }
+                    placeholder="Ej: 1500"
+                  />
+                  <div className="text-xs text-gray-500 mt-1">
+                    Este valor queda fijo (no cambia).
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-sm font-semibold">
                     Límite de crédito (opcional)
@@ -1035,7 +1257,15 @@ export default function CustomersCandy() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            {/* ✅ KPI +1: deuda inicial */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Deuda inicial</div>
+                <div className="text-xl font-semibold">
+                  {money(Number(stCustomer?.initialDebt || 0))}
+                </div>
+              </div>
+
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Saldo actual</div>
                 <div className="text-xl font-semibold">

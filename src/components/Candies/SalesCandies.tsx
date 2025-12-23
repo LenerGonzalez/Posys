@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import jsPDF from "jspdf";
+import { set } from "date-fns";
 
 type ClientType = "CONTADO" | "CREDITO";
 type Status = "ACTIVO" | "BLOQUEADO";
@@ -43,6 +44,8 @@ interface Customer {
   status: Status;
   creditLimit?: number;
   balance?: number;
+  sellerId?: string;
+  vendorId?: string;
 }
 
 interface Product {
@@ -62,6 +65,7 @@ interface Vendor {
   branch: Branch; // sucursal normalizada
   branchLabel: string; // label como se guarda en sellers_candies
   commissionPercent: number; // % comisión sobre la venta
+  status?: Status;
 }
 
 /**
@@ -431,6 +435,7 @@ export default function SalesCandiesPOS({
   const [mNotes, setMNotes] = useState("");
   const [mStatus, setMStatus] = useState<Status>("ACTIVO");
   const [mCreditLimit, setMCreditLimit] = useState<number>(0);
+  const [mSellerId, setMSellerId] = useState<string>("");
   const resetModal = () => {
     setMName("");
     setMPhone("+505 ");
@@ -444,6 +449,15 @@ export default function SalesCandiesPOS({
     () => customers.find((c) => c.id === customerId),
     [customers, customerId]
   );
+  const customersForCredit = useMemo(() => {
+    if (lockVendor && vendorId) {
+      return customers.filter(
+        (c) => ((c as any).vendorId ?? c.sellerId ?? "") === vendorId
+      );
+    }
+    return customers;
+  }, [customers, lockVendor, vendorId]);
+
   const currentBalance = selectedCustomer?.balance || 0;
   const projectedBalance =
     clientType === "CREDITO"
@@ -486,6 +500,8 @@ export default function SalesCandiesPOS({
           status: (x.status as Status) ?? "ACTIVO",
           creditLimit: Number(x.creditLimit ?? 0),
           balance: 0,
+          sellerId: x.sellerId ?? x.vendorId ?? "",
+          vendorId: x.vendorId ?? x.sellerId ?? "",
         });
       });
       // saldos
@@ -558,6 +574,7 @@ export default function SalesCandiesPOS({
     if (role === "vendedor_dulces" && sellerCandyId) {
       setVendorId(sellerCandyId);
       setLockVendor(true);
+
       // Opcional: mantener compat con lógica anterior de localStorage
       try {
         localStorage.setItem("pos_vendorId", sellerCandyId);
@@ -565,41 +582,14 @@ export default function SalesCandiesPOS({
       } catch {
         // ignorar errores de storage
       }
+      return;
+    }
+    if (role === "admin") {
+      setLockVendor(false);
       return;
     }
 
     // 2) Comportamiento legacy: leer de localStorage
-    try {
-      const storedVendorId = localStorage.getItem("pos_vendorId") || "";
-      const storedRole = localStorage.getItem("pos_role") || ""; // "ADMIN" | "VENDEDOR" | ...
-      if (storedVendorId) {
-        setVendorId(storedVendorId);
-      }
-      if (storedRole.toUpperCase() === "VENDEDOR") {
-        setLockVendor(true); // el vendedor no puede cambiarse
-      }
-    } catch {
-      // ignorar
-    }
-  }, [role, sellerCandyId]);
-
-  // leer usuario logueado / vendedor asociado para autoseleccionar vendedor
-  useEffect(() => {
-    // 1) Si viene atado desde App (usuario vendedor de dulces)
-    if (role === "vendedor_dulces" && sellerCandyId) {
-      setVendorId(sellerCandyId);
-      setLockVendor(true);
-      // Opcional: mantener compat con lógica anterior de localStorage
-      try {
-        localStorage.setItem("pos_vendorId", sellerCandyId);
-        localStorage.setItem("pos_role", "VENDEDOR");
-      } catch {
-        // ignorar errores de storage
-      }
-      return;
-    }
-
-    // 2) Comportamiento legacy: leer de localStorage (ej: kiosko fijo)
     try {
       const storedVendorId = localStorage.getItem("pos_vendorId") || "";
       const storedRole = localStorage.getItem("pos_role") || ""; // "ADMIN" | "VENDEDOR" | ...
@@ -919,6 +909,24 @@ export default function SalesCandiesPOS({
       // 1) Crear venta (dulces)
       const saleRef = await addDoc(collection(db, "sales_candies"), payload);
 
+      // ✅ Guardar cliente CONTADO en cash_customers
+      if (clientType === "CONTADO") {
+        const nameCash = (customerNameCash || "").trim();
+        if (nameCash) {
+          try {
+            await addDoc(collection(db, "cash_customers"), {
+              name: nameCash,
+              date: saleDate,
+              branch,
+              vendorId,
+              createdAt: Timestamp.now(),
+            });
+          } catch (e) {
+            console.warn("No se pudo guardar cash_customer:", e);
+          }
+        }
+      }
+
       // 2) CxC crédito
       if (clientType === "CREDITO" && customerId) {
         const base = {
@@ -927,6 +935,8 @@ export default function SalesCandiesPOS({
           createdAt: Timestamp.now(),
           ref: { saleId: saleRef.id },
         };
+        const prevBalance = Number(selectedCustomer?.balance || 0);
+
         await addDoc(collection(db, "ar_movements"), {
           ...base,
           type: "CARGO",
@@ -938,6 +948,17 @@ export default function SalesCandiesPOS({
             type: "ABONO",
             amount: -Number(downPayment),
           });
+        }
+        // ✅ SETEAR DEUDA INICIAL SOLO LA PRIMERA VEZ QUE FÍA (cuando estaba en 0)
+        if (prevBalance === 0) {
+          try {
+            await updateDoc(doc(db, "customers_candies", customerId), {
+              initialDebt: Number(totalAmount) || 0,
+              initialDebtDate: saleDate,
+            });
+          } catch (e) {
+            console.warn("No se pudo setear initialDebt:", e);
+          }
         }
       }
 
@@ -1109,7 +1130,7 @@ export default function SalesCandiesPOS({
                 onChange={(e) => setCustomerId(e.target.value)}
               >
                 <option value="">Selecciona un cliente</option>
-                {customers.map((c) => (
+                {customersForCredit.map((c) => (
                   <option
                     key={c.id}
                     value={c.status === "ACTIVO" ? c.id : ""}
@@ -1502,6 +1523,28 @@ export default function SalesCandiesPOS({
                   <option value="BLOQUEADO">BLOQUEADO</option>
                 </select>
               </div>
+              {!lockVendor && (
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Vendedor
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={mSellerId}
+                    onChange={(e) => setMSellerId(e.target.value)}
+                  >
+                    <option value="">Selecciona un vendedor</option>
+                    {vendors
+                      .filter((v) => (v.status ?? "ACTIVO") === "ACTIVO")
+                      .map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name} — {v.branchLabel}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold">
                   Límite de crédito (opcional)
@@ -1544,12 +1587,23 @@ export default function SalesCandiesPOS({
               <button
                 className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
                 onClick={async () => {
+                  const sellerIdToSave = lockVendor
+                    ? vendorId || sellerCandyId
+                    : mSellerId;
+
+                  if (!sellerIdToSave) {
+                    setMsg("Selecciona el vendedor para asociar este cliente.");
+                    return;
+                  }
+
                   setMsg("");
                   if (!mName.trim()) {
                     setMsg("Ingresa el nombre del nuevo cliente.");
                     return;
                   }
+
                   const cleanPhone = normalizePhone(mPhone);
+
                   try {
                     const ref = await addDoc(
                       collection(db, "customers_candies"),
@@ -1561,6 +1615,11 @@ export default function SalesCandiesPOS({
                         status: mStatus,
                         creditLimit: Number(mCreditLimit || 0),
                         createdAt: Timestamp.now(),
+                        sellerId: sellerIdToSave,
+                        vendorId: sellerIdToSave,
+                        vendorName:
+                          vendors.find((v) => v.id === sellerIdToSave)?.name ||
+                          "",
                       }
                     );
                     const newC: Customer = {
@@ -1571,6 +1630,7 @@ export default function SalesCandiesPOS({
                       status: mStatus,
                       creditLimit: Number(mCreditLimit || 0),
                       balance: 0,
+                      sellerId: sellerIdToSave,
                     };
                     setCustomers((prev) => [newC, ...prev]);
                     setCustomerId(ref.id);

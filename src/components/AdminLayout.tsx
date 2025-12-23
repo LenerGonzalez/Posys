@@ -177,12 +177,12 @@ export default function AdminLayout({ role }: { role: string }) {
                             <NavLink to={`${base}/bills`} className={linkCls}>
                               Cierre
                             </NavLink>
-                            {/* <NavLink
+                            <NavLink
                               to={`${base}/billhistoric`}
                               className={linkCls}
                             >
                               Historial de Cierres
-                            </NavLink>  */}
+                            </NavLink>
                           </div>
                         )}
 
@@ -379,6 +379,16 @@ export default function AdminLayout({ role }: { role: string }) {
                             </NavLink>
                           </div>
                         )}
+                        {openDulcesInv && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/inventoryCandies`}
+                              className={linkCls}
+                            >
+                              Lista Productos
+                            </NavLink>
+                          </div>
+                        )}
 
                         {openDulcesInv && (
                           <div className="ml-4 mt-1 space-y-1">
@@ -387,16 +397,6 @@ export default function AdminLayout({ role }: { role: string }) {
                               className={linkCls}
                             >
                               Productos
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesInv && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/inventoryCandies`}
-                              className={linkCls}
-                            >
-                              Lista Productos
                             </NavLink>
                           </div>
                         )}
@@ -426,6 +426,16 @@ export default function AdminLayout({ role }: { role: string }) {
                               className={linkCls}
                             >
                               Cierres
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/reporteCierresCandies`}
+                              className={linkCls}
+                            >
+                              Reporte Cierres
                             </NavLink>
                           </div>
                         )}

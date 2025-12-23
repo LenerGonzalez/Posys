@@ -49,6 +49,7 @@ import InventoryMainOrders from "./components/Candies/InventarioOrdenesMaestras"
 import CierreVentasDulces from "./components/Candies/CierreVentasDulces";
 import ConsolidadoVendedores from "./components/Candies/ConsolidadoVendedores";
 import BillingCandies from "./components/Candies/BillingCandies";
+import ReporteCierres from "./components/Candies/ReporteCierres";
 
 // Definición de roles
 type Role =
@@ -354,6 +355,18 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <CierreVentasDulces
+                  role={role}
+                  currentUserEmail={currentUserEmail}
+                  sellerCandyId={sellerCandyId}
+                />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="reporteCierresCandies"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+                <ReporteCierres
                   role={role}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}
