@@ -411,6 +411,17 @@ export default function AdminLayout({ role }: { role: string }) {
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
+                              to={`${base}/datacenter`}
+                              className={linkCls}
+                            >
+                              Data Center
+                            </NavLink>
+                          </div>
+                        )}
+
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
                               to={`${base}/transactionCandies`}
                               className={linkCls}
                             >
@@ -587,6 +598,14 @@ export default function AdminLayout({ role }: { role: string }) {
                       className={linkCls}
                     >
                       Pedidos
+                    </NavLink>
+                  </div>
+                  <div className="ml-4 mt-1 space-y-1">
+                    <NavLink
+                      to={`${base}/customersCandies`}
+                      className={linkCls}
+                    >
+                      Clientes
                     </NavLink>
                   </div>
                 </div>

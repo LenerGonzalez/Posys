@@ -136,7 +136,7 @@ type RoleProp =
 
 interface VendorCandyOrdersProps {
   role?: RoleProp;
-  sellerCandyId?: string;
+  sellerCandyId?: string; // id del vendedor de dulces asociado al usuario
   currentUserEmail?: string;
 }
 
@@ -162,15 +162,16 @@ type MasterAllocation = {
 const floor = (n: any) => Math.max(0, Math.floor(Number(n || 0)));
 
 export default function VendorCandyOrders({
-  role,
+  role = "",
+  sellerCandyId = "",
   currentUserEmail,
 }: VendorCandyOrdersProps) {
   const { refreshKey, refresh } = useManualRefresh();
 
   const isAdmin = !role || role === "admin";
-  const isVendDulces = role === "vendedor_dulces";
+  const isVendor = role === "vendedor_dulces";
   const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
-  const isReadOnly = !isAdmin && isVendDulces;
+  const isReadOnly = !isAdmin && isVendor;
 
   // ===== Catálogos =====
   const [sellers, setSellers] = useState<Seller[]>([]);
@@ -241,13 +242,13 @@ export default function VendorCandyOrders({
   }, [sellers]);
 
   const currentSeller = useMemo(() => {
-    if (!isVendDulces || !currentEmailNorm) return null;
+    if (!isVendor || !currentEmailNorm) return null;
     return (
       sellers.find(
         (s) => (s.email || "").trim().toLowerCase() === currentEmailNorm
       ) || null
     );
-  }, [isVendDulces, currentEmailNorm, sellers]);
+  }, [isVendor, currentEmailNorm, sellers]);
 
   // ===== Carga de datos =====
   useEffect(() => {
@@ -403,10 +404,16 @@ export default function VendorCandyOrders({
         //   SUBINVENTARIO VENDEDORES
         // ===========================
         const invSnap = await getDocs(
-          query(
-            collection(db, "inventory_candies_sellers"),
-            orderBy("createdAt", "desc")
-          )
+          isVendor
+            ? query(
+                collection(db, "inventory_candies_sellers"),
+                where("sellerId", "==", sellerCandyId),
+                orderBy("createdAt", "desc")
+              )
+            : query(
+                collection(db, "inventory_candies_sellers"),
+                orderBy("createdAt", "desc")
+              )
         );
 
         const invList: VendorCandyRow[] = [];
@@ -460,11 +467,11 @@ export default function VendorCandyOrders({
 
   // ===== Filtrado por rol (solo sus pedidos si es vendedor de dulces) =====
   const rowsByRole = useMemo(() => {
-    if (isVendDulces && currentSeller) {
+    if (isVendor && currentSeller) {
       return rows.filter((r) => r.sellerId === currentSeller.id);
     }
     return rows;
-  }, [rows, isVendDulces, currentSeller]);
+  }, [rows, isVendor, currentSeller]);
 
   // ===== Resumen por pedido (agrupado) =====
   const orders: OrderSummaryRow[] = useMemo(() => {
@@ -1197,7 +1204,7 @@ export default function VendorCandyOrders({
 
     const first = relatedRows[0];
 
-    if (isVendDulces && currentSeller && first.sellerId !== currentSeller.id) {
+    if (isVendor && currentSeller && first.sellerId !== currentSeller.id) {
       setMsg("No tienes permiso para ver este pedido.");
       return;
     }

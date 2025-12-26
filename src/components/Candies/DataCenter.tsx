@@ -1,0 +1,1880 @@
+// src/components/Candies/DataCenterCandies.tsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { db } from "../../firebase";
+import {
+  collection,
+  getDocs,
+  onSnapshot,
+  orderBy,
+  query,
+  where,
+} from "firebase/firestore";
+import { format } from "date-fns";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
+
+type RoleCandies =
+  | ""
+  | "admin"
+  | "vendedor_pollo"
+  | "vendedor_ropa"
+  | "vendedor_dulces";
+
+type Branch = "RIVAS" | "SAN_JORGE" | "ISLA";
+type SaleStatus = "FLOTANTE" | "PROCESADA";
+type SaleType = "CONTADO" | "CREDITO";
+type GroupBy = "DIA" | "VENDEDOR" | "PRODUCTO" | "SUCURSAL";
+
+type FireTimestamp = { toDate?: () => Date } | undefined;
+
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
+const money = (n: unknown) => Number(n ?? 0).toFixed(2);
+const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
+
+const normalizeBranch = (b: any): Branch | "" => {
+  const s = String(b || "")
+    .toUpperCase()
+    .trim();
+  if (s === "RIVAS") return "RIVAS";
+  if (s === "SAN_JORGE" || s === "SANJORGE" || s === "SJ") return "SAN_JORGE";
+  if (s === "ISLA" || s === "OMETEPE") return "ISLA";
+  return "";
+};
+
+interface SellerCandy {
+  id: string; // vendorId
+  name: string;
+  commissionPercent: number;
+  branch?: string;
+}
+
+interface SaleDataRaw {
+  date?: string;
+  timestamp?: FireTimestamp;
+  status?: SaleStatus;
+  type?: SaleType;
+
+  vendorId?: string;
+  vendorName?: string;
+  userEmail?: string;
+
+  // ✅ a veces viene customerId
+  customerId?: string;
+
+  customerName?: string;
+  clientName?: string;
+
+  branch?: Branch | string;
+  vendorBranch?: Branch | string;
+  vendorBranchLabel?: string;
+
+  total?: number;
+  itemsTotal?: number;
+  packagesTotal?: number;
+  amount?: number;
+  amountCharged?: number;
+
+  vendorCommissionAmount?: number;
+  vendorCommissionPercent?: number;
+
+  processedDate?: string;
+  processedAt?: any;
+  closureDate?: string;
+
+  items?: Array<{
+    productId?: string;
+    productName?: string;
+    packages?: number;
+    qty?: number;
+    unitsPerPackage?: number;
+    unitPricePackage?: number;
+    total?: number;
+    discount?: number;
+    branch?: Branch | string;
+  }>;
+}
+
+interface SaleRow {
+  id: string; // docId#idx
+  docId: string;
+
+  productId: string;
+  productName: string;
+
+  date: string;
+  processedDate: string;
+  status: SaleStatus;
+  type: SaleType;
+
+  vendorId: string;
+  vendorName: string;
+
+  customerId: string;
+  customerName: string;
+
+  branch: Branch | "";
+  packages: number;
+  amount: number;
+  commission: number;
+}
+
+const normalizeSalesMany = (raw: SaleDataRaw, docId: string): SaleRow[] => {
+  const date =
+    raw.date ??
+    (raw.timestamp?.toDate
+      ? format(raw.timestamp.toDate()!, "yyyy-MM-dd")
+      : "");
+  if (!date) return [];
+
+  const processedDate = String(
+    raw.processedDate ?? raw.closureDate ?? ""
+  ).trim();
+
+  const status: SaleStatus = (raw.status as any) ?? "FLOTANTE";
+  const type: SaleType = (raw.type || "CONTADO") as SaleType;
+
+  const vendorId = String(raw.vendorId ?? "").trim();
+  const vendorName =
+    String(raw.vendorName ?? "").trim() ||
+    String(raw.userEmail ?? "").trim() ||
+    vendorId ||
+    "(sin vendedor)";
+
+  const customerId = String(raw.customerId ?? "").trim();
+
+  const customerName =
+    String(raw.customerName ?? "").trim() ||
+    String(raw.clientName ?? "").trim() ||
+    "";
+
+  const saleTotalRoot =
+    Number(
+      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0
+    ) || 0;
+  const saleCommissionRoot = Number(raw.vendorCommissionAmount ?? 0) || 0;
+
+  const rootBranch = normalizeBranch(raw.branch ?? raw.vendorBranch);
+
+  if (Array.isArray(raw.items) && raw.items.length > 0) {
+    return raw.items.map((it, idx) => {
+      const packages = Number(it?.packages ?? 0) || 0;
+
+      const lineAmount =
+        Number(it?.total ?? 0) ||
+        Math.max(
+          0,
+          Number(it?.unitPricePackage || 0) * packages -
+            Number(it?.discount || 0)
+        );
+
+      const branch = normalizeBranch(it?.branch) || rootBranch;
+
+      let commission = 0;
+      if (saleCommissionRoot > 0 && saleTotalRoot > 0 && lineAmount > 0) {
+        commission = round2((saleCommissionRoot * lineAmount) / saleTotalRoot);
+      }
+
+      return {
+        id: `${docId}#${idx}`,
+        docId,
+        productId: String(it?.productId ?? ""),
+        productName: String(it?.productName ?? "(sin nombre)"),
+        date,
+        processedDate,
+        status,
+        type,
+        vendorId,
+        vendorName,
+        customerId,
+        customerName,
+        branch: branch || "",
+        packages,
+        amount: round2(lineAmount),
+        commission: round2(commission),
+      };
+    });
+  }
+
+  const packages = Number(raw.packagesTotal ?? 0) || 0;
+  const amount = Number(raw.total ?? raw.amount ?? raw.amountCharged ?? 0) || 0;
+  const commission = round2(Number(raw.vendorCommissionAmount ?? 0) || 0);
+
+  return [
+    {
+      id: `${docId}#0`,
+      docId,
+      productId: "",
+      productName: "(sin nombre)",
+      date,
+      processedDate,
+      status,
+      type,
+      vendorId,
+      vendorName,
+      customerId,
+      customerName,
+      branch: rootBranch || "",
+      packages,
+      amount: round2(amount),
+      commission: round2(commission),
+    },
+  ];
+};
+
+type MainOrderItem = {
+  name?: string;
+  id?: string;
+  subtotal?: number; // proveedor
+  totalRivas?: number;
+  totalSanJorge?: number;
+  totalIsla?: number;
+  gainRivas?: number;
+  gainSanJorge?: number;
+  gainIsla?: number;
+  packages?: number;
+  remainingPackages?: number;
+};
+
+type MainOrderDoc = {
+  id: string;
+  date?: string; // "yyyy-MM-dd"
+  items?: MainOrderItem[];
+  subtotal?: number; // fallback
+  totalPackages?: number; // fallback
+};
+
+type VendorOrderDoc = {
+  id: string;
+  date?: string;
+  sellerId?: string;
+  sellerName?: string;
+  packages?: number;
+  remainingPackages?: number;
+  subtotal?: number; // proveedor
+
+  // ⚠️ en tu colección sellers existen estos a veces:
+  remainingUnits?: number;
+  remaining?: number;
+  unitsPerPackage?: number;
+};
+
+type CustomerDoc = {
+  id: string;
+  name?: string;
+};
+
+type ARMovement = {
+  id: string;
+  customerId?: string;
+  date?: string; // "yyyy-MM-dd"
+  amount?: number;
+  type?: "CARGO" | "ABONO";
+};
+
+export default function DataCenterCandies({
+  role,
+}: {
+  role?: RoleCandies;
+}): React.ReactElement {
+  const isAdmin = !role || role === "admin";
+
+  const today = format(new Date(), "yyyy-MM-dd");
+  const [startDate, setStartDate] = useState<string>(today);
+  const [endDate, setEndDate] = useState<string>(today);
+
+  const [statusFilter, setStatusFilter] = useState<"TODAS" | SaleStatus>(
+    "TODAS"
+  );
+  const [typeFilter, setTypeFilter] = useState<"AMBAS" | "CASH" | "CREDITO">(
+    "AMBAS"
+  );
+  const [vendorFilter, setVendorFilter] = useState<string>("ALL");
+  const [branchFilter, setBranchFilter] = useState<"ALL" | Branch>("ALL");
+  const [productFilter, setProductFilter] = useState<string>("");
+  const [customerFilter, setCustomerFilter] = useState<string>("");
+
+  const [minAmount, setMinAmount] = useState<string>("");
+  const [maxAmount, setMaxAmount] = useState<string>("");
+
+  const [groupBy, setGroupBy] = useState<GroupBy>("DIA");
+
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [salesRows, setSalesRows] = useState<SaleRow[]>([]);
+  const [sellers, setSellers] = useState<SellerCandy[]>([]);
+  const [mainOrders, setMainOrders] = useState<MainOrderDoc[]>([]);
+  const [vendorOrders, setVendorOrders] = useState<VendorOrderDoc[]>([]);
+  const [customers, setCustomers] = useState<CustomerDoc[]>([]);
+  const [movements, setMovements] = useState<ARMovement[]>([]);
+
+  // ✅ GLOBAL existencias (todas las órdenes / actuales)
+  const [allMasterInventory, setAllMasterInventory] = useState<any[]>([]);
+  const [allVendorInventory, setAllVendorInventory] = useState<any[]>([]);
+
+  const [detailKey, setDetailKey] = useState<string>("");
+  const pdfRef = useRef<HTMLDivElement>(null);
+
+  const [invCandiesAll, setInvCandiesAll] = useState<any[]>([]);
+
+  const customersMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    customers.forEach((c) => {
+      map[c.id] = String(c.name || "").trim();
+    });
+    return map;
+  }, [customers]);
+
+  const displayCustomerName = (r: SaleRow) => {
+    const byId = r.customerId ? customersMap[r.customerId] : "";
+    const name = (r.customerName || byId || "").trim();
+    return (
+      name ||
+      (r.customerId ? customersMap[r.customerId] || r.customerId : "") ||
+      ""
+    );
+  };
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchInvAll = async () => {
+      try {
+        const snap = await getDocs(collection(db, "inventory_candies"));
+        const rows: any[] = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        setInvCandiesAll(rows);
+      } catch (e) {
+        console.error("inventory_candies all error:", e);
+        setInvCandiesAll([]);
+      }
+    };
+
+    fetchInvAll();
+  }, [isAdmin]);
+
+  // --- sellers ---
+  useEffect(() => {
+    const fetchSellers = async () => {
+      try {
+        const snap = await getDocs(collection(db, "sellers_candies"));
+        const list: SellerCandy[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          list.push({
+            id: d.id,
+            name: String(data.name || "").trim(),
+            commissionPercent: Number(data.commissionPercent || 0),
+            branch: data.branch || "",
+          });
+        });
+        const map = new Map<string, SellerCandy>();
+        list.forEach((s) => map.set(s.id, s));
+        setSellers(
+          Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name))
+        );
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    fetchSellers();
+  }, []);
+
+  // --- sales_candies periodo ---
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (!startDate || !endDate) return;
+
+    setLoading(true);
+    setMessage("");
+
+    const qSales = query(
+      collection(db, "sales_candies"),
+      where("date", ">=", startDate),
+      where("date", "<=", endDate),
+      orderBy("date", "asc")
+    );
+
+    const unsub = onSnapshot(
+      qSales,
+      (snap) => {
+        const rows: SaleRow[] = [];
+        snap.forEach((d) =>
+          rows.push(...normalizeSalesMany(d.data() as SaleDataRaw, d.id))
+        );
+        setSalesRows(rows);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("sales_candies periodo error:", err);
+        setSalesRows([]);
+        setLoading(false);
+        setMessage(
+          "❌ Error cargando ventas del período (revisá índices si aplica)."
+        );
+      }
+    );
+
+    return () => unsub();
+  }, [isAdmin, startDate, endDate]);
+
+  // --- candy_main_orders periodo ---
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchOrders = async () => {
+      try {
+        const qy = query(
+          collection(db, "candy_main_orders"),
+          where("date", ">=", startDate),
+          where("date", "<=", endDate)
+        );
+        const snap = await getDocs(qy);
+        const rows: MainOrderDoc[] = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        setMainOrders(rows);
+      } catch (e) {
+        console.error("candy_main_orders error:", e);
+        setMainOrders([]);
+      }
+    };
+
+    fetchOrders();
+  }, [isAdmin, startDate, endDate]);
+
+  // --- inventory_candies_sellers periodo (órdenes vendedor) ---
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchVendorOrders = async () => {
+      try {
+        const qy = query(
+          collection(db, "inventory_candies_sellers"),
+          where("date", ">=", startDate),
+          where("date", "<=", endDate)
+        );
+        const snap = await getDocs(qy);
+        const rows: VendorOrderDoc[] = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        setVendorOrders(rows);
+      } catch (e) {
+        console.error("inventory_candies_sellers error:", e);
+        setVendorOrders([]);
+      }
+    };
+
+    fetchVendorOrders();
+  }, [isAdmin, startDate, endDate]);
+
+  // ✅ GLOBAL: inventory_candies (existencias maestras actuales)
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchAllMasterInventory = async () => {
+      try {
+        const snap = await getDocs(collection(db, "inventory_candies"));
+        const rows: any[] = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        setAllMasterInventory(rows);
+      } catch (e) {
+        console.error("inventory_candies global error:", e);
+        setAllMasterInventory([]);
+      }
+    };
+
+    fetchAllMasterInventory();
+  }, [isAdmin]);
+
+  // ✅ GLOBAL: inventory_candies_sellers (existencias vendedores actuales)
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchAllVendorInventory = async () => {
+      try {
+        const snap = await getDocs(collection(db, "inventory_candies_sellers"));
+        const rows: any[] = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        setAllVendorInventory(rows);
+      } catch (e) {
+        console.error("inventory_candies_sellers global error:", e);
+        setAllVendorInventory([]);
+      }
+    };
+
+    fetchAllVendorInventory();
+  }, [isAdmin]);
+
+  // --- customers (para nombres) EN TIEMPO REAL ---
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const qCustomers = query(collection(db, "customers_candies"));
+
+    const unsub = onSnapshot(
+      qCustomers,
+      (snap) => {
+        const rows: CustomerDoc[] = [];
+        snap.forEach((d) =>
+          rows.push({
+            id: d.id,
+            name: String((d.data() as any)?.name || "").trim(),
+          })
+        );
+        setCustomers(rows);
+      },
+      (err) => {
+        console.error("customers_candies snapshot error:", err);
+        setCustomers([]);
+      }
+    );
+
+    return () => unsub();
+  }, [isAdmin]);
+
+  // --- ar_movements ---
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchMovements = async () => {
+      try {
+        const qy = query(
+          collection(db, "ar_movements"),
+          where("date", "<=", endDate),
+          orderBy("date", "asc")
+        );
+        const snap = await getDocs(qy);
+        const rows: ARMovement[] = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        setMovements(rows);
+      } catch (e) {
+        console.warn("ar_movements sin índice, usando fallback:", e);
+        try {
+          const snap = await getDocs(collection(db, "ar_movements"));
+          const rows: ARMovement[] = [];
+          snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+          setMovements(rows.filter((m) => String(m.date || "") <= endDate));
+        } catch (e2) {
+          console.error(e2);
+          setMovements([]);
+        }
+      }
+    };
+
+    fetchMovements();
+  }, [isAdmin, endDate]);
+
+  // --- filtros ventas ---
+  const filteredRows = useMemo(() => {
+    let base = [...salesRows];
+
+    if (statusFilter !== "TODAS")
+      base = base.filter((r) => r.status === statusFilter);
+
+    if (typeFilter === "CASH") base = base.filter((r) => r.type === "CONTADO");
+    if (typeFilter === "CREDITO")
+      base = base.filter((r) => r.type === "CREDITO");
+
+    if (vendorFilter !== "ALL")
+      base = base.filter((r) => (r.vendorId || "") === vendorFilter);
+
+    if (branchFilter !== "ALL")
+      base = base.filter((r) => r.branch === branchFilter);
+
+    if (productFilter.trim()) {
+      const p = productFilter.trim().toLowerCase();
+      base = base.filter((r) =>
+        (r.productName || "").toLowerCase().includes(p)
+      );
+    }
+
+    if (customerFilter.trim()) {
+      const c = customerFilter.trim().toLowerCase();
+      base = base.filter((r) =>
+        (displayCustomerName(r) || "").toLowerCase().includes(c)
+      );
+    }
+
+    const min = minAmount.trim() ? Number(minAmount) : null;
+    const max = maxAmount.trim() ? Number(maxAmount) : null;
+    if (min !== null && !Number.isNaN(min))
+      base = base.filter((r) => (r.amount || 0) >= min);
+    if (max !== null && !Number.isNaN(max))
+      base = base.filter((r) => (r.amount || 0) <= max);
+
+    return base;
+  }, [
+    salesRows,
+    statusFilter,
+    typeFilter,
+    vendorFilter,
+    branchFilter,
+    productFilter,
+    customerFilter,
+    minAmount,
+    maxAmount,
+    customersMap,
+  ]);
+
+  // --- KPIs base ---
+  const kpis = useMemo(() => {
+    let packsCash = 0;
+    let packsCredit = 0;
+    let salesCash = 0;
+    let salesCredit = 0;
+    let commCash = 0;
+    let commCredit = 0;
+
+    for (const r of filteredRows) {
+      const packs = Number(r.packages || 0);
+      const amt = Number(r.amount || 0);
+      const com = Number(r.commission || 0);
+
+      if (r.type === "CREDITO") {
+        packsCredit += packs;
+        salesCredit += amt;
+        commCredit += com;
+      } else {
+        packsCash += packs;
+        salesCash += amt;
+        commCash += com;
+      }
+    }
+
+    const salesTotal = round2(salesCash + salesCredit);
+
+    return {
+      packsCash: round3(packsCash),
+      packsCredit: round3(packsCredit),
+      salesCash: round2(salesCash),
+      salesCredit: round2(salesCredit),
+      salesTotal,
+      commCash: round2(commCash),
+      commCredit: round2(commCredit),
+    };
+  }, [filteredRows]);
+
+  // --- expected + gross por sucursal (maestras) ---
+  const expectedAndGross = useMemo(() => {
+    let expR = 0,
+      expSJ = 0,
+      expI = 0;
+    let gpR = 0,
+      gpSJ = 0,
+      gpI = 0;
+
+    for (const o of mainOrders) {
+      const items = Array.isArray(o.items) ? o.items : [];
+      for (const it of items) {
+        expR += Number(it.totalRivas ?? 0);
+        expSJ += Number(it.totalSanJorge ?? 0);
+        expI += Number(it.totalIsla ?? 0);
+
+        gpR += Number(it.gainRivas ?? 0);
+        gpSJ += Number(it.gainSanJorge ?? 0);
+        gpI += Number(it.gainIsla ?? 0);
+      }
+    }
+
+    return {
+      expectedRivas: round2(expR),
+      expectedSanJorge: round2(expSJ),
+      expectedIsla: round2(expI),
+      grossRivas: round2(gpR),
+      grossSanJorge: round2(gpSJ),
+      grossIsla: round2(gpI),
+      grossTotal: round2(gpR + gpSJ + gpI),
+    };
+  }, [mainOrders]);
+
+  // --- actual por sucursal desde ventas ---
+  const actualByBranch = useMemo(() => {
+    const map: Record<Branch, { sales: number; packages: number }> = {
+      RIVAS: { sales: 0, packages: 0 },
+      SAN_JORGE: { sales: 0, packages: 0 },
+      ISLA: { sales: 0, packages: 0 },
+    };
+
+    for (const r of filteredRows) {
+      const b = r.branch;
+      if (!b) continue;
+      map[b].sales += Number(r.amount || 0);
+      map[b].packages += Number(r.packages || 0);
+    }
+
+    return {
+      RIVAS: {
+        sales: round2(map.RIVAS.sales),
+        packages: round3(map.RIVAS.packages),
+      },
+      SAN_JORGE: {
+        sales: round2(map.SAN_JORGE.sales),
+        packages: round3(map.SAN_JORGE.packages),
+      },
+      ISLA: {
+        sales: round2(map.ISLA.sales),
+        packages: round3(map.ISLA.packages),
+      },
+    };
+  }, [filteredRows]);
+
+  const diffVsExpected = useMemo(() => {
+    return {
+      RIVAS: round2(
+        actualByBranch.RIVAS.sales - expectedAndGross.expectedRivas
+      ),
+      SAN_JORGE: round2(
+        actualByBranch.SAN_JORGE.sales - expectedAndGross.expectedSanJorge
+      ),
+      ISLA: round2(actualByBranch.ISLA.sales - expectedAndGross.expectedIsla),
+    };
+  }, [actualByBranch, expectedAndGross]);
+
+  // --- KPI vendedores (comisión cash / crédito) ---
+  const vendorsKpi = useMemo(() => {
+    const cash: Record<
+      string,
+      { vendorId: string; name: string; total: number }
+    > = {};
+    const credit: Record<
+      string,
+      { vendorId: string; name: string; total: number }
+    > = {};
+
+    for (const r of filteredRows) {
+      const vid = (r.vendorId || "").trim();
+      if (!vid) continue;
+
+      const seller = sellers.find((x) => x.id === vid);
+      const name = seller?.name || r.vendorName || "(sin vendedor)";
+      const com = Number(r.commission || 0);
+
+      if (r.type === "CREDITO") {
+        if (!credit[vid]) credit[vid] = { vendorId: vid, name, total: 0 };
+        credit[vid].total = round2(credit[vid].total + com);
+      } else {
+        if (!cash[vid]) cash[vid] = { vendorId: vid, name, total: 0 };
+        cash[vid].total = round2(cash[vid].total + com);
+      }
+    }
+
+    const cashArr = Object.values(cash).sort((a, b) => b.total - a.total);
+    const creditArr = Object.values(credit).sort((a, b) => b.total - a.total);
+
+    return { cashArr, creditArr };
+  }, [filteredRows, sellers]);
+
+  // ✅ NUEVOS KPIs pedidos (proveedor + paquetes maestras/vendedor + por vendedor)
+  const providerAndPackagesKpis = useMemo(() => {
+    // Helpers
+    const sumNumber = (arr: any[], key: string) =>
+      arr.reduce((s, x) => s + Number(x?.[key] ?? 0), 0);
+
+    const remainingFromItemsNoDup = (items: any[]) => {
+      const vals = items
+        .map((it) => Number(it?.remainingPackages ?? 0))
+        .filter((v) => Number.isFinite(v));
+
+      if (vals.length === 0) return 0;
+
+      const allSame = vals.every((v) => v === vals[0]);
+      if (allSame) return vals[0]; // ✅ no duplicar
+      return vals.reduce((s, v) => s + v, 0); // ✅ restante real por item
+    };
+
+    const orderedFromOrder = (o: any) => {
+      const root = Number(o?.totalPackages ?? 0);
+      if (root > 0) return root;
+
+      const items = Array.isArray(o?.items) ? o.items : [];
+      return sumNumber(items, "packages");
+    };
+
+    /**
+     * Restantes de la orden:
+     * - si viene remainingPackages en la orden, lo usamos.
+     * - si no, usamos heuristic anti-dup en items[]
+     */
+    const remainingFromOrder = (o: any) => {
+      const root = Number(o?.remainingPackages ?? 0);
+      if (root > 0) return root;
+
+      const items = Array.isArray(o?.items) ? o.items : [];
+      return remainingFromItemsNoDup(items);
+    };
+
+    // ✅ FIX puntual: restantes vendor aunque no venga remainingPackages
+    const safeInt = (n: any) => {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return 0;
+      return Math.floor(x);
+    };
+
+    const getRemainingPackagesVendorDoc = (v: any) => {
+      const rp = Number(v?.remainingPackages);
+      if (Number.isFinite(rp) && rp > 0) return Math.floor(rp);
+
+      const unitsPerPackage = Math.max(1, safeInt(v?.unitsPerPackage ?? 1));
+      const remainingUnits = safeInt(v?.remainingUnits ?? v?.remaining ?? 0);
+      if (remainingUnits > 0)
+        return Math.max(0, Math.floor(remainingUnits / unitsPerPackage));
+
+      return 0;
+    };
+
+    // --- maestras (PERÍODO) ---
+    let providerTotalMaster = 0;
+    let orderedPacksMaster = 0;
+    let remainingPacksMaster = 0;
+
+    for (const o of mainOrders) {
+      const items = Array.isArray((o as any).items) ? (o as any).items : [];
+
+      // proveedor: suma por item.subtotal (costo proveedor por item)
+      if (items.length) {
+        for (const it of items)
+          providerTotalMaster += Number(it?.subtotal ?? 0);
+      } else {
+        providerTotalMaster += Number((o as any).subtotal ?? 0);
+      }
+
+      orderedPacksMaster += orderedFromOrder(o);
+      remainingPacksMaster += remainingFromOrder(o);
+    }
+
+    // --- órdenes vendedor (PERÍODO) ---
+    let providerTotalVendor = 0;
+    let orderedPacksVendor = 0;
+    let remainingPacksVendor = 0;
+
+    const byVendor: Record<
+      string,
+      {
+        sellerId: string;
+        sellerName: string;
+        ordered: number;
+        remaining: number;
+      }
+    > = {};
+
+    for (const v of vendorOrders) {
+      providerTotalVendor += Number(v.subtotal ?? 0);
+      orderedPacksVendor += Number(v.packages ?? 0);
+
+      const remainingVendorPkgs = getRemainingPackagesVendorDoc(v);
+      remainingPacksVendor += remainingVendorPkgs;
+
+      const sid = String(v.sellerId || "").trim();
+      if (!sid) continue;
+
+      const sname = String(v.sellerName || "").trim() || "(sin vendedor)";
+      if (!byVendor[sid])
+        byVendor[sid] = {
+          sellerId: sid,
+          sellerName: sname,
+          ordered: 0,
+          remaining: 0,
+        };
+
+      byVendor[sid].ordered += Number(v.packages ?? 0);
+      byVendor[sid].remaining += remainingVendorPkgs;
+    }
+
+    const vendorRowsOrdered = Object.values(byVendor)
+      .map((x) => ({
+        ...x,
+        ordered: round3(x.ordered),
+        remaining: round3(x.remaining),
+      }))
+      .sort((a, b) => b.ordered - a.ordered);
+
+    const vendorRowsRemaining = [...vendorRowsOrdered].sort(
+      (a, b) => b.remaining - a.remaining
+    );
+
+    // ✅ Como YA decidiste "órdenes del período",
+    //    “existencia global” = “restantes del período”
+    const globalRemainingMaster = remainingPacksMaster;
+    const globalRemainingVendor = remainingPacksVendor;
+
+    // orderIds del período (maestras)
+    const periodOrderIds = new Set(
+      mainOrders
+        .filter(
+          (o) =>
+            String(o.date || "") >= startDate && String(o.date || "") <= endDate
+        )
+        .map((o) => o.id)
+    );
+
+    // restantes maestras (período) desde INVENTORY por orderId
+    let remainingPacksMasterPeriod = 0;
+    for (const inv of invCandiesAll) {
+      const oid = String(inv.orderId || "").trim();
+      if (!oid) continue;
+      if (!periodOrderIds.has(oid)) continue;
+      remainingPacksMasterPeriod += Number(inv.remainingPackages ?? 0);
+    }
+
+    return {
+      providerTotalMaster: round2(providerTotalMaster),
+      providerTotalVendor: round2(providerTotalVendor),
+
+      orderedPacksMaster: round3(orderedPacksMaster),
+      remainingPacksMaster: round3(remainingPacksMasterPeriod),
+
+      orderedPacksVendor: round3(orderedPacksVendor),
+      remainingPacksVendor: round3(remainingPacksVendor),
+
+      globalRemainingMaster: round3(globalRemainingMaster),
+      globalRemainingVendor: round3(globalRemainingVendor),
+
+      vendorRowsOrdered,
+      vendorRowsRemaining,
+    };
+  }, [mainOrders, vendorOrders, invCandiesAll, startDate, endDate]);
+
+  // ✅ KPI EXISTENCIAS GLOBALES (lo que me pediste AHORA)
+  // - Maestras actuales: inventory_candies.remainingPackages
+  // - Vendedores actuales: inventory_candies_sellers.remainingPackages
+  const globalStockKpis = useMemo(() => {
+    const masterRemainingPackages = allMasterInventory.reduce(
+      (s, x) => s + Number(x.remainingPackages ?? 0),
+      0
+    );
+
+    const vendorRemainingPackages = allVendorInventory.reduce(
+      (s, x) => s + Number(x.remainingPackages ?? 0),
+      0
+    );
+
+    return {
+      masterRemainingPackages: round3(masterRemainingPackages),
+      vendorRemainingPackages: round3(vendorRemainingPackages),
+    };
+  }, [allMasterInventory, allVendorInventory]);
+
+  // --- tabla principal group by ---
+  const grouped = useMemo(() => {
+    type Agg = {
+      key: string;
+      label: string;
+      packsCash: number;
+      packsCredit: number;
+      salesCash: number;
+      salesCredit: number;
+      commCash: number;
+      commCredit: number;
+      rows: SaleRow[];
+    };
+
+    const map = new Map<string, Agg>();
+
+    const getKeyLabel = (r: SaleRow): { key: string; label: string } => {
+      if (groupBy === "DIA") return { key: r.date, label: r.date };
+      if (groupBy === "VENDEDOR")
+        return { key: r.vendorId || "—", label: r.vendorName || "—" };
+      if (groupBy === "PRODUCTO")
+        return { key: r.productName || "—", label: r.productName || "—" };
+      return { key: r.branch || "—", label: r.branch || "—" };
+    };
+
+    for (const r of filteredRows) {
+      const { key, label } = getKeyLabel(r);
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label,
+          packsCash: 0,
+          packsCredit: 0,
+          salesCash: 0,
+          salesCredit: 0,
+          commCash: 0,
+          commCredit: 0,
+          rows: [],
+        });
+      }
+      const agg = map.get(key)!;
+      agg.rows.push(r);
+
+      if (r.type === "CREDITO") {
+        agg.packsCredit += Number(r.packages || 0);
+        agg.salesCredit += Number(r.amount || 0);
+        agg.commCredit += Number(r.commission || 0);
+      } else {
+        agg.packsCash += Number(r.packages || 0);
+        agg.salesCash += Number(r.amount || 0);
+        agg.commCash += Number(r.commission || 0);
+      }
+    }
+
+    const arr = Array.from(map.values()).map((a) => ({
+      ...a,
+      packsCash: round3(a.packsCash),
+      packsCredit: round3(a.packsCredit),
+      salesCash: round2(a.salesCash),
+      salesCredit: round2(a.salesCredit),
+      commCash: round2(a.commCash),
+      commCredit: round2(a.commCredit),
+    }));
+
+    if (groupBy === "DIA") arr.sort((a, b) => (a.key < b.key ? 1 : -1));
+    else
+      arr.sort(
+        (a, b) => b.salesCash + b.salesCredit - (a.salesCash + a.salesCredit)
+      );
+
+    return arr;
+  }, [filteredRows, groupBy]);
+
+  const detailRows = useMemo(() => {
+    if (!detailKey) return [];
+    const g = grouped.find((x) => x.key === detailKey);
+    return g?.rows || [];
+  }, [detailKey, grouped]);
+
+  const detailProductSummary = useMemo(() => {
+    const map: Record<
+      string,
+      {
+        productName: string;
+        packsCash: number;
+        packsCredit: number;
+        salesCash: number;
+        salesCredit: number;
+        commCash: number;
+        commCredit: number;
+      }
+    > = {};
+
+    for (const r of detailRows) {
+      const k = r.productName || "(sin nombre)";
+      if (!map[k]) {
+        map[k] = {
+          productName: k,
+          packsCash: 0,
+          packsCredit: 0,
+          salesCash: 0,
+          salesCredit: 0,
+          commCash: 0,
+          commCredit: 0,
+        };
+      }
+      if (r.type === "CREDITO") {
+        map[k].packsCredit += Number(r.packages || 0);
+        map[k].salesCredit += Number(r.amount || 0);
+        map[k].commCredit += Number(r.commission || 0);
+      } else {
+        map[k].packsCash += Number(r.packages || 0);
+        map[k].salesCash += Number(r.amount || 0);
+        map[k].commCash += Number(r.commission || 0);
+      }
+    }
+
+    return Object.values(map)
+      .map((x) => ({
+        ...x,
+        packsCash: round3(x.packsCash),
+        packsCredit: round3(x.packsCredit),
+        salesCash: round2(x.salesCash),
+        salesCredit: round2(x.salesCredit),
+        commCash: round2(x.commCash),
+        commCredit: round2(x.commCredit),
+      }))
+      .sort(
+        (a, b) => b.salesCash + b.salesCredit - (a.salesCash + a.salesCredit)
+      );
+  }, [detailRows]);
+
+  const arSummary = useMemo(() => {
+    const byCustomer: Record<
+      string,
+      { customerId: string; name: string; balance: number; lastPayment: string }
+    > = {};
+
+    const nameOf = (id: string) => (customersMap[id] || "").trim() || id;
+
+    for (const m of movements) {
+      const cid = String(m.customerId || "").trim();
+      if (!cid) continue;
+      const d = String(m.date || "");
+      if (d && d > endDate) continue;
+
+      if (!byCustomer[cid]) {
+        byCustomer[cid] = {
+          customerId: cid,
+          name: nameOf(cid),
+          balance: 0,
+          lastPayment: "",
+        };
+      }
+
+      const amt = Number(m.amount || 0);
+      if (m.type === "CARGO") byCustomer[cid].balance += amt;
+      if (m.type === "ABONO") {
+        byCustomer[cid].balance -= amt;
+        if (!byCustomer[cid].lastPayment || d > byCustomer[cid].lastPayment) {
+          byCustomer[cid].lastPayment = d;
+        }
+      }
+    }
+
+    const list = Object.values(byCustomer)
+      .map((x) => ({ ...x, balance: round2(x.balance) }))
+      .filter((x) => x.balance > 0)
+      .sort((a, b) => b.balance - a.balance);
+
+    const totalPending = round2(list.reduce((s, x) => s + x.balance, 0));
+
+    return {
+      count: list.length,
+      totalPending,
+      list: list.slice(0, 20),
+    };
+  }, [movements, customersMap, endDate]);
+
+  const handleDownloadPDF = async () => {
+    if (!pdfRef.current) return;
+    pdfRef.current.classList.add("force-pdf-colors");
+    try {
+      const canvas = await html2canvas(pdfRef.current, {
+        backgroundColor: "#ffffff",
+      });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF();
+      pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
+      pdf.save(`data_center_dulces_${startDate}_a_${endDate}.pdf`);
+    } finally {
+      pdfRef.current.classList.remove("force-pdf-colors");
+    }
+  };
+
+  const exportCSV = () => {
+    const headers = [
+      "date",
+      "processedDate",
+      "status",
+      "type",
+      "vendorId",
+      "vendorName",
+      "branch",
+      "productName",
+      "packages",
+      "amount",
+      "commission",
+      "customerId",
+      "customerName",
+    ];
+
+    const lines = [
+      headers.join(","),
+      ...filteredRows.map((r) =>
+        [
+          r.date,
+          r.processedDate || "",
+          r.status,
+          r.type,
+          r.vendorId,
+          `"${String(r.vendorName || "").replace(/"/g, '""')}"`,
+          r.branch || "",
+          `"${String(r.productName || "").replace(/"/g, '""')}"`,
+          qty3(r.packages),
+          money(r.amount),
+          money(r.commission),
+          r.customerId || "",
+          `"${String(displayCustomerName(r) || "").replace(/"/g, '""')}"`,
+        ].join(",")
+      ),
+    ];
+
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `data_center_dulces_${startDate}_a_${endDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (!isAdmin) {
+    return (
+      <div className="max-w-5xl mx-auto p-6 bg-white rounded-2xl shadow-2xl">
+        <h2 className="text-xl font-bold">Data Center - Dulces</h2>
+        <p className="text-sm text-gray-600 mt-2">No autorizado.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
+      <div className="flex items-center gap-3 mb-4">
+        <h2 className="text-2xl font-bold">Data Center - Dulces</h2>
+        <div className="ml-auto flex gap-2">
+          <button
+            onClick={handleDownloadPDF}
+            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+          >
+            Exportar PDF
+          </button>
+          <button
+            onClick={exportCSV}
+            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-black"
+          >
+            Exportar CSV
+          </button>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="rounded-2xl border border-gray-100 p-4 mb-4 shadow-sm bg-white">
+        <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div>
+            <label className="block text-sm">Desde</label>
+            <input
+              type="date"
+              className="border rounded px-2 py-1 w-full"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm">Hasta</label>
+            <input
+              type="date"
+              className="border rounded px-2 py-1 w-full"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm">Estado</label>
+            <select
+              className="border rounded px-2 py-1 w-full"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+            >
+              <option value="TODAS">Todas</option>
+              <option value="FLOTANTE">Flotante</option>
+              <option value="PROCESADA">Procesada</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm">Tipo</label>
+            <select
+              className="border rounded px-2 py-1 w-full"
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value as any)}
+            >
+              <option value="AMBAS">Ambas</option>
+              <option value="CASH">Cash</option>
+              <option value="CREDITO">Crédito</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm">Vendedor</label>
+            <select
+              className="border rounded px-2 py-1 w-full"
+              value={vendorFilter}
+              onChange={(e) => setVendorFilter(e.target.value)}
+            >
+              <option value="ALL">Todos</option>
+              {sellers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm">Sucursal</label>
+            <select
+              className="border rounded px-2 py-1 w-full"
+              value={branchFilter}
+              onChange={(e) => setBranchFilter(e.target.value as any)}
+            >
+              <option value="ALL">Todas</option>
+              <option value="RIVAS">Rivas</option>
+              <option value="SAN_JORGE">San Jorge</option>
+              <option value="ISLA">Isla</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm">Producto (opcional)</label>
+            <input
+              className="border rounded px-2 py-1 w-full"
+              value={productFilter}
+              onChange={(e) => setProductFilter(e.target.value)}
+              placeholder="Ej: Conitos"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm">Cliente (opcional)</label>
+            <input
+              className="border rounded px-2 py-1 w-full"
+              value={customerFilter}
+              onChange={(e) => setCustomerFilter(e.target.value)}
+              placeholder="Ej: Javier"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm">Monto min</label>
+            <input
+              className="border rounded px-2 py-1 w-full"
+              value={minAmount}
+              onChange={(e) => setMinAmount(e.target.value)}
+              placeholder="0"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm">Monto max</label>
+            <input
+              className="border rounded px-2 py-1 w-full"
+              value={maxAmount}
+              onChange={(e) => setMaxAmount(e.target.value)}
+              placeholder="999999"
+            />
+          </div>
+
+          <div className="md:col-span-2 lg:col-span-2">
+            <label className="block text-sm">Agrupar por</label>
+            <select
+              className="border rounded px-2 py-1 w-full"
+              value={groupBy}
+              onChange={(e) => {
+                setDetailKey("");
+                setGroupBy(e.target.value as any);
+              }}
+            >
+              <option value="DIA">Día</option>
+              <option value="VENDEDOR">Vendedor</option>
+              <option value="PRODUCTO">Producto</option>
+              <option value="SUCURSAL">Sucursal</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div ref={pdfRef}>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">Paquetes cash</div>
+            <div className="text-2xl font-bold">{qty3(kpis.packsCash)}</div>
+            <div className="text-xs text-gray-500 mt-1">
+              {startDate} → {endDate}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">Paquetes crédito</div>
+            <div className="text-2xl font-bold">{qty3(kpis.packsCredit)}</div>
+            <div className="text-xs text-gray-500 mt-1">
+              {startDate} → {endDate}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">Ventas totales</div>
+            <div className="text-2xl font-bold">C${money(kpis.salesTotal)}</div>
+            <div className="text-xs text-gray-500 mt-1">
+              Cash: C${money(kpis.salesCash)} • Crédito: C$
+              {money(kpis.salesCredit)}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">Comisión</div>
+            <div className="text-2xl font-bold">
+              C${money(kpis.commCash + kpis.commCredit)}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Cash: C${money(kpis.commCash)} • Crédito: C$
+              {money(kpis.commCredit)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Gross Profit total (órdenes maestras)
+            </div>
+            <div className="text-2xl font-bold">
+              C${money(expectedAndGross.grossTotal)}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              R: {money(expectedAndGross.grossRivas)} • SJ:{" "}
+              {money(expectedAndGross.grossSanJorge)} • I:{" "}
+              {money(expectedAndGross.grossIsla)}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Expected Total (Rivas/SJ/Isla)
+            </div>
+            <div className="text-sm mt-2 space-y-1">
+              <div className="flex justify-between">
+                <span>Rivas</span>
+                <strong>C${money(expectedAndGross.expectedRivas)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>San Jorge</span>
+                <strong>C${money(expectedAndGross.expectedSanJorge)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Isla</span>
+                <strong>C${money(expectedAndGross.expectedIsla)}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Actual ventas por sucursal
+            </div>
+            <div className="text-sm mt-2 space-y-1">
+              <div className="flex justify-between">
+                <span>Rivas</span>
+                <strong>C${money(actualByBranch.RIVAS.sales)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>San Jorge</span>
+                <strong>C${money(actualByBranch.SAN_JORGE.sales)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Isla</span>
+                <strong>C${money(actualByBranch.ISLA.sales)}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">Diferencia vs expected</div>
+            <div className="text-sm mt-2 space-y-1">
+              <div className="flex justify-between">
+                <span>Rivas</span>
+                <strong>C${money(diffVsExpected.RIVAS)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>San Jorge</span>
+                <strong>C${money(diffVsExpected.SAN_JORGE)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span>Isla</span>
+                <strong>C${money(diffVsExpected.ISLA)}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ✅ NUEVOS KPIs pedidos */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Total facturado a precio proveedor (órdenes maestras)
+            </div>
+            <div className="text-2xl font-bold">
+              C${money(providerAndPackagesKpis.providerTotalMaster)}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {startDate} → {endDate}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Total facturado a precio proveedor (órdenes vendedor)
+            </div>
+            <div className="text-2xl font-bold">
+              C${money(providerAndPackagesKpis.providerTotalVendor)}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {startDate} → {endDate}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Paquetes ordenados (maestras)
+            </div>
+            <div className="text-2xl font-bold">
+              {qty3(providerAndPackagesKpis.orderedPacksMaster)}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Restantes (período):{" "}
+              <strong>
+                {qty3(providerAndPackagesKpis.remainingPacksMaster)}
+              </strong>
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Existencia global (todas):{" "}
+              <strong>{qty3(globalStockKpis.masterRemainingPackages)}</strong>
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Paquetes ordenados (órdenes vendedor)
+            </div>
+            <div className="text-2xl font-bold">
+              {qty3(providerAndPackagesKpis.orderedPacksVendor)}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Restantes (período):{" "}
+              <strong>
+                {qty3(providerAndPackagesKpis.remainingPacksVendor)}
+              </strong>
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Existencia global (todas):{" "}
+              <strong>{qty3(globalStockKpis.vendorRemainingPackages)}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Paquetes ordenados por vendedor (período)
+            </div>
+            {providerAndPackagesKpis.vendorRowsOrdered.length === 0 ? (
+              <div className="text-sm text-gray-500 mt-2">—</div>
+            ) : (
+              <div className="mt-2 space-y-1 max-h-36 overflow-auto pr-1">
+                {providerAndPackagesKpis.vendorRowsOrdered.map((v) => (
+                  <div
+                    key={v.sellerId}
+                    className="flex justify-between text-sm"
+                  >
+                    <span className="truncate">{v.sellerName}</span>
+                    <strong className="ml-2">{qty3(v.ordered)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Paquetes existentes por vendedor (período)
+            </div>
+            {providerAndPackagesKpis.vendorRowsRemaining.length === 0 ? (
+              <div className="text-sm text-gray-500 mt-2">—</div>
+            ) : (
+              <div className="mt-2 space-y-1 max-h-36 overflow-auto pr-1">
+                {providerAndPackagesKpis.vendorRowsRemaining.map((v) => (
+                  <div
+                    key={v.sellerId}
+                    className="flex justify-between text-sm"
+                  >
+                    <span className="truncate">{v.sellerName}</span>
+                    <strong className="ml-2">{qty3(v.remaining)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* KPI vendedores comisión cash / crédito */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Vendedores (comisión cash)
+            </div>
+            {vendorsKpi.cashArr.length === 0 ? (
+              <div className="text-sm text-gray-500 mt-2">—</div>
+            ) : (
+              <div className="mt-2 space-y-1 max-h-36 overflow-auto pr-1">
+                {vendorsKpi.cashArr.map((v) => (
+                  <div
+                    key={v.vendorId}
+                    className="flex justify-between text-sm"
+                  >
+                    <span className="truncate">{v.name}</span>
+                    <strong className="ml-2">C${money(v.total)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+            <div className="text-xs text-gray-600">
+              Vendedores (comisión crédito)
+            </div>
+            {vendorsKpi.creditArr.length === 0 ? (
+              <div className="text-sm text-gray-500 mt-2">—</div>
+            ) : (
+              <div className="mt-2 space-y-1 max-h-36 overflow-auto pr-1">
+                {vendorsKpi.creditArr.map((v) => (
+                  <div
+                    key={v.vendorId}
+                    className="flex justify-between text-sm"
+                  >
+                    <span className="truncate">{v.name}</span>
+                    <strong className="ml-2">C${money(v.total)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Cartera */}
+        <div className="border rounded-2xl p-4 mb-6 shadow-sm bg-white border-gray-100">
+          <h3 className="font-semibold mb-2">
+            Cartera (saldo pendiente hasta {endDate})
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm mb-3">
+            <div>
+              Clientes con saldo: <strong>{arSummary.count}</strong>
+            </div>
+            <div>
+              Saldo total pendiente:{" "}
+              <strong>C${money(arSummary.totalPending)}</strong>
+            </div>
+            <div className="text-gray-500">*Muestra top 20 por monto</div>
+          </div>
+          {arSummary.list.length === 0 ? (
+            <div className="text-sm text-gray-500">—</div>
+          ) : (
+            <table className="min-w-full border text-sm">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="border p-2">Cliente</th>
+                  <th className="border p-2">Saldo</th>
+                  <th className="border p-2">Último abono</th>
+                </tr>
+              </thead>
+              <tbody>
+                {arSummary.list.map((c) => (
+                  <tr key={c.customerId} className="text-center">
+                    <td className="border p-1">{c.name}</td>
+                    <td className="border p-1">C${money(c.balance)}</td>
+                    <td className="border p-1">{c.lastPayment || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Tabla principal */}
+        <div className="mb-3 flex items-center gap-2">
+          <h3 className="font-semibold">
+            Tabla principal (Agrupar por: {groupBy})
+          </h3>
+          <span className="text-xs text-gray-500 ml-auto">
+            Click en “Ver detalle” para drill-down
+          </span>
+        </div>
+
+        {loading ? (
+          <p>Cargando...</p>
+        ) : (
+          <table className="min-w-full border text-sm mb-6 shadow-2xl">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border p-2">
+                  {groupBy === "DIA"
+                    ? "Día"
+                    : groupBy === "VENDEDOR"
+                    ? "Vendedor"
+                    : groupBy === "PRODUCTO"
+                    ? "Producto"
+                    : "Sucursal"}
+                </th>
+                <th className="border p-2">Paquetes cash</th>
+                <th className="border p-2">Paquetes crédito</th>
+                <th className="border p-2">Ventas cash</th>
+                <th className="border p-2">Ventas crédito</th>
+                <th className="border p-2">Comisión cash</th>
+                <th className="border p-2">Comisión crédito</th>
+                <th className="border p-2">Opciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grouped.map((g) => (
+                <tr key={g.key} className="text-center">
+                  <td className="border p-1">{g.label}</td>
+                  <td className="border p-1">{qty3(g.packsCash)}</td>
+                  <td className="border p-1">{qty3(g.packsCredit)}</td>
+                  <td className="border p-1">C${money(g.salesCash)}</td>
+                  <td className="border p-1">C${money(g.salesCredit)}</td>
+                  <td className="border p-1">C${money(g.commCash)}</td>
+                  <td className="border p-1">C${money(g.commCredit)}</td>
+                  <td className="border p-1">
+                    <button
+                      className="text-xs bg-gray-800 text-white px-2 py-1 rounded hover:bg-black"
+                      onClick={() => setDetailKey(g.key)}
+                    >
+                      Ver detalle
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {grouped.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="p-3 text-center text-gray-500">
+                    Sin datos con los filtros seleccionados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {/* Drill-down */}
+        {detailKey && (
+          <div className="rounded-2xl shadow-lg p-4 bg-white border-solid border-2 border-gray-100">
+            <div className="flex items-center gap-3 mb-2">
+              <h2 className="text-xl font-semibold">
+                Detalle •{" "}
+                {grouped.find((x) => x.key === detailKey)?.label || detailKey}
+              </h2>
+              <button
+                onClick={() => setDetailKey("")}
+                className="text-sm px-2 py-1 border rounded"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-sm mb-4">
+              <div>
+                Total Ventas cash:{" "}
+                <strong>
+                  C$
+                  {money(
+                    detailRows
+                      .filter((r) => r.type === "CONTADO")
+                      .reduce((s, r) => s + Number(r.amount || 0), 0)
+                  )}
+                </strong>
+              </div>
+              <div>
+                Total Ventas crédito:{" "}
+                <strong>
+                  C$
+                  {money(
+                    detailRows
+                      .filter((r) => r.type === "CREDITO")
+                      .reduce((s, r) => s + Number(r.amount || 0), 0)
+                  )}
+                </strong>
+              </div>
+              <div>
+                Total paquetes cash:{" "}
+                <strong>
+                  {qty3(
+                    detailRows
+                      .filter((r) => r.type === "CONTADO")
+                      .reduce((s, r) => s + Number(r.packages || 0), 0)
+                  )}
+                </strong>
+              </div>
+              <div>
+                Total paquetes crédito:{" "}
+                <strong>
+                  {qty3(
+                    detailRows
+                      .filter((r) => r.type === "CREDITO")
+                      .reduce((s, r) => s + Number(r.packages || 0), 0)
+                  )}
+                </strong>
+              </div>
+            </div>
+
+            <h3 className="font-semibold mb-2">Ventas incluidas</h3>
+            <table className="min-w-full border text-sm mb-4">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="border p-2">Vendedor</th>
+                  <th className="border p-2">Producto</th>
+                  <th className="border p-2">Tipo</th>
+                  <th className="border p-2">Sucursal</th>
+                  <th className="border p-2">Paquetes</th>
+                  <th className="border p-2">Monto</th>
+                  <th className="border p-2">Comisión</th>
+                  <th className="border p-2">Fecha venta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detailRows.map((r) => (
+                  <tr key={r.id} className="text-center">
+                    <td className="border p-1">{r.vendorName}</td>
+                    <td className="border p-1">{r.productName}</td>
+                    <td className="border p-1">
+                      {r.type === "CREDITO" ? "Crédito" : "Cash"}
+                    </td>
+                    <td className="border p-1">{r.branch || "—"}</td>
+                    <td className="border p-1">{qty3(r.packages)}</td>
+                    <td className="border p-1">C${money(r.amount)}</td>
+                    <td className="border p-1">C${money(r.commission)}</td>
+                    <td className="border p-1">{r.date}</td>
+                  </tr>
+                ))}
+                {detailRows.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="p-3 text-center text-gray-500">
+                      Sin detalle.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+
+            <h3 className="font-semibold mb-2">Consolidado por producto</h3>
+            <table className="min-w-full border text-sm">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="border p-2">Producto</th>
+                  <th className="border p-2">Total paquetes cash</th>
+                  <th className="border p-2">Total paquetes crédito</th>
+                  <th className="border p-2">Ventas cash</th>
+                  <th className="border p-2">Ventas crédito</th>
+                  <th className="border p-2">Comisión cash</th>
+                  <th className="border p-2">Comisión crédito</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detailProductSummary.map((p) => (
+                  <tr key={p.productName} className="text-center">
+                    <td className="border p-1">{p.productName}</td>
+                    <td className="border p-1">{qty3(p.packsCash)}</td>
+                    <td className="border p-1">{qty3(p.packsCredit)}</td>
+                    <td className="border p-1">C${money(p.salesCash)}</td>
+                    <td className="border p-1">C${money(p.salesCredit)}</td>
+                    <td className="border p-1">C${money(p.commCash)}</td>
+                    <td className="border p-1">C${money(p.commCredit)}</td>
+                  </tr>
+                ))}
+                {detailProductSummary.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-3 text-center text-gray-500">
+                      Sin consolidado.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {message && <p className="mt-3 text-sm">{message}</p>}
+    </div>
+  );
+}

@@ -43,13 +43,14 @@ import ExpensesCandies from "./components/Candies/ExpensesCandies";
 import TransactionCandies from "./components/Candies/TransactionCandies";
 import DashboardCandies from "./components/Candies/DashboardCandies";
 import Vendors from "./components/Candies/SubInventarios/Vendedores";
-import ProductsVendors from "./components/Candies/SubInventarios/OrdenVendedor";
+import OrdenVendedor from "./components/Candies/SubInventarios/OrdenVendedor";
 import ProductMainOrder from "./components/Candies/OrdenMaestra";
 import InventoryMainOrders from "./components/Candies/InventarioOrdenesMaestras";
 import CierreVentasDulces from "./components/Candies/CierreVentasDulces";
 import ConsolidadoVendedores from "./components/Candies/ConsolidadoVendedores";
 import BillingCandies from "./components/Candies/BillingCandies";
 import ReporteCierres from "./components/Candies/ReporteCierres";
+import DataCenterCandies from "./components/Candies/DataCenter";
 
 // Definición de roles
 type Role =
@@ -242,6 +243,14 @@ export default function App() {
           />
           {/* ======== CANDIES ======== */}
           <Route
+            path="datacenter"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+                <DataCenterCandies />
+              </PrivateRoute>
+            }
+          />
+          <Route
             path="productsCandies"
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
@@ -286,7 +295,11 @@ export default function App() {
             path="customersCandies"
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
-                <CustomersCandies />
+                <CustomersCandies
+                  role={role}
+                  currentUserEmail={currentUserEmail}
+                  sellerCandyId={sellerCandyId}
+                />
               </PrivateRoute>
             }
           />
@@ -342,7 +355,7 @@ export default function App() {
             path="productsVendorsCandies"
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
-                <ProductsVendors
+                <OrdenVendedor
                   role={role}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}

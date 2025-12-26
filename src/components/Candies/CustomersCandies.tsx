@@ -98,15 +98,23 @@ type RoleProp =
 
 interface CustomersCandyProps {
   role?: RoleProp;
-  sellerCandyId?: string;
+  sellerCandyId?: string; // id del vendedor de dulces asociado al usuario
+  currentUserEmail?: string;
 }
 
 export default function CustomersCandy({
   role = "",
   sellerCandyId = "",
+  currentUserEmail,
 }: CustomersCandyProps) {
-  const isVendor = role === "vendedor_dulces";
-  const isAdmin = role === "admin";
+  // ✅ FIX: normalizar role + sellerCandyId para que no “caiga” en modo admin por espacios/formatos
+  const roleSafe = String(role || "")
+    .trim()
+    .toLowerCase();
+  const sellerIdSafe = String(sellerCandyId || "").trim();
+
+  const isVendor = roleSafe === "vendedor_dulces";
+  const isAdmin = roleSafe === "admin";
 
   // ✅ lista de vendedores activos
   const [sellers, setSellers] = useState<SellerRow[]>([]);
@@ -219,6 +227,15 @@ export default function CustomersCandy({
       try {
         setLoading(true);
 
+        // ✅ FIX: si es vendedor y no hay sellerCandyId, no cargar para que NO aparezcan clientes “generales”
+        if (isVendor && !sellerIdSafe) {
+          setRows([]);
+          setMsg(
+            "❌ Este usuario no tiene vendedor asociado (sellerCandyId vacío)."
+          );
+          return;
+        }
+
         // ✅ vendedores (solo activos)
         const vSnap = await getDocs(collection(db, "sellers_candies"));
         const vList: SellerRow[] = [];
@@ -234,7 +251,7 @@ export default function CustomersCandy({
         const qC = isVendor
           ? query(
               collection(db, "customers_candies"),
-              where("vendorId", "==", sellerCandyId),
+              where("vendorId", "==", sellerIdSafe),
               orderBy("createdAt", "desc")
             )
           : query(
@@ -290,7 +307,7 @@ export default function CustomersCandy({
         setLoading(false);
       }
     })();
-  }, [isVendor, sellerCandyId]);
+  }, [isVendor, sellerIdSafe]);
 
   const resetForm = () => {
     setName("");
@@ -320,7 +337,9 @@ export default function CustomersCandy({
     }
 
     // ✅ vendor final
-    const finalVendorId = isVendor ? sellerCandyId : String(vendorId || "");
+    const finalVendorId = isVendor
+      ? sellerIdSafe
+      : String(vendorId || "").trim();
     const finalVendorName = finalVendorId
       ? sellers.find((s) => s.id === finalVendorId)?.name || ""
       : "";
@@ -373,6 +392,14 @@ export default function CustomersCandy({
   };
 
   const startEdit = (c: CustomerRow) => {
+    // ✅ FIX: vendedores NO pueden editar clientes desde listado
+    if (isVendor) {
+      setMsg(
+        "❌ No permitido: vendedores no editan clientes desde el listado."
+      );
+      return;
+    }
+
     setEditingId(c.id);
     setEName(c.name);
     setEPhone(c.phone || "+505 ");
@@ -399,6 +426,12 @@ export default function CustomersCandy({
   };
 
   const saveEdit = async () => {
+    // ✅ FIX: vendedores NO pueden editar clientes desde listado
+    if (isVendor) {
+      setMsg("❌ No permitido.");
+      return;
+    }
+
     if (!editingId) return;
 
     const cleanPhone = normalizePhone(ePhone);
@@ -410,10 +443,10 @@ export default function CustomersCandy({
     // ✅ reglas de asociación
     const current = rows.find((x) => x.id === editingId);
     const currentVendor = String(current?.vendorId || "");
-    const nextVendor = isVendor ? sellerCandyId : String(eVendorId || "");
+    const nextVendor = isVendor ? sellerIdSafe : String(eVendorId || "");
 
     // vendedor NO puede tocar clientes de otros
-    if (isVendor && currentVendor && currentVendor !== sellerCandyId) {
+    if (isVendor && currentVendor && currentVendor !== sellerIdSafe) {
       setMsg("❌ Este cliente pertenece a otro vendedor.");
       return;
     }
@@ -431,7 +464,7 @@ export default function CustomersCandy({
       return;
     }
 
-    const finalVendorId = isVendor ? sellerCandyId : String(eVendorId || "");
+    const finalVendorId = isVendor ? sellerIdSafe : String(eVendorId || "");
     const finalVendorName = finalVendorId
       ? sellers.find((s) => s.id === finalVendorId)?.name || ""
       : "";
@@ -818,7 +851,7 @@ export default function CustomersCandy({
           className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
           onClick={() => {
             setShowCreateModal(true);
-            if (isVendor) setVendorId(sellerCandyId);
+            if (isVendor) setVendorId(sellerIdSafe);
           }}
           type="button"
         >
@@ -899,7 +932,7 @@ export default function CustomersCandy({
                       {isEditing ? (
                         <select
                           className="w-full border p-1 rounded text-xs"
-                          value={isVendor ? sellerCandyId : eVendorId}
+                          value={isVendor ? sellerIdSafe : eVendorId}
                           onChange={(e) => setEVendorId(e.target.value)}
                           disabled={isVendor}
                           title="Vendedor asociado"
@@ -1143,7 +1176,7 @@ export default function CustomersCandy({
                   </label>
                   <select
                     className="w-full border p-2 rounded"
-                    value={isVendor ? sellerCandyId : vendorId}
+                    value={isVendor ? sellerIdSafe : vendorId}
                     onChange={(e) => setVendorId(e.target.value)}
                     disabled={isVendor}
                   >
