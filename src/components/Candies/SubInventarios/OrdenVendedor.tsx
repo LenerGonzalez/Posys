@@ -572,36 +572,6 @@ export default function VendorCandyOrders({
         setRows(invList);
         await loadTransferAgg();
 
-        // ===========================
-        //   TRASLADOS (LOG)
-        // ===========================
-        const tSnap = await getDocs(
-          query(collection(db, "candy_transfers"), orderBy("createdAt", "desc"))
-        );
-
-        const agg: Record<string, { out: number; in: number }> = {};
-
-        tSnap.forEach((d) => {
-          const x = d.data() as any;
-
-          const fromKey = String(x.fromOrderKey || "");
-          const toKey = String(x.toOrderKey || "");
-          const packs = Number(x.packagesMoved || 0);
-
-          if (!(packs > 0)) return;
-
-          if (fromKey) {
-            agg[fromKey] = agg[fromKey] || { out: 0, in: 0 };
-            agg[fromKey].out += packs;
-          }
-
-          if (toKey) {
-            agg[toKey] = agg[toKey] || { out: 0, in: 0 };
-            agg[toKey].in += packs;
-          }
-        });
-
-        setTransferAgg(agg);
       } catch (e) {
         console.error(e);
         setMsg("❌ Error cargando datos de vendedores / pedidos.");
@@ -609,7 +579,7 @@ export default function VendorCandyOrders({
         setLoading(false);
       }
     })();
-  }, [refreshKey, , role, sellerCandyId]);
+  }, [refreshKey, role, sellerCandyId]);
 
   // ===== Filtrado por rol (solo sus pedidos si es vendedor de dulces) =====
   const rowsByRole = useMemo(() => {
