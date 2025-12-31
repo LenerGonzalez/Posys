@@ -12,6 +12,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  runTransaction,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
@@ -122,6 +123,8 @@ interface OrderSummaryRow {
   totalRemainingPackages: number;
   subtotal: number;
   totalVendor: number;
+  transferredOut: number;
+  transferredIn: number;
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -161,6 +164,40 @@ type MasterAllocation = {
 
 const floor = (n: any) => Math.max(0, Math.floor(Number(n || 0)));
 
+// ===== NUEVO: Traslados =====
+type TransferRow = {
+  id: string;
+  createdAt?: Timestamp;
+  date?: string; // yyyy-MM-dd (guardada)
+  createdByEmail?: string;
+  createdByName?: string;
+
+  productId?: string;
+  productName?: string;
+
+  packagesMoved?: number;
+
+  providerPrice?: number;
+  unitPriceRivas?: number;
+  unitPriceIsla?: number;
+
+  toSellerId?: string;
+  toSellerName?: string;
+
+  toOrderKey?: string; // orderId / orderKey
+  toOrderLabel?: string;
+
+  comment?: string;
+
+  fromSellerId?: string;
+  fromSellerName?: string;
+  fromOrderKey?: string;
+  fromOrderLabel?: string;
+
+  fromVendorRowId?: string; // doc id inventory_candies_sellers (origen)
+  toVendorRowId?: string; // doc id inventory_candies_sellers (destino)
+};
+
 export default function VendorCandyOrders({
   role = "",
   sellerCandyId = "",
@@ -172,6 +209,10 @@ export default function VendorCandyOrders({
   const isVendor = role === "vendedor_dulces";
   const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
   const isReadOnly = !isAdmin && isVendor;
+
+  const [transferAgg, setTransferAgg] = useState<
+    Record<string, { out: number; in: number }>
+  >({});
 
   // ===== Catálogos =====
   const [sellers, setSellers] = useState<Seller[]>([]);
@@ -249,6 +290,79 @@ export default function VendorCandyOrders({
       ) || null
     );
   }, [isVendor, currentEmailNorm, sellers]);
+
+  const currentUserName = useMemo(() => {
+    // Para guardar "Usuario que la hizo nombre"
+    // Si el email coincide con un seller, usamos su nombre.
+    const fromSeller =
+      sellers.find(
+        (s) => (s.email || "").trim().toLowerCase() === currentEmailNorm
+      ) || null;
+    return fromSeller?.name || (currentUserEmail || "").trim() || "—";
+  }, [sellers, currentEmailNorm, currentUserEmail]);
+
+  const loadTransferAgg = async () => {
+    try {
+      const colRef = collection(db, "inventory_transfers_candies");
+
+      // ✅ Admin ve todo
+      if (!isVendor) {
+        const snap = await getDocs(colRef);
+        const agg: Record<string, { out: number; in: number }> = {};
+
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          const packs = Number(x.packagesMoved || 0);
+          const fromKey = String(x.fromOrderKey || "");
+          const toKey = String(x.toOrderKey || "");
+
+          if (fromKey) {
+            agg[fromKey] = agg[fromKey] || { out: 0, in: 0 };
+            agg[fromKey].out += packs;
+          }
+          if (toKey) {
+            agg[toKey] = agg[toKey] || { out: 0, in: 0 };
+            agg[toKey].in += packs;
+          }
+        });
+
+        setTransferAgg(agg);
+        return;
+      }
+
+      // ✅ Vendedor: Firestore NO permite OR, así que hacemos 2 queries y unimos
+      const qFrom = query(colRef, where("fromSellerId", "==", sellerCandyId));
+      const qTo = query(colRef, where("toSellerId", "==", sellerCandyId));
+
+      const [sFrom, sTo] = await Promise.all([getDocs(qFrom), getDocs(qTo)]);
+
+      const agg: Record<string, { out: number; in: number }> = {};
+
+      const apply = (docs: any[], mode: "out" | "in") => {
+        docs.forEach((d) => {
+          const x = d.data() as any;
+          const packs = Number(x.packagesMoved || 0);
+          const key =
+            mode === "out"
+              ? String(x.fromOrderKey || "")
+              : String(x.toOrderKey || "");
+
+          if (!key) return;
+          agg[key] = agg[key] || { out: 0, in: 0 };
+          agg[key][mode] += packs;
+        });
+      };
+
+      apply(sFrom.docs, "out");
+      apply(sTo.docs, "in");
+
+      setTransferAgg(agg);
+    } catch (e) {
+      console.error(e);
+      // si falla, no rompas nada
+      setTransferAgg({});
+    }
+  };
 
   // ===== Carga de datos =====
   useEffect(() => {
@@ -456,6 +570,38 @@ export default function VendorCandyOrders({
         });
 
         setRows(invList);
+        await loadTransferAgg();
+
+        // ===========================
+        //   TRASLADOS (LOG)
+        // ===========================
+        const tSnap = await getDocs(
+          query(collection(db, "candy_transfers"), orderBy("createdAt", "desc"))
+        );
+
+        const agg: Record<string, { out: number; in: number }> = {};
+
+        tSnap.forEach((d) => {
+          const x = d.data() as any;
+
+          const fromKey = String(x.fromOrderKey || "");
+          const toKey = String(x.toOrderKey || "");
+          const packs = Number(x.packagesMoved || 0);
+
+          if (!(packs > 0)) return;
+
+          if (fromKey) {
+            agg[fromKey] = agg[fromKey] || { out: 0, in: 0 };
+            agg[fromKey].out += packs;
+          }
+
+          if (toKey) {
+            agg[toKey] = agg[toKey] || { out: 0, in: 0 };
+            agg[toKey].in += packs;
+          }
+        });
+
+        setTransferAgg(agg);
       } catch (e) {
         console.error(e);
         setMsg("❌ Error cargando datos de vendedores / pedidos.");
@@ -463,7 +609,7 @@ export default function VendorCandyOrders({
         setLoading(false);
       }
     })();
-  }, [refreshKey]);
+  }, [refreshKey, , role, sellerCandyId]);
 
   // ===== Filtrado por rol (solo sus pedidos si es vendedor de dulces) =====
   const rowsByRole = useMemo(() => {
@@ -471,7 +617,7 @@ export default function VendorCandyOrders({
       return rows.filter((r) => r.sellerId === currentSeller.id);
     }
     return rows;
-  }, [rows, isVendor, currentSeller]);
+  }, [rows, isVendor, currentSeller, sellerId]);
 
   // ===== Resumen por pedido (agrupado) =====
   const orders: OrderSummaryRow[] = useMemo(() => {
@@ -488,6 +634,8 @@ export default function VendorCandyOrders({
           : "");
 
       if (!existing) {
+        const tr = transferAgg[key] || { out: 0, in: 0 };
+
         map[key] = {
           orderKey: key,
           sellerId: r.sellerId,
@@ -497,6 +645,10 @@ export default function VendorCandyOrders({
           totalRemainingPackages: r.remainingPackages,
           subtotal: r.subtotal,
           totalVendor: r.totalVendor,
+
+          // ✅ NUEVO
+          transferredOut: tr.out,
+          transferredIn: tr.in,
         };
       } else {
         existing.totalPackages += r.packages;
@@ -504,11 +656,28 @@ export default function VendorCandyOrders({
         existing.subtotal += r.subtotal;
         existing.totalVendor += r.totalVendor;
         if (dateStr > existing.date) existing.date = dateStr;
+
+        // ❗ NO sumés transferredOut/In aquí, porque ya está por pedido (orderKey)
       }
     }
 
-    return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
-  }, [rowsByRole]);
+    return Object.values(map)
+      .map((o) => {
+        const agg = transferAgg[o.orderKey] || { out: 0, in: 0 };
+        return {
+          ...(o as any),
+          transferredOut: agg.out || 0,
+          transferredIn: agg.in || 0,
+        };
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [rowsByRole, transferAgg]);
+
+  const ordersByKey = useMemo(() => {
+    const m: Record<string, OrderSummaryRow> = {};
+    orders.forEach((o) => (m[o.orderKey] = o));
+    return m;
+  }, [orders]);
 
   // ===== Resumen del pedido actual (para el modal) =====
   const orderSummary = useMemo(() => {
@@ -1089,6 +1258,7 @@ export default function VendorCandyOrders({
         <td>${esc(it.productName)}</td>
         <td class="right">${esc(it.category || "")}</td>
         <td class="right">${it.packages}</td>
+
         <td class="right">${money(it.providerPrice)}</td>
         <td class="right">${money(it.subtotal)}</td>
         <td class="right">${money(it.pricePerPackage)}</td>
@@ -1286,6 +1456,365 @@ export default function VendorCandyOrders({
     }
   };
 
+  // =========================================================
+  // ===== NUEVO: MODAL TRASLADOS (crear + historial) ========
+  // =========================================================
+  const [showTransfersModal, setShowTransfersModal] = useState(false);
+  const [transfersLoading, setTransfersLoading] = useState(false);
+  const [transfersRows, setTransfersRows] = useState<TransferRow[]>([]);
+
+  const [trFromOrderKey, setTrFromOrderKey] = useState<string>("");
+  const [trFromVendorRowId, setTrFromVendorRowId] = useState<string>("");
+
+  const [trToOrderKey, setTrToOrderKey] = useState<string>("");
+  const [trToVendorRowId, setTrToVendorRowId] = useState<string>("");
+
+  const [trPackages, setTrPackages] = useState<string>("0");
+  const [trComment, setTrComment] = useState<string>("");
+
+  const [trSaving, setTrSaving] = useState(false);
+
+  const orderKeysForTransfer = useMemo(() => {
+    // Para admin: todos los pedidos existentes (según listado actual)
+    // Para vendedor: sus pedidos (ya filtrados por rowsByRole/ orders)
+    return orders.map((o) => o.orderKey);
+  }, [orders]);
+
+  const fromOrderVendorRows = useMemo(() => {
+    if (!trFromOrderKey) return [];
+    return rowsByRole.filter((r) => (r.orderId || r.id) === trFromOrderKey);
+  }, [rowsByRole, trFromOrderKey]);
+
+  const fromOrderVendorRowsWithRemaining = useMemo(() => {
+    return fromOrderVendorRows.filter(
+      (r) => Number(r.remainingPackages || 0) > 0
+    );
+  }, [fromOrderVendorRows]);
+
+  const selectedFromVendorRow = useMemo(() => {
+    if (!trFromVendorRowId) return null;
+    return rowsByRole.find((r) => r.id === trFromVendorRowId) || null;
+  }, [rowsByRole, trFromVendorRowId]);
+
+  const toOrderVendorRows = useMemo(() => {
+    if (!trToOrderKey) return [];
+    return rowsByRole.filter((r) => (r.orderId || r.id) === trToOrderKey);
+  }, [rowsByRole, trToOrderKey]);
+
+  const possibleToRowsForSelectedProduct = useMemo(() => {
+    // Solo dejamos escoger destino que tenga el MISMO productoId
+    if (!selectedFromVendorRow) return [];
+    return toOrderVendorRows.filter(
+      (r) => r.productId === selectedFromVendorRow.productId
+    );
+  }, [toOrderVendorRows, selectedFromVendorRow]);
+
+  const loadTransfers = async () => {
+    try {
+      setTransfersLoading(true);
+
+      // Admin: todo
+      // Vendedor: solo los que lo incluyan (from o to)
+      let list: TransferRow[] = [];
+
+      if (isVendor && sellerCandyId) {
+        const qFrom = query(
+          collection(db, "inventory_transfers_candies"),
+          where("fromSellerId", "==", sellerCandyId),
+          orderBy("createdAt", "desc")
+        );
+        const qTo = query(
+          collection(db, "inventory_transfers_candies"),
+          where("toSellerId", "==", sellerCandyId),
+          orderBy("createdAt", "desc")
+        );
+
+        const [s1, s2] = await Promise.all([getDocs(qFrom), getDocs(qTo)]);
+        const seen = new Set<string>();
+
+        const pushSnap = (snap: any) => {
+          snap.forEach((d: any) => {
+            if (seen.has(d.id)) return;
+            seen.add(d.id);
+            const x = d.data() as any;
+            list.push({
+              id: d.id,
+              createdAt: x.createdAt,
+              date: x.date,
+              createdByEmail: x.createdByEmail || "",
+              createdByName: x.createdByName || "",
+              productId: x.productId || "",
+              productName: x.productName || "",
+              packagesMoved: Number(x.packagesMoved || 0),
+              providerPrice: Number(x.providerPrice || 0),
+              unitPriceRivas: Number(x.unitPriceRivas || 0),
+              unitPriceIsla: Number(x.unitPriceIsla || 0),
+              toSellerId: x.toSellerId || "",
+              toSellerName: x.toSellerName || "",
+              toOrderKey: x.toOrderKey || "",
+              toOrderLabel: x.toOrderLabel || "",
+              comment: x.comment || "",
+              fromSellerId: x.fromSellerId || "",
+              fromSellerName: x.fromSellerName || "",
+              fromOrderKey: x.fromOrderKey || "",
+              fromOrderLabel: x.fromOrderLabel || "",
+              fromVendorRowId: x.fromVendorRowId || "",
+              toVendorRowId: x.toVendorRowId || "",
+            });
+          });
+        };
+
+        pushSnap(s1);
+        pushSnap(s2);
+
+        list.sort((a, b) => {
+          const as = a.createdAt?.seconds || 0;
+          const bs = b.createdAt?.seconds || 0;
+          return bs - as;
+        });
+      } else {
+        const qAll = query(
+          collection(db, "inventory_transfers_candies"),
+          orderBy("createdAt", "desc")
+        );
+        const snap = await getDocs(qAll);
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          list.push({
+            id: d.id,
+            createdAt: x.createdAt,
+            date: x.date,
+            createdByEmail: x.createdByEmail || "",
+            createdByName: x.createdByName || "",
+            productId: x.productId || "",
+            productName: x.productName || "",
+            packagesMoved: Number(x.packagesMoved || 0),
+            providerPrice: Number(x.providerPrice || 0),
+            unitPriceRivas: Number(x.unitPriceRivas || 0),
+            unitPriceIsla: Number(x.unitPriceIsla || 0),
+            toSellerId: x.toSellerId || "",
+            toSellerName: x.toSellerName || "",
+            toOrderKey: x.toOrderKey || "",
+            toOrderLabel: x.toOrderLabel || "",
+            comment: x.comment || "",
+            fromSellerId: x.fromSellerId || "",
+            fromSellerName: x.fromSellerName || "",
+            fromOrderKey: x.fromOrderKey || "",
+            fromOrderLabel: x.fromOrderLabel || "",
+            fromVendorRowId: x.fromVendorRowId || "",
+            toVendorRowId: x.toVendorRowId || "",
+          });
+        });
+      }
+
+      setTransfersRows(list);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error cargando traslados.");
+    } finally {
+      setTransfersLoading(false);
+    }
+  };
+
+  const openTransfersModal = async () => {
+    setShowTransfersModal(true);
+    await loadTransfers();
+  };
+
+  const resetTransferForm = () => {
+    setTrFromOrderKey("");
+    setTrFromVendorRowId("");
+    setTrToOrderKey("");
+    setTrToVendorRowId("");
+    setTrPackages("0");
+    setTrComment("");
+  };
+
+  const saveTransfer = async () => {
+    if (!isAdmin) {
+      setMsg("No tienes permiso para hacer traslados.");
+      return;
+    }
+    setMsg("");
+
+    const packs = Number(trPackages || 0);
+    if (!(packs > 0)) {
+      setMsg("La cantidad de paquetes debe ser mayor a 0.");
+      return;
+    }
+    if (!trComment.trim()) {
+      setMsg("Debes escribir el motivo de la movida.");
+      return;
+    }
+    if (!trFromOrderKey || !trFromVendorRowId) {
+      setMsg("Selecciona el pedido origen y el producto.");
+      return;
+    }
+    if (!trToOrderKey || !trToVendorRowId) {
+      setMsg("Selecciona el pedido destino y el producto destino.");
+      return;
+    }
+    if (trFromVendorRowId === trToVendorRowId) {
+      setMsg("Origen y destino no pueden ser el mismo.");
+      return;
+    }
+
+    const fromRow = rows.find((r) => r.id === trFromVendorRowId) || null;
+    const toRow = rows.find((r) => r.id === trToVendorRowId) || null;
+
+    if (!fromRow || !toRow) {
+      setMsg("No se encontró la fila origen/destino.");
+      return;
+    }
+    if (fromRow.productId !== toRow.productId) {
+      setMsg("El producto destino no coincide con el producto origen.");
+      return;
+    }
+    if (Number(fromRow.remainingPackages || 0) < packs) {
+      setMsg("El origen no tiene suficientes paquetes disponibles.");
+      return;
+    }
+
+    try {
+      setTrSaving(true);
+      setLoading(true);
+
+      const fromRef = doc(db, "inventory_candies_sellers", fromRow.id);
+      const toRef = doc(db, "inventory_candies_sellers", toRow.id);
+
+      const now = Timestamp.now();
+      const dateStr = new Date().toISOString().slice(0, 10);
+
+      await runTransaction(db, async (tx) => {
+        const fromSnap = await tx.get(fromRef);
+        const toSnap = await tx.get(toRef);
+
+        if (!fromSnap.exists()) throw new Error("Orden origen no existe.");
+        if (!toSnap.exists()) throw new Error("Orden destino no existe.");
+
+        const a = fromSnap.data() as any;
+        const b = toSnap.data() as any;
+
+        const aRem = Number(a.remainingPackages || 0);
+        if (aRem < packs)
+          throw new Error("Origen no tiene suficientes paquetes.");
+
+        const upp = Number(a.unitsPerPackage || b.unitsPerPackage || 0);
+        const unitsMoved = upp > 0 ? packs * upp : 0;
+
+        // ✅ Movemos EXISTENCIA (remaining)
+        tx.update(fromRef, {
+          remainingPackages: aRem - packs,
+          ...(upp > 0
+            ? { remainingUnits: Number(a.remainingUnits || 0) - unitsMoved }
+            : {}),
+          updatedAt: now,
+        });
+
+        tx.update(toRef, {
+          remainingPackages: Number(b.remainingPackages || 0) + packs,
+          ...(upp > 0
+            ? { remainingUnits: Number(b.remainingUnits || 0) + unitsMoved }
+            : {}),
+          updatedAt: now,
+        });
+
+        const auditRef = doc(collection(db, "inventory_transfers_candies"));
+        tx.set(auditRef, {
+          createdAt: now,
+          date: dateStr,
+
+          createdByEmail: (currentUserEmail || "").trim(),
+          createdByName: String(currentUserName || "").trim(),
+
+          productId: String(a.productId || ""),
+          productName: String(a.productName || ""),
+          packagesMoved: packs,
+
+          providerPrice: Number(a.providerPrice || 0),
+          unitPriceRivas: Number(a.unitPriceRivas || 0),
+          unitPriceIsla: Number(a.unitPriceIsla || 0),
+
+          fromSellerId: String(a.sellerId || ""),
+          fromSellerName: String(a.sellerName || ""),
+          fromOrderKey: String(a.orderId || fromRow.id || ""),
+          fromOrderLabel: String(a.orderId || fromRow.id || ""),
+
+          toSellerId: String(b.sellerId || ""),
+          toSellerName: String(b.sellerName || ""),
+          toOrderKey: String(b.orderId || toRow.id || ""),
+          toOrderLabel: String(b.orderId || toRow.id || ""),
+
+          fromVendorRowId: fromRow.id,
+          toVendorRowId: toRow.id,
+
+          comment: trComment.trim(),
+        });
+      });
+
+      // ✅ UI: actualizamos las 2 filas en memoria
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.id === fromRow.id) {
+            const upp = Number(r.unitsPerPackage || 0);
+            const unitsMoved = upp > 0 ? packs * upp : 0;
+            return {
+              ...r,
+              remainingPackages: Number(r.remainingPackages || 0) - packs,
+              remainingUnits:
+                upp > 0
+                  ? Number(r.remainingUnits || 0) - unitsMoved
+                  : r.remainingUnits,
+            };
+          }
+          if (r.id === toRow.id) {
+            const upp = Number(r.unitsPerPackage || 0);
+            const unitsMoved = upp > 0 ? packs * upp : 0;
+            return {
+              ...r,
+              remainingPackages: Number(r.remainingPackages || 0) + packs,
+              remainingUnits:
+                upp > 0
+                  ? Number(r.remainingUnits || 0) + unitsMoved
+                  : r.remainingUnits,
+            };
+          }
+          return r;
+        })
+      );
+
+      // recargar tabla de historial
+      await loadTransfers();
+
+      // ✅ recalcular agg para la tabla principal
+      setTransferAgg((prev) => {
+        const next = { ...prev };
+        const fromKey = trFromOrderKey;
+        const toKey = trToOrderKey;
+        const packs = Number(trPackages || 0);
+
+        if (fromKey) {
+          next[fromKey] = next[fromKey] || { out: 0, in: 0 };
+          next[fromKey].out += packs;
+        }
+        if (toKey) {
+          next[toKey] = next[toKey] || { out: 0, in: 0 };
+          next[toKey].in += packs;
+        }
+        return next;
+      });
+
+      resetTransferForm();
+      setMsg("✅ Traslado realizado.");
+    } catch (e: any) {
+      console.error(e);
+      setMsg(e?.message || "❌ Error realizando el traslado.");
+    } finally {
+      setTrSaving(false);
+      setLoading(false);
+    }
+  };
+
   // ===== Render =====
   return (
     <div className="max-w-7xl mx-auto">
@@ -1293,6 +1822,16 @@ export default function VendorCandyOrders({
         <h2 className="text-2xl font-bold">Ordenes de Rutas</h2>
         <div className="flex gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
+
+          {/* ✅ NUEVO BOTÓN: TRASLADOS (a la par del botón Nuevo pedido) */}
+          <button
+            className="inline-flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded hover:bg-indigo-700"
+            onClick={openTransfersModal}
+            type="button"
+          >
+            Traslados
+          </button>
+
           {isAdmin && (
             <button
               className="inline-flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
@@ -1322,6 +1861,325 @@ export default function VendorCandyOrders({
           )}
         </div>
       </div>
+
+      {/* ===== NUEVO: MODAL TRASLADOS (crear + historial) ===== */}
+      {showTransfersModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[55]">
+          <div className="bg-white p-6 rounded shadow-lg w-full max-w-7xl max-h-[90vh] overflow-y-auto text-sm relative">
+            {trSaving && (
+              <div className="absolute inset-0 bg-white/70 flex items-center justify-center z-50">
+                <div className="bg-white border rounded-lg px-4 py-3 shadow text-sm font-semibold">
+                  Guardando traslado...
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xl font-bold">Traslado de paquetes</h3>
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => {
+                  setShowTransfersModal(false);
+                  resetTransferForm();
+                }}
+                type="button"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {/* FORM TRASLADO */}
+            <div className="border rounded p-3 bg-gray-50 mb-4">
+              <div className="text-sm font-semibold mb-2">
+                Crear traslado (requiere motivo)
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Pedido origen
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={trFromOrderKey}
+                    onChange={(e) => {
+                      setTrFromOrderKey(e.target.value);
+                      setTrFromVendorRowId("");
+                      setTrToOrderKey("");
+                      setTrToVendorRowId("");
+                      setTrPackages("0");
+                    }}
+                    disabled={!isAdmin}
+                  >
+                    <option value="">Selecciona…</option>
+                    {orderKeysForTransfer.map((k) => {
+                      const o = ordersByKey[k];
+                      return (
+                        <option key={k} value={k}>
+                          Vendedor: {o?.sellerName || "—"} — Existencias: {""}
+                          {o?.totalRemainingPackages || "0"} Paquetes - Fecha
+                          Orden: {o?.date || "—"}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Producto (desde el pedido origen)
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={trFromVendorRowId}
+                    onChange={(e) => {
+                      setTrFromVendorRowId(e.target.value);
+                      setTrToOrderKey("");
+                      setTrToVendorRowId("");
+                      setTrPackages("0");
+                    }}
+                    disabled={!isAdmin || !trFromOrderKey}
+                  >
+                    <option value="">Selecciona…</option>
+                    {fromOrderVendorRowsWithRemaining.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        Tipo: {r.category} - {r.productName} — Existencias:{" "}
+                        {Number(r.remainingPackages || 0)} Paquetes - Precio
+                        Costo: ${r.providerPrice}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Pedido destino
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={trToOrderKey}
+                    onChange={(e) => {
+                      setTrToOrderKey(e.target.value);
+                      setTrToVendorRowId("");
+                    }}
+                    disabled={!isAdmin || !trFromVendorRowId}
+                  >
+                    <option value="">Selecciona…</option>
+                    {orderKeysForTransfer
+                      .filter((k) => k !== trFromOrderKey)
+                      .map((k) => {
+                        const o = ordersByKey[k];
+                        return (
+                          <option key={k} value={k}>
+                            Vendedor: {o?.sellerName || "—"} — Existencias: {""}
+                            {o?.totalRemainingPackages || "0"} - Fecha Orden:{" "}
+                            {o?.date || "—"}
+                          </option>
+                        );
+                      })}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Producto destino (mismo producto)
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={trToVendorRowId}
+                    onChange={(e) => setTrToVendorRowId(e.target.value)}
+                    disabled={
+                      !isAdmin || !trToOrderKey || !selectedFromVendorRow
+                    }
+                  >
+                    <option value="">Selecciona…</option>
+                    {possibleToRowsForSelectedProduct.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        Tipo: {r.category} - {r.productName} — Existencias:{" "}
+                        {Number(r.remainingPackages || 0)} Paquetes - Precio
+                        Costo: ${r.providerPrice}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Nota: no cambiamos lógica, solo mostramos un hint si no existe */}
+                  {trToOrderKey &&
+                    selectedFromVendorRow &&
+                    possibleToRowsForSelectedProduct.length === 0 && (
+                      <div className="text-xs text-red-600 mt-1">
+                        ⚠️ El pedido destino no tiene este producto. (Debe
+                        existir en el pedido destino)
+                      </div>
+                    )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Cantidad paquetes a mover
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-full border p-2 rounded"
+                    value={trPackages}
+                    onChange={(e) => setTrPackages(e.target.value)}
+                    disabled={
+                      !isAdmin || !trFromVendorRowId || !trToVendorRowId
+                    }
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold">
+                    Motivo de movida (obligatorio)
+                  </label>
+                  <textarea
+                    className="w-full border p-2 rounded resize-y min-h-20"
+                    value={trComment}
+                    onChange={(e) => setTrComment(e.target.value)}
+                    disabled={!isAdmin}
+                    placeholder="Ej: Se cambió de ruta por reorganización"
+                    maxLength={250}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 mt-3">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
+                  onClick={resetTransferForm}
+                  disabled={!isAdmin || trSaving}
+                >
+                  Limpiar
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                  onClick={saveTransfer}
+                  disabled={
+                    !isAdmin ||
+                    trSaving ||
+                    !trFromVendorRowId ||
+                    !trToVendorRowId ||
+                    Number(trPackages || 0) <= 0 ||
+                    !trComment.trim()
+                  }
+                >
+                  Hacer traslado
+                </button>
+              </div>
+            </div>
+
+            {/* HISTORIAL */}
+            <div className="bg-white rounded border overflow-x-auto">
+              <div className="flex items-center justify-between p-2">
+                <div className="text-lg font-semibold">
+                  Historial de traslados
+                </div>
+                <button
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                  onClick={loadTransfers}
+                  disabled={transfersLoading}
+                  type="button"
+                >
+                  {transfersLoading ? "Cargando..." : "Recargar"}
+                </button>
+              </div>
+
+              <table className="min-w-[1400px] text-xs md:text-sm">
+                <thead className="bg-gray-100">
+                  <tr className="whitespace-nowrap">
+                    <th className="p-2 border">Fecha y hora</th>
+                    <th className="p-2 border">Usuario</th>
+                    <th className="p-2 border">Producto</th>
+                    <th className="p-2 border">Cantidad paquetes</th>
+                    <th className="p-2 border">Precio proveedor</th>
+                    <th className="p-2 border">Precio Rivas</th>
+                    <th className="p-2 border">Precio Isla</th>
+                    <th className="p-2 border">Movido a vendedor</th>
+                    <th className="p-2 border">Movido a orden</th>
+                    <th className="p-2 border">Motivo de movida</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transfersLoading ? (
+                    <tr>
+                      <td colSpan={10} className="p-4 text-center">
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : transfersRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="p-4 text-center">
+                        Sin traslados
+                      </td>
+                    </tr>
+                  ) : (
+                    transfersRows.map((t) => {
+                      const dt =
+                        t.createdAt?.toDate?.() ||
+                        (t.createdAt
+                          ? new Date(t.createdAt.seconds * 1000)
+                          : null);
+
+                      const dtLabel = dt
+                        ? `${dt.toISOString().slice(0, 10)} ${dt
+                            .toISOString()
+                            .slice(11, 19)}`
+                        : t.date || "—";
+
+                      const userLabel =
+                        (t.createdByName || "").trim() ||
+                        (t.createdByEmail || "").trim() ||
+                        "—";
+
+                      return (
+                        <tr
+                          key={t.id}
+                          className="text-center whitespace-nowrap"
+                        >
+                          <td className="p-2 border">{dtLabel}</td>
+                          <td className="p-2 border">{userLabel}</td>
+                          <td className="p-2 border text-left">
+                            {t.productName || "—"}
+                          </td>
+                          <td className="p-2 border">
+                            {Number(t.packagesMoved || 0)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(t.providerPrice || 0)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(t.unitPriceRivas || 0)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(t.unitPriceIsla || 0)}
+                          </td>
+                          <td className="p-2 border">
+                            {t.toSellerName || "—"}
+                          </td>
+                          <td className="p-2 border">
+                            {t.toOrderLabel || t.toOrderKey || "—"}
+                          </td>
+                          <td className="p-2 border text-left">
+                            {t.comment || "—"}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="text-xs text-gray-500 mt-2">
+              Nota: el traslado mueve EXISTENCIA
+              (remainingPackages/remainingUnits) del pedido origen al destino.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL NUEVO / EDICIÓN DE PEDIDO */}
       {openForm && (
@@ -1669,6 +2527,8 @@ export default function VendorCandyOrders({
               <th className="p-2 border">Vendedor</th>
               <th className="p-2 border">Paquetes totales</th>
               <th className="p-2 border">Paquetes restantes</th>
+              <th className="p-2 border">Paquetes Trasladados</th>
+              <th className="p-2 border">Paquetes Adicionales</th>
               <th className="p-2 border">Subtotal costo</th>
               <th className="p-2 border">Total vendedor</th>
               <th className="p-2 border">Comisión posible</th>
@@ -1709,6 +2569,13 @@ export default function VendorCandyOrders({
                     </td>
                     <td className="p-2 border">{o.totalPackages}</td>
                     <td className="p-2 border">{o.totalRemainingPackages}</td>
+                    <td className="p-2 border">
+                      {transferAgg[o.orderKey]?.out || 0}
+                    </td>
+                    <td className="p-2 border">
+                      {transferAgg[o.orderKey]?.in || 0}
+                    </td>
+
                     <td className="p-2 border">{money(o.subtotal)}</td>
                     <td className="p-2 border">{money(o.totalVendor)}</td>
                     <td className="p-2 border">{money(commissionAmount)}</td>

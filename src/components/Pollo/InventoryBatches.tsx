@@ -9,11 +9,11 @@ import {
   updateDoc,
   deleteDoc,
   doc,
-  addDoc, // <-- NUEVO: para crear venta en salesV2
+  addDoc,
+  Timestamp,
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { newBatch, markBatchAsPaid } from "../../Services/inventory";
-import { Timestamp } from "firebase/firestore";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { roundQty } from "../../Services/decimal";
 import RefreshButton from "../common/RefreshButton";
@@ -21,11 +21,12 @@ import useManualRefresh from "../../hooks/useManualRefresh";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
+// ===== Types =====
 interface Product {
   id: string;
   name: string;
   category: string;
-  measurement: string;
+  measurement: string; // lb / unidad / etc.
   price: number;
 }
 
@@ -47,6 +48,33 @@ interface Batch {
   notes?: string;
   paidAmount?: number;
   paidAt?: Timestamp;
+
+  // ✅ NUEVO (solo metadata para UI agrupada)
+  batchGroupId?: string;
+  orderName?: string;
+}
+
+type GroupRow = {
+  groupId: string; // batchGroupId o fallback = batch.id
+  orderName: string;
+  date: string;
+  typeLabel: string; // Tipo (category o MIXTO)
+  status: "PENDIENTE" | "PAGADO";
+
+  lbsIn: number;
+  lbsRem: number;
+
+  totalFacturado: number;
+  totalEsperado: number;
+  utilidadBruta: number;
+
+  items: Batch[];
+};
+
+// ===== helpers =====
+function uid(prefix = "LOT") {
+  // sin dependencias, lo suficientemente único para Firestore
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 export default function InventoryBatches() {
@@ -67,46 +95,70 @@ export default function InventoryBatches() {
   // 🔵 Filtro por producto
   const [productFilterId, setProductFilterId] = useState<string>("");
 
-  // 👉 Modal Crear Lote
+  // 👉 Modal Crear Pedido/Lote (nuevo)
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // form (crear)
+  // ===== Form header del pedido =====
+  const [orderName, setOrderName] = useState<string>("");
+  const [orderDate, setOrderDate] = useState<string>(
+    format(new Date(), "yyyy-MM-dd")
+  );
+
+  // ===== Filtro unidad ANTES de seleccionar producto =====
+  const [unitFilter, setUnitFilter] = useState<string>("lb");
+
+  // ===== Inputs para agregar producto al pedido =====
   const [productId, setProductId] = useState("");
   const [quantity, setQuantity] = useState<number>(0);
   const [purchasePrice, setPurchasePrice] = useState<number>(0);
   const [salePrice, setSalePrice] = useState<number>(0);
-  const [dateStr, setDateStr] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
-  );
-  const [invoiceTotal, setInvoiceTotal] = useState<number>(0);
-  const [expectedTotal, setExpectedTotal] = useState<number>(0);
-  const [notes, setNotes] = useState<string>("");
 
-  // edición en tabla (por lote)
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDate, setEditDate] = useState<string>("");
-  const [editQty, setEditQty] = useState<number>(0);
-  const [editPurchase, setEditPurchase] = useState<number>(0);
-  const [editSale, setEditSale] = useState<number>(0);
-  const [editNotes, setEditNotes] = useState<string>("");
-  const [editInvoiceTotal, setEditInvoiceTotal] = useState<number>(0);
-  const [editExpectedTotal, setEditExpectedTotal] = useState<number>(0);
+  // items agregados al pedido
+  type OrderItem = {
+    tempId: string; // para UI
+    productId: string;
+    productName: string;
+    category: string;
+    unit: string;
 
-  // === NUEVO: estado para diálogo de "Pagar" ===
+    quantity: number; // lbs ingresadas
+    remaining: number; // lbs restantes (inicialmente = quantity)
+
+    purchasePrice: number;
+    salePrice: number;
+
+    invoiceTotal: number;
+    expectedTotal: number;
+    utilidadBruta: number;
+  };
+
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null); // si editas pedido existente
+  const [editingGroupItems, setEditingGroupItems] = useState<Batch[]>([]); // docs reales del grupo (para edición/guardado)
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [detailGroup, setDetailGroup] = useState<GroupRow | null>(null);
+
+  // === NUEVO: estado para diálogo de "Pagar" (grupo) ===
   const [showPayDialog, setShowPayDialog] = useState(false);
-  const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<GroupRow | null>(null);
 
+  const isPounds = (u: string) => {
+    const s = (u || "").toLowerCase();
+    return /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(s) || s === "lb";
+  };
+
+  // ===== Load =====
   useEffect(() => {
     (async () => {
-      // 🔁 mostrar spinner también cuando se refresca manualmente
       setLoading(true);
-      console.log("Refrescando...", refreshKey);
+      setMsg("");
 
       // cargar products
       const psnap = await getDocs(collection(db, "products"));
       const prods: Product[] = [];
       psnap.forEach((d) => {
         const it = d.data() as any;
+        if (it.active !== true) return;
         prods.push({
           id: d.id,
           name: it.name ?? it.productName ?? "(sin nombre)",
@@ -123,6 +175,7 @@ export default function InventoryBatches() {
         orderBy("date", "desc")
       );
       const bsnap = await getDocs(qB);
+
       const rows: Batch[] = [];
       bsnap.forEach((d) => {
         const b = d.data() as any;
@@ -153,32 +206,18 @@ export default function InventoryBatches() {
           notes: b.notes,
           paidAmount: Number(b.paidAmount || 0),
           paidAt: b.paidAt,
+
+          batchGroupId: b.batchGroupId,
+          orderName: b.orderName,
         });
       });
+
       setBatches(rows);
       setLoading(false);
     })();
   }, [refreshKey]);
-  useEffect(() => {
-    // sugerir salePrice del producto elegido
-    const p = products.find((x) => x.id === productId);
-    if (p) setSalePrice(Number(p.price || 0));
-  }, [productId, products, refreshKey]);
 
-  // cálculos automáticos (crear)
-  useEffect(() => {
-    setInvoiceTotal(Math.floor(quantity * purchasePrice * 100) / 100);
-  }, [quantity, purchasePrice, refreshKey]);
-  useEffect(() => {
-    setExpectedTotal(Math.floor(quantity * salePrice * 100) / 100);
-  }, [quantity, salePrice, refreshKey]);
-
-  const isPounds = (u: string) => {
-    const s = (u || "").toLowerCase();
-    return /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(s) || s === "lb";
-  };
-
-  // Filtro en memoria (fecha + producto)
+  // ===== Filtro en memoria (fecha + producto) =====
   const filteredBatches = useMemo(() => {
     return batches.filter((b) => {
       if (fromDate && b.date < fromDate) return false;
@@ -188,7 +227,7 @@ export default function InventoryBatches() {
     });
   }, [batches, fromDate, toDate, productFilterId]);
 
-  // Totales sobre el filtro
+  // ===== Totales arriba (NO TOCAR UI) =====
   const totals = useMemo(() => {
     const totalFacturado = filteredBatches.reduce(
       (a, b) => a + Number(b.invoiceTotal || 0),
@@ -229,327 +268,501 @@ export default function InventoryBatches() {
     };
   }, [filteredBatches]);
 
-  const saveBatch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // ===== NUEVO: Agrupar en pedidos/lotes =====
+  const groupedRows = useMemo<GroupRow[]>(() => {
+    const map = new Map<string, Batch[]>();
+
+    for (const b of filteredBatches) {
+      const gid = (b.batchGroupId && String(b.batchGroupId).trim()) || b.id; // fallback: doc solo
+      if (!map.has(gid)) map.set(gid, []);
+      map.get(gid)!.push(b);
+    }
+
+    const rows: GroupRow[] = [];
+    for (const [groupId, items] of map.entries()) {
+      // ordenar items por createdAt (si quieres consistencia visual)
+      const ordered = [...items].sort((a, b) => {
+        const sa = a.createdAt?.seconds ?? 0;
+        const sb = b.createdAt?.seconds ?? 0;
+        return sb - sa;
+      });
+
+      // fecha de grupo: la del primer item (son iguales por tu modal)
+      const date = ordered[0]?.date || "";
+
+      // nombre pedido
+      const orderNameLocal =
+        String(ordered[0]?.orderName || "").trim() ||
+        `Pedido ${date || ""}`.trim() ||
+        "Pedido";
+
+      // tipo (category)
+      const cats = new Set(
+        ordered.map((x) => String(x.category || "").trim()).filter(Boolean)
+      );
+      const typeLabel =
+        cats.size === 1 ? Array.from(cats)[0].toUpperCase() : "MIXTO";
+
+      // status: si alguno está pendiente => PENDIENTE, si todos pagados => PAGADO
+      const status: "PENDIENTE" | "PAGADO" = ordered.some(
+        (x) => x.status === "PENDIENTE"
+      )
+        ? "PENDIENTE"
+        : "PAGADO";
+
+      // sums lbs ingresadas/restantes (tú pediste libras del lote)
+      const lbsIn = roundQty(
+        ordered.reduce(
+          (acc, x) => acc + (isPounds(x.unit) ? Number(x.quantity || 0) : 0),
+          0
+        )
+      );
+      const lbsRem = roundQty(
+        ordered.reduce(
+          (acc, x) => acc + (isPounds(x.unit) ? Number(x.remaining || 0) : 0),
+          0
+        )
+      );
+
+      const totalFacturado = Number(
+        ordered
+          .reduce((acc, x) => acc + Number(x.invoiceTotal || 0), 0)
+          .toFixed(2)
+      );
+      const totalEsperado = Number(
+        ordered
+          .reduce((acc, x) => acc + Number(x.expectedTotal || 0), 0)
+          .toFixed(2)
+      );
+      const utilidadBruta = Number((totalEsperado - totalFacturado).toFixed(2));
+
+      rows.push({
+        groupId,
+        orderName: orderNameLocal,
+        date,
+        typeLabel,
+        status,
+        lbsIn,
+        lbsRem,
+        totalFacturado,
+        totalEsperado,
+        utilidadBruta,
+        items: ordered,
+      });
+    }
+
+    // orden por fecha desc (como tu tabla actual)
+    rows.sort((a, b) =>
+      a.date === b.date
+        ? a.groupId < b.groupId
+          ? 1
+          : -1
+        : a.date < b.date
+        ? 1
+        : -1
+    );
+    return rows;
+  }, [filteredBatches]);
+
+  // ===== PRODUCTOS filtrados por unidad (filtro antes de agregar) =====
+  const productsByUnit = useMemo(() => {
+    const u = String(unitFilter || "")
+      .toLowerCase()
+      .trim();
+    const list = products.filter(
+      (p) =>
+        String(p.measurement || "")
+          .toLowerCase()
+          .trim() === u
+    );
+    return list.sort((a, b) => a.name.localeCompare(b.name, "es"));
+  }, [products, unitFilter]);
+
+  // sugerir salePrice del producto elegido
+  useEffect(() => {
     const p = products.find((x) => x.id === productId);
-    if (!p || quantity <= 0 || purchasePrice <= 0) {
-      setMsg("Completa producto, cantidad y costo.");
+    if (p) setSalePrice(Number(p.price || 0));
+  }, [productId, products, refreshKey]);
+
+  // ===== Crear pedido: agregar item =====
+  const addItemToOrder = () => {
+    setMsg("");
+
+    const p = products.find((x) => x.id === productId);
+    if (!p) {
+      setMsg("Selecciona un producto.");
       return;
     }
-    try {
-      const qtyR = roundQty(quantity);
+    if (quantity <= 0 || purchasePrice <= 0) {
+      setMsg("Completa libras a ingresar y precio proveedor.");
+      return;
+    }
 
-      const ref = await newBatch({
+    const qtyR = roundQty(quantity);
+    const unit = p.measurement;
+
+    const inv = Number((qtyR * Number(purchasePrice || 0)).toFixed(2));
+    const exp = Number((qtyR * Number(salePrice || 0)).toFixed(2));
+    const util = Number((exp - inv).toFixed(2));
+
+    // si ya existe el producto en el pedido, lo reemplazamos/actualizamos (para no duplicar filas)
+    const existingIndex = orderItems.findIndex((it) => it.productId === p.id);
+    if (existingIndex >= 0) {
+      setOrderItems((prev) =>
+        prev.map((it, idx) =>
+          idx !== existingIndex
+            ? it
+            : {
+                ...it,
+                quantity: qtyR,
+                remaining: qtyR,
+                purchasePrice: Number(purchasePrice || 0),
+                salePrice: Number(salePrice || 0),
+                invoiceTotal: inv,
+                expectedTotal: exp,
+                utilidadBruta: util,
+              }
+        )
+      );
+    } else {
+      const item: OrderItem = {
+        tempId: uid("IT"),
         productId: p.id,
         productName: p.name,
         category: p.category,
-        unit: p.measurement,
+        unit,
+
         quantity: qtyR,
-        purchasePrice,
-        salePrice,
-        invoiceTotal,
-        expectedTotal,
-        date: dateStr,
-        notes,
-      });
-      setBatches((prev) => [
-        {
-          id: ref.id,
-          productId: p.id,
-          productName: p.name,
-          category: p.category,
-          unit: p.measurement,
-          quantity: qtyR,
-          remaining: qtyR,
-          purchasePrice,
-          salePrice,
-          invoiceTotal,
-          expectedTotal,
-          date: dateStr,
-          createdAt: Timestamp.now(),
-          status: "PENDIENTE",
-          notes,
-        },
-        ...prev,
-      ]);
-      setMsg("✅ Lote creado");
-      setProductId("");
-      setQuantity(0);
-      setPurchasePrice(0);
-      setSalePrice(p.price || 0);
-      setInvoiceTotal(0);
-      setExpectedTotal(0);
-      setNotes("");
-      setShowCreateModal(false);
-    } catch (e) {
-      console.error(e);
-      setMsg("❌ Error al crear lote");
+        remaining: qtyR,
+
+        purchasePrice: Number(purchasePrice || 0),
+        salePrice: Number(salePrice || 0),
+
+        invoiceTotal: inv,
+        expectedTotal: exp,
+        utilidadBruta: util,
+      };
+      setOrderItems((prev) => [...prev, item]);
     }
-  };
-  // ====== Editar / Eliminar lote ======
-  const startEdit = (b: Batch) => {
-    setEditingId(b.id);
-    setEditDate(b.date);
-    setEditQty(roundQty(b.quantity));
-    setEditPurchase(b.purchasePrice);
-    setEditSale(b.salePrice);
-    setEditNotes(b.notes || "");
-    setEditInvoiceTotal(Number((b.quantity * b.purchasePrice).toFixed(2)));
-    setEditExpectedTotal(Number((b.quantity * b.salePrice).toFixed(2)));
+
+    // limpiar inputs de agregar
+    setProductId("");
+    setQuantity(0);
+    setPurchasePrice(0);
+    setSalePrice(0);
   };
 
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditDate("");
-    setEditQty(0);
-    setEditPurchase(0);
-    setEditSale(0);
-    setEditNotes("");
-    setEditInvoiceTotal(0);
-    setEditExpectedTotal(0);
+  const removeOrderItem = (tempId: string) => {
+    setOrderItems((prev) => prev.filter((x) => x.tempId !== tempId));
   };
 
-  // recalcular totales en edición
-  useEffect(() => {
-    if (!editingId) return;
-    setEditInvoiceTotal(Math.floor(editQty * editPurchase * 100) / 100);
-  }, [editingId, editQty, editPurchase, refreshKey]);
-  useEffect(() => {
-    if (!editingId) return;
-    setEditExpectedTotal(Math.floor(editQty * editSale * 100) / 100);
-  }, [editingId, editQty, editSale, refreshKey]);
+  // editar inline en tabla de items del pedido (crear o editar)
+  const updateOrderItemField = (
+    tempId: string,
+    field: "quantity" | "purchasePrice" | "salePrice",
+    value: number
+  ) => {
+    setOrderItems((prev) =>
+      prev.map((it) => {
+        if (it.tempId !== tempId) return it;
 
-  const saveEdit = async () => {
-    if (!editingId) return;
-    const old = batches.find((x) => x.id === editingId);
-    if (!old) return;
+        const updated = { ...it } as OrderItem;
 
-    const consumido = roundQty(old.quantity - old.remaining);
-    const newRemaining = Math.max(0, roundQty(editQty - consumido));
+        if (field === "quantity") {
+          updated.quantity = roundQty(Math.max(0, value));
+          updated.remaining = updated.quantity; // en creación = iguales
+        }
+        if (field === "purchasePrice")
+          updated.purchasePrice = Math.max(0, Number(value || 0));
+        if (field === "salePrice")
+          updated.salePrice = Math.max(0, Number(value || 0));
 
-    const ref = doc(db, "inventory_batches", editingId);
-    await updateDoc(ref, {
-      date: editDate,
-      quantity: roundQty(editQty),
-      purchasePrice: editPurchase,
-      salePrice: editSale,
-      invoiceTotal: editInvoiceTotal,
-      expectedTotal: editExpectedTotal,
-      notes: editNotes,
-      remaining: newRemaining,
-    });
+        updated.invoiceTotal = Number(
+          (updated.quantity * updated.purchasePrice).toFixed(2)
+        );
+        updated.expectedTotal = Number(
+          (updated.quantity * updated.salePrice).toFixed(2)
+        );
+        updated.utilidadBruta = Number(
+          (updated.expectedTotal - updated.invoiceTotal).toFixed(2)
+        );
 
-    setBatches((prev) =>
-      prev.map((x) =>
-        x.id === editingId
-          ? {
-              ...x,
-              date: editDate,
-              quantity: roundQty(editQty),
-              purchasePrice: editPurchase,
-              salePrice: editSale,
-              invoiceTotal: editInvoiceTotal,
-              expectedTotal: editExpectedTotal,
-              notes: editNotes,
-              remaining: newRemaining,
-            }
-          : x
+        return updated;
+      })
+    );
+  };
+
+  // KPIs del modal (sumas)
+  const orderKpis = useMemo(() => {
+    const lbsIn = roundQty(
+      orderItems.reduce(
+        (acc, it) => acc + (isPounds(it.unit) ? Number(it.quantity || 0) : 0),
+        0
       )
     );
-    cancelEdit();
-    setMsg("✅ Lote actualizado");
+    const lbsRem = roundQty(
+      orderItems.reduce(
+        (acc, it) => acc + (isPounds(it.unit) ? Number(it.remaining || 0) : 0),
+        0
+      )
+    );
+
+    const totalFacturado = Number(
+      orderItems
+        .reduce((acc, it) => acc + Number(it.invoiceTotal || 0), 0)
+        .toFixed(2)
+    );
+    const totalEsperado = Number(
+      orderItems
+        .reduce((acc, it) => acc + Number(it.expectedTotal || 0), 0)
+        .toFixed(2)
+    );
+    const utilidadBruta = Number((totalEsperado - totalFacturado).toFixed(2));
+
+    return { lbsIn, lbsRem, totalFacturado, totalEsperado, utilidadBruta };
+  }, [orderItems]);
+
+  const resetOrderModal = () => {
+    setEditingGroupId(null);
+    setEditingGroupItems([]);
+    setOrderName("");
+    setOrderDate(format(new Date(), "yyyy-MM-dd"));
+    setUnitFilter("lb");
+    setProductId("");
+    setQuantity(0);
+    setPurchasePrice(0);
+    setSalePrice(0);
+    setOrderItems([]);
   };
 
-  const deleteBatch = async (b: Batch) => {
-    const ok = confirm(`¿Eliminar el lote del ${b.date} (${b.productName})?`);
-    if (!ok) return;
-    await deleteDoc(doc(db, "inventory_batches", b.id));
-    setBatches((prev) => prev.filter((x) => x.id !== b.id));
-    setMsg("🗑️ Lote eliminado");
-  };
-  // ====== FIN edición/eliminación ======
+  // ===== GUARDAR PEDIDO (crear o editar) =====
+  const saveOrder = async () => {
+    setMsg("");
 
-  // ====== Exportar/Imprimir PDF ======
-  const handlePrintPDF = () => {
-    const titleRange =
-      (fromDate ? `Desde ${fromDate}` : "Desde inicio") +
-      " — " +
-      (toDate ? `Hasta ${toDate}` : "Hasta hoy");
+    if (!orderItems.length) {
+      setMsg("Agrega al menos un producto al pedido.");
+      return;
+    }
 
-    const rowsHtml = filteredBatches
-      .map((b) => {
-        const inv = Number(b.invoiceTotal || 0);
-        const exp = Number(b.expectedTotal || 0);
-        return `
-      <tr>
-        <td>${b.date}</td>
-        <td>${(b.category || "").toUpperCase()}</td>
-        <td>${b.productName}</td>
-        <td>${(b.unit || "").toUpperCase()}</td>
-        <td style="text-align:right">${b.quantity.toFixed(3)}</td>
-        <td style="text-align:right">${b.remaining.toFixed(3)}</td>
-        <td style="text-align:right">${money(b.purchasePrice)}</td>
-        <td style="text-align:right">${money(b.salePrice)}</td>
-        <td style="text-align:right">${money(inv)}</td>
-        <td style="text-align:right">${money(exp)}</td>
-        <td>${b.status}</td>
-      </tr>`;
-      })
-      .join("");
+    const dateStr = orderDate || format(new Date(), "yyyy-MM-dd");
+    const name = String(orderName || "").trim() || `Pedido ${dateStr}`;
+    const groupId = editingGroupId || uid("BATCH");
 
-    const html = `
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Inventario por Lotes</title>
- <style>
-  * { font-family: Arial, sans-serif; }
-  h1 { margin: 0 0 4px; }
-  .muted { color: #555; font-size: 12px; margin-bottom: 12px; }
+    try {
+      // ✅ CREAR
+      if (!editingGroupId) {
+        // crear N docs en inventory_batches (mismo comportamiento que antes, solo en batch)
+        for (const it of orderItems) {
+          await newBatch({
+            productId: it.productId,
+            productName: it.productName,
+            category: it.category,
+            unit: it.unit,
+            quantity: roundQty(it.quantity),
+            purchasePrice: Number(it.purchasePrice || 0),
+            salePrice: Number(it.salePrice || 0),
+            invoiceTotal: Number(it.invoiceTotal || 0),
+            expectedTotal: Number(it.expectedTotal || 0),
+            date: dateStr,
+            notes: "",
 
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { border: 1px solid #ddd; padding: 6px; }
-  th { background: #f5f5f5; text-align: left; }
+            batchGroupId: groupId,
+            orderName: name,
+          });
+        }
 
-  .totals {
-    margin: 10px 0 16px;
-    font-size: 12px;
-    display: grid;
-    grid-template-columns: repeat(2, max-content);
-    column-gap: 32px;
-    row-gap: 6px;
-    align-items: center;
-  }
-  .totals span {
-    margin: 0;
-    white-space: nowrap;
-  }
-
-  @media print {
-    @page { size: A4 landscape; margin: 15mm; }
-    button { display: none; }
-  }
-</style>
-
-</head>
-
-<body>
-  <button onclick="window.print()">Imprimir</button>
-  <h1>Inventario por Lotes</h1>
-<div class="muted">${titleRange}</div>
-<div class="totals">
-  <span><strong>Libras ingresadas:</strong> ${totals.lbsIng.toFixed(3)}</span>
-  <span><strong>Libras restantes:</strong> ${totals.lbsRem.toFixed(3)}</span>
-
-  <span><strong>Unidades ingresadas:</strong> ${totals.udsIng.toFixed(3)}</span>
-  <span><strong>Unidades restantes:</strong> ${totals.udsRem.toFixed(3)}</span>
-
-  <span><strong>Total esperado a ganar:</strong> ${money(
-    totals.totalEsperado
-  )}</span>
-  <span><strong>Total facturado:</strong> ${money(totals.totalFacturado)}</span>
-  <span><strong>Ganancia sin gastos:</strong> ${money(
-    Number((totals.totalEsperado - totals.totalFacturado).toFixed(2))
-  )}</span>
-</div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Fecha</th>
-        <th>Tipo</th>
-        <th>Producto</th>
-        <th>Unidad</th>
-        <th>Ingresado</th>
-        <th>Restantes</th>
-        <th>Precio Compra</th>
-        <th>Precio Venta</th>
-        <th>Total factura</th>
-        <th>Total esperado</th>
-        <th>Estado</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${
-        rowsHtml ||
-        `<tr><td colspan="11" style="text-align:center">Sin lotes</td></tr>`
+        setMsg("✅ Pedido creado");
+        setShowCreateModal(false);
+        resetOrderModal();
+        refresh();
+        return;
       }
-    </tbody>
-  </table>
-</body>
-</html>`;
 
-    const w = window.open("", "_blank");
-    if (!w) return;
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
+      // ✅ EDITAR: actualizar docs existentes del grupo y upsert según items actuales
+      // - No inventamos lógica: solo hacemos updateDoc (misma idea de tu saveEdit) y deleteDoc si quitaste uno.
+      const existing = editingGroupItems;
+
+      // map por productId de docs existentes (1 doc por producto en tu UI)
+      const existingByProduct = new Map<string, Batch>();
+      for (const b of existing) existingByProduct.set(b.productId, b);
+
+      const productIdsNew = new Set(orderItems.map((x) => x.productId));
+
+      // 1) actualizar o crear
+      for (const it of orderItems) {
+        const oldDoc = existingByProduct.get(it.productId);
+        const qtyR = roundQty(it.quantity);
+
+        if (oldDoc) {
+          // mantener consumido (si ya hubo ventas)
+          const consumido = roundQty(oldDoc.quantity - oldDoc.remaining);
+          const newRemaining = Math.max(0, roundQty(qtyR - consumido));
+
+          await updateDoc(doc(db, "inventory_batches", oldDoc.id), {
+            date: dateStr,
+            orderName: name,
+            batchGroupId: groupId,
+
+            quantity: qtyR,
+            purchasePrice: Number(it.purchasePrice || 0),
+            salePrice: Number(it.salePrice || 0),
+            invoiceTotal: Number(it.invoiceTotal || 0),
+            expectedTotal: Number(it.expectedTotal || 0),
+            remaining: newRemaining,
+          });
+        } else {
+          // nuevo producto agregado al pedido
+          await newBatch({
+            productId: it.productId,
+            productName: it.productName,
+            category: it.category,
+            unit: it.unit,
+            quantity: qtyR,
+            purchasePrice: Number(it.purchasePrice || 0),
+            salePrice: Number(it.salePrice || 0),
+            invoiceTotal: Number(it.invoiceTotal || 0),
+            expectedTotal: Number(it.expectedTotal || 0),
+            date: dateStr,
+            notes: "",
+
+            batchGroupId: groupId,
+            orderName: name,
+          });
+        }
+      }
+
+      // 2) eliminar docs de productos quitados del pedido (mismo patrón que tus órdenes maestras)
+      for (const b of existing) {
+        if (!productIdsNew.has(b.productId)) {
+          await deleteDoc(doc(db, "inventory_batches", b.id));
+        }
+      }
+
+      setMsg("✅ Pedido actualizado");
+      setShowCreateModal(false);
+      resetOrderModal();
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al guardar pedido");
+    }
   };
-  // === Pagar (abre modal visual en lugar de confirm()) ===
-  const payBatch = async (b: Batch) => {
-    // NO ejecuta lógica aquí; solo abre el diálogo visual
-    setSelectedBatch(b);
+
+  // ===== Acciones de GRUPO =====
+  const openDetail = (g: GroupRow) => {
+    setDetailGroup(g);
+    setShowDetailModal(true);
+  };
+
+  const openForEdit = (g: GroupRow) => {
+    // cargar items reales del grupo para editar y respetar consumido
+    setEditingGroupId(g.groupId);
+    setEditingGroupItems(g.items);
+
+    setOrderName(g.orderName);
+    setOrderDate(g.date || format(new Date(), "yyyy-MM-dd"));
+
+    // construir orderItems desde docs (editable)
+    const items: OrderItem[] = g.items.map((b) => {
+      const inv = Number(b.invoiceTotal || 0);
+      const exp = Number(b.expectedTotal || 0);
+      return {
+        tempId: uid("IT"),
+        productId: b.productId,
+        productName: b.productName,
+        category: b.category,
+        unit: b.unit,
+        quantity: roundQty(b.quantity),
+        remaining: roundQty(b.remaining), // en edición mostramos la real
+        purchasePrice: Number(b.purchasePrice || 0),
+        salePrice: Number(b.salePrice || 0),
+        invoiceTotal: inv,
+        expectedTotal: exp,
+        utilidadBruta: Number((exp - inv).toFixed(2)),
+      };
+    });
+
+    setOrderItems(items);
+    setShowCreateModal(true);
+  };
+
+  const deleteGroup = async (g: GroupRow) => {
+    const ok = confirm(`¿Eliminar el pedido "${g.orderName}" del ${g.date}?`);
+    if (!ok) return;
+
+    try {
+      for (const b of g.items) {
+        await deleteDoc(doc(db, "inventory_batches", b.id));
+      }
+      setMsg("🗑️ Pedido eliminado");
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al eliminar pedido");
+    }
+  };
+
+  // pagar grupo (abre confirm)
+  const payGroup = (g: GroupRow) => {
+    setSelectedGroup(g);
     setShowPayDialog(true);
   };
 
-  // === Confirmar pago: marca PAGADO, pone remaining=0 y crea venta en salesV2 ===
-  const confirmPayNow = async () => {
-    if (!selectedBatch) return;
-    const b = selectedBatch;
+  // confirmar pagar grupo: mantiene tu misma lógica por doc (markBatchAsPaid + remaining=0 + saleV2)
+  const confirmPayGroupNow = async () => {
+    if (!selectedGroup) return;
 
     try {
-      // 1) Marcar pagado (tu misma función)
-      await markBatchAsPaid(b.id);
+      for (const b of selectedGroup.items) {
+        if (b.status !== "PENDIENTE") continue;
 
-      // 2) Debitar libras (remaining -> 0)
-      const ref = doc(db, "inventory_batches", b.id);
-      await updateDoc(ref, { remaining: 0 });
+        // 1) Marcar pagado
+        await markBatchAsPaid(b.id);
 
-      // 3) Crear venta en salesV2 (para que el dashboard la cuente)
-      const saleDoc = {
-        date: b.date,
-        productName: b.productName,
-        quantity: b.quantity, // venta total del lote
-        amount: Number(
-          (b.expectedTotal ?? b.salePrice * b.quantity).toFixed(2)
-        ),
-        allocations: [
-          {
-            batchId: b.id,
-            qty: b.quantity,
-            unitCost: b.purchasePrice,
-            lineCost: Number((b.purchasePrice * b.quantity).toFixed(2)),
-          },
-        ],
-        avgUnitCost: b.purchasePrice,
-        measurement: b.unit,
-        createdAt: Timestamp.now(),
-        autoGeneratedFromInventory: true,
-      };
-      await addDoc(collection(db, "salesV2"), saleDoc);
+        // 2) Debitar stock (remaining -> 0)
+        await updateDoc(doc(db, "inventory_batches", b.id), { remaining: 0 });
 
-      // 4) Refrescar en UI
-      setBatches((prev) =>
-        prev.map((x) =>
-          x.id === b.id ? { ...x, status: "PAGADO", remaining: 0 } : x
-        )
-      );
-      setMsg("✅ Inventario pagado y reflejado como venta");
-    } catch (err) {
-      console.error(err);
-      setMsg("❌ Error al pagar inventario");
+        // 3) Crear venta en salesV2 (misma lógica que tenías)
+        const saleDoc = {
+          date: b.date,
+          productName: b.productName,
+          quantity: b.quantity,
+          amount: Number(
+            (b.expectedTotal ?? b.salePrice * b.quantity).toFixed(2)
+          ),
+          allocations: [
+            {
+              batchId: b.id,
+              qty: b.quantity,
+              unitCost: b.purchasePrice,
+              lineCost: Number((b.purchasePrice * b.quantity).toFixed(2)),
+            },
+          ],
+          avgUnitCost: b.purchasePrice,
+          measurement: b.unit,
+          createdAt: Timestamp.now(),
+          autoGeneratedFromInventory: true,
+        };
+        await addDoc(collection(db, "salesV2"), saleDoc);
+      }
+
+      setMsg("✅ Pedido pagado y reflejado como venta");
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al pagar pedido");
     } finally {
       setShowPayDialog(false);
-      setSelectedBatch(null);
+      setSelectedGroup(null);
     }
   };
 
   const cancelPayDialog = () => {
     setShowPayDialog(false);
-    setSelectedBatch(null);
+    setSelectedGroup(null);
   };
 
+  // ===== UI =====
   return (
     <div className="max-w-6xl mx-auto shadows-2xl">
       <div className="flex items-center justify-between mb-3">
@@ -557,13 +770,16 @@ export default function InventoryBatches() {
         <button
           className="px-3 py-2 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
           type="button"
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => {
+            resetOrderModal();
+            setShowCreateModal(true);
+          }}
         >
           Crear Lote
         </button>
       </div>
 
-      {/* 🔎 Barra de filtro por fecha */}
+      {/* 🔎 Barra de filtro por fecha (NO TOCAR) */}
       <div className="bg-white p-3 rounded shadow-2xl border mb-4 flex flex-wrap items-end gap-3 text-sm">
         <div className="flex flex-col">
           <label className="font-semibold">Desde</label>
@@ -584,7 +800,7 @@ export default function InventoryBatches() {
           />
         </div>
 
-        {/* Filtro por producto */}
+        {/* Filtro por producto (NO TOCAR) */}
         <div className="flex flex-col min-w-[240px]">
           <label className="font-semibold">Producto</label>
           <select
@@ -612,21 +828,13 @@ export default function InventoryBatches() {
           Quitar filtro
         </button>
 
-        {/* 🖨️ Imprimir/Exportar PDF */}
-        <button
-          className="px-3 py-1 rounded-2xl shadow-2xl bg-blue-600 text-white hover:bg-blue-700"
-          onClick={handlePrintPDF}
-        >
-          Imprimir PDF
-        </button>
-
-        {/* 🔄 Refresh manual */}
+        {/* 🔄 Refresh manual (NO TOCAR) */}
         <div className="ml-auto">
           <RefreshButton onClick={() => refresh()} loading={loading} />
         </div>
       </div>
 
-      {/* Totales (sobre el filtro) */}
+      {/* KPIs (NO TOCAR) */}
       <div className="bg-gray-50 p-3 rounded-2xl shadow-2xl border mb-3 text-base">
         <div className="grid grid-cols-3 gap-y-2 gap-x-8">
           <div>
@@ -670,200 +878,102 @@ export default function InventoryBatches() {
         </div>
       </div>
 
-      {/* Tabla de lotes (filtrada) */}
-      <div className="bg-white p-2 rounded shadow border w-full">
-        <table className="min-w-full w-full text-sm shadow-2xl">
+      {/* ===== TABLA NUEVA (por pedido/grupo) ===== */}
+      <div className="bg-white p-2 rounded shadow border w-full overflow-x-auto">
+        <table className="min-w-[1100px] w-full text-sm shadow-2xl">
           <thead className="bg-gray-100">
-            <tr>
+            <tr className="whitespace-nowrap">
               <th className="p-2 border">Fecha</th>
               <th className="p-2 border">Tipo</th>
-              <th className="p-2 border">Producto</th>
-              <th className="p-2 border">Unidad</th>
-              <th className="p-2 border">Ingresado</th>
-              <th className="p-2 border">Restantes</th>
-              <th className="p-2 border">Precio Compra</th>
-              <th className="p-2 border">Precio Venta</th>
-              <th className="p-2 border">Total factura</th>
+              <th className="p-2 border">Libras ingresadas</th>
+              <th className="p-2 border">Libras restantes</th>
+              <th className="p-2 border">Total Facturado</th>
               <th className="p-2 border">Total esperado</th>
-              <th className="p-2 border">Total ganancia</th>
+              <th className="p-2 border">Utilidad bruta</th>
               <th className="p-2 border">Estado</th>
               <th className="p-2 border">Acciones</th>
             </tr>
           </thead>
+
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={12} className="p-4 text-center">
+                <td colSpan={9} className="p-4 text-center">
                   Cargando…
                 </td>
               </tr>
-            ) : filteredBatches.length === 0 ? (
+            ) : groupedRows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="p-4 text-center">
+                <td colSpan={9} className="p-4 text-center">
                   Sin lotes
                 </td>
               </tr>
             ) : (
-              filteredBatches.map((b) => {
-                const isEditing = editingId === b.id;
-                const inv = Number(b.invoiceTotal || 0);
-                const exp = Number(b.expectedTotal || 0);
-                return (
-                  <tr key={b.id} className="text-center">
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          type="date"
-                          className="w-full border p-1 rounded"
-                          value={editDate}
-                          onChange={(e) => setEditDate(e.target.value)}
-                        />
-                      ) : (
-                        b.date
+              groupedRows.map((g) => (
+                <tr key={g.groupId} className="text-center whitespace-nowrap">
+                  <td className="p-2 border">
+                    <button
+                      className="underline text-blue-700 hover:text-blue-900"
+                      onClick={() => openDetail(g)}
+                      title={g.orderName}
+                    >
+                      {g.date}
+                    </button>
+                    <div className="text-[11px] text-gray-500">
+                      {g.orderName}
+                    </div>
+                  </td>
+                  <td className="p-2 border">{g.typeLabel}</td>
+                  <td className="p-2 border">{g.lbsIn.toFixed(3)}</td>
+                  <td className="p-2 border">{g.lbsRem.toFixed(3)}</td>
+                  <td className="p-2 border">{money(g.totalFacturado)}</td>
+                  <td className="p-2 border">{money(g.totalEsperado)}</td>
+                  <td className="p-2 border">{money(g.utilidadBruta)}</td>
+                  <td className="p-2 border">
+                    <span
+                      className={`px-2 py-0.5 rounded text-xs ${
+                        g.status === "PAGADO"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-yellow-100 text-yellow-700"
+                      }`}
+                    >
+                      {g.status}
+                    </span>
+                  </td>
+                  <td className="p-2 border">
+                    <div className="flex gap-2 justify-center">
+                      {g.status === "PENDIENTE" && (
+                        <button
+                          onClick={() => payGroup(g)}
+                          className="px-2 py-1 rounded text-white bg-green-600 hover:bg-green-700"
+                        >
+                          Pagar
+                        </button>
                       )}
-                    </td>
-                    <td className="p-2 border">{b.category.toUpperCase()}</td>
-                    <td className="p-2 border">{b.productName}</td>
-                    <td className="p-2 border">{b.unit.toUpperCase()}</td>
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          className="w-full border p-1 rounded text-right"
-                          value={Number.isNaN(editQty) ? "" : editQty}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(",", ".");
-                            const num = parseFloat(raw);
-                            const safe = Number.isFinite(num)
-                              ? parseFloat(num.toFixed(3))
-                              : 0;
-                            setEditQty(Math.max(0, safe));
-                          }}
-                        />
-                      ) : (
-                        b.quantity.toFixed(3)
-                      )}
-                    </td>
-                    <td className="p-2 border">
-                      {isEditing ? b.remaining : b.remaining.toFixed(3)}
-                    </td>
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          className="w-full border p-1 rounded text-right"
-                          value={Number.isNaN(editPurchase) ? "" : editPurchase}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(",", ".");
-                            const num = parseFloat(raw);
-                            const safe = Number.isFinite(num)
-                              ? parseFloat(num.toFixed(2))
-                              : 0;
-                            setEditPurchase(Math.max(0, safe));
-                          }}
-                        />
-                      ) : (
-                        money(b.purchasePrice)
-                      )}
-                    </td>
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          className="w-full border p-1 rounded text-right"
-                          value={Number.isNaN(editSale) ? "" : editSale}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(",", ".");
-                            const num = parseFloat(raw);
-                            const safe = Number.isFinite(num)
-                              ? parseFloat(num.toFixed(2))
-                              : 0;
-                            setEditSale(Math.max(0, safe));
-                          }}
-                        />
-                      ) : (
-                        money(b.salePrice)
-                      )}
-                    </td>
-                    <td className="p-2 border">
-                      {isEditing ? money(editInvoiceTotal) : money(inv)}
-                    </td>
-                    <td className="p-2 border">
-                      {isEditing ? money(editExpectedTotal) : money(exp)}
-                    </td>
-                    <td className="p-2 border">
-                      {isEditing
-                        ? money(editExpectedTotal - editInvoiceTotal)
-                        : money(exp - inv)}
-                    </td>
-                    <td className="p-2 border">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          b.status === "PAGADO"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-yellow-100 text-yellow-700"
-                        }`}
+                      <button
+                        className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                        onClick={() => openForEdit(g)}
                       >
-                        {b.status}
-                      </span>
-                    </td>
-                    <td className="flex space-x-2 justify-center">
-                      {isEditing ? (
-                        <>
-                          <button
-                            className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                            onClick={saveEdit}
-                          >
-                            Guardar
-                          </button>
-                          <button
-                            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                            onClick={cancelEdit}
-                          >
-                            Cancelar
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          {b.status === "PENDIENTE" && (
-                            <button
-                              onClick={() => payBatch(b)}
-                              className="px-2 py-1 rounded text-white bg-green-600 hover:bg-green-700"
-                            >
-                              Pagar
-                            </button>
-                          )}
-                          <button
-                            className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                            onClick={() => startEdit(b)}
-                          >
-                            Editar
-                          </button>
-                          <button
-                            className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                            onClick={() => deleteBatch(b)}
-                          >
-                            Borrar
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
+                        Editar
+                      </button>
+                      <button
+                        className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                        onClick={() => deleteGroup(g)}
+                      >
+                        Borrar
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>
       </div>
+
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
-      {/* ===== Modal: Form Crear Lote (sin cambios) ===== */}
+      {/* ===== MODAL CREAR/EDITAR PEDIDO ===== */}
       {showCreateModal &&
         createPortal(
           <div className="fixed inset-0 z-[70] flex items-center justify-center">
@@ -871,9 +981,11 @@ export default function InventoryBatches() {
               className="absolute inset-0 bg-black/40"
               onClick={() => setShowCreateModal(false)}
             />
-            <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-4xl max-h-[92vh] overflow-auto p-4">
+            <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-6xl max-h-[92vh] overflow-auto p-4">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-lg font-bold">Crear Lote</h3>
+                <h3 className="text-lg font-bold">
+                  {editingGroupId ? "Editar pedido" : "Crear pedido"}
+                </h3>
                 <button
                   className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
                   onClick={() => setShowCreateModal(false)}
@@ -883,181 +995,462 @@ export default function InventoryBatches() {
                 </button>
               </div>
 
-              {/* === Formulario original === */}
-              <form
-                onSubmit={saveBatch}
-                className="grid grid-cols-1 md:grid-cols-2 gap-4"
-              >
+              {/* Header */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div className="md:col-span-2">
                   <label className="block text-sm font-semibold">
-                    Producto
+                    Nombre de pedido
                   </label>
-                  <select
+                  <input
                     className="w-full border p-2 rounded"
-                    value={productId}
-                    onChange={(e) => setProductId(e.target.value)}
-                  >
-                    <option value="">Selecciona un producto</option>
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} — {p.category} — {p.measurement} — Precio:{" "}
-                        {money(p.price)}
-                      </option>
-                    ))}
-                  </select>
+                    value={orderName}
+                    onChange={(e) => setOrderName(e.target.value)}
+                    placeholder="Ej: Pedido Pollo - Semana 1"
+                  />
                 </div>
-
                 <div>
                   <label className="block text-sm font-semibold">
-                    Fecha del lote
+                    Fecha de lote
                   </label>
                   <input
                     type="date"
                     className="w-full border p-2 rounded"
-                    value={dateStr}
-                    onChange={(e) => setDateStr(e.target.value)}
+                    value={orderDate}
+                    onChange={(e) => setOrderDate(e.target.value)}
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-sm font-semibold">
-                    Cantidad (Lo que esta ingresando)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    inputMode="decimal"
-                    className="w-full border p-2 rounded"
-                    value={quantity === 0 ? "" : quantity}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(",", ".");
-                      const num = parseFloat(raw);
-                      const safe = Number.isFinite(num)
-                        ? parseFloat(num.toFixed(3))
-                        : 0;
-                      setQuantity(safe);
-                    }}
-                    disabled={!productId}
-                    placeholder={
-                      !productId ? "Selecciona un producto primero" : ""
-                    }
-                    title={
-                      !productId ? "Selecciona un producto para habilitar" : ""
-                    }
-                  />
+              {/* Bloque agregar producto (solo UI, como pediste) */}
+              <div className="border rounded p-3 bg-gray-50 mb-4">
+                <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
+                  {/* ✅ FILTRO DE UNIDAD ANTES DEL PRODUCTO */}
+                  <div>
+                    <label className="block text-sm font-semibold">
+                      Unidad
+                    </label>
+                    <select
+                      className="w-full border p-2 rounded"
+                      value={unitFilter}
+                      onChange={(e) => {
+                        setUnitFilter(e.target.value);
+                        setProductId("");
+                        setQuantity(0);
+                        setPurchasePrice(0);
+                        setSalePrice(0);
+                      }}
+                    >
+                      <option value="lb">lb</option>
+                      <option value="unidad">unidad</option>
+                      <option value="kg">kg</option>
+                    </select>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-semibold">
+                      Producto (solo activos)
+                    </label>
+                    <select
+                      className="w-full border p-2 rounded"
+                      value={productId}
+                      onChange={(e) => setProductId(e.target.value)}
+                    >
+                      <option value="">Selecciona un producto</option>
+                      {productsByUnit.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} — {p.category} — {p.measurement}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold">
+                      Libras a ingresar
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="w-full border p-2 rounded"
+                      value={quantity === 0 ? "" : quantity}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(",", ".");
+                        const num = parseFloat(raw);
+                        const safe = Number.isFinite(num)
+                          ? parseFloat(num.toFixed(3))
+                          : 0;
+                        setQuantity(Math.max(0, safe));
+                      }}
+                      disabled={!productId}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold">
+                      Precio proveedor
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="w-full border p-2 rounded"
+                      value={purchasePrice === 0 ? "" : purchasePrice}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(",", ".");
+                        const num = parseFloat(raw);
+                        const safe = Number.isFinite(num)
+                          ? parseFloat(num.toFixed(2))
+                          : 0;
+                        setPurchasePrice(Math.max(0, safe));
+                      }}
+                      disabled={!productId}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold">
+                      Precio venta (editable)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      inputMode="decimal"
+                      className="w-full border p-2 rounded"
+                      value={salePrice === 0 ? "" : salePrice}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(",", ".");
+                        const num = parseFloat(raw);
+                        const safe = Number.isFinite(num)
+                          ? parseFloat(num.toFixed(2))
+                          : 0;
+                        setSalePrice(Math.max(0, safe));
+                      }}
+                      disabled={!productId}
+                    />
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold">
-                    Precio de compra (compra)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    inputMode="decimal"
-                    className="w-full border p-2 rounded"
-                    value={purchasePrice === 0 ? "" : purchasePrice}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(",", ".");
-                      const num = parseFloat(raw);
-                      const safe = Number.isFinite(num)
-                        ? parseFloat(num.toFixed(2))
-                        : 0;
-                      setPurchasePrice(safe);
-                    }}
-                    disabled={!productId}
-                    placeholder={
-                      !productId ? "Selecciona un producto primero" : ""
-                    }
-                    title={
-                      !productId ? "Selecciona un producto para habilitar" : ""
-                    }
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold">
-                    Precio de venta (venta)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    inputMode="decimal"
-                    className="w-full border p-2 rounded"
-                    value={salePrice === 0 ? "" : salePrice}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(",", ".");
-                      const num = parseFloat(raw);
-                      const safe = Number.isFinite(num)
-                        ? parseFloat(num.toFixed(2))
-                        : 0;
-                      setSalePrice(safe);
-                    }}
-                    disabled={!productId}
-                    placeholder={
-                      !productId ? "Selecciona un producto primero" : ""
-                    }
-                    title={
-                      !productId ? "Selecciona un producto para habilitar" : ""
-                    }
-                  />
-                </div>
-
-                {/* campos calculados */}
-                <div>
-                  <label className="block text-sm font-semibold">
-                    Total factura (auto)
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full border p-2 rounded bg-gray-100"
-                    value={money(invoiceTotal)}
-                    readOnly
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold">
-                    Total esperado (auto)
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full border p-2 rounded bg-gray-100"
-                    value={money(expectedTotal)}
-                    readOnly
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-semibold">Notas</label>
-                  <input
-                    className="w-full border p-2 rounded"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                  />
-                </div>
-
-                <div className="md:col-span-2 flex justify-end gap-2">
+                <div className="flex justify-end mt-3">
                   <button
                     type="button"
-                    className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                    onClick={() => setShowCreateModal(false)}
+                    onClick={addItemToOrder}
+                    className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
                   >
-                    Cancelar
-                  </button>
-                  <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                    Guardar lote
+                    Agregar producto al pedido
                   </button>
                 </div>
-              </form>
+              </div>
+
+              {/* Tabla productos agregados */}
+              <div className="bg-white rounded border overflow-x-auto">
+                <table className="min-w-[1200px] text-xs md:text-sm">
+                  <thead className="bg-gray-100">
+                    <tr className="whitespace-nowrap">
+                      <th className="p-2 border">Producto</th>
+                      <th className="p-2 border">Libras ingresadas</th>
+                      <th className="p-2 border">Libras restantes</th>
+                      <th className="p-2 border">Precio proveedor</th>
+                      <th className="p-2 border">Precio venta</th>
+                      <th className="p-2 border">Total facturado</th>
+                      <th className="p-2 border">Total esperado</th>
+                      <th className="p-2 border">Utilidad bruta</th>
+                      <th className="p-2 border">Acciones</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {orderItems.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={9}
+                          className="p-4 text-center text-gray-500"
+                        >
+                          No hay productos agregados.
+                        </td>
+                      </tr>
+                    ) : (
+                      orderItems.map((it) => (
+                        <tr
+                          key={it.tempId}
+                          className="text-center whitespace-nowrap"
+                        >
+                          <td className="p-2 border text-left">
+                            {it.productName}
+                            <div className="text-[11px] text-gray-500">
+                              {it.category} — {it.unit}
+                            </div>
+                          </td>
+
+                          {/* ✅ Editables: libras ingresadas, precio proveedor, precio venta */}
+                          <td className="p-2 border">
+                            <input
+                              type="number"
+                              step="0.01"
+                              inputMode="decimal"
+                              className="w-28 border p-1 rounded text-right"
+                              value={it.quantity}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(",", ".");
+                                const num = parseFloat(raw);
+                                const safe = Number.isFinite(num)
+                                  ? parseFloat(num.toFixed(3))
+                                  : 0;
+                                updateOrderItemField(
+                                  it.tempId,
+                                  "quantity",
+                                  safe
+                                );
+                              }}
+                            />
+                          </td>
+
+                          <td className="p-2 border">
+                            {Number(it.remaining || 0).toFixed(3)}
+                          </td>
+
+                          <td className="p-2 border">
+                            <input
+                              type="number"
+                              step="0.01"
+                              inputMode="decimal"
+                              className="w-28 border p-1 rounded text-right"
+                              value={it.purchasePrice}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(",", ".");
+                                const num = parseFloat(raw);
+                                const safe = Number.isFinite(num)
+                                  ? parseFloat(num.toFixed(2))
+                                  : 0;
+                                updateOrderItemField(
+                                  it.tempId,
+                                  "purchasePrice",
+                                  safe
+                                );
+                              }}
+                            />
+                          </td>
+
+                          <td className="p-2 border">
+                            <input
+                              type="number"
+                              step="0.01"
+                              inputMode="decimal"
+                              className="w-28 border p-1 rounded text-right"
+                              value={it.salePrice}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(",", ".");
+                                const num = parseFloat(raw);
+                                const safe = Number.isFinite(num)
+                                  ? parseFloat(num.toFixed(2))
+                                  : 0;
+                                updateOrderItemField(
+                                  it.tempId,
+                                  "salePrice",
+                                  safe
+                                );
+                              }}
+                            />
+                          </td>
+
+                          <td className="p-2 border">
+                            {money(it.invoiceTotal)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.expectedTotal)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.utilidadBruta)}
+                          </td>
+
+                          <td className="p-2 border">
+                            <button
+                              type="button"
+                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                              onClick={() => removeOrderItem(it.tempId)}
+                            >
+                              Quitar
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* KPIs abajo (como ordenes maestras) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">Libras ingresadas</div>
+                  <div className="text-lg font-semibold">
+                    {orderKpis.lbsIn.toFixed(3)}
+                  </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    Libras restantes
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {orderKpis.lbsRem.toFixed(3)}
+                  </div>
+                </div>
+
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">Total facturado</div>
+                  <div className="text-lg font-semibold">
+                    {money(orderKpis.totalFacturado)}
+                  </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    Total esperado
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {money(orderKpis.totalEsperado)}
+                  </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    Utilidad bruta
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {money(orderKpis.utilidadBruta)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Botones */}
+              <div className="flex justify-end gap-2 mt-4">
+                <button
+                  type="button"
+                  className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                  onClick={() => setShowCreateModal(false)}
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="button"
+                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                  onClick={saveOrder}
+                  disabled={orderItems.length === 0}
+                >
+                  {editingGroupId ? "Editar pedido" : "Crear pedido"}
+                </button>
+              </div>
             </div>
           </div>,
           document.body
         )}
 
-      {/* ===== NUEVO: Modal visual Confirmar Pago ===== */}
+      {/* ===== MODAL DETALLE PEDIDO ===== */}
+      {showDetailModal &&
+        detailGroup &&
+        createPortal(
+          <div className="fixed inset-0 z-[75] flex items-center justify-center">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => {
+                setShowDetailModal(false);
+                setDetailGroup(null);
+              }}
+            />
+            <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-6xl max-h-[92vh] overflow-auto p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h3 className="text-lg font-bold">Detalle del pedido</h3>
+                  <div className="text-sm text-gray-600">
+                    <strong>{detailGroup.orderName}</strong> —{" "}
+                    {detailGroup.date}
+                  </div>
+                </div>
+                <button
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                  onClick={() => {
+                    setShowDetailModal(false);
+                    setDetailGroup(null);
+                  }}
+                  type="button"
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              <div className="bg-white rounded border overflow-x-auto">
+                <table className="min-w-[1100px] text-xs md:text-sm">
+                  <thead className="bg-gray-100">
+                    <tr className="whitespace-nowrap">
+                      <th className="p-2 border">Producto</th>
+                      <th className="p-2 border">Unidad</th>
+                      <th className="p-2 border">Ingresado</th>
+                      <th className="p-2 border">Restantes</th>
+                      <th className="p-2 border">Precio Compra</th>
+                      <th className="p-2 border">Precio Venta</th>
+                      <th className="p-2 border">Total factura</th>
+                      <th className="p-2 border">Total esperado</th>
+                      <th className="p-2 border">Utilidad</th>
+                      <th className="p-2 border">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailGroup.items.map((b) => {
+                      const inv = Number(b.invoiceTotal || 0);
+                      const exp = Number(b.expectedTotal || 0);
+                      return (
+                        <tr
+                          key={b.id}
+                          className="text-center whitespace-nowrap"
+                        >
+                          <td className="p-2 border text-left">
+                            {b.productName}
+                          </td>
+                          <td className="p-2 border">
+                            {(b.unit || "").toUpperCase()}
+                          </td>
+                          <td className="p-2 border">
+                            {b.quantity.toFixed(3)}
+                          </td>
+                          <td className="p-2 border">
+                            {b.remaining.toFixed(3)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(b.purchasePrice)}
+                          </td>
+                          <td className="p-2 border">{money(b.salePrice)}</td>
+                          <td className="p-2 border">{money(inv)}</td>
+                          <td className="p-2 border">{money(exp)}</td>
+                          <td className="p-2 border">{money(exp - inv)}</td>
+                          <td className="p-2 border">{b.status}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">Libras ingresadas</div>
+                  <div className="text-lg font-semibold">
+                    {detailGroup.lbsIn.toFixed(3)}
+                  </div>
+                </div>
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">Libras restantes</div>
+                  <div className="text-lg font-semibold">
+                    {detailGroup.lbsRem.toFixed(3)}
+                  </div>
+                </div>
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">Utilidad bruta</div>
+                  <div className="text-lg font-semibold">
+                    {money(detailGroup.utilidadBruta)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* ===== MODAL CONFIRMAR PAGO (grupo) ===== */}
       {showPayDialog &&
-        selectedBatch &&
+        selectedGroup &&
         createPortal(
           <div className="fixed inset-0 z-[80] flex items-center justify-center">
             <div
@@ -1069,16 +1462,16 @@ export default function InventoryBatches() {
                 Confirmar pago de inventario
               </h3>
               <p className="text-sm text-gray-700 mb-5 text-center">
-                ¿Seguro que quieres pagar este inventario?
+                ¿Seguro que quieres pagar este pedido?
                 <br />
-                <strong>{selectedBatch.productName}</strong> —{" "}
-                {selectedBatch.quantity} {selectedBatch.unit}
+                <strong>{selectedGroup.orderName}</strong> —{" "}
+                {selectedGroup.date}
                 <br />
                 Ya no habrán libras disponibles al pagar este inventario.
               </p>
               <div className="flex justify-center gap-4">
                 <button
-                  onClick={confirmPayNow}
+                  onClick={confirmPayGroupNow}
                   className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700"
                 >
                   Confirmar

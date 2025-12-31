@@ -25,9 +25,13 @@ export async function newBatch(payload: {
   purchasePrice: number; // costo unitario
   salePrice: number; // precio venta unitario
   invoiceTotal?: number; // total factura (opcional)
+  expectedTotal?: number; // <-- ya lo usas en el componente
   date: string; // yyyy-MM-dd
   supplier?: string;
   notes?: string;
+  // ✅ NUEVO (solo metadatos para agrupar en UI)
+  batchGroupId?: string;
+  orderName?: string;
 }) {
   const data = {
     ...payload,

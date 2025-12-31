@@ -57,7 +57,8 @@ type CartItem = {
   productId: string;
   productName: string;
   measurement: string; // "lb" o unidad
-  price: number; // unitario
+  price: number; // precio normal (catálogo)
+  specialPrice: number; // ✅ NUEVO: precio especial digitado (0 = no aplica)
   stock: number; // existencias calculadas
   qty: number; // cantidad elegida
   discount: number; // entero C$ por línea
@@ -85,14 +86,22 @@ export default function SaleForm({ user }: { user: any }) {
 
   const [message, setMessage] = useState("");
 
-  // 🔵 NUEVO: overlay de guardado
+  // 🔵 overlay de guardado
   const [saving, setSaving] = useState(false);
 
-  // 🔵 NUEVO: mapa de existencias por productId para filtrar el selector
+  // 🔵 mapa de existencias por productId para filtrar el selector
   const [stockById, setStockById] = useState<Record<string, number>>({});
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
   const qty3 = (n: number) => roundQty(n).toFixed(3);
+
+  // ✅ precio aplicado por línea (si specialPrice > 0 usa ese; si no, usa price normal)
+  const getAppliedUnitPrice = (
+    it: Pick<CartItem, "price" | "specialPrice">
+  ) => {
+    const sp = Number(it.specialPrice || 0);
+    return sp > 0 ? sp : Number(it.price || 0);
+  };
 
   // ---- helpers stock (a 3 decimales) ---------------------------------------
   const getDisponibleByProductId = async (productId: string) => {
@@ -145,7 +154,7 @@ export default function SaleForm({ user }: { user: any }) {
     })();
   }, []);
 
-  // 🔵 NUEVO: cargar existencias por productId para filtrar el selector
+  // cargar existencias por productId para filtrar el selector
   useEffect(() => {
     (async () => {
       const snap = await getDocs(collection(db, "inventory_batches"));
@@ -156,7 +165,6 @@ export default function SaleForm({ user }: { user: any }) {
         const rem = Number(x.remaining || 0);
         if (pid) m[pid] = addQty(m[pid] || 0, rem);
       });
-      // redondeo a 3 decimales como el resto del módulo
       Object.keys(m).forEach((k) => (m[k] = roundQty(m[k])));
       setStockById(m);
     })();
@@ -196,6 +204,7 @@ export default function SaleForm({ user }: { user: any }) {
         productName: p.productName,
         measurement: p.measurement,
         price: Number(p.price || 0),
+        specialPrice: 0, // ✅ NUEVO
         stock,
         qty: 0,
         discount: 0,
@@ -222,6 +231,19 @@ export default function SaleForm({ user }: { user: any }) {
     );
   };
 
+  // ✅ NUEVO: actualizar precio especial
+  const setItemSpecialPrice = (productId: string, raw: string) => {
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.productId !== productId) return it;
+        const txt = (raw || "").replace(",", ".");
+        const num = txt.trim() === "" ? 0 : Number(txt);
+        const safe = Number.isFinite(num) ? Math.max(0, round2(num)) : 0;
+        return { ...it, specialPrice: safe };
+      })
+    );
+  };
+
   // Actualizar descuento (entero)
   const setItemDiscount = (productId: string, raw: string) => {
     setItems((prev) =>
@@ -233,11 +255,12 @@ export default function SaleForm({ user }: { user: any }) {
     );
   };
 
-  // Recalcular total neto (precio×cantidad − descuento)
+  // ✅ Recalcular total neto usando PRECIO APLICADO (special si existe)
   const cartTotal = useMemo(() => {
     let sum = 0;
     for (const it of items) {
-      const line = Number(it.price || 0) * Number(it.qty || 0);
+      const unitApplied = getAppliedUnitPrice(it);
+      const line = Number(unitApplied || 0) * Number(it.qty || 0);
       const net = Math.max(0, line - Math.max(0, Number(it.discount || 0)));
       sum += net;
     }
@@ -303,7 +326,7 @@ export default function SaleForm({ user }: { user: any }) {
     }
 
     try {
-      setSaving(true); // 🔵 overlay ON
+      setSaving(true);
 
       // 1) Asignar FIFO y descontar por ítem
       const enriched = [];
@@ -312,7 +335,8 @@ export default function SaleForm({ user }: { user: any }) {
         const { allocations, avgUnitCost, cogsAmount } =
           await allocateFIFOAndUpdateBatches(db, it.productName, qty, false);
 
-        const line = Number(it.price || 0) * Number(qty || 0);
+        const unitApplied = getAppliedUnitPrice(it); // ✅ precio aplicado
+        const line = Number(unitApplied || 0) * Number(qty || 0);
         const discount = Math.max(0, Number(it.discount || 0));
         const net = Math.max(0, line - discount);
 
@@ -320,11 +344,20 @@ export default function SaleForm({ user }: { user: any }) {
           productId: it.productId,
           productName: it.productName,
           measurement: it.measurement,
-          unitPrice: Number(it.price || 0),
+
+          // ✅ CLAVE: unitPrice queda como PRECIO APLICADO (para que transacciones/cierres/dashboard muestren lo correcto)
+          unitPrice: Number(unitApplied || 0),
+
+          // ✅ opcionales (no rompen nada): para auditoría
+          regularPrice: Number(it.price || 0),
+          specialPrice:
+            Number(it.specialPrice || 0) > 0 ? Number(it.specialPrice) : null,
+
           qty,
           discount,
           lineTotal: round2(line),
           lineFinal: round2(net),
+
           allocations,
           avgUnitCost,
           cogsAmount,
@@ -367,7 +400,7 @@ export default function SaleForm({ user }: { user: any }) {
       console.error(err);
       setMessage(`❌ ${err?.message || "Error al registrar la venta."}`);
     } finally {
-      setSaving(false); // 🔵 overlay OFF
+      setSaving(false);
     }
   };
 
@@ -377,7 +410,7 @@ export default function SaleForm({ user }: { user: any }) {
     [items]
   );
 
-  // 🔵 NUEVO: solo mostrar en el selector los que tienen stock > 0
+  // solo mostrar en el selector los que tienen stock > 0
   const selectableProducts = useMemo(
     () => products.filter((p) => (stockById[p.id] || 0) > 0),
     [products, stockById]
@@ -472,6 +505,12 @@ export default function SaleForm({ user }: { user: any }) {
               <tr className="text-center">
                 <th className="p-2 border whitespace-nowrap">Producto</th>
                 <th className="p-2 border whitespace-nowrap">Precio</th>
+
+                {/* ✅ NUEVO */}
+                <th className="p-2 border whitespace-nowrap">
+                  Precio especial
+                </th>
+
                 <th className="p-2 border whitespace-nowrap">Existencias</th>
                 <th className="p-2 border whitespace-nowrap">Cantidad</th>
                 <th className="p-2 border whitespace-nowrap">Descuento</th>
@@ -482,13 +521,14 @@ export default function SaleForm({ user }: { user: any }) {
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-4 text-center text-gray-500">
+                  <td colSpan={8} className="p-4 text-center text-gray-500">
                     Agrega productos al carrito.
                   </td>
                 </tr>
               ) : (
                 items.map((it) => {
-                  const line = Number(it.price || 0) * Number(it.qty || 0);
+                  const unitApplied = getAppliedUnitPrice(it);
+                  const line = Number(unitApplied || 0) * Number(it.qty || 0);
                   const net = Math.max(
                     0,
                     line - Math.max(0, Number(it.discount || 0))
@@ -496,18 +536,44 @@ export default function SaleForm({ user }: { user: any }) {
                   const isUnit = (it.measurement || "").toLowerCase() !== "lb";
                   const shownExist = roundQty(
                     Number(it.stock) - Number(it.qty || 0)
-                  ); // 🔵 stock dinámico
+                  );
+
                   return (
                     <tr key={it.productId} className="text-center">
                       <td className="p-2 border whitespace-nowrap">
                         {it.productName} — {it.measurement}
                       </td>
+
+                      {/* Precio normal */}
                       <td className="p-2 border whitespace-nowrap">
                         C$ {round2(it.price).toFixed(2)}
                       </td>
+
+                      {/* ✅ NUEVO: Precio especial */}
+                      <td className="p-2 border">
+                        <input
+                          type="number"
+                          step="0.01"
+                          inputMode="decimal"
+                          className="w-28 border p-1 rounded text-right"
+                          value={it.specialPrice === 0 ? "" : it.specialPrice}
+                          onKeyDown={numberKeyGuard}
+                          onChange={(e) =>
+                            setItemSpecialPrice(it.productId, e.target.value)
+                          }
+                          placeholder="—"
+                          title="Precio especial (si se deja vacío, se usa el precio normal)"
+                        />
+                        {/* opcional: mini hint del aplicado */}
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          Aplicado: C$ {round2(unitApplied).toFixed(2)}
+                        </div>
+                      </td>
+
                       <td className="p-2 border whitespace-nowrap">
                         {shownExist.toFixed(3)}
                       </td>
+
                       <td className="p-2 border">
                         <input
                           type="number"
@@ -523,6 +589,7 @@ export default function SaleForm({ user }: { user: any }) {
                           title="Cantidad"
                         />
                       </td>
+
                       <td className="p-2 border">
                         <input
                           type="number"
@@ -538,9 +605,11 @@ export default function SaleForm({ user }: { user: any }) {
                           title="Descuento (entero C$)"
                         />
                       </td>
+
                       <td className="p-2 border whitespace-nowrap">
                         C$ {round2(net).toFixed(2)}
                       </td>
+
                       <td className="p-2 border">
                         <button
                           type="button"
@@ -569,7 +638,7 @@ export default function SaleForm({ user }: { user: any }) {
             className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl bg-gray-100"
             value={`C$ ${amountCharged.toFixed(2)}`}
             readOnly
-            title="Suma de (precio × cantidad − descuento) de cada producto."
+            title="Suma de (precio aplicado × cantidad − descuento) de cada producto."
           />
         </div>
 
@@ -625,7 +694,7 @@ export default function SaleForm({ user }: { user: any }) {
         )}
       </form>
 
-      {/* 🔵 Overlay de guardado (igual estilo que ropa) */}
+      {/* Overlay de guardado */}
       {saving && (
         <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center">
           <div className="bg-white rounded-lg shadow-xl border px-6 py-5">

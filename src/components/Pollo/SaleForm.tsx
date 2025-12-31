@@ -51,7 +51,7 @@ export default function SaleForm({ user }: { user: any }) {
       setProducts(data);
     }
     fetchProducts();
-  }, []);
+  }, []); 
 
   //Cargar usuario
   useEffect(() => {
