@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
+import InstallApp from "../components/InstallApp";
 
 type Role =
   | ""
@@ -141,6 +142,8 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
           )}
 
           <div className="ml-auto">
+            <InstallApp />
+
             <button
               onClick={handleLogout}
               className="px-3 py-2 rounded-2xl bg-red-500 text-white text-sm font-semibold shadow hover:bg-red-600"
