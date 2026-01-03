@@ -3,11 +3,21 @@
 @tailwind utilities;
 
 /* Estilos base para tu app React */
+#root {
+  min-height: 100%;
+}
+
+html,
+body {
+  height: 100%;
+  overscroll-behavior-y: none;
+}
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
   background: #f8fafc;
   color: #222;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Fuerza colores simples (rgb/hex) dentro del bloque a exportar */

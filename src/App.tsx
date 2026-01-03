@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   BrowserRouter as Router,
   Routes,
@@ -14,8 +14,9 @@ import { doc, getDoc } from "firebase/firestore";
 import Login from "./components/Login";
 import PrivateRoute from "./PrivateRoute";
 import AdminLayout from "./components/AdminLayout";
+import MobileTabsLayout from "./components/MobileTabsLayout";
 
-// Módulos
+// Módulos POLLO
 import CierreVentas from "../src/components/Pollo/CierreVentas";
 import HistorialCierres from "../src/components/Pollo/HistorialCierres";
 import UserRegisterForm from "./components/UserRegisterForm";
@@ -28,6 +29,8 @@ import ExpensesAdmin from "./components/Pollo/ExpensesAdmin";
 import FixBatchesPages from "../src/components/Pollo/FixBatchesPages";
 import Billing from "./components/Pollo/Billing";
 import PaidBatches from "../src/components/Pollo/PaidBatches";
+
+// Módulos ROPA
 import InventoryClothesBatches from "./components/Clothes/InventoryClothesBatches";
 import ProductsClothes from "./components/Clothes/ClothesProducts";
 import CustomersClothes from "./components/Clothes/CustomersClothes";
@@ -35,6 +38,8 @@ import SalesClothesPOS from "./components/Clothes/SalesClothesPOS";
 import FinancialDashboardClothes from "./components/Clothes/FinancialDashboardClothes";
 import ExpensesClothes from "./components/Clothes/ExpensesClothes";
 import TransactionsReportClothes from "./components/Clothes/TransactionsReportClothes";
+
+// Módulos DULCES
 import CandiesProducts from "./components/Candies/CatalogoProductos";
 import InventoryCandies from "./components/Candies/InventarioProductos";
 import CustomersCandies from "./components/Candies/CustomersCandies";
@@ -60,15 +65,43 @@ type Role =
   | "vendedor_ropa"
   | "vendedor_dulces";
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener?.("change", update);
+    return () => mq.removeEventListener?.("change", update);
+  }, []);
+
+  return isMobile;
+}
+
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [role, setRole] = useState<Role>("");
-  const [sellerCandyId, setSellerCandyId] = useState<string>(""); // <- nuevo
+  const [sellerCandyId, setSellerCandyId] = useState<string>("");
   const [loading, setLoading] = useState(true);
+
+  const isMobile = useIsMobile();
+
+  // ✅ IMPORTANTE: esto debe estar ANTES del "if (loading) return ..."
+  const Layout = useMemo(() => {
+    return isMobile ? (
+      <MobileTabsLayout role={role} />
+    ) : (
+      <AdminLayout role={role} />
+    );
+  }, [isMobile, role]);
+
+  const currentUserEmail = user?.email || "";
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
+
       if (firebaseUser) {
         setUser(firebaseUser);
         try {
@@ -93,8 +126,10 @@ export default function App() {
         setRole("");
         setSellerCandyId("");
       }
+
       setLoading(false);
     });
+
     return () => unsubscribe();
   }, []);
 
@@ -102,22 +137,19 @@ export default function App() {
 
   // Redirección por defecto dentro de /admin según rol
   const AdminIndexRedirect = () => {
-    if (role === "admin") return <Navigate to="FinancialDashboard" replace />;
+    if (role === "admin") return <Navigate to="financialDashboard" replace />;
     if (role === "vendedor_pollo") return <Navigate to="salesV2" replace />;
     if (role === "vendedor_ropa") return <Navigate to="salesClothes" replace />;
     if (role === "vendedor_dulces")
-      return <Navigate to="productsCandies" replace />;
+      return <Navigate to="salesCandies" replace />;
     return <Navigate to="/" replace />;
   };
-
-  const currentUserEmail = user?.email || "";
 
   return (
     <Router>
       <Routes>
         <Route path="/" element={<Login />} />
 
-        {/* Árbol ADMIN protegido con layout + rutas hijas */}
         <Route
           path="/admin"
           element={
@@ -129,14 +161,13 @@ export default function App() {
                 "vendedor_dulces",
               ]}
             >
-              <AdminLayout role={role} />
+              {Layout}
             </PrivateRoute>
           }
         >
-          {/* Redirección inicial dentro de /admin según rol */}
           <Route index element={<AdminIndexRedirect />} />
+
           {/* ======== POLLO ======== */}
-          {/* Cierre del día (admin y vendedor_pollo) */}
           <Route
             path="bills"
             element={
@@ -145,7 +176,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Ventas pollo (admin y vendedor_pollo) */}
           <Route
             path="salesV2"
             element={
@@ -154,7 +184,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Panel financiero pollo (solo admin) */}
           <Route
             path="financialDashboard"
             element={
@@ -163,7 +192,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Gastos pollo (solo admin) */}
           <Route
             path="expenses"
             element={
@@ -172,7 +200,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Billing / cierre manual (solo admin) */}
           <Route
             path="billing"
             element={
@@ -181,12 +208,11 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Inventarios pollo (solo admin) */}
           <Route
             path="batches"
             element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <InventoryBatches />
+              <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
+                <InventoryBatches role={role} />
               </PrivateRoute>
             }
           />
@@ -198,7 +224,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Otros (solo admin) */}
           <Route
             path="fix"
             element={
@@ -223,7 +248,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Usuarios (solo admin) */}
           <Route
             path="users"
             element={
@@ -232,7 +256,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Productos pollo (solo admin) */}
           <Route
             path="products"
             element={
@@ -241,6 +264,7 @@ export default function App() {
               </PrivateRoute>
             }
           />
+
           {/* ======== CANDIES ======== */}
           <Route
             path="datacenter"
@@ -290,7 +314,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           <Route
             path="customersCandies"
             element={
@@ -395,8 +418,8 @@ export default function App() {
               </PrivateRoute>
             }
           />
+
           {/* ======== ROPA ======== */}
-          {/* Venta ropa (admin y vendedor_ropa) */}
           <Route
             path="salesClothes"
             element={
@@ -405,7 +428,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Transacciones ropa (admin y vendedor_ropa) */}
           <Route
             path="TransactionsReportClothes"
             element={
@@ -414,7 +436,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Dashboard ropa (admin y vendedor_ropa) */}
           <Route
             path="financialDashboardClothes"
             element={
@@ -423,7 +444,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Gastos ropa (solo admin) */}
           <Route
             path="ExpensesClothes"
             element={
@@ -432,7 +452,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Inventario ropa (solo admin) */}
           <Route
             path="inventoryClothesBatches"
             element={
@@ -441,7 +460,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Productos ropa */}
           <Route
             path="productsClothes"
             element={
@@ -450,7 +468,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-          {/* Clientes ropa */}
           <Route
             path="CustomersClothes"
             element={
@@ -461,7 +478,6 @@ export default function App() {
           />
         </Route>
 
-        {/* Ruta legacy directa a ventas pollo */}
         <Route
           path="/salesV2"
           element={

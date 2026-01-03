@@ -259,7 +259,7 @@ export default function FinancialDashboard(): React.ReactElement {
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl ">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Finanzas: Ingresos y Egresos</h2>
+        <h2 className="text-2xl font-bold">Dashboard Financiero</h2>
         <RefreshButton onClick={refresh} loading={loading} />
       </div>
 
@@ -423,7 +423,9 @@ function Kpi({
   return (
     <div className="border rounded-2xl p-3">
       <div className="text-[17px] text-gray-500">{title}</div>
-      <div className={`text-[30px] font-bold ${positive ? "text-green-700" : ""}`}>
+      <div
+        className={`text-[30px] font-bold ${positive ? "text-green-700" : ""}`}
+      >
         {value}
       </div>
     </div>
