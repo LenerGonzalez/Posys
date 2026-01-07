@@ -54,18 +54,16 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
       ];
     }
 
-    // === VENDEDOR POLLO === (ventas + trans view (pendiente) + cierre view + inventario view)
-    // Por ahora sin transacciones (lo dejaste en pausa)
+    // === VENDEDOR POLLO ===
     if (isVendPollo) {
       return [
         { key: "venta", label: "Venta", to: `${base}/salesV2` },
-        { key: "inv", label: "Inventario", to: `${base}/batches` }, // lo haremos solo vista en el componente
+        { key: "inv", label: "Inventario", to: `${base}/batches` },
         { key: "cierre", label: "Cierre", to: `${base}/bills` },
       ];
     }
 
-    // === VENDEDOR DULCES === (venta + trans view (pendiente) + cierre view + órdenes view + clientes)
-    // Por ahora sin transacciones (lo dejaste en pausa)
+    // === VENDEDOR DULCES ===
     if (isVendDulces) {
       return [
         { key: "venta", label: "Venta", to: `${base}/salesCandies` },
@@ -94,12 +92,14 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
 
   const tabCls = ({ isActive }: { isActive: boolean }) =>
     cn(
-      "flex-1 text-center text-xs py-2 rounded-xl",
+      "flex-1 text-center text-[11px] py-1.5 rounded-lg",
+      "leading-none select-none",
       isActive ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-gray-100"
     );
 
   return (
-    <div className="min-h-screen bg-[#f1f3f7]">
+    // Layout en columna: header fijo + contenido scrolleable + tab bar fijo
+    <div className="min-h-screen bg-[#f1f3f7] flex flex-col">
       {/* Top Bar */}
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
         <div className="px-3 py-3 flex items-center gap-2">
@@ -141,9 +141,8 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
             </div>
           )}
 
-          <div className="ml-auto">
-            <InstallApp />
-
+          <div className="ml-auto flex items-center gap-2">
+         
             <button
               onClick={handleLogout}
               className="px-3 py-2 rounded-2xl bg-red-500 text-white text-sm font-semibold shadow hover:bg-red-600"
@@ -154,14 +153,14 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
         </div>
       </header>
 
-      {/* Content */}
-      <main className="px-3 pt-3 pb-24">
+      {/* Content (solo esto scrollea) */}
+      <main className="flex-1 overflow-y-auto px-3 pt-3 pb-20">
         <Outlet />
       </main>
 
-      {/* Bottom Tabs */}
+      {/* Bottom Tabs (fijo SIEMPRE) */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-md">
-        <div className="max-w-3xl mx-auto px-2 py-2 flex gap-2">
+        <div className="max-w-3xl mx-auto px-2 py-1.5 flex gap-1.5">
           {tabs.map((t) => (
             <NavLink key={t.key} to={t.to} className={tabCls}>
               {t.label}

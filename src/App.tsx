@@ -15,7 +15,6 @@ import Login from "./components/Login";
 import PrivateRoute from "./PrivateRoute";
 import AdminLayout from "./components/AdminLayout";
 import MobileTabsLayout from "./components/MobileTabsLayout";
-import InstallApp from "./components/InstallApp";
 
 // Módulos POLLO
 import CierreVentas from "../src/components/Pollo/CierreVentas";
@@ -148,7 +147,6 @@ export default function App() {
 
   return (
     <Router>
-      <InstallApp />
 
       <Routes>
         <Route path="/" element={<Login />} />

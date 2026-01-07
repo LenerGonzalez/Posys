@@ -147,7 +147,7 @@ function generateCandyVoucherPDF(args: {
   let y = 12;
 
   // Encabezado
-  doc.setFontSize(14);
+  doc.setFontSize(16);
   doc.text("Multiservicios Ortiz", 10, y);
   y += 6;
 
@@ -155,7 +155,7 @@ function generateCandyVoucherPDF(args: {
   doc.text("Recibo de venta certificada", 10, y);
   y += 8;
 
-  doc.setFontSize(10);
+  doc.setFontSize(12);
   doc.text(`Fecha: ${date}`, 10, y);
   y += 5;
   doc.text(`Cliente: ${customerName || "Cliente Mostrador"}`, 10, y);
@@ -179,7 +179,7 @@ function generateCandyVoucherPDF(args: {
   }
 
   // Encabezado de tabla simple
-  doc.setFontSize(9);
+  doc.setFontSize(12);
   doc.text("Producto", 10, y);
   doc.text("Paquetes", 110, y, { align: "right" as any });
   doc.text("Precio.", 150, y, { align: "right" as any });
@@ -216,7 +216,7 @@ function generateCandyVoucherPDF(args: {
   y += 6;
 
   // Total
-  doc.setFontSize(11);
+  doc.setFontSize(13);
   doc.text(`Total: C$ ${Number(total || 0).toFixed(2)}`, 200 - 10, y, {
     align: "right" as any,
   });
@@ -354,7 +354,6 @@ function normalizePhone(input: string): string {
   return prefix + rest.slice(0, 8);
 }
 
-// ===== NUEVO: Props opcionales para amarrar el vendedor al usuario logueado =====
 // ===== NUEVO: Props opcionales para amarrar el vendedor al usuario logueado =====
 type RoleProp =
   | ""
@@ -1086,11 +1085,14 @@ export default function SalesCandiesPOS({
   // UI
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Ventas (Dulces)</h2>
+      {/* ✅ Responsive header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+        <h2 className="text-2xl font-bold">Ventas (Dulces)</h2>
+      </div>
 
       <form
         onSubmit={saveSale}
-        className="bg-white p-4 rounded shadow border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
+        className="bg-white p-3 sm:p-4 rounded shadow border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
       >
         {/* Tipo de cliente */}
         <div>
@@ -1123,9 +1125,11 @@ export default function SalesCandiesPOS({
             <label className="block text-sm font-semibold">
               Cliente (crédito)
             </label>
-            <div className="flex gap-2">
+
+            {/* ✅ Responsive: en móvil apila select + botón */}
+            <div className="flex flex-col sm:flex-row gap-2">
               <select
-                className="flex-1 border p-2 rounded"
+                className="w-full sm:flex-1 border p-2 rounded"
                 value={customerId}
                 onChange={(e) => setCustomerId(e.target.value)}
               >
@@ -1140,9 +1144,10 @@ export default function SalesCandiesPOS({
                   </option>
                 ))}
               </select>
+
               <button
                 type="button"
-                className="px-20 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+                className="w-full sm:w-auto px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"
                 onClick={() => setShowModal(true)}
               >
                 Crear Cliente
@@ -1285,10 +1290,6 @@ export default function SalesCandiesPOS({
                 : "Selecciona un vendedor primero"}
             </option>
 
-            {/* ✅ AJUSTE + MEJORA:
-                - SOLO productos del pedido del vendedor (stockByProduct)
-                - NO mostrar productos con 0 stock
-             */}
             {productsForVendorPicker.map((p) => {
               const already = items.some((it) => it.productId === p.id);
 
@@ -1296,7 +1297,6 @@ export default function SalesCandiesPOS({
               const upp = Math.max(1, Number(p.unitsPerPackage || 1));
               const stockPackages = Math.floor(units / upp);
 
-              // por seguridad: si por algún motivo llega 0, lo omitimos
               if (stockPackages <= 0) return null;
 
               return (
@@ -1321,122 +1321,124 @@ export default function SalesCandiesPOS({
 
         {/* Lista de productos seleccionados */}
         <div className="md:col-span-2">
-          <div className="border rounded overflow-hidden">
-            <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold border-b">
-              <div className="col-span-4">Producto</div>
-              <div className="col-span-2 text-right">Precio (paq.)</div>
-              <div className="col-span-2 text-right">Existencias (paq.)</div>
-              <div className="col-span-1 text-right">Cantidad (paq.)</div>
-              <div className="col-span-1 text-right">Descuento</div>
-              <div className="col-span-1 text-right">Monto</div>
-              <div className="col-span-1 text-center">Quitar</div>
-            </div>
-
-            {items.length === 0 ? (
-              <div className="px-3 py-4 text-sm text-gray-500">
-                No hay productos agregados.
+          {/* ✅ PWA: overflow-x sin cambiar tu grid interno */}
+          <div className="w-full overflow-x-auto">
+            <div className="border rounded overflow-hidden min-w-[860px]">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold border-b">
+                <div className="col-span-4">Producto</div>
+                <div className="col-span-2 text-right">Precio (paq.)</div>
+                <div className="col-span-2 text-right">Existencias (paq.)</div>
+                <div className="col-span-1 text-right">Cantidad (paq.)</div>
+                <div className="col-span-1 text-right">Descuento</div>
+                <div className="col-span-1 text-right">Monto</div>
+                <div className="col-span-1 text-center">Quitar</div>
               </div>
-            ) : (
-              items.map((it) => {
-                // ✅ mejora: siempre usar el stock actual del mapa (post-venta / reload)
-                const currentUnits =
-                  stockByProduct[it.productId] ?? it.availableUnits ?? 0;
-                const packagesAvailable = it.unitsPerPackage
-                  ? Math.floor(currentUnits / it.unitsPerPackage)
-                  : 0;
 
-                const visualStock = Math.max(
-                  0,
-                  packagesAvailable - (it.qtyPackages || 0)
-                );
-                const lineGross =
-                  (Number(it.pricePerPackage) || 0) * (it.qtyPackages || 0);
-                const lineNet = Math.max(
-                  0,
-                  lineGross - (Number(it.discount) || 0)
-                );
+              {items.length === 0 ? (
+                <div className="px-3 py-4 text-sm text-gray-500">
+                  No hay productos agregados.
+                </div>
+              ) : (
+                items.map((it) => {
+                  const currentUnits =
+                    stockByProduct[it.productId] ?? it.availableUnits ?? 0;
+                  const packagesAvailable = it.unitsPerPackage
+                    ? Math.floor(currentUnits / it.unitsPerPackage)
+                    : 0;
 
-                return (
-                  <div
-                    key={it.productId}
-                    className="grid grid-cols-12 items-center px-3 py-2 border-b text-sm gap-x-2"
-                  >
-                    <div className="col-span-4">
-                      <div className="font-medium">
-                        {it.productName}
-                        {it.sku ? ` — ${it.sku}` : ""}
+                  const visualStock = Math.max(
+                    0,
+                    packagesAvailable - (it.qtyPackages || 0)
+                  );
+                  const lineGross =
+                    (Number(it.pricePerPackage) || 0) * (it.qtyPackages || 0);
+                  const lineNet = Math.max(
+                    0,
+                    lineGross - (Number(it.discount) || 0)
+                  );
+
+                  return (
+                    <div
+                      key={it.productId}
+                      className="grid grid-cols-12 items-center px-3 py-2 border-b text-sm gap-x-2"
+                    >
+                      <div className="col-span-4">
+                        <div className="font-medium">
+                          {it.productName}
+                          {it.sku ? ` — ${it.sku}` : ""}
+                        </div>
+                      </div>
+
+                      <div className="col-span-2 text-right">
+                        {money(it.pricePerPackage)}
+                      </div>
+                      <div className="col-span-2 text-right">
+                        {visualStock} paq.
+                      </div>
+
+                      <div className="col-span-1">
+                        <input
+                          type="number"
+                          step="0"
+                          min={0}
+                          className="w-full border p-1 rounded text-right"
+                          value={
+                            Number.isNaN(it.qtyPackages) || it.qtyPackages === 0
+                              ? ""
+                              : it.qtyPackages
+                          }
+                          onChange={(e) =>
+                            setItemQty(it.productId, e.target.value)
+                          }
+                          inputMode="numeric"
+                          placeholder="0"
+                          title="Cantidad de paquetes"
+                        />
+                      </div>
+
+                      <div className="col-span-1">
+                        <input
+                          type="number"
+                          step="1"
+                          min={0}
+                          className="w-full border p-1 rounded text-right"
+                          value={
+                            Number.isNaN(it.discount) || it.discount === 0
+                              ? ""
+                              : it.discount
+                          }
+                          onChange={(e) =>
+                            setItemDiscount(it.productId, e.target.value)
+                          }
+                          inputMode="numeric"
+                          placeholder="0"
+                          title="Descuento entero (C$)"
+                        />
+                      </div>
+
+                      <div className="col-span-1 text-right">
+                        {money(lineNet)}
+                      </div>
+
+                      <div className="col-span-1 text-center">
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded bg-red-100 hover:bg-red-200"
+                          onClick={() => removeItem(it.productId)}
+                          title="Quitar producto"
+                        >
+                          ✕
+                        </button>
                       </div>
                     </div>
-
-                    <div className="col-span-2 text-right">
-                      {money(it.pricePerPackage)}
-                    </div>
-                    <div className="col-span-2 text-right">
-                      {visualStock} paq.
-                    </div>
-
-                    <div className="col-span-1">
-                      <input
-                        type="number"
-                        step="0"
-                        min={0}
-                        className="w-full border p-1 rounded text-right"
-                        value={
-                          Number.isNaN(it.qtyPackages) || it.qtyPackages === 0
-                            ? ""
-                            : it.qtyPackages
-                        }
-                        onChange={(e) =>
-                          setItemQty(it.productId, e.target.value)
-                        }
-                        inputMode="numeric"
-                        placeholder="0"
-                        title="Cantidad de paquetes"
-                      />
-                    </div>
-
-                    <div className="col-span-1">
-                      <input
-                        type="number"
-                        step="1"
-                        min={0}
-                        className="w-full border p-1 rounded text-right"
-                        value={
-                          Number.isNaN(it.discount) || it.discount === 0
-                            ? ""
-                            : it.discount
-                        }
-                        onChange={(e) =>
-                          setItemDiscount(it.productId, e.target.value)
-                        }
-                        inputMode="numeric"
-                        placeholder="0"
-                        title="Descuento entero (C$)"
-                      />
-                    </div>
-
-                    <div className="col-span-1 text-right">
-                      {money(lineNet)}
-                    </div>
-
-                    <div className="col-span-1 text-center">
-                      <button
-                        type="button"
-                        className="px-2 py-1 rounded bg-red-100 hover:bg-red-200"
-                        onClick={() => removeItem(it.productId)}
-                        title="Quitar producto"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
+                  );
+                })
+              )}
+            </div>
           </div>
 
           {items.length > 0 && (
-            <div className="flex justify-end gap-6 mt-3 text-sm">
+            <div className="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-6 mt-3 text-sm">
               <div>
                 <span className="text-gray-600">Paquetes totales: </span>
                 <span className="font-semibold">{totalPackages}</span>
@@ -1445,7 +1447,6 @@ export default function SalesCandiesPOS({
                 <span className="text-gray-600">Total: </span>
                 <span className="font-semibold">{money(totalAmount)}</span>
               </div>
-              {/* NUEVO: Comisión del vendedor */}
               <div>
                 <span className="text-gray-600">Comisión vendedor: </span>
                 <span className="font-semibold">
@@ -1462,7 +1463,7 @@ export default function SalesCandiesPOS({
         {/* Guardar */}
         <div className="md:col-span-2">
           <button
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+            className="w-full sm:w-auto bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
             disabled={saving}
           >
             {saving ? "Guardando..." : "Registrar venta"}
@@ -1474,8 +1475,8 @@ export default function SalesCandiesPOS({
 
       {/* Modal: Crear cliente rápido */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-xl p-4">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl border w-[98%] sm:w-[95%] max-w-xl p-3 sm:p-4 max-h-[92vh] overflow-auto">
             <h3 className="text-lg font-bold mb-3">Nuevo cliente</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1574,9 +1575,9 @@ export default function SalesCandiesPOS({
               </div>
             </div>
 
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mt-4 flex flex-col sm:flex-row justify-end gap-2">
               <button
-                className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                className="w-full sm:w-auto px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
                 onClick={() => {
                   resetModal();
                   setShowModal(false);
@@ -1585,7 +1586,7 @@ export default function SalesCandiesPOS({
                 Cancelar
               </button>
               <button
-                className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+                className="w-full sm:w-auto px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
                 onClick={async () => {
                   const sellerIdToSave = lockVendor
                     ? vendorId || sellerCandyId
@@ -1652,7 +1653,7 @@ export default function SalesCandiesPOS({
 
       {/* Overlay de guardado */}
       {saving && (
-        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center">
+        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-2">
           <div className="bg-white rounded-lg shadow-xl border px-4 py-3 flex items-center gap-3">
             <svg
               className="h-5 w-5 animate-spin"

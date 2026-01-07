@@ -221,6 +221,8 @@ export default function VendorCandyOrders({
   const [availablePacks, setAvailablePacks] = useState<Record<string, number>>(
     {}
   ); // productId -> paq disponibles
+  //MOBILE CARD EXPANDIBLES
+  const [expandedOrderKey, setExpandedOrderKey] = useState<string | null>(null);
 
   // ===== Sub-inventario (todas las líneas por vendedor) =====
   const [rows, setRows] = useState<VendorCandyRow[]>([]);
@@ -571,7 +573,6 @@ export default function VendorCandyOrders({
 
         setRows(invList);
         await loadTransferAgg();
-
       } catch (e) {
         console.error(e);
         setMsg("❌ Error cargando datos de vendedores / pedidos.");
@@ -588,6 +589,10 @@ export default function VendorCandyOrders({
     }
     return rows;
   }, [rows, isVendor, currentSeller, sellerId]);
+
+  const getOrderDetailRows = (orderKey: string) => {
+    return rowsByRole.filter((r) => (r.orderId || r.id) === orderKey);
+  };
 
   // ===== Resumen por pedido (agrupado) =====
   const orders: OrderSummaryRow[] = useMemo(() => {
@@ -1795,9 +1800,10 @@ export default function VendorCandyOrders({
 
           {/* ✅ NUEVO BOTÓN: TRASLADOS (a la par del botón Nuevo pedido) */}
           <button
-            className="inline-flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded hover:bg-indigo-700"
+            className="inline-flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded hover:bg-indigo-700 disabled:opacity-30 disabled:bg-gray-300"
             onClick={openTransfersModal}
             type="button"
+            disabled={!isAdmin}
           >
             Traslados
           </button>
@@ -2486,9 +2492,179 @@ export default function VendorCandyOrders({
           </div>
         </div>
       )}
+      {/* ================= MOBILE: Cards ================= */}
+      {/* ================= MOBILE: Cards (expandibles) ================= */}
+      <div className="block md:hidden space-y-3 mt-4">
+        {orders.map((o) => {
+          const seller = sellersById[o.sellerId];
+          const commissionPercent = Number(seller?.commissionPercent || 0);
+          const commissionAmount = (o.totalVendor * commissionPercent) / 100;
 
-      {/* LISTADO: POR PEDIDO */}
-      <div className="bg-white p-2 rounded shadow border w-full overflow-x-auto mt-4">
+          const isExpanded = expandedOrderKey === o.orderKey;
+          const detailRows = isExpanded ? getOrderDetailRows(o.orderKey) : [];
+
+          return (
+            <div
+              key={o.orderKey}
+              className="border rounded-lg p-3 bg-white shadow-sm"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <div className="font-semibold text-sm">{o.sellerName}</div>
+                  <div className="text-xs text-gray-500">
+                    {seller?.branchLabel || "—"}
+                  </div>
+                </div>
+
+                <div className="text-xs text-gray-500 text-right">
+                  <div>{o.date || "—"}</div>
+                  <div className="truncate max-w-[140px]">{o.orderKey}</div>
+                </div>
+              </div>
+
+              {/* KPIs */}
+              <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                <div>
+                  <span className="text-gray-500">Paquetes:</span>{" "}
+                  <b>{o.totalPackages}</b>
+                </div>
+                <div>
+                  <span className="text-gray-500">Restantes:</span>{" "}
+                  <b>{o.totalRemainingPackages}</b>
+                </div>
+                <div>
+                  <span className="text-gray-500">Trasl. OUT:</span>{" "}
+                  <b>{transferAgg[o.orderKey]?.out || 0}</b>
+                </div>
+                <div>
+                  <span className="text-gray-500">Trasl. IN:</span>{" "}
+                  <b>{transferAgg[o.orderKey]?.in || 0}</b>
+                </div>
+              </div>
+
+              {/* Totales */}
+              <div className="text-sm border-t pt-2 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Subtotal:</span>
+                  <span>{money(o.subtotal)}</span>
+                </div>
+                <div className="flex justify-between font-semibold">
+                  <span>Total:</span>
+                  <span>{money(o.totalVendor)}</span>
+                </div>
+                <div className="flex justify-between text-xs text-gray-600">
+                  <span>Comisión:</span>
+                  <span>{money(commissionAmount)}</span>
+                </div>
+              </div>
+
+              {/* Acciones principales */}
+              <div className="flex gap-2 mt-3">
+                {/* Ver/Editar solo lo dejamos como está (admin) */}
+                <button
+                  className="flex-1 bg-blue-600 text-white py-2 rounded text-xs"
+                  onClick={() => openOrderForEdit(o.orderKey)}
+                >
+                  Ver / Editar
+                </button>
+
+                {isAdmin && (
+                  <button
+                    className="flex-1 bg-red-600 text-white py-2 rounded text-xs"
+                    onClick={() => handleDeleteOrder(o.orderKey)}
+                  >
+                    Borrar
+                  </button>
+                )}
+              </div>
+
+              {/* Toggle detalle (para TODOS, pero solo lectura) */}
+              <button
+                type="button"
+                className="w-full mt-2 border rounded py-2 text-xs bg-gray-50 hover:bg-gray-100"
+                onClick={() => {
+                  setExpandedOrderKey((prev) =>
+                    prev === o.orderKey ? null : o.orderKey
+                  );
+                }}
+              >
+                {isExpanded ? "Ocultar detalle" : "Ver detalle del pedido"}
+              </button>
+
+              {/* Detalle expandible */}
+              {isExpanded && (
+                <div className="mt-2 border rounded bg-white overflow-hidden">
+                  <div className="px-3 py-2 text-xs font-semibold bg-gray-100">
+                    Detalle del pedido
+                  </div>
+
+                  {detailRows.length === 0 ? (
+                    <div className="p-3 text-xs text-gray-500">Sin detalle</div>
+                  ) : (
+                    <div className="divide-y">
+                      {detailRows.map((r) => (
+                        <div key={r.id} className="p-3 text-xs">
+                          <div className="flex justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-semibold truncate">
+                                {r.productName}
+                              </div>
+                              <div className="text-gray-500 truncate">
+                                {r.category || "—"}
+                              </div>
+                            </div>
+
+                            <div className="text-right">
+                              <div>
+                                <span className="text-gray-500">Paq:</span>{" "}
+                                <b>{Number(r.packages || 0)}</b>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Rem:</span>{" "}
+                                <b>{Number(r.remainingPackages || 0)}</b>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">Costo:</span>
+                              <span>{money(Number(r.providerPrice || 0))}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">Total:</span>
+                              <span className="font-semibold">
+                                {money(Number(r.totalVendor || 0))}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Opcional: mostrar precios por sucursal si querés */}
+                          <div className="grid grid-cols-3 gap-2 mt-2 text-[11px] text-gray-600">
+                            <div className="text-center border rounded py-1">
+                              R {money(Number(r.unitPriceRivas || 0))}
+                            </div>
+                            <div className="text-center border rounded py-1">
+                              SJ {money(Number(r.unitPriceSanJorge || 0))}
+                            </div>
+                            <div className="text-center border rounded py-1">
+                              I {money(Number(r.unitPriceIsla || 0))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* LISTADO: POR PEDIDO DESKTOP */}
+      <div className="hidden md:block bg-white p-2 rounded shadow border w-full overflow-x-auto mt-4">
         <h3 className="text-lg font-semibold mb-2">Listado de pedidos</h3>
         <table className="min-w-[1000px] text-xs md:text-sm">
           <thead className="bg-gray-100">

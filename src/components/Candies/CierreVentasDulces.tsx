@@ -790,9 +790,14 @@ export default function CierreVentasDulces({
     }
   };
 
+  // ✅ PDF: en PWA se muestra cards, pero para PDF forzamos vista "desktop" (tabla)
   const handleDownloadPDF = async () => {
     if (!pdfRef.current) return;
+
+    // fuerza modo PDF (muestra tablas aunque estés en móvil)
     pdfRef.current.classList.add("force-pdf-colors");
+    pdfRef.current.classList.add("pdf-print-mode");
+
     try {
       const canvas = await html2canvas(pdfRef.current, {
         backgroundColor: "#ffffff",
@@ -802,12 +807,19 @@ export default function CierreVentasDulces({
       pdf.addImage(imgData, "PNG", 10, 10, 190, 0);
       pdf.save(`cierre_dulces_${startDate}_a_${endDate}_proc_${today}.pdf`);
     } finally {
+      pdfRef.current.classList.remove("pdf-print-mode");
       pdfRef.current.classList.remove("force-pdf-colors");
     }
   };
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
+      {/* ✅ CSS interno SOLO para alternar vista en PDF (sin tocar tu data) */}
+      <style>{`
+        .pdf-print-mode .pdf-desktop { display: block !important; }
+        .pdf-print-mode .pdf-mobile  { display: none !important; }
+      `}</style>
+
       <h2 className="text-2xl font-bold mb-4">
         Cierre de Ventas de Dulces - Proceso: {today}
       </h2>
@@ -977,31 +989,139 @@ export default function CierreVentasDulces({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          <table className="min-w-full border text-sm mb-4 shadow-2xl">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border p-2">Estado</th>
-                <th className="border p-2">Producto</th>
-                <th className="border p-2">Tipo</th>
-                <th className="border p-2">Paquetes</th>
-                <th className="border p-2">Monto</th>
-                <th className="border p-2">Comisión</th>
-                <th className="border p-2">Fecha venta</th>
-                <th className="border p-2">Fecha proceso</th>
-                <th className="border p-2">Vendedor</th>
-                <th className="border p-2">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleSales.map((s) => {
-                const commission = getCommissionAmount(s);
-                const processDate = (s.processedDate || "").trim();
+          {/* =========================
+              DESKTOP / WEB -> TABLA (IGUAL)
+              ========================= */}
+          <div className="pdf-desktop hidden md:block">
+            <table className="min-w-full border text-sm mb-4 shadow-2xl">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="border p-2">Estado</th>
+                  <th className="border p-2">Producto</th>
+                  <th className="border p-2">Tipo</th>
+                  <th className="border p-2">Paquetes</th>
+                  <th className="border p-2">Monto</th>
+                  <th className="border p-2">Comisión</th>
+                  <th className="border p-2">Fecha venta</th>
+                  <th className="border p-2">Fecha proceso</th>
+                  <th className="border p-2">Vendedor</th>
+                  <th className="border p-2">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleSales.map((s) => {
+                  const commission = getCommissionAmount(s);
+                  const processDate = (s.processedDate || "").trim();
 
-                return (
-                  <tr key={s.id} className="text-center">
-                    <td className="border p-1">
+                  return (
+                    <tr key={s.id} className="text-center">
+                      <td className="border p-1">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs ${
+                            s.status === "PROCESADA"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-yellow-100 text-yellow-700"
+                          }`}
+                        >
+                          {s.status}
+                        </span>
+                      </td>
+                      <td className="border p-1">{s.productName}</td>
+                      <td className="border p-1">
+                        {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                      </td>
+                      <td className="border p-1">{qty3(s.quantity)}</td>
+                      <td className="border p-1">C${money(s.amount)}</td>
+                      <td className="border p-1">
+                        {commission > 0 ? `C$${money(commission)}` : "—"}
+                      </td>
+                      <td className="border p-1">{s.date}</td>
+                      <td className="border p-1">
+                        {processDate ? processDate : "—"}
+                      </td>
+                      <td className="border p-1">{s.userEmail}</td>
+                      <td className="border p-1">
+                        {s.status === "FLOTANTE" ? (
+                          <div className="flex gap-2 justify-center">
+                            {isAdmin ? (
+                              <>
+                                <button
+                                  onClick={() => openEdit(s)}
+                                  className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  onClick={() => deleteSale(s.id)}
+                                  className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                                >
+                                  Eliminar
+                                </button>
+                              </>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </div>
+                        ) : s.status === "PROCESADA" ? (
+                          <div className="flex gap-2 justify-center">
+                            {isAdmin ? (
+                              <button
+                                onClick={() => handleRevert(s.id)}
+                                className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                              >
+                                Revertir
+                              </button>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-xs">
+                            No options
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {visibleSales.length === 0 && (
+                  <tr>
+                    <td colSpan={10} className="p-3 text-center text-gray-500">
+                      Sin ventas para mostrar.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* =========================
+              MOBILE / PWA -> CARDS EXPANDIBLES (SIN PERDER DATOS)
+              ========================= */}
+          <div className="pdf-mobile md:hidden space-y-3 mb-4">
+            {visibleSales.map((s) => {
+              const commission = getCommissionAmount(s);
+              const processDate = (s.processedDate || "").trim();
+
+              return (
+                <details
+                  key={s.id}
+                  className="border rounded-xl bg-white shadow-sm"
+                >
+                  <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">
+                        {s.productName}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {s.type === "CREDITO" ? "Crédito" : "Cash"} • {s.date}
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0 ml-3">
+                      <div className="font-bold">C${money(s.amount)}</div>
                       <span
-                        className={`px-2 py-0.5 rounded text-xs ${
+                        className={`text-xs px-2 py-0.5 rounded ${
                           s.status === "PROCESADA"
                             ? "bg-green-100 text-green-700"
                             : "bg-yellow-100 text-yellow-700"
@@ -1009,74 +1129,91 @@ export default function CierreVentasDulces({
                       >
                         {s.status}
                       </span>
-                    </td>
-                    <td className="border p-1">{s.productName}</td>
-                    <td className="border p-1">
-                      {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                    </td>
-                    <td className="border p-1">{qty3(s.quantity)}</td>
-                    <td className="border p-1">C${money(s.amount)}</td>
-                    <td className="border p-1">
-                      {commission > 0 ? `C$${money(commission)}` : "—"}
-                    </td>
-                    <td className="border p-1">{s.date}</td>
-                    <td className="border p-1">
-                      {processDate ? processDate : "—"}
-                    </td>
-                    <td className="border p-1">{s.userEmail}</td>
-                    <td className="border p-1">
+                    </div>
+                  </summary>
+
+                  <div className="px-4 pb-4 pt-2 text-sm space-y-2">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-600">Paquetes</span>
+                      <strong>{qty3(s.quantity)}</strong>
+                    </div>
+
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-600">Comisión</span>
+                      <strong>
+                        {commission > 0 ? `C$${money(commission)}` : "—"}
+                      </strong>
+                    </div>
+
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-600">Fecha proceso</span>
+                      <strong>{processDate || "—"}</strong>
+                    </div>
+
+                    <div className="flex justify-between gap-3">
+                      <span className="text-gray-600">Vendedor</span>
+                      <strong className="text-right break-all">
+                        {s.userEmail}
+                      </strong>
+                    </div>
+
+                    {/* Acciones: mismo permiso/lógica que tabla */}
+                    <div className="pt-2">
                       {s.status === "FLOTANTE" ? (
-                        <div className="flex gap-2 justify-center">
+                        <div className="flex gap-2">
                           {isAdmin ? (
                             <>
                               <button
                                 onClick={() => openEdit(s)}
-                                className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                                className="flex-1 text-xs bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700"
                               >
                                 Editar
                               </button>
                               <button
                                 onClick={() => deleteSale(s.id)}
-                                className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                                className="flex-1 text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
                               >
                                 Eliminar
                               </button>
                             </>
                           ) : (
-                            <span className="text-gray-400 text-xs">—</span>
+                            <div className="text-gray-400 text-xs w-full text-center">
+                              —
+                            </div>
                           )}
                         </div>
                       ) : s.status === "PROCESADA" ? (
-                        <div className="flex gap-2 justify-center">
+                        <div className="flex gap-2">
                           {isAdmin ? (
                             <button
                               onClick={() => handleRevert(s.id)}
-                              className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                              className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
                             >
                               Revertir
                             </button>
                           ) : (
-                            <span className="text-gray-400 text-xs">—</span>
+                            <div className="text-gray-400 text-xs w-full text-center">
+                              —
+                            </div>
                           )}
                         </div>
                       ) : (
-                        <span className="text-gray-400 text-xs">
+                        <div className="text-gray-400 text-xs w-full text-center">
                           No options
-                        </span>
+                        </div>
                       )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {visibleSales.length === 0 && (
-                <tr>
-                  <td colSpan={10} className="p-3 text-center text-gray-500">
-                    Sin ventas para mostrar.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+
+            {visibleSales.length === 0 && (
+              <div className="text-center text-gray-500 text-sm py-6">
+                Sin ventas para mostrar.
+              </div>
+            )}
+          </div>
 
           {/* Bloque de totales (igual) */}
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-2 text-sm mb-4">
@@ -1107,45 +1244,89 @@ export default function CierreVentasDulces({
                 Ganancia antes de gasto:{" "}
                 <strong>C${money(grossProfitVisible)}</strong>
               </div>
+              <div>
+                Total paquetes (visibles):{" "}
+                <strong>{qty3(totalPaquetes)}</strong>
+              </div>
             </div>
           )}
 
           <h3 className="font-semibold mb-2">Consolidado por producto</h3>
-          <table className="min-w-full border text-sm mb-2 shadow-2xl">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border p-2">Producto</th>
-                <th className="border p-2">Total paquetes</th>
-                <th className="border p-2">Total dinero</th>
-                <th className="border p-2">Comisión</th>
-              </tr>
-            </thead>
-            <tbody>
-              {productSummaryArray.map((row) => (
-                <tr key={row.productName} className="text-center">
-                  <td className="border p-1">{row.productName}</td>
-                  <td className="border p-1">{qty3(row.totalQuantity)}</td>
-                  <td className="border p-1">C${money(row.totalAmount)}</td>
-                  <td className="border p-1">
-                    {row.totalCommission > 0
-                      ? `C$${money(row.totalCommission)}`
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
-              {productSummaryArray.length === 0 && (
+
+          {/* DESKTOP consolidado (tabla igual) */}
+          <div className="pdf-desktop hidden md:block">
+            <table className="min-w-full border text-sm mb-2 shadow-2xl">
+              <thead className="bg-gray-100">
                 <tr>
-                  <td colSpan={4} className="p-3 text-center text-gray-500">
-                    Sin datos para consolidar.
-                  </td>
+                  <th className="border p-2">Producto</th>
+                  <th className="border p-2">Total paquetes</th>
+                  <th className="border p-2">Total dinero</th>
+                  <th className="border p-2">Comisión</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {productSummaryArray.map((row) => (
+                  <tr key={row.productName} className="text-center">
+                    <td className="border p-1">{row.productName}</td>
+                    <td className="border p-1">{qty3(row.totalQuantity)}</td>
+                    <td className="border p-1">C${money(row.totalAmount)}</td>
+                    <td className="border p-1">
+                      {row.totalCommission > 0
+                        ? `C$${money(row.totalCommission)}`
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+                {productSummaryArray.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="p-3 text-center text-gray-500">
+                      Sin datos para consolidar.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* MOBILE consolidado (cards) */}
+          <div className="pdf-mobile md:hidden space-y-2">
+            {productSummaryArray.map((row) => (
+              <div
+                key={row.productName}
+                className="border rounded-xl bg-white shadow-sm p-3"
+              >
+                <div className="font-semibold">{row.productName}</div>
+                <div className="mt-2 text-sm space-y-1">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-gray-600">Total paquetes</span>
+                    <strong>{qty3(row.totalQuantity)}</strong>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-gray-600">Total dinero</span>
+                    <strong>C${money(row.totalAmount)}</strong>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-gray-600">Comisión</span>
+                    <strong>
+                      {row.totalCommission > 0
+                        ? `C$${money(row.totalCommission)}`
+                        : "—"}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {productSummaryArray.length === 0 && (
+              <div className="text-center text-gray-500 text-sm py-6">
+                Sin datos para consolidar.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 mt-4">
         {isAdmin && (
           <button
             onClick={handleSaveClosure}

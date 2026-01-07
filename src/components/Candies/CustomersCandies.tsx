@@ -861,235 +861,480 @@ export default function CustomersCandy({
 
       {/* ===== Lista ===== */}
       <div className="bg-white p-2 rounded shadow border w-full">
-        <table className="min-w-full w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">Nombre</th>
-              <th className="p-2 border">Teléfono</th>
-              <th className="p-2 border">Vendedor</th>
-              <th className="p-2 border">Lugar</th>
-              <th className="p-2 border">Estado</th>
-              <th className="p-2 border">Límite</th>
-              <th className="p-2 border">Saldo</th>
-              <th className="p-2 border">Comentario</th>
-              <th className="p-2 border">Acciones</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {loading ? (
+        {/* ===================== WEB (NO CAMBIAR UI) ===================== */}
+        <div className="hidden md:block">
+          <table className="min-w-full w-full text-sm">
+            <thead className="bg-gray-100">
               <tr>
-                <td className="p-4 text-center" colSpan={10}>
-                  Cargando…
-                </td>
+                <th className="p-2 border">Fecha</th>
+                <th className="p-2 border">Nombre</th>
+                <th className="p-2 border">Teléfono</th>
+                <th className="p-2 border">Vendedor</th>
+                <th className="p-2 border">Lugar</th>
+                <th className="p-2 border">Estado</th>
+                <th className="p-2 border">Límite</th>
+                <th className="p-2 border">Saldo</th>
+                <th className="p-2 border">Comentario</th>
+                <th className="p-2 border">Acciones</th>
               </tr>
-            ) : orderedRows.length === 0 ? (
-              <tr>
-                <td className="p-4 text-center" colSpan={10}>
-                  Sin clientes
-                </td>
-              </tr>
-            ) : (
-              orderedRows.map((c) => {
-                const isEditing = editingId === c.id;
-                return (
-                  <tr key={c.id} className="text-center">
-                    <td className="p-2 border">
-                      {c.createdAt?.toDate
-                        ? c.createdAt.toDate().toISOString().slice(0, 10)
-                        : "—"}
-                    </td>
+            </thead>
 
-                    <td className="p-2 border text-left">
-                      {isEditing ? (
-                        <input
-                          className="w-full border p-1 rounded"
-                          value={eName}
-                          onChange={(e) => setEName(e.target.value)}
-                        />
-                      ) : (
-                        <div className="font-medium">{c.name}</div>
-                      )}
-                    </td>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td className="p-4 text-center" colSpan={10}>
+                    Cargando…
+                  </td>
+                </tr>
+              ) : orderedRows.length === 0 ? (
+                <tr>
+                  <td className="p-4 text-center" colSpan={10}>
+                    Sin clientes
+                  </td>
+                </tr>
+              ) : (
+                orderedRows.map((c) => {
+                  const isEditing = editingId === c.id;
+                  return (
+                    <tr key={c.id} className="text-center">
+                      <td className="p-2 border">
+                        {c.createdAt?.toDate
+                          ? c.createdAt.toDate().toISOString().slice(0, 10)
+                          : "—"}
+                      </td>
 
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          className="w-full border p-1 rounded"
-                          value={ePhone}
-                          onChange={(e) =>
-                            setEPhone(normalizePhone(e.target.value))
-                          }
-                        />
-                      ) : (
-                        c.phone
-                      )}
-                    </td>
-
-                    {/* ✅ FIX: esta celda AHORA es “Vendedor” de verdad */}
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded text-xs"
-                          value={isVendor ? sellerIdSafe : eVendorId}
-                          onChange={(e) => setEVendorId(e.target.value)}
-                          disabled={isVendor}
-                          title="Vendedor asociado"
-                        >
-                          <option value="">— Sin vendedor —</option>
-                          {sellers.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        c.vendorName || "—"
-                      )}
-                    </td>
-
-                    {/* ✅ Lugar (antes estaba ocupando la columna “Vendedor”) */}
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded"
-                          value={ePlace}
-                          onChange={(e) => setEPlace(e.target.value as Place)}
-                        >
-                          <option value="">—</option>
-                          {PLACES.map((p) => (
-                            <option key={p} value={p}>
-                              {p}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        c.place || "—"
-                      )}
-                    </td>
-
-                    {/* ✅ Estado */}
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded"
-                          value={eStatus}
-                          onChange={(e) => setEStatus(e.target.value as Status)}
-                        >
-                          <option value="ACTIVO">ACTIVO</option>
-                          <option value="BLOQUEADO">BLOQUEADO</option>
-                        </select>
-                      ) : (
-                        <span
-                          className={`px-2 py-0.5 rounded text-xs ${
-                            c.status === "ACTIVO"
-                              ? "bg-green-100 text-green-700"
-                              : "bg-red-100 text-red-700"
-                          }`}
-                        >
-                          {c.status}
-                        </span>
-                      )}
-                    </td>
-
-                    {/* ✅ Límite */}
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          className="w-full border p-1 rounded text-right"
-                          value={Number.isNaN(eCreditLimit) ? "" : eCreditLimit}
-                          onChange={(e) =>
-                            setECreditLimit(
-                              Math.max(0, Number(e.target.value || 0))
-                            )
-                          }
-                        />
-                      ) : (
-                        money(c.creditLimit || 0)
-                      )}
-                    </td>
-
-                    {/* ✅ Saldo */}
-                    <td className="p-2 border font-semibold">
-                      {money(c.balance || 0)}
-                    </td>
-
-                    {/* ✅ Comentario */}
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <textarea
-                          className="w-full border p-1 rounded resize-y min-h-12"
-                          value={eNotes}
-                          onChange={(e) => setENotes(e.target.value)}
-                          maxLength={500}
-                        />
-                      ) : (
-                        <span title={c.notes || ""}>
-                          {(c.notes || "").length > 40
-                            ? (c.notes || "").slice(0, 40) + "…"
-                            : c.notes || "—"}
-                        </span>
-                      )}
-                    </td>
-
-                    {/* ✅ Acciones */}
-                    <td className="p-2 border">
-                      <div className="flex gap-2 justify-center">
+                      <td className="p-2 border text-left">
                         {isEditing ? (
-                          <>
-                            <button
-                              className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                              onClick={saveEdit}
-                            >
-                              Guardar
-                            </button>
-                            <button
-                              className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                              onClick={cancelEdit}
-                            >
-                              Cancelar
-                            </button>
-                          </>
+                          <input
+                            className="w-full border p-1 rounded"
+                            value={eName}
+                            onChange={(e) => setEName(e.target.value)}
+                          />
                         ) : (
-                          <>
-                            <button
-                              className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                              onClick={() => startEdit(c)}
-                            >
-                              Editar
-                            </button>
-
-                            {/* vendedor no debería borrar clientes si no es admin */}
-                            <button
-                              className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
-                              onClick={() => handleDelete(c)}
-                              disabled={!isAdmin}
-                              title={!isAdmin ? "Solo admin" : "Borrar"}
-                            >
-                              Borrar
-                            </button>
-
-                            <button
-                              className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
-                              onClick={() => openStatement(c)}
-                              title="Ver compras y abonos"
-                            >
-                              Estado de cuenta
-                            </button>
-                          </>
+                          <div className="font-medium">{c.name}</div>
                         )}
+                      </td>
+
+                      <td className="p-2 border">
+                        {isEditing ? (
+                          <input
+                            className="w-full border p-1 rounded"
+                            value={ePhone}
+                            onChange={(e) =>
+                              setEPhone(normalizePhone(e.target.value))
+                            }
+                          />
+                        ) : (
+                          c.phone
+                        )}
+                      </td>
+
+                      {/* ✅ FIX: esta celda AHORA es “Vendedor” de verdad */}
+                      <td className="p-2 border">
+                        {isEditing ? (
+                          <select
+                            className="w-full border p-1 rounded text-xs"
+                            value={isVendor ? sellerIdSafe : eVendorId}
+                            onChange={(e) => setEVendorId(e.target.value)}
+                            disabled={isVendor}
+                            title="Vendedor asociado"
+                          >
+                            <option value="">— Sin vendedor —</option>
+                            {sellers.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          c.vendorName || "—"
+                        )}
+                      </td>
+
+                      {/* ✅ Lugar (antes estaba ocupando la columna “Vendedor”) */}
+                      <td className="p-2 border">
+                        {isEditing ? (
+                          <select
+                            className="w-full border p-1 rounded"
+                            value={ePlace}
+                            onChange={(e) => setEPlace(e.target.value as Place)}
+                          >
+                            <option value="">—</option>
+                            {PLACES.map((p) => (
+                              <option key={p} value={p}>
+                                {p}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          c.place || "—"
+                        )}
+                      </td>
+
+                      {/* ✅ Estado */}
+                      <td className="p-2 border">
+                        {isEditing ? (
+                          <select
+                            className="w-full border p-1 rounded"
+                            value={eStatus}
+                            onChange={(e) =>
+                              setEStatus(e.target.value as Status)
+                            }
+                          >
+                            <option value="ACTIVO">ACTIVO</option>
+                            <option value="BLOQUEADO">BLOQUEADO</option>
+                          </select>
+                        ) : (
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs ${
+                              c.status === "ACTIVO"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-red-100 text-red-700"
+                            }`}
+                          >
+                            {c.status}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* ✅ Límite */}
+                      <td className="p-2 border">
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            className="w-full border p-1 rounded text-right"
+                            value={
+                              Number.isNaN(eCreditLimit) ? "" : eCreditLimit
+                            }
+                            onChange={(e) =>
+                              setECreditLimit(
+                                Math.max(0, Number(e.target.value || 0))
+                              )
+                            }
+                          />
+                        ) : (
+                          money(c.creditLimit || 0)
+                        )}
+                      </td>
+
+                      {/* ✅ Saldo */}
+                      <td className="p-2 border font-semibold">
+                        {money(c.balance || 0)}
+                      </td>
+
+                      {/* ✅ Comentario */}
+                      <td className="p-2 border">
+                        {isEditing ? (
+                          <textarea
+                            className="w-full border p-1 rounded resize-y min-h-12"
+                            value={eNotes}
+                            onChange={(e) => setENotes(e.target.value)}
+                            maxLength={500}
+                          />
+                        ) : (
+                          <span title={c.notes || ""}>
+                            {(c.notes || "").length > 40
+                              ? (c.notes || "").slice(0, 40) + "…"
+                              : c.notes || "—"}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* ✅ Acciones */}
+                      <td className="p-2 border">
+                        <div className="flex gap-2 justify-center">
+                          {isEditing ? (
+                            <>
+                              <button
+                                className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                                onClick={saveEdit}
+                              >
+                                Guardar
+                              </button>
+                              <button
+                                className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                                onClick={cancelEdit}
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                                onClick={() => startEdit(c)}
+                              >
+                                Editar
+                              </button>
+
+                              {/* vendedor no debería borrar clientes si no es admin */}
+                              <button
+                                className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                                onClick={() => handleDelete(c)}
+                                disabled={!isAdmin}
+                                title={!isAdmin ? "Solo admin" : "Borrar"}
+                              >
+                                Borrar
+                              </button>
+
+                              <button
+                                className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
+                                onClick={() => openStatement(c)}
+                                title="Ver compras y abonos"
+                              >
+                                Estado de cuenta
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* ===================== MOBILE (RESPONSIVE, SIN QUITAR ELEMENTOS) ===================== */}
+        <div className="md:hidden">
+          {loading ? (
+            <div className="p-4 text-center text-sm">Cargando…</div>
+          ) : orderedRows.length === 0 ? (
+            <div className="p-4 text-center text-sm">Sin clientes</div>
+          ) : (
+            <div className="space-y-3">
+              {orderedRows.map((c) => {
+                const isEditing = editingId === c.id;
+                const fecha = c.createdAt?.toDate
+                  ? c.createdAt.toDate().toISOString().slice(0, 10)
+                  : "—";
+
+                return (
+                  <div
+                    key={c.id}
+                    className="border rounded-2xl shadow-sm bg-white p-3"
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-xs text-gray-500">Nombre</div>
+                        <div className="font-semibold truncate">
+                          {isEditing ? (
+                            <input
+                              className="w-full border p-2 rounded"
+                              value={eName}
+                              onChange={(e) => setEName(e.target.value)}
+                            />
+                          ) : (
+                            c.name
+                          )}
+                        </div>
                       </div>
-                    </td>
-                  </tr>
+
+                      <div className="text-right">
+                        <div className="text-xs text-gray-500">Estado</div>
+                        <div>
+                          {isEditing ? (
+                            <select
+                              className="border p-2 rounded text-sm"
+                              value={eStatus}
+                              onChange={(e) =>
+                                setEStatus(e.target.value as Status)
+                              }
+                            >
+                              <option value="ACTIVO">ACTIVO</option>
+                              <option value="BLOQUEADO">BLOQUEADO</option>
+                            </select>
+                          ) : (
+                            <span
+                              className={`inline-flex px-2 py-0.5 rounded text-xs ${
+                                c.status === "ACTIVO"
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-red-100 text-red-700"
+                              }`}
+                            >
+                              {c.status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Grid fields */}
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <div className="text-xs text-gray-500">Fecha</div>
+                        <div className="font-medium">{fecha}</div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs text-gray-500">Teléfono</div>
+                        <div className="font-medium">
+                          {isEditing ? (
+                            <input
+                              className="w-full border p-2 rounded"
+                              value={ePhone}
+                              onChange={(e) =>
+                                setEPhone(normalizePhone(e.target.value))
+                              }
+                            />
+                          ) : (
+                            c.phone
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="col-span-2">
+                        <div className="text-xs text-gray-500">Vendedor</div>
+                        <div className="font-medium">
+                          {isEditing ? (
+                            <select
+                              className="w-full border p-2 rounded text-sm"
+                              value={isVendor ? sellerIdSafe : eVendorId}
+                              onChange={(e) => setEVendorId(e.target.value)}
+                              disabled={isVendor}
+                              title="Vendedor asociado"
+                            >
+                              <option value="">— Sin vendedor —</option>
+                              {sellers.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            c.vendorName || "—"
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs text-gray-500">Lugar</div>
+                        <div className="font-medium">
+                          {isEditing ? (
+                            <select
+                              className="w-full border p-2 rounded text-sm"
+                              value={ePlace}
+                              onChange={(e) =>
+                                setEPlace(e.target.value as Place)
+                              }
+                            >
+                              <option value="">—</option>
+                              {PLACES.map((p) => (
+                                <option key={p} value={p}>
+                                  {p}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            c.place || "—"
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs text-gray-500">Límite</div>
+                        <div className="font-medium">
+                          {isEditing ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              inputMode="decimal"
+                              className="w-full border p-2 rounded text-right"
+                              value={
+                                Number.isNaN(eCreditLimit) ? "" : eCreditLimit
+                              }
+                              onChange={(e) =>
+                                setECreditLimit(
+                                  Math.max(0, Number(e.target.value || 0))
+                                )
+                              }
+                            />
+                          ) : (
+                            money(c.creditLimit || 0)
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="col-span-2">
+                        <div className="text-xs text-gray-500">Saldo</div>
+                        <div className="font-semibold">
+                          {money(c.balance || 0)}
+                        </div>
+                      </div>
+
+                      <div className="col-span-2">
+                        <div className="text-xs text-gray-500">Comentario</div>
+                        <div className="font-medium">
+                          {isEditing ? (
+                            <textarea
+                              className="w-full border p-2 rounded resize-y min-h-20"
+                              value={eNotes}
+                              onChange={(e) => setENotes(e.target.value)}
+                              maxLength={500}
+                            />
+                          ) : (
+                            <div title={c.notes || ""}>
+                              {(c.notes || "").trim() ? c.notes : "—"}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="mt-3">
+                      {isEditing ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            className="px-3 py-2 rounded-xl text-white bg-blue-600 hover:bg-blue-700"
+                            onClick={saveEdit}
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            className="px-3 py-2 rounded-xl bg-gray-200 hover:bg-gray-300"
+                            onClick={cancelEdit}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            className="px-3 py-2 rounded-xl text-white bg-yellow-600 hover:bg-yellow-700"
+                            onClick={() => startEdit(c)}
+                          >
+                            Editar
+                          </button>
+
+                          <button
+                            className="px-3 py-2 rounded-xl text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                            onClick={() => handleDelete(c)}
+                            disabled={!isAdmin}
+                            title={!isAdmin ? "Solo admin" : "Borrar"}
+                          >
+                            Borrar
+                          </button>
+
+                          <button
+                            className="px-3 py-2 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700"
+                            onClick={() => openStatement(c)}
+                          >
+                            Estado
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 );
-              })
-            )}
-          </tbody>
-        </table>
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
