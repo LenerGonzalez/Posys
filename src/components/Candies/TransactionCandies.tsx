@@ -107,7 +107,6 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
 }
 
 // ============ CUENTAS POR COBRAR (CxC) ============
-
 async function deleteARMovesBySaleId(saleId: string) {
   const qMov = query(
     collection(db, "ar_movements"),
@@ -132,8 +131,6 @@ interface TransactionsReportCandiesProps {
   sellerCandyId?: string;
   currentUserEmail?: string;
 }
-
-// ==================== UI ====================
 
 export default function TransactionsReportCandies({
   role = "",
@@ -166,7 +163,6 @@ export default function TransactionsReportCandies({
     setItemsModalRows([]);
 
     try {
-      // ✅ 1 doc directo (más limpio y estable)
       const docSnap = await getDoc(doc(db, "sales_candies", saleId));
       const data = docSnap.exists() ? (docSnap.data() as any) : null;
       if (!data) {
@@ -182,9 +178,7 @@ export default function TransactionsReportCandies({
 
       const rows = arr.map((it: any) => ({
         productName: String(it.productName || ""),
-        // 👇 aquí mostramos PAQUETES en el detalle
         qty: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
-        // 👇 y el precio por paquete correcto
         unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? 0),
         discount: Number(it.discount || 0),
         total: Number(it.total ?? it.lineFinal ?? 0),
@@ -228,7 +222,6 @@ export default function TransactionsReportCandies({
     return m;
   }, [customers]);
 
-  // NUEVO: mapa de vendedores por id
   const sellersById = useMemo(() => {
     const m: Record<string, Seller> = {};
     sellers.forEach((v) => {
@@ -237,7 +230,7 @@ export default function TransactionsReportCandies({
     return m;
   }, [sellers]);
 
-  // ✅ Ajuste: comisión HISTÓRICA desde la venta (si existe),
+  // ✅ Comisión HISTÓRICA desde la venta (si existe),
   // fallback a cálculo por sellers_candies
   const getCommissionAmount = (s: SaleDoc): number => {
     const stored = Number((s as any).vendorCommissionAmount || 0);
@@ -365,12 +358,9 @@ export default function TransactionsReportCandies({
       return;
     try {
       setLoading(true);
-      // 1) Reversar inventario y borrar la venta (dulces)
       await restoreSaleAndDeleteCandy(s.id);
-      // 2) Eliminar movimientos de CxC vinculados
       await deleteARMovesBySaleId(s.id);
 
-      // 3) Actualizar UI
       setSales((prev) => prev.filter((x) => x.id !== s.id));
       setMsg("✅ Venta eliminada");
     } catch (e) {
@@ -465,8 +455,8 @@ export default function TransactionsReportCandies({
     }
 
     return (
-      <div className="flex items-center gap-1 justify-between mt-3">
-        <div className="flex items-center gap-1">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
+        <div className="flex items-center gap-1 flex-wrap">
           <button
             className="px-2 py-1 border rounded disabled:opacity-50"
             onClick={goFirst}
@@ -525,13 +515,13 @@ export default function TransactionsReportCandies({
     <div className="max-w-6xl mx-auto">
       <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
 
-      {/* Filtros */}
-      <div className="bg-white p-3 rounded shadow border mb-4 flex flex-wrap gap-3 items-end text-sm">
+      {/* Filtros (mobile-friendly) */}
+      <div className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end text-sm">
         <div>
           <label className="block font-semibold">Desde</label>
           <input
             type="date"
-            className="border rounded px-2 py-1"
+            className="border rounded px-2 py-1 w-full"
             value={fromDate}
             onChange={(e) => {
               setFromDate(e.target.value);
@@ -539,11 +529,12 @@ export default function TransactionsReportCandies({
             }}
           />
         </div>
+
         <div>
           <label className="block font-semibold">Hasta</label>
           <input
             type="date"
-            className="border rounded px-2 py-1"
+            className="border rounded px-2 py-1 w-full"
             value={toDate}
             onChange={(e) => {
               setToDate(e.target.value);
@@ -552,11 +543,10 @@ export default function TransactionsReportCandies({
           />
         </div>
 
-        {/* Filtro por Cliente */}
-        <div>
+        <div className="sm:col-span-2 lg:col-span-2">
           <label className="block font-semibold">Cliente (crédito)</label>
           <select
-            className="border rounded px-2 py-1 min-w-[220px]"
+            className="border rounded px-2 py-1 w-full"
             value={filterCustomerId}
             onChange={(e) => {
               setFilterCustomerId(e.target.value);
@@ -572,11 +562,10 @@ export default function TransactionsReportCandies({
           </select>
         </div>
 
-        {/* Filtro por Tipo */}
         <div>
           <label className="block font-semibold">Tipo</label>
           <select
-            className="border rounded px-2 py-1"
+            className="border rounded px-2 py-1 w-full"
             value={filterType}
             onChange={(e) => {
               setFilterType(e.target.value as "" | SaleType);
@@ -590,7 +579,7 @@ export default function TransactionsReportCandies({
         </div>
 
         <button
-          className="ml-auto px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+          className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
           onClick={handleExportPDF}
         >
           Exportar PDF
@@ -598,7 +587,7 @@ export default function TransactionsReportCandies({
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">Paquetes Cash</div>
           <div className="text-xl font-semibold">{kpis.packsCash}</div>
@@ -619,8 +608,166 @@ export default function TransactionsReportCandies({
         </div>
       </div>
 
-      {/* Tabla */}
-      <div className="bg-white p-2 rounded shadow border w-full">
+      {/* ===== MOBILE: Cards expandibles (sin perder datos) ===== */}
+      <div className="block md:hidden space-y-3">
+        {loading ? (
+          <div className="bg-white border rounded-lg p-4 shadow">Cargando…</div>
+        ) : paged.length === 0 ? (
+          <div className="bg-white border rounded-lg p-4 shadow">
+            Sin transacciones en el rango.
+          </div>
+        ) : (
+          paged.map((s) => {
+            const name =
+              s.customerName ||
+              (s.customerId ? customersById[s.customerId] : "") ||
+              "Nombre cliente";
+            const commissionAmount = getCommissionAmount(s);
+
+            return (
+              <div key={s.id} className="bg-white border rounded-xl shadow">
+                <details className="group">
+                  <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-semibold truncate">{name}</div>
+                        <div className="text-xs text-gray-600 shrink-0">
+                          {s.date}
+                        </div>
+                      </div>
+
+                      <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
+                        <span
+                          className={`px-2 py-1 rounded-full border ${
+                            s.type === "CREDITO"
+                              ? "bg-yellow-50 border-yellow-200 text-yellow-700"
+                              : "bg-green-50 border-green-200 text-green-700"
+                          }`}
+                        >
+                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                        </span>
+
+                        <span className="text-gray-700">
+                          <b>Paquetes:</b>{" "}
+                          <button
+                            type="button"
+                            className="underline text-blue-600"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              openItemsModal(s.id);
+                            }}
+                            title="Ver detalle"
+                          >
+                            {s.quantity}
+                          </button>
+                        </span>
+
+                        <span className="text-gray-700">
+                          <b>Monto:</b> {money(s.total)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-gray-500 mt-1">
+                      <span className="inline-block transition-transform group-open:rotate-180">
+                        ▼
+                      </span>
+                    </div>
+                  </summary>
+
+                  {/* Detalle expandido */}
+                  <div className="px-3 pb-3 pt-0 text-sm">
+                    <div className="grid grid-cols-1 gap-2 border-t pt-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Cliente</span>
+                        <span className="font-medium text-right">{name}</span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Fecha</span>
+                        <span className="font-medium">{s.date}</span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Tipo</span>
+                        <span className="font-medium">
+                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Paquetes</span>
+                        <span className="font-medium">
+                          <button
+                            type="button"
+                            className="underline text-blue-600"
+                            onClick={() => openItemsModal(s.id)}
+                            title="Ver detalle"
+                          >
+                            {s.quantity}
+                          </button>
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Monto</span>
+                        <span className="font-semibold">{money(s.total)}</span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Comisión</span>
+                        <span className="font-medium">
+                          {commissionAmount > 0 ? money(commissionAmount) : "—"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Vendedor</span>
+                        <span className="font-medium">
+                          {s.vendorName || "—"}
+                        </span>
+                      </div>
+
+                      {/* Acciones (solo admin) */}
+                      {canDelete && (
+                        <div className="pt-2 flex items-center justify-end gap-2">
+                          <button
+                            className="px-3 py-2 rounded border hover:bg-gray-50"
+                            onClick={() =>
+                              setOpenMenuId((prev) =>
+                                prev === s.id ? null : s.id
+                              )
+                            }
+                          >
+                            ⋮ Acciones
+                          </button>
+
+                          {openMenuId === s.id && (
+                            <button
+                              className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                              onClick={() => confirmDelete(s)}
+                            >
+                              Eliminar
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </details>
+              </div>
+            );
+          })
+        )}
+
+        {/* Paginación */}
+        <div className="bg-white p-3 rounded shadow border">
+          {renderPager()}
+        </div>
+      </div>
+
+      {/* ===== DESKTOP: Tabla original ===== */}
+      <div className="hidden md:block bg-white p-2 rounded shadow border w-full">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>

@@ -32,7 +32,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
     return "POLLO";
   });
 
-  // Tabs por rubro/rol según tu matriz (sin transacciones por ahora)
+  // Tabs por rubro/rol (✅ ahora incluye Transacciones en DULCES)
   const tabs = useMemo(() => {
     // === ADMIN ===
     if (isAdmin) {
@@ -40,16 +40,19 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
         return [
           { key: "dash", label: "Dashboard", to: `${base}/financialDashboard` },
           { key: "inv", label: "Inventario", to: `${base}/batches` },
-          { key: "cierre", label: "Cierre", to: `${base}/bills` },
-          { key: "hist", label: "Historial", to: `${base}/billhistoric` },
+          { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
+          { key: "gastos", label: "Gastos", to: `${base}/expenses` },
         ];
       }
-      // DULCES (admin): + Clientes (nuevo)
+      // DULCES (admin)
       return [
         { key: "dc", label: "Data", to: `${base}/datacenter` },
-        { key: "ord", label: "Órdenes", to: `${base}/productsVendorsCandies` },
-        { key: "maes", label: "Maestras", to: `${base}/mainordersCandies` },
-        { key: "cli", label: "Clientes", to: `${base}/customersCandies` }, // ✅ NUEVO
+        { key: "maes", label: "Inventario", to: `${base}/mainordersCandies` },
+        { key: "ord", label: "Rutas", to: `${base}/productsVendorsCandies` },
+
+        { key: "cli", label: "Cuentas", to: `${base}/customersCandies` },
+        // ✅ NUEVO TAB
+        { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
         { key: "cier", label: "Cierres", to: `${base}/cierreVentasCandies` },
       ];
     }
@@ -66,9 +69,15 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
     // === VENDEDOR DULCES ===
     if (isVendDulces) {
       return [
-        { key: "venta", label: "Venta", to: `${base}/salesCandies` },
-        { key: "ped", label: "Pedidos", to: `${base}/productsVendorsCandies` },
-        { key: "cli", label: "Clientes", to: `${base}/customersCandies` }, // ✅ NUEVO
+        { key: "venta", label: "Vender", to: `${base}/salesCandies` },
+        {
+          key: "ped",
+          label: "Inventario",
+          to: `${base}/productsVendorsCandies`,
+        },
+        { key: "cli", label: "Cuentas", to: `${base}/customersCandies` },
+        // ✅ NUEVO TAB
+        { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
         { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
       ];
     }
@@ -142,7 +151,9 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
           )}
 
           <div className="ml-auto flex items-center gap-2">
-         
+            {/* Si querés mantener InstallApp visible, descomentá */}
+            {/* <InstallApp /> */}
+
             <button
               onClick={handleLogout}
               className="px-3 py-2 rounded-2xl bg-red-500 text-white text-sm font-semibold shadow hover:bg-red-600"
@@ -153,13 +164,15 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
         </div>
       </header>
 
-      {/* Content (solo esto scrollea) */}
-      <main className="flex-1 overflow-y-auto px-3 pt-3 pb-20">
+      {/* Content (solo esto scrollea)
+          ✅ Ajuste PWA: padding-bottom con safe-area para que no lo tape el tabbar */}
+      <main className="flex-1 overflow-y-auto px-3 pt-3 pb-[calc(92px+env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
 
-      {/* Bottom Tabs (fijo SIEMPRE) */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-md">
+      {/* Bottom Tabs (fijo SIEMPRE)
+          ✅ safe-area abajo */}
+      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-md pb-[env(safe-area-inset-bottom)]">
         <div className="max-w-3xl mx-auto px-2 py-1.5 flex gap-1.5">
           {tabs.map((t) => (
             <NavLink key={t.key} to={t.to} className={tabCls}>

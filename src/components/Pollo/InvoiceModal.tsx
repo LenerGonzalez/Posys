@@ -1,4 +1,4 @@
-// src/components/InvoiceModal.tsx
+// src/components/Pollo/InvoiceModal.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { db } from "../../firebase";
 import {
@@ -8,8 +8,6 @@ import {
   orderBy,
   query,
   Timestamp,
-  getDoc,
-  doc,
 } from "firebase/firestore";
 import { format } from "date-fns";
 
@@ -97,15 +95,19 @@ export default function InvoiceModal({
   );
   const [description, setDescription] = useState<string>("");
 
-  // Selección de lotes
-  const [selectedIds, setSelectedIds] = useState<string[]>(() =>
-    filteredBatches.map((b) => b.id)
-  );
-  // Mantener coherencia al cambiar filtros
+  // ✅ Selección de lotes (FIX: coherencia con filtros)
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   useEffect(() => {
-    setSelectedIds((prev) =>
-      prev.filter((id) => filteredBatches.some((b) => b.id === id))
-    );
+    // Mantener solo seleccionados válidos dentro del filtro actual
+    setSelectedIds((prev) => {
+      const valid = prev.filter((id) =>
+        filteredBatches.some((b) => b.id === id)
+      );
+      // Si no hay ninguno seleccionado y hay resultados, auto-selecciona todos (comportamiento útil)
+      return valid.length === 0 && filteredBatches.length > 0
+        ? filteredBatches.map((b) => b.id)
+        : valid;
+    });
   }, [filteredBatches]);
 
   // ========= Gastos con filtro independiente =========
@@ -196,6 +198,7 @@ export default function InvoiceModal({
     if (!editingAdjId) return;
     const amt = Number(editAdjAmount);
     if (!isFinite(amt) || amt <= 0) return;
+
     setAdjustments((prev) =>
       prev.map((x) =>
         x.id === editingAdjId
@@ -287,8 +290,8 @@ export default function InvoiceModal({
     return {
       totalLbs: lbs,
       totalUnits: uds,
-      totalExpected: Number(expected.toFixed(2)), // ventas
-      totalInvoiced: Number(facturado.toFixed(2)), // costo
+      totalExpected: Number(expected.toFixed(2)),
+      totalInvoiced: Number(facturado.toFixed(2)),
       totalGastos: Number(totalGastos.toFixed(2)),
       debits: Number(debitsSum.toFixed(2)),
       credits: Number(creditsSum.toFixed(2)),
@@ -323,17 +326,15 @@ export default function InvoiceModal({
         status: "PENDIENTE" as const,
         createdAt: Timestamp.now(),
 
-        // Totales (guardamos ambos: esperado e “invoiceTotal” costo)
         totalLbs: Number(qty3(totals.totalLbs)),
         totalUnits: Number(qty3(totals.totalUnits)),
-        totalAmount: totals.totalExpected, // ventas (esperado)
-        invoiceTotal: totals.totalInvoiced, // facturado (costo)
+        totalAmount: totals.totalExpected,
+        invoiceTotal: totals.totalInvoiced,
         totalExpenses: totals.totalGastos,
         totalDebits: totals.debits,
         totalCredits: totals.credits,
-        finalAmount: totals.finalAmount, // esperado - gastos - débitos + créditos
+        finalAmount: totals.finalAmount,
 
-        // Detalle lotes
         batches: selectedBatches.map((b) => ({
           id: b.id,
           productId: b.productId,
@@ -359,7 +360,6 @@ export default function InvoiceModal({
             : null,
         })),
 
-        // Gastos
         expenses: filteredExpenses
           .filter((g) => selectedExpenseIds.includes(g.id))
           .map((g) => ({
@@ -369,7 +369,6 @@ export default function InvoiceModal({
             amount: Number(Number(g.amount || 0).toFixed(2)),
           })),
 
-        // Ajustes
         adjustments: adjustments.map((a) => ({
           id: a.id,
           description: a.description,
@@ -398,6 +397,7 @@ export default function InvoiceModal({
         <div className="flex items-center gap-3 mb-4">
           <h3 className="text-lg font-semibold">Crear factura</h3>
           <button
+            type="button"
             onClick={onClose}
             className="ml-auto px-2 py-1 border rounded hover:bg-gray-50"
           >
@@ -475,6 +475,7 @@ export default function InvoiceModal({
               </select>
             </div>
             <button
+              type="button"
               className="ml-auto px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
               onClick={() => {
                 setLotFrom(firstDayOfMonth());
@@ -667,6 +668,7 @@ export default function InvoiceModal({
               Notas Crédito/Débito (Cargos extras)
             </h4>
             <button
+              type="button"
               className="ml-auto px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
               onClick={() => setOpenAdjModal(true)}
             >
@@ -692,7 +694,6 @@ export default function InvoiceModal({
                     const isEditing = editingAdjId === a.id;
                     return (
                       <tr key={a.id} className="text-center">
-                        {/* Descripción */}
                         <td className="p-2 border">
                           {isEditing ? (
                             <textarea
@@ -709,7 +710,6 @@ export default function InvoiceModal({
                           )}
                         </td>
 
-                        {/* Tipo */}
                         <td className="p-2 border">
                           {isEditing ? (
                             <select
@@ -737,7 +737,6 @@ export default function InvoiceModal({
                           )}
                         </td>
 
-                        {/* Monto */}
                         <td className="p-2 border">
                           {isEditing ? (
                             <input
@@ -752,23 +751,25 @@ export default function InvoiceModal({
                           )}
                         </td>
 
-                        {/* Acciones */}
                         <td className="p-2 border">
                           {isEditing ? (
                             <div className="flex gap-2 justify-center">
                               <button
+                                type="button"
                                 className="px-2 py-1 rounded bg-green-600 text-white hover:bg-green-700 text-xs"
                                 onClick={saveEditAdjustment}
                               >
                                 Guardar
                               </button>
                               <button
+                                type="button"
                                 className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-xs"
                                 onClick={cancelEditAdjustment}
                               >
                                 Cancelar
                               </button>
                               <button
+                                type="button"
                                 className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
                                 onClick={() => removeAdjustment(a.id)}
                               >
@@ -778,12 +779,14 @@ export default function InvoiceModal({
                           ) : (
                             <div className="flex gap-2 justify-center">
                               <button
+                                type="button"
                                 className="px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 text-xs"
                                 onClick={() => beginEditAdjustment(a)}
                               >
                                 Editar
                               </button>
                               <button
+                                type="button"
                                 className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
                                 onClick={() => removeAdjustment(a.id)}
                               >
@@ -803,7 +806,6 @@ export default function InvoiceModal({
 
         {/* Totales */}
         <div className="grid grid-cols-1 md:grid-cols-3 text-sm mb-4 justify-between">
-          {/* Columna 1 */}
           <div className="space-y-1">
             <div>
               Total libras: <strong>{qty3(totals.totalLbs)}</strong>
@@ -813,7 +815,6 @@ export default function InvoiceModal({
             </div>
           </div>
 
-          {/* Columna 2 */}
           <div className="space-y-1 text-center">
             <div>
               Total facturado (costo):{" "}
@@ -829,7 +830,6 @@ export default function InvoiceModal({
             </div>
           </div>
 
-          {/* Columna 3 */}
           <div className="space-y-1 text-right">
             <div>
               Gastos: <strong>{money(totals.totalGastos)}</strong>
@@ -842,7 +842,6 @@ export default function InvoiceModal({
             </div>
           </div>
 
-          {/* Monto final en toda la fila */}
           <div className="md:col-span-3 mt-3">
             <div className="p-3 bg-blue-50 border border-blue-200 rounded text-center font-semibold text-lg">
               Monto final (esperado − gastos − débitos + créditos):{" "}
@@ -854,13 +853,18 @@ export default function InvoiceModal({
         {/* Acciones */}
         <div className="flex items-center gap-2">
           <button
+            type="button"
             disabled={creating}
             onClick={createInvoice}
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
           >
             {creating ? "Creando…" : "Crear factura"}
           </button>
-          <button onClick={onClose} className="px-4 py-2 border rounded">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 border rounded"
+          >
             Cancelar
           </button>
           {msg && <span className="text-sm ml-2">{msg}</span>}
@@ -902,6 +906,7 @@ export default function InvoiceModal({
             <div className="flex items-center mb-3">
               <h4 className="font-semibold">Nuevo cargo</h4>
               <button
+                type="button"
                 className="ml-auto px-2 py-1 border rounded hover:bg-gray-50"
                 onClick={() => setOpenAdjModal(false)}
               >
@@ -953,6 +958,7 @@ export default function InvoiceModal({
 
               <div className="flex justify-end">
                 <button
+                  type="button"
                   className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
                   onClick={addAdjustment}
                 >
