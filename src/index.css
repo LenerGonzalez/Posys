@@ -2,6 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* @layer components {
+  .btn-header-mobile {
+    @apply
+      w-10 h-10
+      flex items-center justify-center
+      rounded-lg
+      text-sm;
+  }
+
+  @media (min-width: 768px) {
+    .btn-header-mobile {
+      @apply
+        w-24 h-auto
+    
+        px-4 py-2;
+    }
+  }
+} */
+
+
 /* Estilos base para tu app React */
 #root {
   min-height: 100%;

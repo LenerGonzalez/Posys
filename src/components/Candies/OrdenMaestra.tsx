@@ -998,13 +998,13 @@ export default function CandyMainOrders() {
 
           {/* Nueva Orden */}
           <button
-            className="inline-flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded hover:bg-indigo-700"
+            className="items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded-2xl hover:bg-indigo-700"
             onClick={() => {
               resetOrderForm();
               setOpenOrderModal(true);
             }}
           >
-            <span className="inline-block bg-indigo-700/40 rounded-full p-1">
+            <span className="items-center gap-4 inline-block bg-indigo-700/40 rounded-full ">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 className="h-4 w-4"
