@@ -272,6 +272,261 @@ type ARMovement = {
   type?: "CARGO" | "ABONO";
 };
 
+// ======================
+//  CHARTS (sin librerías)
+// ======================
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function LineChartSimple({
+  title,
+  series,
+  valuePrefix = "C$",
+}: {
+  title: string;
+  series: Array<{ label: string; value: number }>;
+  valuePrefix?: string;
+}) {
+  const W = 900;
+  const H = 260;
+  const padL = 44;
+  const padR = 16;
+  const padT = 18;
+  const padB = 38;
+
+  const values = series.map((x) => Number(x.value || 0));
+  const minV = values.length ? Math.min(...values) : 0;
+  const maxV = values.length ? Math.max(...values) : 0;
+  const range = maxV - minV || 1;
+
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  const points = series.map((p, i) => {
+    const x =
+      padL +
+      (series.length <= 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
+    const y = padT + (1 - (Number(p.value || 0) - minV) / range) * innerH;
+    return { x, y, ...p };
+  });
+
+  const path = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+    .join(" ");
+
+  const last = points[points.length - 1];
+  const lastValue = last ? last.value : 0;
+
+  return (
+    <div className="border rounded-2xl p-3 shadow-sm bg-white">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="font-semibold text-sm sm:text-base">{title}</div>
+        <div className="text-xs text-gray-600 whitespace-nowrap">
+          Último: <strong>{valuePrefix + money(lastValue)}</strong>
+        </div>
+      </div>
+
+      <div className="w-full overflow-x-auto">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="min-w-[720px] w-full h-auto"
+          role="img"
+          aria-label={title}
+        >
+          {/* grid */}
+          {[0, 1, 2, 3].map((i) => {
+            const y = padT + (i / 3) * innerH;
+            return (
+              <line
+                key={i}
+                x1={padL}
+                y1={y}
+                x2={W - padR}
+                y2={y}
+                stroke="#e5e7eb"
+                strokeWidth="1"
+              />
+            );
+          })}
+
+          {/* axis labels (min/max) */}
+          <text x={8} y={padT + 10} fontSize="12" fill="#6b7280">
+            {valuePrefix}
+            {money(maxV)}
+          </text>
+          <text x={8} y={padT + innerH} fontSize="12" fill="#6b7280">
+            {valuePrefix}
+            {money(minV)}
+          </text>
+
+          {/* line */}
+          <path d={path} fill="none" stroke="#111827" strokeWidth="2.5" />
+
+          {/* points */}
+          {points.map((p, idx) => (
+            <circle key={idx} cx={p.x} cy={p.y} r="3.5" fill="#111827" />
+          ))}
+
+          {/* x labels (primer/último) */}
+          {series.length > 0 && (
+            <>
+              <text
+                x={padL}
+                y={H - 14}
+                fontSize="12"
+                fill="#6b7280"
+                textAnchor="start"
+              >
+                {series[0].label}
+              </text>
+              <text
+                x={W - padR}
+                y={H - 14}
+                fontSize="12"
+                fill="#6b7280"
+                textAnchor="end"
+              >
+                {series[series.length - 1].label}
+              </text>
+            </>
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function PieChartSimple({
+  title,
+  items,
+}: {
+  title: string;
+  items: Array<{ label: string; value: number }>;
+}) {
+  const total = items.reduce((s, x) => s + Number(x.value || 0), 0);
+  const size = 240;
+  const r = 86;
+  const cx = 120;
+  const cy = 120;
+
+  const safeTotal = total > 0 ? total : 1;
+  let acc = 0;
+
+  // Monochrome palette (grays) para no pelear con tema/estilo
+  const shades = ["#111827", "#374151", "#6b7280", "#9ca3af"];
+
+  const arcs = items.map((it, idx) => {
+    const v = Math.max(0, Number(it.value || 0));
+    const start = acc / safeTotal;
+    const frac = v / safeTotal;
+    acc += v;
+
+    const end = start + frac;
+
+    const a0 = start * Math.PI * 2 - Math.PI / 2;
+    const a1 = end * Math.PI * 2 - Math.PI / 2;
+
+    const x0 = cx + r * Math.cos(a0);
+    const y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1);
+    const y1 = cy + r * Math.sin(a1);
+
+    const largeArc = frac > 0.5 ? 1 : 0;
+
+    const d = [
+      `M ${cx} ${cy}`,
+      `L ${x0.toFixed(2)} ${y0.toFixed(2)}`,
+      `A ${r} ${r} 0 ${largeArc} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`,
+      "Z",
+    ].join(" ");
+
+    return { d, fill: shades[idx % shades.length], ...it, frac };
+  });
+
+  return (
+    <div className="border rounded-2xl p-3 shadow-sm bg-white">
+      <div className="font-semibold text-sm sm:text-base mb-2">{title}</div>
+
+      <div className="flex flex-col md:flex-row gap-3 md:items-center">
+        <div className="w-full md:w-auto overflow-x-auto">
+          <svg
+            viewBox={`0 0 ${size} ${size}`}
+            className="min-w-[240px] w-[260px] h-auto"
+            role="img"
+            aria-label={title}
+          >
+            {arcs.map((a, i) => (
+              <path key={i} d={a.d} fill={a.fill} />
+            ))}
+            <circle cx={cx} cy={cy} r="48" fill="#ffffff" />
+            <text
+              x={cx}
+              y={cy - 4}
+              textAnchor="middle"
+              fontSize="12"
+              fill="#6b7280"
+            >
+              Total
+            </text>
+            <text
+              x={cx}
+              y={cy + 16}
+              textAnchor="middle"
+              fontSize="14"
+              fill="#111827"
+              fontWeight="700"
+            >
+              C${money(total)}
+            </text>
+          </svg>
+        </div>
+
+        <div className="flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {items.map((it, idx) => {
+              const v = Number(it.value || 0);
+              const pct = clamp01(v / (total || 1)) * 100;
+              return (
+                <div
+                  key={it.label}
+                  className="border rounded-xl p-2 bg-gray-50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold truncate">
+                      {it.label}
+                    </div>
+                    <div className="text-sm font-bold whitespace-nowrap">
+                      C${money(v)}
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    {pct.toFixed(1)}%
+                  </div>
+                  <div className="h-2 bg-white border rounded-full mt-2 overflow-hidden">
+                    <div
+                      className="h-full"
+                      style={{
+                        width: `${pct}%`,
+                        background: shades[idx % shades.length],
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="text-xs text-gray-500 mt-2">
+            *Distribución basada en ventas del período con los filtros actuales.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DataCenterCandies({
   role,
 }: {
@@ -316,6 +571,12 @@ export default function DataCenterCandies({
   const pdfRef = useRef<HTMLDivElement>(null);
 
   const [invCandiesAll, setInvCandiesAll] = useState<any[]>([]);
+
+  // ✅ TABS/CHIPS: Macro vs Detalle
+  const [dataView, setDataView] = useState<"MACRO" | "DETALLE">("DETALLE");
+
+  // ✅ Gastos del período (input manual para que admin lo capture)
+  const [otherExpenses, setOtherExpenses] = useState<string>("");
 
   const customersMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -683,6 +944,7 @@ export default function DataCenterCandies({
       grossSanJorge: round2(gpSJ),
       grossIsla: round2(gpI),
       grossTotal: round2(gpR + gpSJ + gpI),
+      expectedTotal: round2(expR + expSJ + expI),
     };
   }, [mainOrders]);
 
@@ -1180,6 +1442,106 @@ export default function DataCenterCandies({
     );
   }
 
+  // ======================
+  //  DATA MACRO (KPIs)
+  // ======================
+  const macro = useMemo(() => {
+    const ingreso = round2(kpis.salesTotal);
+    const comision = round2(kpis.commCash + kpis.commCredit);
+
+    // Margen % estimado desde órdenes maestras (gross / expected)
+    // Si no hay data, margen 0 para no inventar.
+    const expectedTotal = Number(expectedAndGross.expectedTotal || 0);
+    const grossTotal = Number(expectedAndGross.grossTotal || 0);
+    const marginPct =
+      expectedTotal > 0
+        ? Math.max(0, Math.min(1, grossTotal / expectedTotal))
+        : 0;
+
+    // Costo estimado vendido = ingreso * (1 - margen)
+    // (Esto es estimación basada en tus órdenes maestras, porque tus ventas no traen costo unitario real por línea)
+    const costoProducto = round2(ingreso * (1 - marginPct));
+
+    const gastos = (() => {
+      const x = Number(otherExpenses || 0);
+      return Number.isFinite(x) ? round2(Math.max(0, x)) : 0;
+    })();
+
+    const gananciaBruta = round2(ingreso - costoProducto);
+    const gananciaNeta = round2(gananciaBruta - comision - gastos);
+
+    return {
+      ingreso,
+      costoProducto,
+      gananciaBruta,
+      comision,
+      gastos,
+      gananciaNeta,
+      marginPct,
+      hasEstimation: expectedTotal > 0,
+    };
+  }, [kpis, expectedAndGross, otherExpenses]);
+
+  // ======================
+  //  SERIES para gráficas
+  // ======================
+  const seriesByDay = useMemo(() => {
+    const map: Record<
+      string,
+      { date: string; ingreso: number; comision: number }
+    > = {};
+    for (const r of filteredRows) {
+      const d = r.date;
+      if (!d) continue;
+      if (!map[d]) map[d] = { date: d, ingreso: 0, comision: 0 };
+      map[d].ingreso += Number(r.amount || 0);
+      map[d].comision += Number(r.commission || 0);
+    }
+
+    const dates = Object.keys(map).sort((a, b) => (a < b ? -1 : 1));
+    const totalIngreso = dates.reduce((s, d) => s + map[d].ingreso, 0) || 1;
+
+    // Distribución proporcional de gastos a nivel día (según ingreso del día)
+    const gastos = Number(macro.gastos || 0);
+
+    // Costo estimado proporcional a ingreso del día
+    const costoTotal = Number(macro.costoProducto || 0);
+    const comisionTotal = Number(macro.comision || 0);
+
+    const seriesIngreso = dates.map((d) => ({
+      label: d.slice(5), // MM-dd para compacto
+      value: round2(map[d].ingreso),
+    }));
+
+    const seriesNeta = dates.map((d) => {
+      const ingresoDia = map[d].ingreso;
+      const share = ingresoDia / totalIngreso;
+
+      const costoDia = costoTotal * share;
+      const comDia = comisionTotal * share; // comisiones ya vienen por día, pero mantenemos consistencia proporcional
+      const gastosDia = gastos * share;
+
+      const netaDia = ingresoDia - costoDia - comDia - gastosDia;
+      return {
+        label: d.slice(5),
+        value: round2(netaDia),
+      };
+    });
+
+    return { seriesIngreso, seriesNeta, datesCount: dates.length };
+  }, [filteredRows, macro]);
+
+  const pieSalesByBranch = useMemo(() => {
+    return [
+      { label: "Rivas", value: Number(actualByBranch.RIVAS.sales || 0) },
+      {
+        label: "San Jorge",
+        value: Number(actualByBranch.SAN_JORGE.sales || 0),
+      },
+      { label: "Isla", value: Number(actualByBranch.ISLA.sales || 0) },
+    ].map((x) => ({ ...x, value: round2(x.value) }));
+  }, [actualByBranch]);
+
   return (
     <div className="max-w-7xl mx-auto px-2 sm:px-4 md:px-0">
       <div className="bg-white p-3 sm:p-4 md:p-6 rounded-2xl shadow-2xl">
@@ -1219,7 +1581,7 @@ export default function DataCenterCandies({
         </div>
 
         {/* FILTROS (mobile-first) */}
-        <div className="rounded-2xl border border-gray-100 p-3 sm:p-4 mb-4 shadow-sm bg-white">
+        <div className="rounded-2xl border border-gray-100 p-3 sm:p-4 mb-3 shadow-sm bg-white">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
             <div>
               <label className="block text-xs text-gray-600">Desde</label>
@@ -1360,762 +1722,988 @@ export default function DataCenterCandies({
           </div>
         </div>
 
+        {/* CHIPS/TABS (debajo de filtros, arriba de KPIs) */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setDataView("MACRO")}
+              className={[
+                "px-3 py-2 rounded-full text-sm font-semibold border transition-colors",
+                dataView === "MACRO"
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-800 border-gray-200 hover:bg-gray-50",
+              ].join(" ")}
+            >
+              Data Macro
+            </button>
+            <button
+              onClick={() => setDataView("DETALLE")}
+              className={[
+                "px-3 py-2 rounded-full text-sm font-semibold border transition-colors",
+                dataView === "DETALLE"
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-800 border-gray-200 hover:bg-gray-50",
+              ].join(" ")}
+            >
+              Data Detalle
+            </button>
+          </div>
+
+          {/* Gastos período (solo relevante en Macro, pero lo dejamos visible siempre por simplicidad) */}
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+            <div className="text-xs text-gray-600">
+              Gastos del período (manual)
+            </div>
+            <input
+              value={otherExpenses}
+              onChange={(e) => setOtherExpenses(e.target.value)}
+              className="border rounded-lg px-3 py-2 w-full sm:w-56 text-sm"
+              placeholder="0"
+              inputMode="decimal"
+            />
+          </div>
+        </div>
+
         {/* CONTENIDO PDF */}
         <div ref={pdfRef}>
-          {/* KPIs (mobile-first) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Paquetes cash</div>
-              <div className="text-xl sm:text-2xl font-bold">
-                {qty3(kpis.packsCash)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {startDate} → {endDate}
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Paquetes crédito</div>
-              <div className="text-xl sm:text-2xl font-bold">
-                {qty3(kpis.packsCredit)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {startDate} → {endDate}
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Ventas totales</div>
-              <div className="text-xl sm:text-2xl font-bold">
-                C${money(kpis.salesTotal)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Cash: C${money(kpis.salesCash)} • Crédito: C$
-                {money(kpis.salesCredit)}
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Comisión</div>
-              <div className="text-xl sm:text-2xl font-bold">
-                C${money(kpis.commCash + kpis.commCredit)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Cash: C${money(kpis.commCash)} • Crédito: C$
-                {money(kpis.commCredit)}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Gross Profit total (órdenes maestras)
-              </div>
-              <div className="text-xl sm:text-2xl font-bold">
-                C${money(expectedAndGross.grossTotal)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                R: {money(expectedAndGross.grossRivas)} • SJ:{" "}
-                {money(expectedAndGross.grossSanJorge)} • I:{" "}
-                {money(expectedAndGross.grossIsla)}
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Expected Total (Rivas/SJ/Isla)
-              </div>
-              <div className="text-sm mt-2 space-y-1">
-                <div className="flex justify-between">
-                  <span>Rivas</span>
-                  <strong>C${money(expectedAndGross.expectedRivas)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>San Jorge</span>
-                  <strong>C${money(expectedAndGross.expectedSanJorge)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>Isla</span>
-                  <strong>C${money(expectedAndGross.expectedIsla)}</strong>
-                </div>
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Actual ventas por sucursal
-              </div>
-              <div className="text-sm mt-2 space-y-1">
-                <div className="flex justify-between">
-                  <span>Rivas</span>
-                  <strong>C${money(actualByBranch.RIVAS.sales)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>San Jorge</span>
-                  <strong>C${money(actualByBranch.SAN_JORGE.sales)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>Isla</span>
-                  <strong>C${money(actualByBranch.ISLA.sales)}</strong>
-                </div>
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Diferencia vs expected
-              </div>
-              <div className="text-sm mt-2 space-y-1">
-                <div className="flex justify-between">
-                  <span>Rivas</span>
-                  <strong>C${money(diffVsExpected.RIVAS)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>San Jorge</span>
-                  <strong>C${money(diffVsExpected.SAN_JORGE)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>Isla</span>
-                  <strong>C${money(diffVsExpected.ISLA)}</strong>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* NUEVOS KPIs pedidos */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Total facturado a precio proveedor (órdenes maestras)
-              </div>
-              <div className="text-xl sm:text-2xl font-bold">
-                C${money(providerAndPackagesKpis.providerTotalMaster)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {startDate} → {endDate}
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Total facturado a precio proveedor (órdenes vendedor)
-              </div>
-              <div className="text-xl sm:text-2xl font-bold">
-                C${money(providerAndPackagesKpis.providerTotalVendor)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {startDate} → {endDate}
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Paquetes ordenados (maestras)
-              </div>
-              <div className="text-xl sm:text-2xl font-bold">
-                {qty3(providerAndPackagesKpis.orderedPacksMaster)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Restantes (período):{" "}
-                <strong>
-                  {qty3(providerAndPackagesKpis.remainingPacksMaster)}
-                </strong>
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Existencia global (todas):{" "}
-                <strong>{qty3(globalStockKpis.masterRemainingPackages)}</strong>
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Paquetes ordenados (órdenes vendedor)
-              </div>
-              <div className="text-xl sm:text-2xl font-bold">
-                {qty3(providerAndPackagesKpis.orderedPacksVendor)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Restantes (período):{" "}
-                <strong>
-                  {qty3(providerAndPackagesKpis.remainingPacksVendor)}
-                </strong>
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Existencia global (todas):{" "}
-                <strong>{qty3(globalStockKpis.vendorRemainingPackages)}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Paquetes ordenados por vendedor (período)
-              </div>
-              {providerAndPackagesKpis.vendorRowsOrdered.length === 0 ? (
-                <div className="text-sm text-gray-500 mt-2">—</div>
-              ) : (
-                <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                  {providerAndPackagesKpis.vendorRowsOrdered.map((v) => (
-                    <div
-                      key={v.sellerId}
-                      className="flex justify-between text-sm"
-                    >
-                      <span className="truncate">{v.sellerName}</span>
-                      <strong className="ml-2">{qty3(v.ordered)}</strong>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Paquetes existentes por vendedor (período)
-              </div>
-              {providerAndPackagesKpis.vendorRowsRemaining.length === 0 ? (
-                <div className="text-sm text-gray-500 mt-2">—</div>
-              ) : (
-                <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                  {providerAndPackagesKpis.vendorRowsRemaining.map((v) => (
-                    <div
-                      key={v.sellerId}
-                      className="flex justify-between text-sm"
-                    >
-                      <span className="truncate">{v.sellerName}</span>
-                      <strong className="ml-2">{qty3(v.remaining)}</strong>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* KPI vendedores comisión */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Vendedores (comisión cash)
-              </div>
-              {vendorsKpi.cashArr.length === 0 ? (
-                <div className="text-sm text-gray-500 mt-2">—</div>
-              ) : (
-                <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                  {vendorsKpi.cashArr.map((v) => (
-                    <div
-                      key={v.vendorId}
-                      className="flex justify-between text-sm"
-                    >
-                      <span className="truncate">{v.name}</span>
-                      <strong className="ml-2">C${money(v.total)}</strong>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
-                Vendedores (comisión crédito)
-              </div>
-              {vendorsKpi.creditArr.length === 0 ? (
-                <div className="text-sm text-gray-500 mt-2">—</div>
-              ) : (
-                <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                  {vendorsKpi.creditArr.map((v) => (
-                    <div
-                      key={v.vendorId}
-                      className="flex justify-between text-sm"
-                    >
-                      <span className="truncate">{v.name}</span>
-                      <strong className="ml-2">C${money(v.total)}</strong>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* CARTERA */}
-          <div className="border rounded-2xl p-3 sm:p-4 mb-6 shadow-sm bg-white border-gray-100">
-            <h3 className="font-semibold mb-2 text-sm sm:text-base">
-              Cartera (saldo pendiente hasta {endDate})
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm mb-3">
-              <div>
-                Clientes con saldo: <strong>{arSummary.count}</strong>
-              </div>
-              <div>
-                Saldo total pendiente:{" "}
-                <strong>C${money(arSummary.totalPending)}</strong>
-              </div>
-              <div className="text-gray-500">*Muestra top 20 por monto</div>
-            </div>
-
-            {arSummary.list.length === 0 ? (
-              <div className="text-sm text-gray-500">—</div>
-            ) : (
-              <>
-                {/* MOBILE: cards */}
-                <div className="md:hidden space-y-2">
-                  {arSummary.list.map((c) => (
-                    <div key={c.customerId} className="border rounded-xl p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-semibold truncate">{c.name}</div>
-                        <div className="text-sm font-bold whitespace-nowrap">
-                          C${money(c.balance)}
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-600 mt-1">
-                        Último abono:{" "}
-                        <span className="font-medium">
-                          {c.lastPayment || "—"}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* DESKTOP: tabla */}
-                <div className="hidden md:block overflow-x-auto">
-                  <table className="min-w-full border text-sm">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="border p-2 text-left">Cliente</th>
-                        <th className="border p-2">Saldo</th>
-                        <th className="border p-2">Último abono</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {arSummary.list.map((c) => (
-                        <tr key={c.customerId} className="text-center">
-                          <td className="border p-2 text-left">{c.name}</td>
-                          <td className="border p-2">C${money(c.balance)}</td>
-                          <td className="border p-2">{c.lastPayment || "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* TABLA PRINCIPAL */}
-          <div className="mb-3 flex flex-col sm:flex-row sm:items-center gap-2">
-            <h3 className="font-semibold text-sm sm:text-base">
-              Tabla principal (Agrupar por: {groupBy})
-            </h3>
-            <span className="text-xs text-gray-500 sm:ml-auto">
-              Tap/Click en “Ver detalle” para drill-down
-            </span>
-          </div>
-
-          {loading ? (
-            <p className="text-sm">Cargando...</p>
-          ) : (
+          {/* =======================
+              DATA MACRO (nuevo)
+             ======================= */}
+          {dataView === "MACRO" && (
             <>
-              {/* MOBILE: cards para evitar scroll horizontal */}
-              <div className="md:hidden space-y-2 mb-6">
-                {grouped.length === 0 ? (
-                  <div className="border rounded-xl p-3 text-center text-gray-500">
-                    Sin datos con los filtros seleccionados.
+              {/* KPIs Macro */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Ingreso (ventas)</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(macro.ingreso)}
                   </div>
-                ) : (
-                  grouped.map((g) => (
-                    <div
-                      key={g.key}
-                      className="border rounded-2xl p-3 shadow-sm bg-white"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-semibold truncate">{g.label}</div>
-                        <button
-                          className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm font-semibold"
-                          onClick={() => setDetailKey(g.key)}
-                        >
-                          Ver detalle
-                        </button>
-                      </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {startDate} → {endDate}
+                  </div>
+                </div>
 
-                      <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Paquetes cash
-                          </div>
-                          <div className="font-bold">{qty3(g.packsCash)}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Paquetes crédito
-                          </div>
-                          <div className="font-bold">{qty3(g.packsCredit)}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Ventas cash
-                          </div>
-                          <div className="font-bold">
-                            C${money(g.salesCash)}
-                          </div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Ventas crédito
-                          </div>
-                          <div className="font-bold">
-                            C${money(g.salesCredit)}
-                          </div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Comisión cash
-                          </div>
-                          <div className="font-bold">C${money(g.commCash)}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Comisión crédito
-                          </div>
-                          <div className="font-bold">
-                            C${money(g.commCredit)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Costo producto{" "}
+                    <span className="text-gray-400">(estimado)</span>
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    -C${money(macro.costoProducto)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Margen ref:{" "}
+                    <strong>
+                      {macro.hasEstimation
+                        ? (macro.marginPct * 100).toFixed(1)
+                        : "0.0"}
+                      %
+                    </strong>{" "}
+                    (órdenes maestras)
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Ganancia bruta</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(macro.gananciaBruta)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Ingreso − Costo producto
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Comisión vendedor</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    -C${money(macro.comision)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Cash: C${money(kpis.commCash)} • Crédito: C$
+                    {money(kpis.commCredit)}
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Ganancia neta</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(macro.gananciaNeta)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Bruta − Comisiones − Gastos
+                  </div>
+                </div>
               </div>
 
-              {/* DESKTOP: tabla */}
-              <div className="hidden md:block overflow-x-auto mb-6 shadow-2xl rounded-xl border">
-                <table className="min-w-full border text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="border p-2 text-left">
-                        {groupBy === "DIA"
-                          ? "Día"
-                          : groupBy === "VENDEDOR"
-                          ? "Vendedor"
-                          : groupBy === "PRODUCTO"
-                          ? "Producto"
-                          : "Sucursal"}
-                      </th>
-                      <th className="border p-2">Paquetes cash</th>
-                      <th className="border p-2">Paquetes crédito</th>
-                      <th className="border p-2">Ventas cash</th>
-                      <th className="border p-2">Ventas crédito</th>
-                      <th className="border p-2">Comisión cash</th>
-                      <th className="border p-2">Comisión crédito</th>
-                      <th className="border p-2">Opciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {grouped.map((g) => (
-                      <tr key={g.key} className="text-center">
-                        <td className="border p-2 text-left">{g.label}</td>
-                        <td className="border p-2">{qty3(g.packsCash)}</td>
-                        <td className="border p-2">{qty3(g.packsCredit)}</td>
-                        <td className="border p-2">C${money(g.salesCash)}</td>
-                        <td className="border p-2">C${money(g.salesCredit)}</td>
-                        <td className="border p-2">C${money(g.commCash)}</td>
-                        <td className="border p-2">C${money(g.commCredit)}</td>
-                        <td className="border p-2">
-                          <button
-                            className="text-xs bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-black"
-                            onClick={() => setDetailKey(g.key)}
-                          >
-                            Ver detalle
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {grouped.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={8}
-                          className="p-4 text-center text-gray-500"
-                        >
-                          Sin datos con los filtros seleccionados.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              {/* Nota de estimación */}
+              <div className="border rounded-2xl p-3 sm:p-4 mb-4 bg-white border-gray-100 shadow-sm">
+                <div className="text-sm font-semibold">Notas rápidas</div>
+                <ul className="text-xs text-gray-600 mt-2 space-y-1 list-disc pl-4">
+                  <li>
+                    <strong>Costo producto</strong> se muestra como{" "}
+                    <strong>estimado</strong> porque tus ventas no traen el
+                    costo real por línea (COGS). Se calcula usando el margen de{" "}
+                    <strong>órdenes maestras</strong>.
+                  </li>
+                  <li>
+                    <strong>Gastos del período</strong> es un campo manual para
+                    que puedas incluir transporte, bolsas, pagos, etc. (si no
+                    aplica, dejalo en 0).
+                  </li>
+                </ul>
+              </div>
+
+              {/* Gráficas: 2 líneas + 1 pastel */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+                <LineChartSimple
+                  title="Ventas por día (Ingreso)"
+                  series={seriesByDay.seriesIngreso}
+                  valuePrefix="C$"
+                />
+                <LineChartSimple
+                  title="Ganancia neta estimada por día"
+                  series={seriesByDay.seriesNeta}
+                  valuePrefix="C$"
+                />
+              </div>
+
+              <div className="mb-6">
+                <PieChartSimple
+                  title="Distribución de ventas por sucursal"
+                  items={pieSalesByBranch}
+                />
               </div>
             </>
           )}
 
-          {/* DRILL-DOWN */}
-          {detailKey && (
-            <div className="rounded-2xl shadow-lg p-3 sm:p-4 bg-white border-solid border-2 border-gray-100">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
-                <h2 className="text-base sm:text-xl font-semibold truncate">
-                  Detalle •{" "}
-                  {grouped.find((x) => x.key === detailKey)?.label || detailKey}
-                </h2>
-
-                <button
-                  onClick={() => setDetailKey("")}
-                  className="
-                    w-full sm:w-auto
-                    text-sm px-3 py-2 border rounded-lg
-                    hover:bg-gray-50
-                  "
-                >
-                  Cerrar
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm mb-4">
-                <div className="border rounded-xl p-3 bg-gray-50">
-                  Total Ventas cash:{" "}
-                  <strong>
-                    C$
-                    {money(
-                      detailRows
-                        .filter((r) => r.type === "CONTADO")
-                        .reduce((s, r) => s + Number(r.amount || 0), 0)
-                    )}
-                  </strong>
-                </div>
-                <div className="border rounded-xl p-3 bg-gray-50">
-                  Total Ventas crédito:{" "}
-                  <strong>
-                    C$
-                    {money(
-                      detailRows
-                        .filter((r) => r.type === "CREDITO")
-                        .reduce((s, r) => s + Number(r.amount || 0), 0)
-                    )}
-                  </strong>
-                </div>
-                <div className="border rounded-xl p-3 bg-gray-50">
-                  Total paquetes cash:{" "}
-                  <strong>
-                    {qty3(
-                      detailRows
-                        .filter((r) => r.type === "CONTADO")
-                        .reduce((s, r) => s + Number(r.packages || 0), 0)
-                    )}
-                  </strong>
-                </div>
-                <div className="border rounded-xl p-3 bg-gray-50">
-                  Total paquetes crédito:{" "}
-                  <strong>
-                    {qty3(
-                      detailRows
-                        .filter((r) => r.type === "CREDITO")
-                        .reduce((s, r) => s + Number(r.packages || 0), 0)
-                    )}
-                  </strong>
-                </div>
-              </div>
-
-              <h3 className="font-semibold mb-2 text-sm sm:text-base">
-                Ventas incluidas
-              </h3>
-
-              {/* MOBILE: cards */}
-              <div className="md:hidden space-y-2 mb-4">
-                {detailRows.length === 0 ? (
-                  <div className="border rounded-xl p-3 text-center text-gray-500">
-                    Sin detalle.
+          {/* =======================
+              DATA DETALLE (existente)
+             ======================= */}
+          {dataView === "DETALLE" && (
+            <>
+              {/* KPIs (mobile-first) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Paquetes cash</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    {qty3(kpis.packsCash)}
                   </div>
-                ) : (
-                  detailRows.map((r) => (
-                    <div key={r.id} className="border rounded-2xl p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-semibold truncate">
-                          {r.productName}
-                        </div>
-                        <div className="text-sm font-bold whitespace-nowrap">
-                          C${money(r.amount)}
-                        </div>
-                      </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {startDate} → {endDate}
+                  </div>
+                </div>
 
-                      <div className="text-xs text-gray-600 mt-1">
-                        Vendedor:{" "}
-                        <span className="font-medium">{r.vendorName}</span>
-                      </div>
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Paquetes crédito</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    {qty3(kpis.packsCredit)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {startDate} → {endDate}
+                  </div>
+                </div>
 
-                      <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">Tipo</div>
-                          <div className="font-bold">
-                            {r.type === "CREDITO" ? "Crédito" : "Cash"}
-                          </div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">Sucursal</div>
-                          <div className="font-bold">{r.branch || "—"}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">Paquetes</div>
-                          <div className="font-bold">{qty3(r.packages)}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">Comisión</div>
-                          <div className="font-bold">
-                            C${money(r.commission)}
-                          </div>
-                        </div>
-                      </div>
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Ventas totales</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(kpis.salesTotal)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Cash: C${money(kpis.salesCash)} • Crédito: C$
+                    {money(kpis.salesCredit)}
+                  </div>
+                </div>
 
-                      <div className="text-xs text-gray-500 mt-2">
-                        Fecha: {r.date}
-                      </div>
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Comisión</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(kpis.commCash + kpis.commCredit)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Cash: C${money(kpis.commCash)} • Crédito: C$
+                    {money(kpis.commCredit)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Gross Profit total (órdenes maestras)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(expectedAndGross.grossTotal)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    R: {money(expectedAndGross.grossRivas)} • SJ:{" "}
+                    {money(expectedAndGross.grossSanJorge)} • I:{" "}
+                    {money(expectedAndGross.grossIsla)}
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Expected Total (Rivas/SJ/Isla)
+                  </div>
+                  <div className="text-sm mt-2 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Rivas</span>
+                      <strong>C${money(expectedAndGross.expectedRivas)}</strong>
                     </div>
-                  ))
+                    <div className="flex justify-between">
+                      <span>San Jorge</span>
+                      <strong>
+                        C${money(expectedAndGross.expectedSanJorge)}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Isla</span>
+                      <strong>C${money(expectedAndGross.expectedIsla)}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Actual ventas por sucursal
+                  </div>
+                  <div className="text-sm mt-2 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Rivas</span>
+                      <strong>C${money(actualByBranch.RIVAS.sales)}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>San Jorge</span>
+                      <strong>C${money(actualByBranch.SAN_JORGE.sales)}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Isla</span>
+                      <strong>C${money(actualByBranch.ISLA.sales)}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Diferencia vs expected
+                  </div>
+                  <div className="text-sm mt-2 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Rivas</span>
+                      <strong>C${money(diffVsExpected.RIVAS)}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>San Jorge</span>
+                      <strong>C${money(diffVsExpected.SAN_JORGE)}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Isla</span>
+                      <strong>C${money(diffVsExpected.ISLA)}</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* NUEVOS KPIs pedidos */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Total facturado a precio proveedor (órdenes maestras)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(providerAndPackagesKpis.providerTotalMaster)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {startDate} → {endDate}
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Total facturado a precio proveedor (órdenes vendedor)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(providerAndPackagesKpis.providerTotalVendor)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {startDate} → {endDate}
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Paquetes ordenados (maestras)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    {qty3(providerAndPackagesKpis.orderedPacksMaster)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Restantes (período):{" "}
+                    <strong>
+                      {qty3(providerAndPackagesKpis.remainingPacksMaster)}
+                    </strong>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Existencia global (todas):{" "}
+                    <strong>
+                      {qty3(globalStockKpis.masterRemainingPackages)}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Paquetes ordenados (órdenes vendedor)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    {qty3(providerAndPackagesKpis.orderedPacksVendor)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Restantes (período):{" "}
+                    <strong>
+                      {qty3(providerAndPackagesKpis.remainingPacksVendor)}
+                    </strong>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Existencia global (todas):{" "}
+                    <strong>
+                      {qty3(globalStockKpis.vendorRemainingPackages)}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Paquetes ordenados por vendedor (período)
+                  </div>
+                  {providerAndPackagesKpis.vendorRowsOrdered.length === 0 ? (
+                    <div className="text-sm text-gray-500 mt-2">—</div>
+                  ) : (
+                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                      {providerAndPackagesKpis.vendorRowsOrdered.map((v) => (
+                        <div
+                          key={v.sellerId}
+                          className="flex justify-between text-sm"
+                        >
+                          <span className="truncate">{v.sellerName}</span>
+                          <strong className="ml-2">{qty3(v.ordered)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Paquetes existentes por vendedor (período)
+                  </div>
+                  {providerAndPackagesKpis.vendorRowsRemaining.length === 0 ? (
+                    <div className="text-sm text-gray-500 mt-2">—</div>
+                  ) : (
+                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                      {providerAndPackagesKpis.vendorRowsRemaining.map((v) => (
+                        <div
+                          key={v.sellerId}
+                          className="flex justify-between text-sm"
+                        >
+                          <span className="truncate">{v.sellerName}</span>
+                          <strong className="ml-2">{qty3(v.remaining)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* KPI vendedores comisión */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Vendedores (comisión cash)
+                  </div>
+                  {vendorsKpi.cashArr.length === 0 ? (
+                    <div className="text-sm text-gray-500 mt-2">—</div>
+                  ) : (
+                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                      {vendorsKpi.cashArr.map((v) => (
+                        <div
+                          key={v.vendorId}
+                          className="flex justify-between text-sm"
+                        >
+                          <span className="truncate">{v.name}</span>
+                          <strong className="ml-2">C${money(v.total)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Vendedores (comisión crédito)
+                  </div>
+                  {vendorsKpi.creditArr.length === 0 ? (
+                    <div className="text-sm text-gray-500 mt-2">—</div>
+                  ) : (
+                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                      {vendorsKpi.creditArr.map((v) => (
+                        <div
+                          key={v.vendorId}
+                          className="flex justify-between text-sm"
+                        >
+                          <span className="truncate">{v.name}</span>
+                          <strong className="ml-2">C${money(v.total)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* CARTERA */}
+              <div className="border rounded-2xl p-3 sm:p-4 mb-6 shadow-sm bg-white border-gray-100">
+                <h3 className="font-semibold mb-2 text-sm sm:text-base">
+                  Cartera (saldo pendiente hasta {endDate})
+                </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm mb-3">
+                  <div>
+                    Clientes con saldo: <strong>{arSummary.count}</strong>
+                  </div>
+                  <div>
+                    Saldo total pendiente:{" "}
+                    <strong>C${money(arSummary.totalPending)}</strong>
+                  </div>
+                  <div className="text-gray-500">*Muestra top 20 por monto</div>
+                </div>
+
+                {arSummary.list.length === 0 ? (
+                  <div className="text-sm text-gray-500">—</div>
+                ) : (
+                  <>
+                    {/* MOBILE: cards */}
+                    <div className="md:hidden space-y-2">
+                      {arSummary.list.map((c) => (
+                        <div
+                          key={c.customerId}
+                          className="border rounded-xl p-3"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-semibold truncate">
+                              {c.name}
+                            </div>
+                            <div className="text-sm font-bold whitespace-nowrap">
+                              C${money(c.balance)}
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            Último abono:{" "}
+                            <span className="font-medium">
+                              {c.lastPayment || "—"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* DESKTOP: tabla */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="min-w-full border text-sm">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            <th className="border p-2 text-left">Cliente</th>
+                            <th className="border p-2">Saldo</th>
+                            <th className="border p-2">Último abono</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {arSummary.list.map((c) => (
+                            <tr key={c.customerId} className="text-center">
+                              <td className="border p-2 text-left">{c.name}</td>
+                              <td className="border p-2">
+                                C${money(c.balance)}
+                              </td>
+                              <td className="border p-2">
+                                {c.lastPayment || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </div>
 
-              {/* DESKTOP: tabla */}
-              <div className="hidden md:block overflow-x-auto mb-4">
-                <table className="min-w-full border text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="border p-2">Vendedor</th>
-                      <th className="border p-2">Producto</th>
-                      <th className="border p-2">Tipo</th>
-                      <th className="border p-2">Sucursal</th>
-                      <th className="border p-2">Paquetes</th>
-                      <th className="border p-2">Monto</th>
-                      <th className="border p-2">Comisión</th>
-                      <th className="border p-2">Fecha venta</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailRows.map((r) => (
-                      <tr key={r.id} className="text-center">
-                        <td className="border p-2">{r.vendorName}</td>
-                        <td className="border p-2">{r.productName}</td>
-                        <td className="border p-2">
-                          {r.type === "CREDITO" ? "Crédito" : "Cash"}
-                        </td>
-                        <td className="border p-2">{r.branch || "—"}</td>
-                        <td className="border p-2">{qty3(r.packages)}</td>
-                        <td className="border p-2">C${money(r.amount)}</td>
-                        <td className="border p-2">C${money(r.commission)}</td>
-                        <td className="border p-2">{r.date}</td>
-                      </tr>
-                    ))}
-                    {detailRows.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={8}
-                          className="p-4 text-center text-gray-500"
-                        >
-                          Sin detalle.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              {/* TABLA PRINCIPAL */}
+              <div className="mb-3 flex flex-col sm:flex-row sm:items-center gap-2">
+                <h3 className="font-semibold text-sm sm:text-base">
+                  Tabla principal (Agrupar por: {groupBy})
+                </h3>
+                <span className="text-xs text-gray-500 sm:ml-auto">
+                  Tap/Click en “Ver detalle” para drill-down
+                </span>
               </div>
 
-              <h3 className="font-semibold mb-2 text-sm sm:text-base">
-                Consolidado por producto
-              </h3>
-
-              {/* MOBILE: cards */}
-              <div className="md:hidden space-y-2">
-                {detailProductSummary.length === 0 ? (
-                  <div className="border rounded-xl p-3 text-center text-gray-500">
-                    Sin consolidado.
-                  </div>
-                ) : (
-                  detailProductSummary.map((p) => (
-                    <div key={p.productName} className="border rounded-2xl p-3">
-                      <div className="font-semibold">{p.productName}</div>
-                      <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">Paq cash</div>
-                          <div className="font-bold">{qty3(p.packsCash)}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Paq crédito
-                          </div>
-                          <div className="font-bold">{qty3(p.packsCredit)}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Ventas cash
-                          </div>
-                          <div className="font-bold">
-                            C${money(p.salesCash)}
-                          </div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Ventas crédito
-                          </div>
-                          <div className="font-bold">
-                            C${money(p.salesCredit)}
-                          </div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">Com cash</div>
-                          <div className="font-bold">C${money(p.commCash)}</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-2">
-                          <div className="text-xs text-gray-600">
-                            Com crédito
-                          </div>
-                          <div className="font-bold">
-                            C${money(p.commCredit)}
-                          </div>
-                        </div>
+              {loading ? (
+                <p className="text-sm">Cargando...</p>
+              ) : (
+                <>
+                  {/* MOBILE: cards para evitar scroll horizontal */}
+                  <div className="md:hidden space-y-2 mb-6">
+                    {grouped.length === 0 ? (
+                      <div className="border rounded-xl p-3 text-center text-gray-500">
+                        Sin datos con los filtros seleccionados.
                       </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* DESKTOP: tabla */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="min-w-full border text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="border p-2">Producto</th>
-                      <th className="border p-2">Total paquetes cash</th>
-                      <th className="border p-2">Total paquetes crédito</th>
-                      <th className="border p-2">Ventas cash</th>
-                      <th className="border p-2">Ventas crédito</th>
-                      <th className="border p-2">Comisión cash</th>
-                      <th className="border p-2">Comisión crédito</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailProductSummary.map((p) => (
-                      <tr key={p.productName} className="text-center">
-                        <td className="border p-2 text-left">
-                          {p.productName}
-                        </td>
-                        <td className="border p-2">{qty3(p.packsCash)}</td>
-                        <td className="border p-2">{qty3(p.packsCredit)}</td>
-                        <td className="border p-2">C${money(p.salesCash)}</td>
-                        <td className="border p-2">C${money(p.salesCredit)}</td>
-                        <td className="border p-2">C${money(p.commCash)}</td>
-                        <td className="border p-2">C${money(p.commCredit)}</td>
-                      </tr>
-                    ))}
-                    {detailProductSummary.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={7}
-                          className="p-4 text-center text-gray-500"
+                    ) : (
+                      grouped.map((g) => (
+                        <div
+                          key={g.key}
+                          className="border rounded-2xl p-3 shadow-sm bg-white"
                         >
-                          Sin consolidado.
-                        </td>
-                      </tr>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-semibold truncate">
+                              {g.label}
+                            </div>
+                            <button
+                              className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm font-semibold"
+                              onClick={() => setDetailKey(g.key)}
+                            >
+                              Ver detalle
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Paquetes cash
+                              </div>
+                              <div className="font-bold">
+                                {qty3(g.packsCash)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Paquetes crédito
+                              </div>
+                              <div className="font-bold">
+                                {qty3(g.packsCredit)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Ventas cash
+                              </div>
+                              <div className="font-bold">
+                                C${money(g.salesCash)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Ventas crédito
+                              </div>
+                              <div className="font-bold">
+                                C${money(g.salesCredit)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Comisión cash
+                              </div>
+                              <div className="font-bold">
+                                C${money(g.commCash)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Comisión crédito
+                              </div>
+                              <div className="font-bold">
+                                C${money(g.commCredit)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
                     )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                  </div>
+
+                  {/* DESKTOP: tabla */}
+                  <div className="hidden md:block overflow-x-auto mb-6 shadow-2xl rounded-xl border">
+                    <table className="min-w-full border text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="border p-2 text-left">
+                            {groupBy === "DIA"
+                              ? "Día"
+                              : groupBy === "VENDEDOR"
+                              ? "Vendedor"
+                              : groupBy === "PRODUCTO"
+                              ? "Producto"
+                              : "Sucursal"}
+                          </th>
+                          <th className="border p-2">Paquetes cash</th>
+                          <th className="border p-2">Paquetes crédito</th>
+                          <th className="border p-2">Ventas cash</th>
+                          <th className="border p-2">Ventas crédito</th>
+                          <th className="border p-2">Comisión cash</th>
+                          <th className="border p-2">Comisión crédito</th>
+                          <th className="border p-2">Opciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {grouped.map((g) => (
+                          <tr key={g.key} className="text-center">
+                            <td className="border p-2 text-left">{g.label}</td>
+                            <td className="border p-2">{qty3(g.packsCash)}</td>
+                            <td className="border p-2">
+                              {qty3(g.packsCredit)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(g.salesCash)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(g.salesCredit)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(g.commCash)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(g.commCredit)}
+                            </td>
+                            <td className="border p-2">
+                              <button
+                                className="text-xs bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-black"
+                                onClick={() => setDetailKey(g.key)}
+                              >
+                                Ver detalle
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {grouped.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={8}
+                              className="p-4 text-center text-gray-500"
+                            >
+                              Sin datos con los filtros seleccionados.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+
+              {/* DRILL-DOWN */}
+              {detailKey && (
+                <div className="rounded-2xl shadow-lg p-3 sm:p-4 bg-white border-solid border-2 border-gray-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
+                    <h2 className="text-base sm:text-xl font-semibold truncate">
+                      Detalle •{" "}
+                      {grouped.find((x) => x.key === detailKey)?.label ||
+                        detailKey}
+                    </h2>
+
+                    <button
+                      onClick={() => setDetailKey("")}
+                      className="
+                        w-full sm:w-auto
+                        text-sm px-3 py-2 border rounded-lg
+                        hover:bg-gray-50
+                      "
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm mb-4">
+                    <div className="border rounded-xl p-3 bg-gray-50">
+                      Total Ventas cash:{" "}
+                      <strong>
+                        C$
+                        {money(
+                          detailRows
+                            .filter((r) => r.type === "CONTADO")
+                            .reduce((s, r) => s + Number(r.amount || 0), 0)
+                        )}
+                      </strong>
+                    </div>
+                    <div className="border rounded-xl p-3 bg-gray-50">
+                      Total Ventas crédito:{" "}
+                      <strong>
+                        C$
+                        {money(
+                          detailRows
+                            .filter((r) => r.type === "CREDITO")
+                            .reduce((s, r) => s + Number(r.amount || 0), 0)
+                        )}
+                      </strong>
+                    </div>
+                    <div className="border rounded-xl p-3 bg-gray-50">
+                      Total paquetes cash:{" "}
+                      <strong>
+                        {qty3(
+                          detailRows
+                            .filter((r) => r.type === "CONTADO")
+                            .reduce((s, r) => s + Number(r.packages || 0), 0)
+                        )}
+                      </strong>
+                    </div>
+                    <div className="border rounded-xl p-3 bg-gray-50">
+                      Total paquetes crédito:{" "}
+                      <strong>
+                        {qty3(
+                          detailRows
+                            .filter((r) => r.type === "CREDITO")
+                            .reduce((s, r) => s + Number(r.packages || 0), 0)
+                        )}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <h3 className="font-semibold mb-2 text-sm sm:text-base">
+                    Ventas incluidas
+                  </h3>
+
+                  {/* MOBILE: cards */}
+                  <div className="md:hidden space-y-2 mb-4">
+                    {detailRows.length === 0 ? (
+                      <div className="border rounded-xl p-3 text-center text-gray-500">
+                        Sin detalle.
+                      </div>
+                    ) : (
+                      detailRows.map((r) => (
+                        <div key={r.id} className="border rounded-2xl p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-semibold truncate">
+                              {r.productName}
+                            </div>
+                            <div className="text-sm font-bold whitespace-nowrap">
+                              C${money(r.amount)}
+                            </div>
+                          </div>
+
+                          <div className="text-xs text-gray-600 mt-1">
+                            Vendedor:{" "}
+                            <span className="font-medium">{r.vendorName}</span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">Tipo</div>
+                              <div className="font-bold">
+                                {r.type === "CREDITO" ? "Crédito" : "Cash"}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Sucursal
+                              </div>
+                              <div className="font-bold">{r.branch || "—"}</div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Paquetes
+                              </div>
+                              <div className="font-bold">
+                                {qty3(r.packages)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Comisión
+                              </div>
+                              <div className="font-bold">
+                                C${money(r.commission)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-xs text-gray-500 mt-2">
+                            Fecha: {r.date}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* DESKTOP: tabla */}
+                  <div className="hidden md:block overflow-x-auto mb-4">
+                    <table className="min-w-full border text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="border p-2">Vendedor</th>
+                          <th className="border p-2">Producto</th>
+                          <th className="border p-2">Tipo</th>
+                          <th className="border p-2">Sucursal</th>
+                          <th className="border p-2">Paquetes</th>
+                          <th className="border p-2">Monto</th>
+                          <th className="border p-2">Comisión</th>
+                          <th className="border p-2">Fecha venta</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailRows.map((r) => (
+                          <tr key={r.id} className="text-center">
+                            <td className="border p-2">{r.vendorName}</td>
+                            <td className="border p-2">{r.productName}</td>
+                            <td className="border p-2">
+                              {r.type === "CREDITO" ? "Crédito" : "Cash"}
+                            </td>
+                            <td className="border p-2">{r.branch || "—"}</td>
+                            <td className="border p-2">{qty3(r.packages)}</td>
+                            <td className="border p-2">C${money(r.amount)}</td>
+                            <td className="border p-2">
+                              C${money(r.commission)}
+                            </td>
+                            <td className="border p-2">{r.date}</td>
+                          </tr>
+                        ))}
+                        {detailRows.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={8}
+                              className="p-4 text-center text-gray-500"
+                            >
+                              Sin detalle.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <h3 className="font-semibold mb-2 text-sm sm:text-base">
+                    Consolidado por producto
+                  </h3>
+
+                  {/* MOBILE: cards */}
+                  <div className="md:hidden space-y-2">
+                    {detailProductSummary.length === 0 ? (
+                      <div className="border rounded-xl p-3 text-center text-gray-500">
+                        Sin consolidado.
+                      </div>
+                    ) : (
+                      detailProductSummary.map((p) => (
+                        <div
+                          key={p.productName}
+                          className="border rounded-2xl p-3"
+                        >
+                          <div className="font-semibold">{p.productName}</div>
+                          <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Paq cash
+                              </div>
+                              <div className="font-bold">
+                                {qty3(p.packsCash)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Paq crédito
+                              </div>
+                              <div className="font-bold">
+                                {qty3(p.packsCredit)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Ventas cash
+                              </div>
+                              <div className="font-bold">
+                                C${money(p.salesCash)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Ventas crédito
+                              </div>
+                              <div className="font-bold">
+                                C${money(p.salesCredit)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Com cash
+                              </div>
+                              <div className="font-bold">
+                                C${money(p.commCash)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Com crédito
+                              </div>
+                              <div className="font-bold">
+                                C${money(p.commCredit)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* DESKTOP: tabla */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="min-w-full border text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="border p-2">Producto</th>
+                          <th className="border p-2">Total paquetes cash</th>
+                          <th className="border p-2">Total paquetes crédito</th>
+                          <th className="border p-2">Ventas cash</th>
+                          <th className="border p-2">Ventas crédito</th>
+                          <th className="border p-2">Comisión cash</th>
+                          <th className="border p-2">Comisión crédito</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailProductSummary.map((p) => (
+                          <tr key={p.productName} className="text-center">
+                            <td className="border p-2 text-left">
+                              {p.productName}
+                            </td>
+                            <td className="border p-2">{qty3(p.packsCash)}</td>
+                            <td className="border p-2">
+                              {qty3(p.packsCredit)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(p.salesCash)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(p.salesCredit)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(p.commCash)}
+                            </td>
+                            <td className="border p-2">
+                              C${money(p.commCredit)}
+                            </td>
+                          </tr>
+                        ))}
+                        {detailProductSummary.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={7}
+                              className="p-4 text-center text-gray-500"
+                            >
+                              Sin consolidado.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
