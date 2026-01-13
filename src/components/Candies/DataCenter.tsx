@@ -42,6 +42,254 @@ const normalizeBranch = (b: any): Branch | "" => {
   return "";
 };
 
+const safeNum = (v: any) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+function LineChartSimple({
+  title,
+  series,
+  valuePrefix = "C$",
+}: {
+  title: string;
+  series: Array<{ label: string; value: number }>;
+  valuePrefix?: string;
+}) {
+  const W = 900;
+  const H = 260;
+  const padL = 44;
+  const padR = 16;
+  const padT = 18;
+  const padB = 38;
+
+  const values = series.map((x) => Number(x.value || 0));
+  const minV = values.length ? Math.min(...values) : 0;
+  const maxV = values.length ? Math.max(...values) : 0;
+  const range = maxV - minV || 1;
+
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  const points = series.map((p, i) => {
+    const x =
+      padL +
+      (series.length <= 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
+    const y = padT + (1 - (Number(p.value || 0) - minV) / range) * innerH;
+    return { x, y, ...p };
+  });
+
+  const path = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+    .join(" ");
+
+  const last = points[points.length - 1];
+  const lastValue = last ? last.value : 0;
+
+  return (
+    <div className="border rounded-2xl p-3 shadow-sm bg-white">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="font-semibold text-sm sm:text-base">{title}</div>
+        <div className="text-xs text-gray-600 whitespace-nowrap">
+          Último: <strong>{valuePrefix + money(lastValue)}</strong>
+        </div>
+      </div>
+
+      <div className="w-full overflow-x-auto">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="min-w-[720px] w-full h-auto"
+          role="img"
+          aria-label={title}
+        >
+          {[0, 1, 2, 3].map((i) => {
+            const y = padT + (i / 3) * innerH;
+            return (
+              <line
+                key={i}
+                x1={padL}
+                y1={y}
+                x2={W - padR}
+                y2={y}
+                stroke="#e5e7eb"
+                strokeWidth="1"
+              />
+            );
+          })}
+
+          <text x={8} y={padT + 10} fontSize="12" fill="#6b7280">
+            {valuePrefix}
+            {money(maxV)}
+          </text>
+          <text x={8} y={padT + innerH} fontSize="12" fill="#6b7280">
+            {valuePrefix}
+            {money(minV)}
+          </text>
+
+          <path d={path} fill="none" stroke="#111827" strokeWidth="2.5" />
+
+          {points.map((p, idx) => (
+            <circle key={idx} cx={p.x} cy={p.y} r="3.5" fill="#111827" />
+          ))}
+
+          {series.length > 0 && (
+            <>
+              <text
+                x={padL}
+                y={H - 14}
+                fontSize="12"
+                fill="#6b7280"
+                textAnchor="start"
+              >
+                {series[0].label}
+              </text>
+              <text
+                x={W - padR}
+                y={H - 14}
+                fontSize="12"
+                fill="#6b7280"
+                textAnchor="end"
+              >
+                {series[series.length - 1].label}
+              </text>
+            </>
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function PieChartSimple({
+  title,
+  items,
+}: {
+  title: string;
+  items: Array<{ label: string; value: number }>;
+}) {
+  const total = items.reduce((s, x) => s + Number(x.value || 0), 0);
+  const size = 240;
+  const r = 86;
+  const cx = 120;
+  const cy = 120;
+
+  const safeTotal = total > 0 ? total : 1;
+  let acc = 0;
+
+  const shades = ["#111827", "#374151", "#6b7280", "#9ca3af"];
+
+  const arcs = items.map((it, idx) => {
+    const v = Math.max(0, Number(it.value || 0));
+    const start = acc / safeTotal;
+    const frac = v / safeTotal;
+    acc += v;
+
+    const end = start + frac;
+
+    const a0 = start * Math.PI * 2 - Math.PI / 2;
+    const a1 = end * Math.PI * 2 - Math.PI / 2;
+
+    const x0 = cx + r * Math.cos(a0);
+    const y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1);
+    const y1 = cy + r * Math.sin(a1);
+
+    const largeArc = frac > 0.5 ? 1 : 0;
+
+    const d = [
+      `M ${cx} ${cy}`,
+      `L ${x0.toFixed(2)} ${y0.toFixed(2)}`,
+      `A ${r} ${r} 0 ${largeArc} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`,
+      "Z",
+    ].join(" ");
+
+    return { d, fill: shades[idx % shades.length], ...it, frac };
+  });
+
+  return (
+    <div className="border rounded-2xl p-3 shadow-sm bg-white">
+      <div className="font-semibold text-sm sm:text-base mb-2">{title}</div>
+
+      <div className="flex flex-col md:flex-row gap-3 md:items-center">
+        <div className="w-full md:w-auto overflow-x-auto">
+          <svg
+            viewBox={`0 0 ${size} ${size}`}
+            className="min-w-[240px] w-[260px] h-auto"
+            role="img"
+            aria-label={title}
+          >
+            {arcs.map((a, i) => (
+              <path key={i} d={a.d} fill={a.fill} />
+            ))}
+            <circle cx={cx} cy={cy} r="48" fill="#ffffff" />
+            <text
+              x={cx}
+              y={cy - 4}
+              textAnchor="middle"
+              fontSize="12"
+              fill="#6b7280"
+            >
+              Total
+            </text>
+            <text
+              x={cx}
+              y={cy + 16}
+              textAnchor="middle"
+              fontSize="14"
+              fill="#111827"
+              fontWeight="700"
+            >
+              C${money(total)}
+            </text>
+          </svg>
+        </div>
+
+        <div className="flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {items.map((it, idx) => {
+              const v = Number(it.value || 0);
+              const pct = clamp01(v / (total || 1)) * 100;
+              return (
+                <div
+                  key={it.label}
+                  className="border rounded-xl p-2 bg-gray-50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold truncate">
+                      {it.label}
+                    </div>
+                    <div className="text-sm font-bold whitespace-nowrap">
+                      C${money(v)}
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    {pct.toFixed(1)}%
+                  </div>
+                  <div className="h-2 bg-white border rounded-full mt-2 overflow-hidden">
+                    <div
+                      className="h-full"
+                      style={{
+                        width: `${pct}%`,
+                        background: shades[idx % shades.length],
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="text-xs text-gray-500 mt-2">
+            *Distribución basada en ventas del período con los filtros actuales.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface SellerCandy {
   id: string; // vendorId
   name: string;
@@ -59,7 +307,6 @@ interface SaleDataRaw {
   vendorName?: string;
   userEmail?: string;
 
-  // ✅ a veces viene customerId
   customerId?: string;
 
   customerName?: string;
@@ -244,25 +491,41 @@ type MainOrderDoc = {
   totalPackages?: number; // fallback
 };
 
-type VendorOrderDoc = {
+type VendorOrderLineDoc = {
   id: string;
+
+  // agrupación
+  orderId?: string; // ORD-...
   date?: string;
+
+  // vendedor
   sellerId?: string;
   sellerName?: string;
+
+  // producto (en tu colección normalmente existe)
+  productId?: string;
+  productName?: string;
+  category?: string;
+
+  // cantidades
   packages?: number;
   remainingPackages?: number;
-  subtotal?: number; // proveedor
-
-  // ⚠️ en tu colección sellers existen estos a veces:
+  totalUnits?: number;
   remainingUnits?: number;
-  remaining?: number;
   unitsPerPackage?: number;
+
+  // valores
+  subtotal?: number; // proveedor (costo)
+  totalVendor?: number; // total al precio de venta (si existe)
+  unitPriceVendor?: number; // precio unitario de venta (si existe)
+
+  // por sucursal (a veces existen)
+  totalRivas?: number;
+  totalSanJorge?: number;
+  totalIsla?: number;
 };
 
-type CustomerDoc = {
-  id: string;
-  name?: string;
-};
+type CustomerDoc = { id: string; name?: string };
 
 type ARMovement = {
   id: string;
@@ -272,260 +535,13 @@ type ARMovement = {
   type?: "CARGO" | "ABONO";
 };
 
-// ======================
-//  CHARTS (sin librerías)
-// ======================
-function clamp01(n: number) {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
-}
-
-function LineChartSimple({
-  title,
-  series,
-  valuePrefix = "C$",
-}: {
-  title: string;
-  series: Array<{ label: string; value: number }>;
-  valuePrefix?: string;
-}) {
-  const W = 900;
-  const H = 260;
-  const padL = 44;
-  const padR = 16;
-  const padT = 18;
-  const padB = 38;
-
-  const values = series.map((x) => Number(x.value || 0));
-  const minV = values.length ? Math.min(...values) : 0;
-  const maxV = values.length ? Math.max(...values) : 0;
-  const range = maxV - minV || 1;
-
-  const innerW = W - padL - padR;
-  const innerH = H - padT - padB;
-
-  const points = series.map((p, i) => {
-    const x =
-      padL +
-      (series.length <= 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
-    const y = padT + (1 - (Number(p.value || 0) - minV) / range) * innerH;
-    return { x, y, ...p };
-  });
-
-  const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
-    .join(" ");
-
-  const last = points[points.length - 1];
-  const lastValue = last ? last.value : 0;
-
-  return (
-    <div className="border rounded-2xl p-3 shadow-sm bg-white">
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="font-semibold text-sm sm:text-base">{title}</div>
-        <div className="text-xs text-gray-600 whitespace-nowrap">
-          Último: <strong>{valuePrefix + money(lastValue)}</strong>
-        </div>
-      </div>
-
-      <div className="w-full overflow-x-auto">
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          className="min-w-[720px] w-full h-auto"
-          role="img"
-          aria-label={title}
-        >
-          {/* grid */}
-          {[0, 1, 2, 3].map((i) => {
-            const y = padT + (i / 3) * innerH;
-            return (
-              <line
-                key={i}
-                x1={padL}
-                y1={y}
-                x2={W - padR}
-                y2={y}
-                stroke="#e5e7eb"
-                strokeWidth="1"
-              />
-            );
-          })}
-
-          {/* axis labels (min/max) */}
-          <text x={8} y={padT + 10} fontSize="12" fill="#6b7280">
-            {valuePrefix}
-            {money(maxV)}
-          </text>
-          <text x={8} y={padT + innerH} fontSize="12" fill="#6b7280">
-            {valuePrefix}
-            {money(minV)}
-          </text>
-
-          {/* line */}
-          <path d={path} fill="none" stroke="#111827" strokeWidth="2.5" />
-
-          {/* points */}
-          {points.map((p, idx) => (
-            <circle key={idx} cx={p.x} cy={p.y} r="3.5" fill="#111827" />
-          ))}
-
-          {/* x labels (primer/último) */}
-          {series.length > 0 && (
-            <>
-              <text
-                x={padL}
-                y={H - 14}
-                fontSize="12"
-                fill="#6b7280"
-                textAnchor="start"
-              >
-                {series[0].label}
-              </text>
-              <text
-                x={W - padR}
-                y={H - 14}
-                fontSize="12"
-                fill="#6b7280"
-                textAnchor="end"
-              >
-                {series[series.length - 1].label}
-              </text>
-            </>
-          )}
-        </svg>
-      </div>
-    </div>
-  );
-}
-
-function PieChartSimple({
-  title,
-  items,
-}: {
-  title: string;
-  items: Array<{ label: string; value: number }>;
-}) {
-  const total = items.reduce((s, x) => s + Number(x.value || 0), 0);
-  const size = 240;
-  const r = 86;
-  const cx = 120;
-  const cy = 120;
-
-  const safeTotal = total > 0 ? total : 1;
-  let acc = 0;
-
-  // Monochrome palette (grays) para no pelear con tema/estilo
-  const shades = ["#111827", "#374151", "#6b7280", "#9ca3af"];
-
-  const arcs = items.map((it, idx) => {
-    const v = Math.max(0, Number(it.value || 0));
-    const start = acc / safeTotal;
-    const frac = v / safeTotal;
-    acc += v;
-
-    const end = start + frac;
-
-    const a0 = start * Math.PI * 2 - Math.PI / 2;
-    const a1 = end * Math.PI * 2 - Math.PI / 2;
-
-    const x0 = cx + r * Math.cos(a0);
-    const y0 = cy + r * Math.sin(a0);
-    const x1 = cx + r * Math.cos(a1);
-    const y1 = cy + r * Math.sin(a1);
-
-    const largeArc = frac > 0.5 ? 1 : 0;
-
-    const d = [
-      `M ${cx} ${cy}`,
-      `L ${x0.toFixed(2)} ${y0.toFixed(2)}`,
-      `A ${r} ${r} 0 ${largeArc} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`,
-      "Z",
-    ].join(" ");
-
-    return { d, fill: shades[idx % shades.length], ...it, frac };
-  });
-
-  return (
-    <div className="border rounded-2xl p-3 shadow-sm bg-white">
-      <div className="font-semibold text-sm sm:text-base mb-2">{title}</div>
-
-      <div className="flex flex-col md:flex-row gap-3 md:items-center">
-        <div className="w-full md:w-auto overflow-x-auto">
-          <svg
-            viewBox={`0 0 ${size} ${size}`}
-            className="min-w-[240px] w-[260px] h-auto"
-            role="img"
-            aria-label={title}
-          >
-            {arcs.map((a, i) => (
-              <path key={i} d={a.d} fill={a.fill} />
-            ))}
-            <circle cx={cx} cy={cy} r="48" fill="#ffffff" />
-            <text
-              x={cx}
-              y={cy - 4}
-              textAnchor="middle"
-              fontSize="12"
-              fill="#6b7280"
-            >
-              Total
-            </text>
-            <text
-              x={cx}
-              y={cy + 16}
-              textAnchor="middle"
-              fontSize="14"
-              fill="#111827"
-              fontWeight="700"
-            >
-              C${money(total)}
-            </text>
-          </svg>
-        </div>
-
-        <div className="flex-1">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {items.map((it, idx) => {
-              const v = Number(it.value || 0);
-              const pct = clamp01(v / (total || 1)) * 100;
-              return (
-                <div
-                  key={it.label}
-                  className="border rounded-xl p-2 bg-gray-50"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold truncate">
-                      {it.label}
-                    </div>
-                    <div className="text-sm font-bold whitespace-nowrap">
-                      C${money(v)}
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-600 mt-1">
-                    {pct.toFixed(1)}%
-                  </div>
-                  <div className="h-2 bg-white border rounded-full mt-2 overflow-hidden">
-                    <div
-                      className="h-full"
-                      style={{
-                        width: `${pct}%`,
-                        background: shades[idx % shades.length],
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="text-xs text-gray-500 mt-2">
-            *Distribución basada en ventas del período con los filtros actuales.
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+type ExpenseCandy = {
+  id: string;
+  date?: string; // yyyy-MM-dd
+  amount?: number;
+  description?: string;
+  category?: string;
+};
 
 export default function DataCenterCandies({
   role,
@@ -559,32 +575,35 @@ export default function DataCenterCandies({
   const [salesRows, setSalesRows] = useState<SaleRow[]>([]);
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
   const [mainOrders, setMainOrders] = useState<MainOrderDoc[]>([]);
-  const [vendorOrders, setVendorOrders] = useState<VendorOrderDoc[]>([]);
+  const [vendorOrdersLines, setVendorOrdersLines] = useState<
+    VendorOrderLineDoc[]
+  >([]);
   const [customers, setCustomers] = useState<CustomerDoc[]>([]);
   const [movements, setMovements] = useState<ARMovement[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseCandy[]>([]);
 
-  // ✅ GLOBAL existencias (todas las órdenes / actuales)
   const [allMasterInventory, setAllMasterInventory] = useState<any[]>([]);
   const [allVendorInventory, setAllVendorInventory] = useState<any[]>([]);
 
   const [detailKey, setDetailKey] = useState<string>("");
+  const [vendorOrderKey, setVendorOrderKey] = useState<string>(""); // ✅ detalle por orden de vendedor
   const pdfRef = useRef<HTMLDivElement>(null);
 
   const [invCandiesAll, setInvCandiesAll] = useState<any[]>([]);
 
-  // ✅ TABS/CHIPS: Macro vs Detalle
   const [dataView, setDataView] = useState<"MACRO" | "DETALLE">("DETALLE");
-
-  // ✅ Gastos del período (input manual para que admin lo capture)
-  const [otherExpenses, setOtherExpenses] = useState<string>("");
 
   const customersMap = useMemo(() => {
     const map: Record<string, string> = {};
-    customers.forEach((c) => {
-      map[c.id] = String(c.name || "").trim();
-    });
+    customers.forEach((c) => (map[c.id] = String(c.name || "").trim()));
     return map;
   }, [customers]);
+
+  const sellersMap = useMemo(() => {
+    const map: Record<string, SellerCandy> = {};
+    sellers.forEach((s) => (map[s.id] = s));
+    return map;
+  }, [sellers]);
 
   const displayCustomerName = (r: SaleRow) => {
     const byId = r.customerId ? customersMap[r.customerId] : "";
@@ -595,6 +614,10 @@ export default function DataCenterCandies({
       ""
     );
   };
+
+  // ==========================
+  //  CARGAS (sin tocar lo que funciona)
+  // ==========================
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -703,7 +726,7 @@ export default function DataCenterCandies({
     fetchOrders();
   }, [isAdmin, startDate, endDate]);
 
-  // --- inventory_candies_sellers periodo (órdenes vendedor) ---
+  // --- inventory_candies_sellers periodo (líneas de órdenes vendedor) ---
   useEffect(() => {
     if (!isAdmin) return;
 
@@ -715,16 +738,56 @@ export default function DataCenterCandies({
           where("date", "<=", endDate)
         );
         const snap = await getDocs(qy);
-        const rows: VendorOrderDoc[] = [];
+        const rows: VendorOrderLineDoc[] = [];
         snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
-        setVendorOrders(rows);
+        setVendorOrdersLines(rows);
       } catch (e) {
         console.error("inventory_candies_sellers error:", e);
-        setVendorOrders([]);
+        setVendorOrdersLines([]);
       }
     };
 
     fetchVendorOrders();
+  }, [isAdmin, startDate, endDate]);
+
+  // ✅ expenses_candies (sin manual)
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchExpenses = async () => {
+      try {
+        const qy = query(
+          collection(db, "expenses_candies"),
+          where("date", ">=", startDate),
+          where("date", "<=", endDate),
+          orderBy("date", "asc")
+        );
+        const snap = await getDocs(qy);
+        const rows: ExpenseCandy[] = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        setExpenses(rows);
+      } catch (e) {
+        // fallback si no hay índice
+        console.warn("expenses_candies sin índice, usando fallback:", e);
+        try {
+          const snap = await getDocs(collection(db, "expenses_candies"));
+          const rows: ExpenseCandy[] = [];
+          snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+          setExpenses(
+            rows.filter(
+              (x) =>
+                String(x.date || "") >= startDate &&
+                String(x.date || "") <= endDate
+            )
+          );
+        } catch (e2) {
+          console.error(e2);
+          setExpenses([]);
+        }
+      }
+    };
+
+    fetchExpenses();
   }, [isAdmin, startDate, endDate]);
 
   // ✅ GLOBAL: inventory_candies (existencias maestras actuales)
@@ -824,7 +887,9 @@ export default function DataCenterCandies({
     fetchMovements();
   }, [isAdmin, endDate]);
 
-  // --- filtros ventas ---
+  // ==========================
+  //  FILTROS VENTAS
+  // ==========================
   const filteredRows = useMemo(() => {
     let base = [...salesRows];
 
@@ -876,7 +941,9 @@ export default function DataCenterCandies({
     customersMap,
   ]);
 
-  // --- KPIs base ---
+  // ==========================
+  //  KPIs base (ventas)
+  // ==========================
   const kpis = useMemo(() => {
     let packsCash = 0;
     let packsCredit = 0;
@@ -886,9 +953,9 @@ export default function DataCenterCandies({
     let commCredit = 0;
 
     for (const r of filteredRows) {
-      const packs = Number(r.packages || 0);
-      const amt = Number(r.amount || 0);
-      const com = Number(r.commission || 0);
+      const packs = safeNum(r.packages);
+      const amt = safeNum(r.amount);
+      const com = safeNum(r.commission);
 
       if (r.type === "CREDITO") {
         packsCredit += packs;
@@ -911,10 +978,13 @@ export default function DataCenterCandies({
       salesTotal,
       commCash: round2(commCash),
       commCredit: round2(commCredit),
+      commTotal: round2(commCash + commCredit),
     };
   }, [filteredRows]);
 
-  // --- expected + gross por sucursal (maestras) ---
+  // ==========================
+  //  expected + gross por sucursal (maestras)
+  // ==========================
   const expectedAndGross = useMemo(() => {
     let expR = 0,
       expSJ = 0,
@@ -926,13 +996,13 @@ export default function DataCenterCandies({
     for (const o of mainOrders) {
       const items = Array.isArray(o.items) ? o.items : [];
       for (const it of items) {
-        expR += Number(it.totalRivas ?? 0);
-        expSJ += Number(it.totalSanJorge ?? 0);
-        expI += Number(it.totalIsla ?? 0);
+        expR += safeNum(it.totalRivas);
+        expSJ += safeNum(it.totalSanJorge);
+        expI += safeNum(it.totalIsla);
 
-        gpR += Number(it.gainRivas ?? 0);
-        gpSJ += Number(it.gainSanJorge ?? 0);
-        gpI += Number(it.gainIsla ?? 0);
+        gpR += safeNum(it.gainRivas);
+        gpSJ += safeNum(it.gainSanJorge);
+        gpI += safeNum(it.gainIsla);
       }
     }
 
@@ -948,7 +1018,9 @@ export default function DataCenterCandies({
     };
   }, [mainOrders]);
 
-  // --- actual por sucursal desde ventas ---
+  // ==========================
+  //  actual por sucursal desde ventas
+  // ==========================
   const actualByBranch = useMemo(() => {
     const map: Record<Branch, { sales: number; packages: number }> = {
       RIVAS: { sales: 0, packages: 0 },
@@ -959,8 +1031,8 @@ export default function DataCenterCandies({
     for (const r of filteredRows) {
       const b = r.branch;
       if (!b) continue;
-      map[b].sales += Number(r.amount || 0);
-      map[b].packages += Number(r.packages || 0);
+      map[b].sales += safeNum(r.amount);
+      map[b].packages += safeNum(r.packages);
     }
 
     return {
@@ -991,7 +1063,9 @@ export default function DataCenterCandies({
     };
   }, [actualByBranch, expectedAndGross]);
 
-  // --- KPI vendedores (comisión cash / crédito) ---
+  // ==========================
+  //  KPI vendedores (comisión cash / crédito) - ya existía
+  // ==========================
   const vendorsKpi = useMemo(() => {
     const cash: Record<
       string,
@@ -1008,7 +1082,7 @@ export default function DataCenterCandies({
 
       const seller = sellers.find((x) => x.id === vid);
       const name = seller?.name || r.vendorName || "(sin vendedor)";
-      const com = Number(r.commission || 0);
+      const com = safeNum(r.commission);
 
       if (r.type === "CREDITO") {
         if (!credit[vid]) credit[vid] = { vendorId: vid, name, total: 0 };
@@ -1025,19 +1099,17 @@ export default function DataCenterCandies({
     return { cashArr, creditArr };
   }, [filteredRows, sellers]);
 
-  // ✅ NUEVOS KPIs pedidos (proveedor + paquetes maestras/vendedor + por vendedor)
+  // ==========================
+  //  ✅ VOLVIENDO LOS KPIs QUE SE HABÍAN QUITADO (los del screenshot)
+  // ==========================
   const providerAndPackagesKpis = useMemo(() => {
     const sumNumber = (arr: any[], key: string) =>
       arr.reduce((s, x) => s + Number(x?.[key] ?? 0), 0);
 
-    const remainingFromItemsNoDup = (items: any[]) => {
-      const vals = items
-        .map((it) => Number(it?.remainingPackages ?? 0))
-        .filter((v) => Number.isFinite(v));
-      if (vals.length === 0) return 0;
-      const allSame = vals.every((v) => v === vals[0]);
-      if (allSame) return vals[0]; // ✅ no duplicar
-      return vals.reduce((s, v) => s + v, 0);
+    const safeInt = (n: any) => {
+      const x = Number(n);
+      if (!Number.isFinite(x)) return 0;
+      return Math.floor(x);
     };
 
     const orderedFromOrder = (o: any) => {
@@ -1047,18 +1119,24 @@ export default function DataCenterCandies({
       return sumNumber(items, "packages");
     };
 
-    const remainingFromOrder = (o: any) => {
-      const root = Number(o?.remainingPackages ?? 0);
-      if (root > 0) return root;
-      const items = Array.isArray(o?.items) ? o.items : [];
-      return remainingFromItemsNoDup(items);
-    };
+    // Total facturado proveedor (maestras)
+    let providerTotalMaster = 0;
+    let orderedPacksMaster = 0;
+    for (const o of mainOrders) {
+      const items = Array.isArray((o as any).items) ? (o as any).items : [];
+      if (items.length) {
+        for (const it of items)
+          providerTotalMaster += Number(it?.subtotal ?? 0);
+      } else {
+        providerTotalMaster += Number((o as any).subtotal ?? 0);
+      }
+      orderedPacksMaster += orderedFromOrder(o);
+    }
 
-    const safeInt = (n: any) => {
-      const x = Number(n);
-      if (!Number.isFinite(x)) return 0;
-      return Math.floor(x);
-    };
+    // Total facturado proveedor (órdenes vendedor) + paquetes ordenados vendedor
+    let providerTotalVendor = 0;
+    let orderedPacksVendor = 0;
+    let remainingPacksVendor = 0;
 
     const getRemainingPackagesVendorDoc = (v: any) => {
       const rp = Number(v?.remainingPackages);
@@ -1071,75 +1149,14 @@ export default function DataCenterCandies({
       return 0;
     };
 
-    let providerTotalMaster = 0;
-    let orderedPacksMaster = 0;
-    let remainingPacksMaster = 0;
-
-    for (const o of mainOrders) {
-      const items = Array.isArray((o as any).items) ? (o as any).items : [];
-      if (items.length) {
-        for (const it of items)
-          providerTotalMaster += Number(it?.subtotal ?? 0);
-      } else {
-        providerTotalMaster += Number((o as any).subtotal ?? 0);
-      }
-
-      orderedPacksMaster += orderedFromOrder(o);
-      remainingPacksMaster += remainingFromOrder(o);
-    }
-
-    let providerTotalVendor = 0;
-    let orderedPacksVendor = 0;
-    let remainingPacksVendor = 0;
-
-    const byVendor: Record<
-      string,
-      {
-        sellerId: string;
-        sellerName: string;
-        ordered: number;
-        remaining: number;
-      }
-    > = {};
-
-    for (const v of vendorOrders) {
+    for (const v of vendorOrdersLines) {
       providerTotalVendor += Number(v.subtotal ?? 0);
       orderedPacksVendor += Number(v.packages ?? 0);
-
-      const remainingVendorPkgs = getRemainingPackagesVendorDoc(v);
-      remainingPacksVendor += remainingVendorPkgs;
-
-      const sid = String(v.sellerId || "").trim();
-      if (!sid) continue;
-
-      const sname = String(v.sellerName || "").trim() || "(sin vendedor)";
-      if (!byVendor[sid])
-        byVendor[sid] = {
-          sellerId: sid,
-          sellerName: sname,
-          ordered: 0,
-          remaining: 0,
-        };
-
-      byVendor[sid].ordered += Number(v.packages ?? 0);
-      byVendor[sid].remaining += remainingVendorPkgs;
+      remainingPacksVendor += getRemainingPackagesVendorDoc(v);
     }
 
-    const vendorRowsOrdered = Object.values(byVendor)
-      .map((x) => ({
-        ...x,
-        ordered: round3(x.ordered),
-        remaining: round3(x.remaining),
-      }))
-      .sort((a, b) => b.ordered - a.ordered);
-
-    const vendorRowsRemaining = [...vendorRowsOrdered].sort(
-      (a, b) => b.remaining - a.remaining
-    );
-
-    const globalRemainingMaster = remainingPacksMaster;
-    const globalRemainingVendor = remainingPacksVendor;
-
+    // Restantes (período) maestras = remainingPackages de inventory_candies
+    // asociados a órdenes maestras del período
     const periodOrderIds = new Set(
       mainOrders
         .filter(
@@ -1157,6 +1174,16 @@ export default function DataCenterCandies({
       remainingPacksMasterPeriod += Number(inv.remainingPackages ?? 0);
     }
 
+    // Existencia global (todas)
+    const globalRemainingMaster = allMasterInventory.reduce(
+      (s, x) => s + safeNum(x.remainingPackages),
+      0
+    );
+    const globalRemainingVendor = allVendorInventory.reduce(
+      (s, x) => s + safeNum(x.remainingPackages),
+      0
+    );
+
     return {
       providerTotalMaster: round2(providerTotalMaster),
       providerTotalVendor: round2(providerTotalVendor),
@@ -1169,21 +1196,338 @@ export default function DataCenterCandies({
 
       globalRemainingMaster: round3(globalRemainingMaster),
       globalRemainingVendor: round3(globalRemainingVendor),
-
-      vendorRowsOrdered,
-      vendorRowsRemaining,
     };
-  }, [mainOrders, vendorOrders, invCandiesAll, startDate, endDate]);
+  }, [
+    mainOrders,
+    vendorOrdersLines,
+    invCandiesAll,
+    startDate,
+    endDate,
+    allMasterInventory,
+    allVendorInventory,
+  ]);
+
+  // ==========================
+  //  ✅ NUEVO: Gastos del período desde expenses_candies
+  // ==========================
+  const expensesKpi = useMemo(() => {
+    const byDay: Record<string, number> = {};
+    let total = 0;
+
+    for (const e of expenses) {
+      const d = String(e.date || "").trim();
+      if (!d) continue;
+      const amt = Math.max(0, safeNum(e.amount));
+      total += amt;
+      byDay[d] = round2((byDay[d] || 0) + amt);
+    }
+
+    return { total: round2(total), byDay };
+  }, [expenses]);
+
+  // ==========================
+  //  ✅ NUEVO: Total facturado (proveedor) = sumatoria órdenes maestras (costo)
+  // ==========================
+  const totalFacturadoProveedor = useMemo(() => {
+    let total = 0;
+    for (const o of mainOrders) {
+      const items = Array.isArray((o as any).items) ? (o as any).items : [];
+      if (items.length) {
+        for (const it of items) total += safeNum(it?.subtotal);
+      } else {
+        total += safeNum((o as any).subtotal);
+      }
+    }
+    return round2(total);
+  }, [mainOrders]);
+
+  // ==========================
+  //  ✅ NUEVO: Dispersado a vendedores (precio de venta) + Total existente (Isla)
+  // ==========================
+  const dispersedKpis = useMemo(() => {
+    // “Productos dispersados”: dinero en productos enviados a órdenes de vendedor (precio venta)
+    // “Total existente”: expectedIsla - dispersadoIsla
+    let dispersedTotal = 0;
+    let dispersedIsla = 0;
+
+    for (const line of vendorOrdersLines) {
+      const sid = String(line.sellerId || "").trim();
+      const seller = sid ? sellersMap[sid] : undefined;
+      const b = normalizeBranch(seller?.branch) || "ISLA"; // si solo usás ISLA, esto cae bien
+
+      const totalVenta =
+        safeNum(line.totalVendor) ||
+        (b === "ISLA"
+          ? safeNum(line.totalIsla)
+          : b === "RIVAS"
+          ? safeNum(line.totalRivas)
+          : safeNum(line.totalSanJorge));
+
+      dispersedTotal += totalVenta;
+      if (b === "ISLA") dispersedIsla += totalVenta;
+    }
+
+    const totalExistenteIsla = round2(
+      safeNum(expectedAndGross.expectedIsla) - dispersedIsla
+    );
+
+    return {
+      dispersedTotal: round2(dispersedTotal),
+      dispersedIsla: round2(dispersedIsla),
+      totalExistenteIsla,
+    };
+  }, [vendorOrdersLines, sellersMap, expectedAndGross.expectedIsla]);
+
+  // ==========================
+  //  ✅ NUEVO: KPIs de Órdenes de Vendedores (vista global + por orden)
+  // ==========================
+  const vendorOrdersKpis = useMemo(() => {
+    // Agrupar líneas por orderId (si no existe, caemos a docId)
+    type Agg = {
+      orderKey: string; // orderId o fallback
+      orderId: string;
+      date: string;
+      sellerId: string;
+      sellerName: string;
+      branch: Branch | "";
+      totalOrden: number; // dinero asociado (venta)
+      vendido: number; // dinero vendido
+      restante: number; // dinero restante
+      comision: number; // comisión total (sobre totalOrden)
+      totalEsperado: number; // totalOrden - comision
+      lines: Array<
+        VendorOrderLineDoc & {
+          orderedUnits: number;
+          soldUnits: number;
+          remainingUnits: number;
+          lineTotal: number;
+          lineSoldValue: number;
+          lineRemainingValue: number;
+        }
+      >;
+    };
+
+    const getUnits = (l: VendorOrderLineDoc) => {
+      const upp = Math.max(1, Math.floor(safeNum(l.unitsPerPackage || 1)));
+      const orderedUnits =
+        safeNum(l.totalUnits) > 0
+          ? safeNum(l.totalUnits)
+          : safeNum(l.packages) * upp;
+
+      let remainingUnits = 0;
+      if (safeNum(l.remainingUnits) > 0)
+        remainingUnits = safeNum(l.remainingUnits);
+      else if (safeNum(l.remainingPackages) > 0)
+        remainingUnits = safeNum(l.remainingPackages) * upp;
+      else remainingUnits = 0;
+
+      const soldUnits = Math.max(0, orderedUnits - remainingUnits);
+      return { orderedUnits, remainingUnits, soldUnits, upp };
+    };
+
+    const pickBranch = (sellerId: string): Branch | "" => {
+      const s = sellersMap[sellerId];
+      return normalizeBranch(s?.branch);
+    };
+
+    const pickLineTotalVenta = (l: VendorOrderLineDoc, b: Branch | "") => {
+      const direct =
+        safeNum(l.totalVendor) ||
+        (b === "ISLA"
+          ? safeNum(l.totalIsla)
+          : b === "RIVAS"
+          ? safeNum(l.totalRivas)
+          : b === "SAN_JORGE"
+          ? safeNum(l.totalSanJorge)
+          : 0);
+
+      if (direct > 0) return direct;
+
+      // fallback: si hay unitPriceVendor (unitario), multiplicamos por unidades asociadas
+      const upv = safeNum(l.unitPriceVendor);
+      if (upv > 0) {
+        const { orderedUnits } = getUnits(l);
+        return upv * orderedUnits;
+      }
+
+      return 0;
+    };
+
+    const getUnitPriceFromLine = (l: VendorOrderLineDoc, b: Branch | "") => {
+      const upv = safeNum(l.unitPriceVendor);
+      if (upv > 0) return upv;
+
+      // si no hay unitario, lo derivamos del total / unidades
+      const total = pickLineTotalVenta(l, b);
+      const { orderedUnits } = getUnits(l);
+      if (total > 0 && orderedUnits > 0) return total / orderedUnits;
+
+      return 0;
+    };
+
+    const map = new Map<string, Agg>();
+
+    for (const l of vendorOrdersLines) {
+      const orderId = String(l.orderId || "").trim();
+      const orderKey = orderId || `DOC:${l.id}`; // fallback estable
+
+      const sellerId = String(l.sellerId || "").trim();
+      const sellerName =
+        String(l.sellerName || "").trim() ||
+        (sellerId ? sellersMap[sellerId]?.name || "" : "") ||
+        "(sin vendedor)";
+
+      const date = String(l.date || "").trim();
+
+      const branch = sellerId ? pickBranch(sellerId) : "";
+
+      const { orderedUnits, remainingUnits, soldUnits } = getUnits(l);
+      const lineTotal = pickLineTotalVenta(l, branch);
+      const unitPrice = getUnitPriceFromLine(l, branch);
+
+      const lineSoldValue =
+        unitPrice > 0
+          ? unitPrice * soldUnits
+          : orderedUnits > 0
+          ? (lineTotal * soldUnits) / orderedUnits
+          : 0;
+
+      const lineRemainingValue =
+        unitPrice > 0
+          ? unitPrice * remainingUnits
+          : orderedUnits > 0
+          ? (lineTotal * remainingUnits) / orderedUnits
+          : 0;
+
+      if (!map.has(orderKey)) {
+        map.set(orderKey, {
+          orderKey,
+          orderId: orderId || orderKey,
+          date,
+          sellerId,
+          sellerName,
+          branch,
+          totalOrden: 0,
+          vendido: 0,
+          restante: 0,
+          comision: 0,
+          totalEsperado: 0,
+          lines: [],
+        });
+      }
+
+      const agg = map.get(orderKey)!;
+      agg.lines.push({
+        ...l,
+        orderedUnits,
+        soldUnits,
+        remainingUnits,
+        lineTotal: round2(lineTotal),
+        lineSoldValue: round2(lineSoldValue),
+        lineRemainingValue: round2(lineRemainingValue),
+      });
+
+      agg.totalOrden += lineTotal;
+      agg.vendido += lineSoldValue;
+      agg.restante += lineRemainingValue;
+    }
+
+    // calcular comisiones por orden (según comisión del vendedor)
+    for (const agg of map.values()) {
+      const pct = agg.sellerId
+        ? safeNum(sellersMap[agg.sellerId]?.commissionPercent)
+        : 0;
+      agg.comision = round2((agg.totalOrden * pct) / 100);
+      agg.totalEsperado = round2(agg.totalOrden - agg.comision);
+
+      agg.totalOrden = round2(agg.totalOrden);
+      agg.vendido = round2(agg.vendido);
+      agg.restante = round2(agg.restante);
+    }
+
+    const orders = Array.from(map.values()).sort((a, b) => {
+      // más recientes primero si hay date, si no por total
+      if (a.date && b.date) return a.date < b.date ? 1 : -1;
+      return b.totalOrden - a.totalOrden;
+    });
+
+    const global = orders.reduce(
+      (acc, o) => {
+        acc.totalOrden += safeNum(o.totalOrden);
+        acc.vendido += safeNum(o.vendido);
+        acc.restante += safeNum(o.restante);
+        acc.comision += safeNum(o.comision);
+        acc.totalEsperado += safeNum(o.totalEsperado);
+        return acc;
+      },
+      { totalOrden: 0, vendido: 0, restante: 0, comision: 0, totalEsperado: 0 }
+    );
+
+    return {
+      global: {
+        totalOrden: round2(global.totalOrden),
+        vendido: round2(global.vendido),
+        restante: round2(global.restante),
+        comision: round2(global.comision),
+        totalEsperado: round2(global.totalEsperado),
+      },
+      orders,
+    };
+  }, [vendorOrdersLines, sellersMap]);
+
+  const vendorOrderDetail = useMemo(() => {
+    if (!vendorOrderKey) return null;
+    const o = vendorOrdersKpis.orders.find(
+      (x) => x.orderKey === vendorOrderKey
+    );
+    if (!o) return null;
+
+    // resumen por producto: Asociados / Vendidos / Restantes (contadores en UNIDADES)
+    const byProduct: Record<
+      string,
+      {
+        productName: string;
+        asociados: number;
+        vendidos: number;
+        restantes: number;
+      }
+    > = {};
+
+    for (const l of o.lines) {
+      const name = String(l.productName || "(sin nombre)");
+      if (!byProduct[name])
+        byProduct[name] = {
+          productName: name,
+          asociados: 0,
+          vendidos: 0,
+          restantes: 0,
+        };
+      byProduct[name].asociados += safeNum((l as any).orderedUnits);
+      byProduct[name].vendidos += safeNum((l as any).soldUnits);
+      byProduct[name].restantes += safeNum((l as any).remainingUnits);
+    }
+
+    const products = Object.values(byProduct)
+      .map((p) => ({
+        ...p,
+        asociados: Math.floor(p.asociados),
+        vendidos: Math.floor(p.vendidos),
+        restantes: Math.floor(p.restantes),
+      }))
+      .sort((a, b) => b.asociados - a.asociados);
+
+    return { ...o, products };
+  }, [vendorOrderKey, vendorOrdersKpis.orders]);
 
   // ✅ KPI EXISTENCIAS GLOBALES
   const globalStockKpis = useMemo(() => {
     const masterRemainingPackages = allMasterInventory.reduce(
-      (s, x) => s + Number(x.remainingPackages ?? 0),
+      (s, x) => s + safeNum(x.remainingPackages),
       0
     );
 
     const vendorRemainingPackages = allVendorInventory.reduce(
-      (s, x) => s + Number(x.remainingPackages ?? 0),
+      (s, x) => s + safeNum(x.remainingPackages),
       0
     );
 
@@ -1193,7 +1537,9 @@ export default function DataCenterCandies({
     };
   }, [allMasterInventory, allVendorInventory]);
 
-  // --- tabla principal group by ---
+  // ==========================
+  //  TABLA PRINCIPAL (group by)
+  // ==========================
   const grouped = useMemo(() => {
     type Agg = {
       key: string;
@@ -1237,13 +1583,13 @@ export default function DataCenterCandies({
       agg.rows.push(r);
 
       if (r.type === "CREDITO") {
-        agg.packsCredit += Number(r.packages || 0);
-        agg.salesCredit += Number(r.amount || 0);
-        agg.commCredit += Number(r.commission || 0);
+        agg.packsCredit += safeNum(r.packages);
+        agg.salesCredit += safeNum(r.amount);
+        agg.commCredit += safeNum(r.commission);
       } else {
-        agg.packsCash += Number(r.packages || 0);
-        agg.salesCash += Number(r.amount || 0);
-        agg.commCash += Number(r.commission || 0);
+        agg.packsCash += safeNum(r.packages);
+        agg.salesCash += safeNum(r.amount);
+        agg.commCash += safeNum(r.commission);
       }
     }
 
@@ -1300,13 +1646,13 @@ export default function DataCenterCandies({
         };
       }
       if (r.type === "CREDITO") {
-        map[k].packsCredit += Number(r.packages || 0);
-        map[k].salesCredit += Number(r.amount || 0);
-        map[k].commCredit += Number(r.commission || 0);
+        map[k].packsCredit += safeNum(r.packages);
+        map[k].salesCredit += safeNum(r.amount);
+        map[k].commCredit += safeNum(r.commission);
       } else {
-        map[k].packsCash += Number(r.packages || 0);
-        map[k].salesCash += Number(r.amount || 0);
-        map[k].commCash += Number(r.commission || 0);
+        map[k].packsCash += safeNum(r.packages);
+        map[k].salesCash += safeNum(r.amount);
+        map[k].commCash += safeNum(r.commission);
       }
     }
 
@@ -1348,7 +1694,7 @@ export default function DataCenterCandies({
         };
       }
 
-      const amt = Number(m.amount || 0);
+      const amt = safeNum(m.amount);
       if (m.type === "CARGO") byCustomer[cid].balance += amt;
       if (m.type === "ABONO") {
         byCustomer[cid].balance -= amt;
@@ -1364,9 +1710,83 @@ export default function DataCenterCandies({
       .sort((a, b) => b.balance - a.balance);
 
     const totalPending = round2(list.reduce((s, x) => s + x.balance, 0));
-
     return { count: list.length, totalPending, list: list.slice(0, 20) };
   }, [movements, customersMap, endDate]);
+
+  // ==========================
+  //  ✅ MACRO (SIN estimaciones)
+  // ==========================
+  const macro = useMemo(() => {
+    const ingreso = round2(kpis.salesTotal);
+    const comision = round2(kpis.commTotal);
+    const gastos = round2(expensesKpi.total);
+
+    const gananciaNeta = round2(ingreso - comision - gastos);
+
+    // promedio por día (no estimado, es promedio real del período filtrado)
+    const daysSet = new Set<string>();
+    for (const r of filteredRows) if (r.date) daysSet.add(r.date);
+    const daysCount = Math.max(1, daysSet.size);
+
+    const ingresoDia = round2(ingreso / daysCount);
+    const comisionDia = round2(comision / daysCount);
+    const gastosDia = round2(gastos / daysCount);
+    const netaDia = round2(gananciaNeta / daysCount);
+
+    return {
+      ingreso,
+      comision,
+      gastos,
+      gananciaNeta,
+      daysCount,
+      ingresoDia,
+      comisionDia,
+      gastosDia,
+      netaDia,
+    };
+  }, [kpis, expensesKpi.total, filteredRows]);
+
+  // ==========================
+  //  SERIES (ventas/neto por día) - NO estimado
+  // ==========================
+  const seriesByDay = useMemo(() => {
+    const map: Record<
+      string,
+      { date: string; ingreso: number; comision: number }
+    > = {};
+    for (const r of filteredRows) {
+      const d = r.date;
+      if (!d) continue;
+      if (!map[d]) map[d] = { date: d, ingreso: 0, comision: 0 };
+      map[d].ingreso += safeNum(r.amount);
+      map[d].comision += safeNum(r.commission);
+    }
+
+    const dates = Object.keys(map).sort((a, b) => (a < b ? -1 : 1));
+
+    const seriesIngreso = dates.map((d) => ({
+      label: d.slice(5),
+      value: round2(map[d].ingreso),
+    }));
+
+    const seriesNeta = dates.map((d) => {
+      const ingresoDia = safeNum(map[d]?.ingreso);
+      const comDia = safeNum(map[d]?.comision);
+      const gastosDia = safeNum(expensesKpi.byDay[d] || 0);
+      const netaDia = ingresoDia - comDia - gastosDia;
+      return { label: d.slice(5), value: round2(netaDia) };
+    });
+
+    return { seriesIngreso, seriesNeta, datesCount: dates.length };
+  }, [filteredRows, expensesKpi.byDay]);
+
+  const pieSalesByBranch = useMemo(() => {
+    return [
+      { label: "Rivas", value: safeNum(actualByBranch.RIVAS.sales) },
+      { label: "San Jorge", value: safeNum(actualByBranch.SAN_JORGE.sales) },
+      { label: "Isla", value: safeNum(actualByBranch.ISLA.sales) },
+    ].map((x) => ({ ...x, value: round2(x.value) }));
+  }, [actualByBranch]);
 
   const handleDownloadPDF = async () => {
     if (!pdfRef.current) return;
@@ -1442,110 +1862,10 @@ export default function DataCenterCandies({
     );
   }
 
-  // ======================
-  //  DATA MACRO (KPIs)
-  // ======================
-  const macro = useMemo(() => {
-    const ingreso = round2(kpis.salesTotal);
-    const comision = round2(kpis.commCash + kpis.commCredit);
-
-    // Margen % estimado desde órdenes maestras (gross / expected)
-    // Si no hay data, margen 0 para no inventar.
-    const expectedTotal = Number(expectedAndGross.expectedTotal || 0);
-    const grossTotal = Number(expectedAndGross.grossTotal || 0);
-    const marginPct =
-      expectedTotal > 0
-        ? Math.max(0, Math.min(1, grossTotal / expectedTotal))
-        : 0;
-
-    // Costo estimado vendido = ingreso * (1 - margen)
-    // (Esto es estimación basada en tus órdenes maestras, porque tus ventas no traen costo unitario real por línea)
-    const costoProducto = round2(ingreso * (1 - marginPct));
-
-    const gastos = (() => {
-      const x = Number(otherExpenses || 0);
-      return Number.isFinite(x) ? round2(Math.max(0, x)) : 0;
-    })();
-
-    const gananciaBruta = round2(ingreso - costoProducto);
-    const gananciaNeta = round2(gananciaBruta - comision - gastos);
-
-    return {
-      ingreso,
-      costoProducto,
-      gananciaBruta,
-      comision,
-      gastos,
-      gananciaNeta,
-      marginPct,
-      hasEstimation: expectedTotal > 0,
-    };
-  }, [kpis, expectedAndGross, otherExpenses]);
-
-  // ======================
-  //  SERIES para gráficas
-  // ======================
-  const seriesByDay = useMemo(() => {
-    const map: Record<
-      string,
-      { date: string; ingreso: number; comision: number }
-    > = {};
-    for (const r of filteredRows) {
-      const d = r.date;
-      if (!d) continue;
-      if (!map[d]) map[d] = { date: d, ingreso: 0, comision: 0 };
-      map[d].ingreso += Number(r.amount || 0);
-      map[d].comision += Number(r.commission || 0);
-    }
-
-    const dates = Object.keys(map).sort((a, b) => (a < b ? -1 : 1));
-    const totalIngreso = dates.reduce((s, d) => s + map[d].ingreso, 0) || 1;
-
-    // Distribución proporcional de gastos a nivel día (según ingreso del día)
-    const gastos = Number(macro.gastos || 0);
-
-    // Costo estimado proporcional a ingreso del día
-    const costoTotal = Number(macro.costoProducto || 0);
-    const comisionTotal = Number(macro.comision || 0);
-
-    const seriesIngreso = dates.map((d) => ({
-      label: d.slice(5), // MM-dd para compacto
-      value: round2(map[d].ingreso),
-    }));
-
-    const seriesNeta = dates.map((d) => {
-      const ingresoDia = map[d].ingreso;
-      const share = ingresoDia / totalIngreso;
-
-      const costoDia = costoTotal * share;
-      const comDia = comisionTotal * share; // comisiones ya vienen por día, pero mantenemos consistencia proporcional
-      const gastosDia = gastos * share;
-
-      const netaDia = ingresoDia - costoDia - comDia - gastosDia;
-      return {
-        label: d.slice(5),
-        value: round2(netaDia),
-      };
-    });
-
-    return { seriesIngreso, seriesNeta, datesCount: dates.length };
-  }, [filteredRows, macro]);
-
-  const pieSalesByBranch = useMemo(() => {
-    return [
-      { label: "Rivas", value: Number(actualByBranch.RIVAS.sales || 0) },
-      {
-        label: "San Jorge",
-        value: Number(actualByBranch.SAN_JORGE.sales || 0),
-      },
-      { label: "Isla", value: Number(actualByBranch.ISLA.sales || 0) },
-    ].map((x) => ({ ...x, value: round2(x.value) }));
-  }, [actualByBranch]);
-
   return (
     <div className="max-w-7xl mx-auto px-2 sm:px-4 md:px-0">
       <div className="bg-white p-3 sm:p-4 md:p-6 rounded-2xl shadow-2xl">
-        {/* HEADER (mobile-first) */}
+        {/* HEADER */}
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-4">
           <h2 className="text-lg sm:text-xl md:text-2xl font-bold">
             Data Center - Dulces
@@ -1580,7 +1900,7 @@ export default function DataCenterCandies({
           </div>
         </div>
 
-        {/* FILTROS (mobile-first) */}
+        {/* FILTROS */}
         <div className="rounded-2xl border border-gray-100 p-3 sm:p-4 mb-3 shadow-sm bg-white">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
             <div>
@@ -1722,11 +2042,14 @@ export default function DataCenterCandies({
           </div>
         </div>
 
-        {/* CHIPS/TABS (debajo de filtros, arriba de KPIs) */}
+        {/* CHIPS/TABS */}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
           <div className="flex gap-2">
             <button
-              onClick={() => setDataView("MACRO")}
+              onClick={() => {
+                setVendorOrderKey("");
+                setDataView("MACRO");
+              }}
               className={[
                 "px-3 py-2 rounded-full text-sm font-semibold border transition-colors",
                 dataView === "MACRO"
@@ -1737,7 +2060,10 @@ export default function DataCenterCandies({
               Data Macro
             </button>
             <button
-              onClick={() => setDataView("DETALLE")}
+              onClick={() => {
+                setVendorOrderKey("");
+                setDataView("DETALLE");
+              }}
               className={[
                 "px-3 py-2 rounded-full text-sm font-semibold border transition-colors",
                 dataView === "DETALLE"
@@ -1749,25 +2075,17 @@ export default function DataCenterCandies({
             </button>
           </div>
 
-          {/* Gastos período (solo relevante en Macro, pero lo dejamos visible siempre por simplicidad) */}
-          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-            <div className="text-xs text-gray-600">
-              Gastos del período (manual)
-            </div>
-            <input
-              value={otherExpenses}
-              onChange={(e) => setOtherExpenses(e.target.value)}
-              className="border rounded-lg px-3 py-2 w-full sm:w-56 text-sm"
-              placeholder="0"
-              inputMode="decimal"
-            />
+          {/* ✅ Gastos ya NO son manuales */}
+          <div className="text-xs text-gray-600">
+            Gastos del período (expenses_candies):{" "}
+            <strong>C${money(expensesKpi.total)}</strong>
           </div>
         </div>
 
         {/* CONTENIDO PDF */}
         <div ref={pdfRef}>
           {/* =======================
-              DATA MACRO (nuevo)
+              DATA MACRO
              ======================= */}
           {dataView === "MACRO" && (
             <>
@@ -1784,36 +2102,6 @@ export default function DataCenterCandies({
                 </div>
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Costo producto{" "}
-                    <span className="text-gray-400">(estimado)</span>
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    -C${money(macro.costoProducto)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Margen ref:{" "}
-                    <strong>
-                      {macro.hasEstimation
-                        ? (macro.marginPct * 100).toFixed(1)
-                        : "0.0"}
-                      %
-                    </strong>{" "}
-                    (órdenes maestras)
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Ganancia bruta</div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(macro.gananciaBruta)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Ingreso − Costo producto
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">Comisión vendedor</div>
                   <div className="text-xl sm:text-2xl font-bold">
                     -C${money(macro.comision)}
@@ -1825,35 +2113,43 @@ export default function DataCenterCandies({
                 </div>
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Ganancia neta</div>
+                  <div className="text-xs text-gray-600">
+                    Gastos (expenses_candies)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    -C${money(macro.gastos)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Se calcula automático por fechas
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Ganancia neta (real)
+                  </div>
                   <div className="text-xl sm:text-2xl font-bold">
                     C${money(macro.gananciaNeta)}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
-                    Bruta − Comisiones − Gastos
+                    Ingreso − Comisión − Gastos
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Promedio neto por día
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(macro.netaDia)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Días con ventas: <strong>{macro.daysCount}</strong>
                   </div>
                 </div>
               </div>
 
-              {/* Nota de estimación */}
-              <div className="border rounded-2xl p-3 sm:p-4 mb-4 bg-white border-gray-100 shadow-sm">
-                <div className="text-sm font-semibold">Notas rápidas</div>
-                <ul className="text-xs text-gray-600 mt-2 space-y-1 list-disc pl-4">
-                  <li>
-                    <strong>Costo producto</strong> se muestra como{" "}
-                    <strong>estimado</strong> porque tus ventas no traen el
-                    costo real por línea (COGS). Se calcula usando el margen de{" "}
-                    <strong>órdenes maestras</strong>.
-                  </li>
-                  <li>
-                    <strong>Gastos del período</strong> es un campo manual para
-                    que puedas incluir transporte, bolsas, pagos, etc. (si no
-                    aplica, dejalo en 0).
-                  </li>
-                </ul>
-              </div>
-
-              {/* Gráficas: 2 líneas + 1 pastel */}
+              {/* Gráficas */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
                 <LineChartSimple
                   title="Ventas por día (Ingreso)"
@@ -1861,7 +2157,7 @@ export default function DataCenterCandies({
                   valuePrefix="C$"
                 />
                 <LineChartSimple
-                  title="Ganancia neta estimada por día"
+                  title="Ganancia neta por día (real)"
                   series={seriesByDay.seriesNeta}
                   valuePrefix="C$"
                 />
@@ -1877,11 +2173,11 @@ export default function DataCenterCandies({
           )}
 
           {/* =======================
-              DATA DETALLE (existente)
+              DATA DETALLE
              ======================= */}
           {dataView === "DETALLE" && (
             <>
-              {/* KPIs (mobile-first) */}
+              {/* KPIs ventas */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">Paquetes cash</div>
@@ -1917,7 +2213,7 @@ export default function DataCenterCandies({
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">Comisión</div>
                   <div className="text-xl sm:text-2xl font-bold">
-                    C${money(kpis.commCash + kpis.commCredit)}
+                    C${money(kpis.commTotal)}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
                     Cash: C${money(kpis.commCash)} • Crédito: C$
@@ -1926,6 +2222,7 @@ export default function DataCenterCandies({
                 </div>
               </div>
 
+              {/* expected + actual + diff */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
@@ -1943,7 +2240,7 @@ export default function DataCenterCandies({
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Expected Total (Rivas/SJ/Isla)
+                    Total esperado (por sucursal)
                   </div>
                   <div className="text-sm mt-2 space-y-1">
                     <div className="flex justify-between">
@@ -1985,7 +2282,7 @@ export default function DataCenterCandies({
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Diferencia vs expected
+                    Diferencia vs esperado
                   </div>
                   <div className="text-sm mt-2 space-y-1">
                     <div className="flex justify-between">
@@ -2004,20 +2301,8 @@ export default function DataCenterCandies({
                 </div>
               </div>
 
-              {/* NUEVOS KPIs pedidos */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Total facturado a precio proveedor (órdenes maestras)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(providerAndPackagesKpis.providerTotalMaster)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
-                  </div>
-                </div>
-
+              {/* ✅ RESTAURADO: los 3 KPIs del screenshot */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
                     Total facturado a precio proveedor (órdenes vendedor)
@@ -2073,47 +2358,384 @@ export default function DataCenterCandies({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+              {/* ✅ KPIs pedidos: Total facturado + Dispersado + Total existente (Isla) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Paquetes ordenados por vendedor (período)
+                    Total facturado (precio proveedor)
                   </div>
-                  {providerAndPackagesKpis.vendorRowsOrdered.length === 0 ? (
-                    <div className="text-sm text-gray-500 mt-2">—</div>
-                  ) : (
-                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                      {providerAndPackagesKpis.vendorRowsOrdered.map((v) => (
-                        <div
-                          key={v.sellerId}
-                          className="flex justify-between text-sm"
-                        >
-                          <span className="truncate">{v.sellerName}</span>
-                          <strong className="ml-2">{qty3(v.ordered)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(totalFacturadoProveedor)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Sumatoria órdenes maestras (período)
+                  </div>
                 </div>
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Paquetes existentes por vendedor (período)
+                    Productos dispersados (precio venta)
                   </div>
-                  {providerAndPackagesKpis.vendorRowsRemaining.length === 0 ? (
-                    <div className="text-sm text-gray-500 mt-2">—</div>
-                  ) : (
-                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                      {providerAndPackagesKpis.vendorRowsRemaining.map((v) => (
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(dispersedKpis.dispersedTotal)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Sumatoria órdenes de vendedores (período)
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Dispersado Isla (precio venta)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(dispersedKpis.dispersedIsla)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Usado para “Total existente”
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Total existente (Isla)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(dispersedKpis.totalExistenteIsla)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Esperado Isla − Dispersado Isla
+                  </div>
+                </div>
+              </div>
+
+              {/* ✅ NUEVO: KPIs Órdenes de Vendedores (vista global) */}
+              <div className="border rounded-2xl p-3 sm:p-4 mb-4 shadow-sm bg-white border-gray-100">
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <h3 className="font-semibold text-sm sm:text-base">
+                    Órdenes de vendedores (Global)
+                  </h3>
+                  <div className="text-xs text-gray-500">
+                    Basado en <strong>precio de venta</strong> (por sucursal del
+                    vendedor)
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm">
+                  <div className="border rounded-xl p-3 bg-gray-50">
+                    Total orden:{" "}
+                    <strong>
+                      C${money(vendorOrdersKpis.global.totalOrden)}
+                    </strong>
+                  </div>
+                  <div className="border rounded-xl p-3 bg-gray-50">
+                    Vendido:{" "}
+                    <strong>C${money(vendorOrdersKpis.global.vendido)}</strong>
+                  </div>
+                  <div className="border rounded-xl p-3 bg-gray-50">
+                    Restante:{" "}
+                    <strong>C${money(vendorOrdersKpis.global.restante)}</strong>
+                  </div>
+                  <div className="border rounded-xl p-3 bg-gray-50">
+                    Comisión:{" "}
+                    <strong>C${money(vendorOrdersKpis.global.comision)}</strong>
+                  </div>
+                  <div className="border rounded-xl p-3 bg-gray-50">
+                    Total esperado:{" "}
+                    <strong>
+                      C${money(vendorOrdersKpis.global.totalEsperado)}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* ✅ NUEVO: Lista de órdenes de vendedores (clic para detalle) */}
+              <div className="border rounded-2xl p-3 sm:p-4 mb-6 shadow-sm bg-white border-gray-100">
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <h3 className="font-semibold text-sm sm:text-base">
+                    Órdenes de vendedores (Detalle por orden)
+                  </h3>
+                  <div className="text-xs text-gray-500">
+                    Click/Tap en una orden para ver productos
+                    asociados/vendidos/restantes
+                  </div>
+                </div>
+
+                {vendorOrdersKpis.orders.length === 0 ? (
+                  <div className="text-sm text-gray-500">—</div>
+                ) : (
+                  <>
+                    {/* MOBILE: cards */}
+                    <div className="md:hidden space-y-2">
+                      {vendorOrdersKpis.orders.map((o) => (
                         <div
-                          key={v.sellerId}
-                          className="flex justify-between text-sm"
+                          key={o.orderKey}
+                          className="border rounded-2xl p-3"
                         >
-                          <span className="truncate">{v.sellerName}</span>
-                          <strong className="ml-2">{qty3(v.remaining)}</strong>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-semibold truncate">
+                                {o.orderId}
+                              </div>
+                              <div className="text-xs text-gray-600 mt-1 truncate">
+                                {o.sellerName} {o.branch ? `• ${o.branch}` : ""}{" "}
+                                {o.date ? `• ${o.date}` : ""}
+                              </div>
+                            </div>
+                            <button
+                              className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm font-semibold"
+                              onClick={() => setVendorOrderKey(o.orderKey)}
+                            >
+                              Ver
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">Total</div>
+                              <div className="font-bold">
+                                C${money(o.totalOrden)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Vendido
+                              </div>
+                              <div className="font-bold">
+                                C${money(o.vendido)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Restante
+                              </div>
+                              <div className="font-bold">
+                                C${money(o.restante)}
+                              </div>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-2">
+                              <div className="text-xs text-gray-600">
+                                Comisión
+                              </div>
+                              <div className="font-bold">
+                                C${money(o.comision)}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
-                  )}
+
+                    {/* DESKTOP: tabla */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="min-w-full border text-sm">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            <th className="border p-2 text-left">Orden</th>
+                            <th className="border p-2 text-left">Vendedor</th>
+                            <th className="border p-2">Sucursal</th>
+                            <th className="border p-2">Fecha</th>
+                            <th className="border p-2">Total orden</th>
+                            <th className="border p-2">Vendido</th>
+                            <th className="border p-2">Restante</th>
+                            <th className="border p-2">Comisión</th>
+                            <th className="border p-2">Total esperado</th>
+                            <th className="border p-2">Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vendorOrdersKpis.orders.map((o) => (
+                            <tr key={o.orderKey} className="text-center">
+                              <td className="border p-2 text-left">
+                                {o.orderId}
+                              </td>
+                              <td className="border p-2 text-left">
+                                {o.sellerName}
+                              </td>
+                              <td className="border p-2">{o.branch || "—"}</td>
+                              <td className="border p-2">{o.date || "—"}</td>
+                              <td className="border p-2">
+                                C${money(o.totalOrden)}
+                              </td>
+                              <td className="border p-2">
+                                C${money(o.vendido)}
+                              </td>
+                              <td className="border p-2">
+                                C${money(o.restante)}
+                              </td>
+                              <td className="border p-2">
+                                C${money(o.comision)}
+                              </td>
+                              <td className="border p-2">
+                                C${money(o.totalEsperado)}
+                              </td>
+                              <td className="border p-2">
+                                <button
+                                  className="text-xs bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-black"
+                                  onClick={() => setVendorOrderKey(o.orderKey)}
+                                >
+                                  Ver detalle
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* DETALLE POR ORDEN */}
+                    {vendorOrderDetail && (
+                      <div className="mt-4 rounded-2xl border-2 border-gray-100 p-3 sm:p-4 shadow-lg bg-white">
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
+                          <h4 className="text-base sm:text-xl font-semibold truncate">
+                            Detalle orden vendedor • {vendorOrderDetail.orderId}
+                          </h4>
+                          <button
+                            onClick={() => setVendorOrderKey("")}
+                            className="w-full sm:w-auto text-sm px-3 py-2 border rounded-lg hover:bg-gray-50"
+                          >
+                            Cerrar
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm mb-4">
+                          <div className="border rounded-xl p-3 bg-gray-50">
+                            Total orden:{" "}
+                            <strong>
+                              C${money(vendorOrderDetail.totalOrden)}
+                            </strong>
+                          </div>
+                          <div className="border rounded-xl p-3 bg-gray-50">
+                            Vendido:{" "}
+                            <strong>
+                              C${money(vendorOrderDetail.vendido)}
+                            </strong>
+                          </div>
+                          <div className="border rounded-xl p-3 bg-gray-50">
+                            Restante:{" "}
+                            <strong>
+                              C${money(vendorOrderDetail.restante)}
+                            </strong>
+                          </div>
+                          <div className="border rounded-xl p-3 bg-gray-50">
+                            Comisión:{" "}
+                            <strong>
+                              C${money(vendorOrderDetail.comision)}
+                            </strong>
+                          </div>
+                          <div className="border rounded-xl p-3 bg-gray-50">
+                            Total esperado:{" "}
+                            <strong>
+                              C${money(vendorOrderDetail.totalEsperado)}
+                            </strong>
+                          </div>
+                        </div>
+
+                        <h5 className="font-semibold mb-2 text-sm sm:text-base">
+                          Productos asociados (Nombre - Asociados - Vendidos -
+                          Restantes)
+                        </h5>
+
+                        {/* MOBILE: cards */}
+                        <div className="md:hidden space-y-2">
+                          {vendorOrderDetail.products.map((p) => (
+                            <div
+                              key={p.productName}
+                              className="border rounded-2xl p-3"
+                            >
+                              <div className="font-semibold">
+                                {p.productName}
+                              </div>
+                              <div className="grid grid-cols-3 gap-2 mt-3 text-sm">
+                                <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                  <div className="text-xs text-gray-600">
+                                    Asociados
+                                  </div>
+                                  <div className="font-bold">{p.asociados}</div>
+                                </div>
+                                <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                  <div className="text-xs text-gray-600">
+                                    Vendidos
+                                  </div>
+                                  <div className="font-bold">{p.vendidos}</div>
+                                </div>
+                                <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                  <div className="text-xs text-gray-600">
+                                    Restantes
+                                  </div>
+                                  <div className="font-bold">{p.restantes}</div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* DESKTOP: tabla */}
+                        <div className="hidden md:block overflow-x-auto">
+                          <table className="min-w-full border text-sm">
+                            <thead className="bg-gray-100">
+                              <tr>
+                                <th className="border p-2 text-left">
+                                  Nombre producto
+                                </th>
+                                <th className="border p-2">Asociados</th>
+                                <th className="border p-2">Vendidos</th>
+                                <th className="border p-2">Restantes</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {vendorOrderDetail.products.map((p) => (
+                                <tr key={p.productName} className="text-center">
+                                  <td className="border p-2 text-left">
+                                    {p.productName}
+                                  </td>
+                                  <td className="border p-2">{p.asociados}</td>
+                                  <td className="border p-2">{p.vendidos}</td>
+                                  <td className="border p-2">{p.restantes}</td>
+                                </tr>
+                              ))}
+                              {vendorOrderDetail.products.length === 0 && (
+                                <tr>
+                                  <td
+                                    colSpan={4}
+                                    className="p-4 text-center text-gray-500"
+                                  >
+                                    Sin productos.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* KPI existencias globales (lo que ya tenías) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Existencia global (maestras)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    {qty3(globalStockKpis.masterRemainingPackages)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    remainingPackages (todas)
+                  </div>
+                </div>
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Existencia global (vendedores)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    {qty3(globalStockKpis.vendorRemainingPackages)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    remainingPackages (todas)
+                  </div>
                 </div>
               </div>
 
@@ -2183,7 +2805,6 @@ export default function DataCenterCandies({
                   <div className="text-sm text-gray-500">—</div>
                 ) : (
                   <>
-                    {/* MOBILE: cards */}
                     <div className="md:hidden space-y-2">
                       {arSummary.list.map((c) => (
                         <div
@@ -2208,7 +2829,6 @@ export default function DataCenterCandies({
                       ))}
                     </div>
 
-                    {/* DESKTOP: tabla */}
                     <div className="hidden md:block overflow-x-auto">
                       <table className="min-w-full border text-sm">
                         <thead className="bg-gray-100">
@@ -2251,7 +2871,7 @@ export default function DataCenterCandies({
                 <p className="text-sm">Cargando...</p>
               ) : (
                 <>
-                  {/* MOBILE: cards para evitar scroll horizontal */}
+                  {/* MOBILE: cards */}
                   <div className="md:hidden space-y-2 mb-6">
                     {grouped.length === 0 ? (
                       <div className="border rounded-xl p-3 text-center text-gray-500">
@@ -2411,11 +3031,7 @@ export default function DataCenterCandies({
 
                     <button
                       onClick={() => setDetailKey("")}
-                      className="
-                        w-full sm:w-auto
-                        text-sm px-3 py-2 border rounded-lg
-                        hover:bg-gray-50
-                      "
+                      className="w-full sm:w-auto text-sm px-3 py-2 border rounded-lg hover:bg-gray-50"
                     >
                       Cerrar
                     </button>
@@ -2429,7 +3045,7 @@ export default function DataCenterCandies({
                         {money(
                           detailRows
                             .filter((r) => r.type === "CONTADO")
-                            .reduce((s, r) => s + Number(r.amount || 0), 0)
+                            .reduce((s, r) => s + safeNum(r.amount), 0)
                         )}
                       </strong>
                     </div>
@@ -2440,7 +3056,7 @@ export default function DataCenterCandies({
                         {money(
                           detailRows
                             .filter((r) => r.type === "CREDITO")
-                            .reduce((s, r) => s + Number(r.amount || 0), 0)
+                            .reduce((s, r) => s + safeNum(r.amount), 0)
                         )}
                       </strong>
                     </div>
@@ -2450,7 +3066,7 @@ export default function DataCenterCandies({
                         {qty3(
                           detailRows
                             .filter((r) => r.type === "CONTADO")
-                            .reduce((s, r) => s + Number(r.packages || 0), 0)
+                            .reduce((s, r) => s + safeNum(r.packages), 0)
                         )}
                       </strong>
                     </div>
@@ -2460,7 +3076,7 @@ export default function DataCenterCandies({
                         {qty3(
                           detailRows
                             .filter((r) => r.type === "CREDITO")
-                            .reduce((s, r) => s + Number(r.packages || 0), 0)
+                            .reduce((s, r) => s + safeNum(r.packages), 0)
                         )}
                       </strong>
                     </div>

@@ -1,11 +1,19 @@
 // src/components/Login.tsx
 import React, { useState } from "react";
 import { auth, db } from "../firebase";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import {
+  signInWithEmailAndPassword,
+  browserLocalPersistence,
+  setPersistence,
+} from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 
-type AllowedRole = "admin" | "vendedor_pollo" | "vendedor_ropa" | "vendedor_dulces";
+type AllowedRole =
+  | "admin"
+  | "vendedor_pollo"
+  | "vendedor_ropa"
+  | "vendedor_dulces";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -41,8 +49,15 @@ export default function Login() {
 
     try {
       setLoading(true);
+
+      // ✅ Mantener la sesión (persistencia en el dispositivo)
+      await setPersistence(auth, browserLocalPersistence);
+
       const cred = await signInWithEmailAndPassword(auth, email, password);
       const uid = cred.user.uid;
+
+      // ✅ Marca inicio de sesión para expiración 15 días
+      localStorage.setItem("POSYS_LOGIN_AT", String(Date.now()));
 
       // Leer perfil en Firestore
       const snap = await getDoc(doc(db, "users", uid));

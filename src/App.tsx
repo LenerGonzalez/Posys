@@ -6,7 +6,7 @@ import {
   Route,
   Navigate,
 } from "react-router-dom";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebase";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -102,6 +102,44 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
 
+      // ✅ Expiración de sesión a los 15 días (basado en localStorage)
+      // - Login.tsx guarda: localStorage.setItem("POSYS_LOGIN_AT", Date.now().toString())
+      // - Si no existe, lo creamos en el primer authState detectado (por compatibilidad)
+      try {
+        const KEY = "POSYS_LOGIN_AT";
+        const FIFTEEN_DAYS_MS = 15 * 24 * 60 * 60 * 1000;
+
+        if (firebaseUser) {
+          const raw = localStorage.getItem(KEY);
+          const loginAt = raw ? Number(raw) : NaN;
+
+          // si no hay marca, la ponemos ahora para no romper sesiones viejas
+          if (!Number.isFinite(loginAt)) {
+            localStorage.setItem(KEY, String(Date.now()));
+          } else {
+            const age = Date.now() - loginAt;
+            if (age > FIFTEEN_DAYS_MS) {
+              // expiró: cerramos sesión y limpiamos
+              await signOut(auth);
+              localStorage.removeItem(KEY);
+              localStorage.removeItem("role");
+              localStorage.removeItem("user_email");
+              localStorage.removeItem("user_name");
+
+              setUser(null);
+              setRole("");
+              setSellerCandyId("");
+              setLoading(false);
+              return;
+            }
+          }
+        } else {
+          // si no hay usuario, no hacemos nada aquí
+        }
+      } catch {
+        // si falla cualquier cosa con localStorage, no rompemos el flujo
+      }
+
       if (firebaseUser) {
         setUser(firebaseUser);
         try {
@@ -147,7 +185,6 @@ export default function App() {
 
   return (
     <Router>
-
       <Routes>
         <Route path="/" element={<Login />} />
 
