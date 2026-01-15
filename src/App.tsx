@@ -56,6 +56,7 @@ import ConsolidadoVendedores from "./components/Candies/ConsolidadoVendedores";
 import BillingCandies from "./components/Candies/BillingCandies";
 import ReporteCierres from "./components/Candies/ReporteCierres";
 import DataCenterCandies from "./components/Candies/DataCenter";
+import EntregasCash from "./components/Candies/EntregasCash";
 
 // Definición de roles
 type Role =
@@ -349,6 +350,14 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <BillingCandies />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="cashDeliveries"
+            element={
+              <PrivateRoute allowedRoles={["admin"]}>
+                <EntregasCash />
               </PrivateRoute>
             }
           />

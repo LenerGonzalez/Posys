@@ -358,7 +358,6 @@ export default function AdminLayout({ role }: { role: string }) {
                           onClick={() => setOpenDulcesInv((v) => !v)}
                           title="Inventario"
                         />
-
                         {openDulcesInv && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
@@ -389,7 +388,6 @@ export default function AdminLayout({ role }: { role: string }) {
                             </NavLink>
                           </div>
                         )}
-
                         {openDulcesInv && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
@@ -400,14 +398,12 @@ export default function AdminLayout({ role }: { role: string }) {
                             </NavLink>
                           </div>
                         )}
-
                         {/* Finanzas (Dulces) */}
                         <SubSectionBtn
                           open={openDulcesFin}
                           onClick={() => setOpenDulcesFin((v) => !v)}
                           title="Finanzas"
                         />
-
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
@@ -415,6 +411,16 @@ export default function AdminLayout({ role }: { role: string }) {
                               className={linkCls}
                             >
                               Data Center
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/cashDeliveries`}
+                              className={linkCls}
+                            >
+                              Entregas Cash
                             </NavLink>
                           </div>
                         )}
@@ -429,7 +435,6 @@ export default function AdminLayout({ role }: { role: string }) {
                             </NavLink>
                           </div>
                         )}
-
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
@@ -470,7 +475,6 @@ export default function AdminLayout({ role }: { role: string }) {
                             </NavLink>
                           </div>
                         )}
-
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink

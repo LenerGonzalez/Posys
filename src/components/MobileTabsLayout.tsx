@@ -79,6 +79,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
         // ✅ NUEVO TAB
         { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
         { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
+        { key: "cash", label: "Cash", to: `${base}/cashDeliveries` },
       ];
     }
 
