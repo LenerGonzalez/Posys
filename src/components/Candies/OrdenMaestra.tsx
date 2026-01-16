@@ -16,6 +16,7 @@ import {
 import { db } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import * as XLSX from "xlsx";
 
 function roundToInt(value: number): number {
   if (!isFinite(value)) return 0;
@@ -498,6 +499,301 @@ export default function CandyMainOrders() {
         return updated;
       })
     );
+  };
+
+  // ===== DESCARGAR PLANTILLA EXCEL =====
+  const handleDownloadTemplate = () => {
+    setMsg("");
+
+    if (!catalog.length) {
+      setMsg("❌ No hay catálogo cargado para generar plantilla.");
+      return;
+    }
+
+    // Usa los márgenes actuales del header como default en el excel
+    const mR = Number(marginRivas || 0);
+    const mSJ = Number(marginSanJorge || 0);
+    const mI = Number(marginIsla || 0);
+
+    const rows = catalog
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name, "es"))
+      .map((p) => ({
+        Producto: p.name,
+        Paquetes: "", // 👈 vos lo llenás
+        "Margen Rivas": mR,
+        "Margen San Jorge": mSJ,
+        "Margen Isla": mI,
+      }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Plantilla");
+
+    // nombre del archivo
+    const dateStr =
+      (orderDate && String(orderDate).trim()) ||
+      new Date().toISOString().slice(0, 10);
+
+    XLSX.writeFile(wb, `plantilla_orden_maestra_${dateStr}.xlsx`);
+  };
+
+  // ===== IMPORT EXCEL (solo nueva orden) =====
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  function norm(s: any) {
+    return String(s ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+  }
+
+  function num(v: any): number {
+    const n = Number(String(v ?? "").replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function getRowValue(row: any, keys: string[]) {
+    const map: Record<string, any> = {};
+    Object.keys(row || {}).forEach((k) => (map[norm(k)] = row[k]));
+    for (const k of keys) {
+      const val = map[norm(k)];
+      if (val !== undefined && val !== null && String(val).trim() !== "")
+        return val;
+    }
+    return undefined;
+  }
+
+  const handlePickExcel = () => {
+    if (!catalog.length) {
+      setMsg("❌ Catálogo no cargado todavía. Esperá y probá de nuevo.");
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  const handleExcelFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // para que puedas volver a importar el mismo archivo si querés
+    e.target.value = "";
+
+    setImporting(true);
+    setMsg("");
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+      if (!rows.length) {
+        setMsg("❌ El Excel viene vacío.");
+        return;
+      }
+
+      // índice rápido por nombre
+      const catalogByName = new Map<string, CatalogCandyProduct>();
+      for (const p of catalog) catalogByName.set(norm(p.name), p);
+
+      const errors: string[] = [];
+      const incomingById = new Map<
+        string,
+        { packages: number; mR: number; mSJ: number; mI: number }
+      >();
+
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+
+        // Acepta headers típicos: "Producto", "product", "Nombre", etc.
+        const productName = getRowValue(r, [
+          "Producto",
+          "Product",
+          "Nombre",
+          "Name",
+        ]);
+        const packagesVal = getRowValue(r, ["Paquetes", "Packages"]);
+        const mRVal = getRowValue(r, [
+          "Margen Rivas",
+          "Margen Rivas (%)",
+          "Margin Rivas",
+          "Margin Rivas (%)",
+        ]);
+        const mSJVal = getRowValue(r, [
+          "Margen San Jorge",
+          "Margen San Jorge (%)",
+          "Margin San Jorge",
+          "Margin San Jorge (%)",
+        ]);
+        const mIVal = getRowValue(r, [
+          "Margen Isla",
+          "Margen Isla (%)",
+          "Margin Isla",
+          "Margin Isla (%)",
+        ]);
+
+        const prodKey = norm(productName);
+        if (!prodKey) {
+          errors.push(`Fila ${i + 2}: Falta "Producto".`);
+          continue;
+        }
+
+        const catProd = catalogByName.get(prodKey);
+        if (!catProd) {
+          errors.push(
+            `Fila ${i + 2}: Producto no existe en catálogo: "${String(
+              productName
+            ).trim()}".`
+          );
+          continue;
+        }
+
+        const packagesNum = Math.floor(num(packagesVal));
+        if (packagesNum <= 0) {
+          errors.push(
+            `Fila ${i + 2}: "Paquetes" inválido para "${catProd.name}".`
+          );
+          continue;
+        }
+
+        // si no vienen márgenes en el excel, usa los de la cabecera (tus inputs)
+        const mR =
+          Number.isFinite(num(mRVal)) && String(mRVal).trim() !== ""
+            ? num(mRVal)
+            : Number(marginRivas || 0);
+        const mSJ =
+          Number.isFinite(num(mSJVal)) && String(mSJVal).trim() !== ""
+            ? num(mSJVal)
+            : Number(marginSanJorge || 0);
+        const mI =
+          Number.isFinite(num(mIVal)) && String(mIVal).trim() !== ""
+            ? num(mIVal)
+            : Number(marginIsla || 0);
+
+        // si el excel trae duplicado el mismo producto, sumamos paquetes (y dejamos el último margen que venga)
+        const prev = incomingById.get(catProd.id);
+        if (prev) {
+          incomingById.set(catProd.id, {
+            packages: prev.packages + packagesNum,
+            mR,
+            mSJ,
+            mI,
+          });
+        } else {
+          incomingById.set(catProd.id, { packages: packagesNum, mR, mSJ, mI });
+        }
+      }
+
+      // construir items nuevos con tu misma lógica
+      const newItems: CandyOrderItem[] = [];
+      incomingById.forEach((x, productId) => {
+        const catProd = catalog.find((p) => p.id === productId);
+        if (!catProd) return;
+
+        const providerPriceNum = Number(catProd.providerPrice || 0);
+        const unitsNum = Math.max(1, safeInt(catProd.unitsPerPackage || 1));
+        const packagesNum = Math.max(1, safeInt(x.packages));
+
+        const vals = calcOrderItemValues(providerPriceNum, packagesNum, {
+          marginR: x.mR,
+          marginSJ: x.mSJ,
+          marginIsla: x.mI,
+        });
+
+        newItems.push({
+          id: catProd.id,
+          name: catProd.name,
+          category: catProd.category,
+
+          providerPrice: providerPriceNum,
+          packages: packagesNum,
+          unitsPerPackage: unitsNum,
+
+          marginRivas: x.mR,
+          marginSanJorge: x.mSJ,
+          marginIsla: x.mI,
+
+          subtotal: vals.subtotal,
+          totalRivas: vals.totalRivas,
+          totalSanJorge: vals.totalSanJorge,
+          totalIsla: vals.totalIsla,
+          gainRivas: vals.gainRivas,
+          gainSanJorge: vals.gainSanJorge,
+          gainIsla: vals.gainIsla,
+          unitPriceRivas: vals.unitPriceRivas,
+          unitPriceSanJorge: vals.unitPriceSanJorge,
+          unitPriceIsla: vals.unitPriceIsla,
+
+          remainingPackages: packagesNum, // ✅ igual que cuando se crea manual
+        });
+      });
+
+      // merge con lo que ya tenías en la orden (si ya agregaste algo manual)
+      setOrderItems((prev) => {
+        const map = new Map<string, CandyOrderItem>();
+        prev.forEach((it) => map.set(it.id, it));
+
+        for (const it of newItems) {
+          const existing = map.get(it.id);
+          if (!existing) {
+            map.set(it.id, it);
+          } else {
+            // sumamos paquetes y recalculamos con márgenes del import (últimos)
+            const mergedPackages =
+              safeInt(existing.packages) + safeInt(it.packages);
+            const vals = calcOrderItemValues(
+              existing.providerPrice,
+              mergedPackages,
+              {
+                marginR: it.marginRivas,
+                marginSJ: it.marginSanJorge,
+                marginIsla: it.marginIsla,
+              }
+            );
+
+            map.set(it.id, {
+              ...existing,
+              packages: mergedPackages,
+              marginRivas: it.marginRivas,
+              marginSanJorge: it.marginSanJorge,
+              marginIsla: it.marginIsla,
+              remainingPackages:
+                safeInt(existing.remainingPackages ?? existing.packages) +
+                safeInt(it.packages),
+              ...vals,
+            });
+          }
+        }
+
+        return Array.from(map.values()).sort((a, b) =>
+          a.name.localeCompare(b.name, "es")
+        );
+      });
+
+      setMobileTab("ITEMS");
+
+      if (errors.length) {
+        setMsg(
+          `⚠️ Importado con detalles: ${newItems.length} productos. Errores: ${errors.length}. (Revisá nombres/paquetes).`
+        );
+        console.warn("Errores import:", errors);
+      } else {
+        setMsg(
+          `✅ Importación lista: ${newItems.length} productos agregados a la tabla.`
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      setMsg(
+        "❌ Error importando Excel. Revisá que sea .xlsx y que tenga columnas Producto/Paquetes/Márgenes."
+      );
+    } finally {
+      setImporting(false);
+    }
   };
 
   // ====== LOAD LISTA DE PEDIDOS + agregados de paquetes ======
@@ -1507,6 +1803,37 @@ export default function CandyMainOrders() {
                     ))
                   )}
                 </div>
+
+                {!editingOrderId && (
+                  <div className="hidden md:flex items-center justify-end gap-2 mb-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      className="hidden"
+                      onChange={handleExcelFileChange}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadTemplate}
+                      className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                      title="Descarga plantilla con todos los productos"
+                    >
+                      Descargar plantilla
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handlePickExcel}
+                      disabled={importing}
+                      className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                      title="Importa Producto / Paquetes / Márgenes desde Excel"
+                    >
+                      {importing ? "Importando..." : "Importar Excel"}
+                    </button>
+                  </div>
+                )}
 
                 {/* DESKTOP: tu tabla original */}
                 <div className="hidden md:block bg-white rounded border overflow-x-auto">
