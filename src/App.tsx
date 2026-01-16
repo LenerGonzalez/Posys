@@ -57,6 +57,9 @@ import BillingCandies from "./components/Candies/BillingCandies";
 import ReporteCierres from "./components/Candies/ReporteCierres";
 import DataCenterCandies from "./components/Candies/DataCenter";
 import EntregasCash from "./components/Candies/EntregasCash";
+import PreciosVenta from "./components/Candies/PreciosVenta";
+
+import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
 
 // Definición de roles
 type Role =
@@ -330,6 +333,14 @@ export default function App() {
             }
           />
           <Route
+            path="productsPricesCandies"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+                <PreciosVenta />
+              </PrivateRoute>
+            }
+          />
+          <Route
             path="inventoryMainOrderCandies"
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
@@ -472,6 +483,14 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_ropa"]}>
                 <SalesClothesPOS />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="notebooksInventory"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_ropa"]}>
+                <GonperProductosPrices />
               </PrivateRoute>
             }
           />

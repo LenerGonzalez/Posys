@@ -212,29 +212,24 @@ export default function AdminLayout({ role }: { role: string }) {
                       open={openRopa}
                       onClick={() => setOpenRopa((v) => !v)}
                     >
-                      Chiqui Look
+                      Gonper
                     </SectionBtn>
 
                     {openRopa && (
                       <div className="pb-2">
-                        {/* Inventario (Ropa) */}
-                        <SubSectionBtn
-                          open={openRopaInv}
-                          onClick={() => setOpenRopaInv((v) => !v)}
-                          title="Inventario"
-                        />
+                     
                         {openRopaInv && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
-                              to={`${base}/InventoryClothesBatches`}
+                              to={`${base}/notebooksInventory`}
                               className={linkCls}
                             >
-                              Inventario Ropa
+                              Productos y Precios
                             </NavLink>
                           </div>
                         )}
                         {/* Productos (Ropa) */}
-                        <SubSectionBtn
+                        {/* <SubSectionBtn
                           open={openRopaProd}
                           onClick={() => setOpenRopaProd((v) => !v)}
                           title="Productos"
@@ -249,13 +244,13 @@ export default function AdminLayout({ role }: { role: string }) {
                             </NavLink>
                           </div>
                         )}
-                        {/* Clientes (Ropa) */}
+                        Clientes (Ropa)
                         <SubSectionBtn
                           open={openClients}
                           onClick={() => setOpenClients((v) => !v)}
                           title="Clientes"
-                        />
-                        {openClients && (
+                        /> */}
+                        {/* {openClients && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
                               to={`${base}/CustomersClothes`}
@@ -264,9 +259,9 @@ export default function AdminLayout({ role }: { role: string }) {
                               Listado de Clientes
                             </NavLink>
                           </div>
-                        )}
+                        )} */}
                         {/* Finanzas (Ropa) */}
-                        <SubSectionBtn
+                        {/* <SubSectionBtn
                           open={openRopaFin}
                           onClick={() => setOpenRopaFin((v) => !v)}
                           title="Finanzas"
@@ -311,7 +306,7 @@ export default function AdminLayout({ role }: { role: string }) {
                               Gastos Ropa
                             </NavLink>
                           </div>
-                        )}
+                        )} */}
                       </div>
                     )}
                   </div>
@@ -353,6 +348,17 @@ export default function AdminLayout({ role }: { role: string }) {
                             </NavLink>
                           </div>
                         )}
+                        {openDulcesVendors && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/productsPricesCandies`}
+                              className={linkCls}
+                            >
+                              Precios Venta
+                            </NavLink>
+                          </div>
+                        )}
+
                         <SubSectionBtn
                           open={openDulcesInv}
                           onClick={() => setOpenDulcesInv((v) => !v)}

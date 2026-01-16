@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { BrowserMultiFormatReader, IScannerControls } from "@zxing/browser";
 import * as XLSX from "xlsx";
 import {
   addDoc,
@@ -22,6 +23,7 @@ type CandyProduct = {
   category: string;
   providerPrice: number; // por paquete
   unitsPerPackage: number; // und por paquete
+  barcode?: string; // ✅ NUEVO (opcional)
   createdAt?: any;
 };
 
@@ -70,8 +72,213 @@ type ImportRow = {
   name: string;
   providerPrice: number;
   unitsPerPackage: number;
+  barcode?: string; // ✅ opcional
   _raw?: Record<string, any>;
 };
+
+// ============================
+//  MODAL: Mostrar código
+// ============================
+function CodeModal({
+  open,
+  code,
+  onClose,
+}: {
+  open: boolean;
+  code: string;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-3">
+      <div className="bg-white w-full max-w-sm rounded-2xl shadow-lg border p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="font-bold text-lg">Código de barras</div>
+          <button
+            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+            onClick={onClose}
+            type="button"
+          >
+            Cerrar
+          </button>
+        </div>
+        <div className="bg-gray-50 border rounded-xl p-3">
+          <div className="text-xs text-gray-600 mb-1">Valor</div>
+          <div className="text-xl font-mono font-semibold break-all">
+            {code}
+          </div>
+        </div>
+        <div className="mt-3 flex gap-2 justify-end">
+          <button
+            className="px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+            type="button"
+            onClick={() => {
+              try {
+                navigator.clipboard?.writeText(code);
+              } catch {}
+            }}
+          >
+            Copiar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================
+//  MODAL: Escáner (sin librerías, BarcodeDetector + getUserMedia)
+//  - Funciona bien en Android/Chrome (PWA)
+// ============================
+
+function BarcodeScanModal({
+  open,
+  onClose,
+  onDetected,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onDetected: (code: string) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const controlsRef = useRef<IScannerControls | null>(null);
+  const [err, setErr] = useState<string>("");
+  const lastRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!open) return;
+
+    let cancelled = false;
+    const reader = new BrowserMultiFormatReader();
+
+    const stopAll = () => {
+      try {
+        controlsRef.current?.stop();
+      } catch {}
+      controlsRef.current = null;
+
+      try {
+        const stream = videoRef.current?.srcObject as MediaStream | null;
+        stream?.getTracks?.().forEach((t) => t.stop());
+      } catch {}
+
+      try {
+        if (videoRef.current) videoRef.current.srcObject = null;
+      } catch {}
+    };
+
+    const start = async () => {
+      setErr("");
+
+      try {
+        if (!videoRef.current) return;
+
+        // Lista cámaras
+        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+
+        // Preferir trasera (en iPhone a veces label viene vacío; igual elegimos la última como fallback)
+        const back =
+          devices.find((d) => /back|rear|environment/i.test(d.label || "")) ||
+          devices[devices.length - 1] ||
+          devices[0];
+
+        if (!back?.deviceId) {
+          setErr("No se encontró cámara.");
+          return;
+        }
+
+        // decodeFromVideoDevice maneja getUserMedia + stream
+        const controls = await reader.decodeFromConstraints(
+          {
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+          } as any,
+          videoRef.current,
+          (result) => {
+            if (cancelled) return;
+            if (result) {
+              const code = String(result.getText() || "")
+                .trim()
+                .replace(/\s+/g, "");
+              if (!code) return;
+              if (code === lastRef.current) return;
+              lastRef.current = code;
+
+              stopAll();
+              onDetected(code);
+              onClose();
+            }
+          }
+        );
+
+        controlsRef.current = controls;
+      } catch (e: any) {
+        const msg = String(e?.message || "");
+        if (
+          msg.toLowerCase().includes("permission") ||
+          e?.name === "NotAllowedError"
+        ) {
+          setErr("Permiso de cámara denegado.");
+        } else if (e?.name === "NotFoundError") {
+          setErr("No se encontró cámara en este dispositivo.");
+        } else {
+          setErr(msg || "No se pudo iniciar el escáner.");
+        }
+      }
+    };
+
+    start();
+
+    return () => {
+      cancelled = true;
+      stopAll();
+    };
+  }, [open, onClose, onDetected]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 p-3 flex items-center justify-center">
+      <div className="bg-white w-full max-w-md rounded-2xl shadow-lg border overflow-hidden">
+        <div className="flex items-center justify-between p-3 border-b">
+          <div className="font-bold">Escanear código</div>
+          <button
+            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+            onClick={onClose}
+            type="button"
+          >
+            Cerrar
+          </button>
+        </div>
+
+        <div className="p-3">
+          <div className="relative w-full aspect-[3/4] bg-black rounded-xl overflow-hidden">
+            <video
+              ref={videoRef}
+              className="w-full h-full object-cover"
+              muted
+              playsInline
+              autoPlay
+            />
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[85%] h-40 border-2 border-white/70 rounded-xl" />
+            </div>
+          </div>
+
+          {err && (
+            <div className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">
+              {err}
+            </div>
+          )}
+
+          <div className="mt-2 text-xs text-gray-600">
+            Apuntá al código de barras y mantenelo estable.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function ProductsCandies() {
   const { refreshKey, refresh } = useManualRefresh();
@@ -87,6 +294,7 @@ export default function ProductsCandies() {
   const [name, setName] = useState("");
   const [providerPrice, setProviderPrice] = useState<number>(0);
   const [unitsPerPackage, setUnitsPerPackage] = useState<number>(1);
+  const [barcode, setBarcode] = useState(""); // ✅ NUEVO
 
   // edición inline
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -94,9 +302,19 @@ export default function ProductsCandies() {
   const [editName, setEditName] = useState("");
   const [editProviderPrice, setEditProviderPrice] = useState<number>(0);
   const [editUnitsPerPackage, setEditUnitsPerPackage] = useState<number>(1);
+  const [editBarcode, setEditBarcode] = useState(""); // ✅ NUEVO
 
   // filtros
   const [search, setSearch] = useState("");
+  const [searchCode, setSearchCode] = useState(""); // ✅ NUEVO: buscar por barcode
+
+  // modal código
+  const [codeModalOpen, setCodeModalOpen] = useState(false);
+  const [codeModalValue, setCodeModalValue] = useState("");
+
+  // escáner
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanTarget, setScanTarget] = useState<"create" | "edit">("create");
 
   // importación
   const [importOpen, setImportOpen] = useState(false);
@@ -125,6 +343,7 @@ export default function ProductsCandies() {
             category: x.category || "",
             providerPrice: Number(x.providerPrice || 0),
             unitsPerPackage: Number(x.unitsPerPackage || 1),
+            barcode: String(x.barcode || "").trim() || undefined, // ✅ NUEVO
             createdAt: x.createdAt,
           });
         });
@@ -140,12 +359,20 @@ export default function ProductsCandies() {
 
   const filtered = useMemo(() => {
     const q = norm(search);
-    if (!q) return products;
+    const qc = String(searchCode || "").trim();
+
+    if (!q && !qc) return products;
+
     return products.filter((p) => {
       const hay = `${p.category} ${p.name}`.toLowerCase();
-      return hay.includes(q);
+      const okText = !q ? true : hay.includes(q);
+
+      const code = String(p.barcode || "");
+      const okCode = !qc ? true : code.includes(qc);
+
+      return okText && okCode;
     });
-  }, [products, search]);
+  }, [products, search, searchCode]);
 
   // ✅ categorías existentes (para ayudarte en UI / import)
   const categoryOptions = useMemo(() => {
@@ -165,6 +392,7 @@ export default function ProductsCandies() {
     setName("");
     setProviderPrice(0);
     setUnitsPerPackage(1);
+    setBarcode("");
   };
 
   const createProduct = async (e: React.FormEvent) => {
@@ -175,6 +403,7 @@ export default function ProductsCandies() {
     const n = String(name || "").trim();
     const pp = Math.max(0, toNum(providerPrice, 0));
     const upp = roundInt(unitsPerPackage, 1);
+    const bc = String(barcode || "").trim();
 
     if (!c) return setMsg("⚠️ La categoría es requerida.");
     if (!n) return setMsg("⚠️ El nombre del producto es requerido.");
@@ -189,15 +418,25 @@ export default function ProductsCandies() {
       return setMsg("⚠️ Ya existe un producto con esa categoría y nombre.");
     }
 
+    // evitar duplicado de barcode si viene lleno
+    if (bc) {
+      const dupCode = products.some((p) => String(p.barcode || "") === bc);
+      if (dupCode) {
+        return setMsg("⚠️ Ya existe un producto con ese código de barras.");
+      }
+    }
+
     try {
       setLoading(true);
-      const payload = {
+      const payload: any = {
         category: c,
         name: n,
         providerPrice: pp,
         unitsPerPackage: upp,
         createdAt: Timestamp.now(),
       };
+      if (bc) payload.barcode = bc;
+
       const ref = await addDoc(collection(db, "products_candies"), payload);
       setProducts((prev) =>
         [...prev, { id: ref.id, ...payload } as CandyProduct].sort((a, b) =>
@@ -220,6 +459,7 @@ export default function ProductsCandies() {
     setEditName(p.name);
     setEditProviderPrice(p.providerPrice);
     setEditUnitsPerPackage(p.unitsPerPackage || 1);
+    setEditBarcode(String(p.barcode || "")); // ✅ NUEVO
     setMsg("");
   };
 
@@ -229,6 +469,7 @@ export default function ProductsCandies() {
     setEditName("");
     setEditProviderPrice(0);
     setEditUnitsPerPackage(1);
+    setEditBarcode("");
   };
 
   const saveEdit = async () => {
@@ -239,6 +480,7 @@ export default function ProductsCandies() {
     const n = String(editName || "").trim();
     const pp = Math.max(0, toNum(editProviderPrice, 0));
     const upp = roundInt(editUnitsPerPackage, 1);
+    const bc = String(editBarcode || "").trim();
 
     if (!c) return setMsg("⚠️ La categoría es requerida.");
     if (!n) return setMsg("⚠️ El nombre del producto es requerido.");
@@ -255,15 +497,34 @@ export default function ProductsCandies() {
     if (dup)
       return setMsg("⚠️ Ya existe otro producto con esa categoría y nombre.");
 
+    // evitar duplicado de barcode si viene lleno
+    if (bc) {
+      const dupCode = products.some(
+        (p) => p.id !== editingId && String(p.barcode || "") === bc
+      );
+      if (dupCode) {
+        return setMsg("⚠️ Ya existe otro producto con ese código de barras.");
+      }
+    }
+
     try {
       setLoading(true);
-      await updateDoc(doc(db, "products_candies", editingId), {
+
+      const payload: any = {
         category: c,
         name: n,
         providerPrice: pp,
         unitsPerPackage: upp,
         updatedAt: Timestamp.now(),
-      });
+      };
+
+      // ✅ Si bc viene vacío, lo guardamos como ""? NO: lo limpiamos (remove field)
+      // Firestore no tiene "unset" sin FieldValue.delete(); como vos no lo tenés importado,
+      // aquí hacemos: si viene vacío, seteamos "" para que quede claro sin código.
+      // Si preferís borrar el campo, decime y lo ajusto con deleteField().
+      payload.barcode = bc || "";
+
+      await updateDoc(doc(db, "products_candies", editingId), payload);
 
       setProducts((prev) =>
         prev
@@ -275,6 +536,7 @@ export default function ProductsCandies() {
                   name: n,
                   providerPrice: pp,
                   unitsPerPackage: upp,
+                  barcode: bc || undefined,
                 }
               : p
           )
@@ -319,6 +581,7 @@ export default function ProductsCandies() {
         Producto: "Gomita Fresa",
         PrecioProveedor: 120,
         UnidadesPorPaquete: 24,
+        Codigo: "7445074183182", // ✅ opcional
       },
     ];
 
@@ -387,6 +650,18 @@ export default function ProductsCandies() {
         "unitsPerPackage",
       ]);
 
+      // ✅ barcode opcional
+      const bcRaw = pickCol(r, [
+        "Codigo",
+        "Código",
+        "Barcode",
+        "barcode",
+        "EAN",
+        "UPC",
+        "Code",
+      ]);
+      const bc = String(bcRaw ?? "").trim();
+
       const providerPrice = Math.max(0, toNum(ppRaw, 0));
       const unitsPerPackage = roundInt(uppRaw, 1);
 
@@ -407,6 +682,7 @@ export default function ProductsCandies() {
           name: prod,
           providerPrice,
           unitsPerPackage,
+          barcode: bc || undefined,
           _raw: r,
         });
       }
@@ -505,9 +781,12 @@ export default function ProductsCandies() {
       // index por id y por (cat+name)
       const existingById: Record<string, CandyProduct> = {};
       const existingByKey: Record<string, CandyProduct> = {};
+      const existingByBarcode: Record<string, CandyProduct> = {};
       products.forEach((p) => {
         existingById[p.id] = p;
         existingByKey[`${norm(p.category)}::${norm(p.name)}`] = p;
+        const bc = String(p.barcode || "").trim();
+        if (bc) existingByBarcode[bc] = p;
       });
 
       const batch = writeBatch(db);
@@ -520,6 +799,7 @@ export default function ProductsCandies() {
         const n = String(r.name || "").trim();
         const pp = Math.max(0, toNum(r.providerPrice, 0));
         const upp = roundInt(r.unitsPerPackage, 1);
+        const bc = String(r.barcode || "").trim();
 
         if (!c || !n || pp <= 0 || upp <= 0) continue;
 
@@ -533,24 +813,37 @@ export default function ProductsCandies() {
           existing = existingByKey[key];
         }
 
+        // ✅ si no encontró por id/key, y viene barcode, intentamos por barcode
+        if (!existing && bc && existingByBarcode[bc]) {
+          existing = existingByBarcode[bc];
+        }
+
         if (existing) {
-          batch.update(doc(db, "products_candies", existing.id), {
+          const payload: any = {
             category: c,
             name: n,
             providerPrice: pp,
             unitsPerPackage: upp,
             updatedAt: Timestamp.now(),
-          });
+          };
+
+          // ✅ Import: solo toca barcode si viene en el archivo
+          if (r.barcode != null) payload.barcode = bc || "";
+
+          batch.update(doc(db, "products_candies", existing.id), payload);
           toUpdate += 1;
         } else {
           const ref = doc(collection(db, "products_candies"));
-          batch.set(ref, {
+          const payload: any = {
             category: c,
             name: n,
             providerPrice: pp,
             unitsPerPackage: upp,
             createdAt: Timestamp.now(),
-          });
+          };
+          if (bc) payload.barcode = bc;
+
+          batch.set(ref, payload);
           toCreate += 1;
         }
       }
@@ -579,6 +872,9 @@ export default function ProductsCandies() {
     const existingKeys = new Set(
       products.map((p) => `${norm(p.category)}::${norm(p.name)}`)
     );
+    const existingCodes = new Set(
+      products.map((p) => String(p.barcode || "").trim()).filter(Boolean)
+    );
 
     let willUpdate = 0;
     let willCreate = 0;
@@ -589,8 +885,16 @@ export default function ProductsCandies() {
         continue;
       }
       const k = `${norm(r.category)}::${norm(r.name)}`;
-      if (existingKeys.has(k)) willUpdate += 1;
-      else willCreate += 1;
+      if (existingKeys.has(k)) {
+        willUpdate += 1;
+        continue;
+      }
+      const bc = String(r.barcode || "").trim();
+      if (bc && existingCodes.has(bc)) {
+        willUpdate += 1;
+        continue;
+      }
+      willCreate += 1;
     }
 
     return { willCreate, willUpdate, total: importRows.length };
@@ -619,7 +923,7 @@ export default function ProductsCandies() {
       {/* FORM CREAR */}
       <form
         onSubmit={createProduct}
-        className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-end text-sm"
+        className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
       >
         <div>
           <label className="block font-semibold">Categoría</label>
@@ -666,7 +970,30 @@ export default function ProductsCandies() {
           />
         </div>
 
-        <div className="md:col-span-5 flex justify-end gap-2">
+        {/* ✅ NUEVO: Código + Escanear */}
+        <div>
+          <label className="block font-semibold">Código (opcional)</label>
+          <div className="flex gap-2">
+            <input
+              className="w-full border rounded px-2 py-1"
+              value={barcode}
+              onChange={(e) => setBarcode(e.target.value)}
+              placeholder="EAN/UPC"
+            />
+            <button
+              type="button"
+              className="px-3 py-2 rounded bg-gray-800 text-white hover:bg-black whitespace-nowrap"
+              onClick={() => {
+                setScanTarget("create");
+                setScanOpen(true);
+              }}
+            >
+              Escanear
+            </button>
+          </div>
+        </div>
+
+        <div className="md:col-span-6 flex justify-end gap-2">
           <button
             type="button"
             className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
@@ -695,7 +1022,19 @@ export default function ProductsCandies() {
             placeholder="Buscar por categoría o producto…"
           />
         </div>
-        <div className="w-full md:w-1/2 text-right">
+
+        {/* ✅ NUEVO: Buscar por código */}
+        <div className="w-full md:w-1/2">
+          <label className="block font-semibold">Buscar por código</label>
+          <input
+            className="w-full border rounded px-2 py-1"
+            value={searchCode}
+            onChange={(e) => setSearchCode(e.target.value)}
+            placeholder="Ej: 7445074183182"
+          />
+        </div>
+
+        <div className="w-full md:w-auto text-right">
           <div className="text-xs text-gray-600">Productos en catálogo</div>
           <div className="text-lg font-semibold">{filtered.length}</div>
         </div>
@@ -703,32 +1042,35 @@ export default function ProductsCandies() {
 
       {/* TABLA */}
       <div className="bg-white rounded shadow border w-full overflow-x-auto">
-        <table className="min-w-[900px] w-full text-xs md:text-sm">
+        <table className="min-w-[1050px] w-full text-xs md:text-sm">
           <thead className="bg-gray-100">
             <tr className="whitespace-nowrap">
               <th className="p-2 border text-left">Categoría</th>
               <th className="p-2 border text-left">Producto</th>
               <th className="p-2 border text-right">Precio proveedor</th>
               <th className="p-2 border text-right">Und x paquete</th>
+              <th className="p-2 border text-center">Código</th>
               <th className="p-2 border text-center">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-center" colSpan={5}>
+                <td className="p-4 text-center" colSpan={6}>
                   Cargando…
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td className="p-4 text-center" colSpan={5}>
+                <td className="p-4 text-center" colSpan={6}>
                   Sin productos.
                 </td>
               </tr>
             ) : (
               filtered.map((p) => {
                 const isEd = editingId === p.id;
+                const hasCode = !!String(p.barcode || "").trim();
+
                 return (
                   <tr key={p.id} className="align-top">
                     <td className="p-2 border">
@@ -794,6 +1136,45 @@ export default function ProductsCandies() {
                       )}
                     </td>
 
+                    {/* ✅ NUEVO: Columna Código */}
+                    <td className="p-2 border text-center">
+                      {isEd ? (
+                        <div className="flex gap-2 justify-center">
+                          <input
+                            className="w-44 border rounded px-2 py-1"
+                            value={editBarcode}
+                            onChange={(e) => setEditBarcode(e.target.value)}
+                            placeholder="EAN/UPC"
+                          />
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded bg-gray-800 text-white hover:bg-black"
+                            onClick={() => {
+                              setScanTarget("edit");
+                              setScanOpen(true);
+                            }}
+                          >
+                            Escanear
+                          </button>
+                        </div>
+                      ) : hasCode ? (
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
+                          onClick={() => {
+                            setCodeModalValue(String(p.barcode || "").trim());
+                            setCodeModalOpen(true);
+                          }}
+                        >
+                          Sí
+                        </button>
+                      ) : (
+                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-600">
+                          No
+                        </span>
+                      )}
+                    </td>
+
                     <td className="p-2 border">
                       {isEd ? (
                         <div className="flex gap-2 justify-center">
@@ -841,6 +1222,23 @@ export default function ProductsCandies() {
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
+      {/* MODAL CÓDIGO */}
+      <CodeModal
+        open={codeModalOpen}
+        code={codeModalValue}
+        onClose={() => setCodeModalOpen(false)}
+      />
+
+      {/* MODAL ESCÁNER */}
+      <BarcodeScanModal
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onDetected={(code) => {
+          if (scanTarget === "create") setBarcode(code);
+          else setEditBarcode(code);
+        }}
+      />
+
       {/* MODAL IMPORTACIÓN */}
       {importOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -863,7 +1261,8 @@ export default function ProductsCandies() {
                   <div className="font-semibold">1) Subí tu archivo</div>
                   <div className="text-xs text-gray-600">
                     Columnas esperadas (flexible): Id (opcional), Categoria,
-                    Producto/Nombre, PrecioProveedor, UnidadesPorPaquete.
+                    Producto/Nombre, PrecioProveedor, UnidadesPorPaquete, Codigo
+                    (opcional).
                   </div>
                 </div>
                 <button
@@ -931,7 +1330,7 @@ export default function ProductsCandies() {
               </div>
 
               <div className="overflow-x-auto border rounded">
-                <table className="min-w-[1100px] w-full text-xs">
+                <table className="min-w-[1250px] w-full text-xs">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
                       <th className="p-2 border text-left">Id (opcional)</th>
@@ -941,6 +1340,9 @@ export default function ProductsCandies() {
                         Precio proveedor
                       </th>
                       <th className="p-2 border text-right">Und x paquete</th>
+                      <th className="p-2 border text-left">
+                        Codigo (opcional)
+                      </th>
                       <th className="p-2 border text-center">Acción</th>
                     </tr>
                   </thead>
@@ -948,7 +1350,7 @@ export default function ProductsCandies() {
                     {importRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={6}
+                          colSpan={7}
                           className="p-4 text-center text-gray-500"
                         >
                           Subí un archivo para ver la previsualización.
@@ -964,7 +1366,12 @@ export default function ProductsCandies() {
                             `${norm(p.category)}::${norm(p.name)}` ===
                             `${norm(r.category)}::${norm(r.name)}`
                         );
-                        const exists = byId || byKey;
+                        const byCode = r.barcode
+                          ? products.some(
+                              (p) => String(p.barcode || "") === r.barcode
+                            )
+                          : false;
+                        const exists = byId || byKey || byCode;
 
                         return (
                           <tr
@@ -1043,6 +1450,19 @@ export default function ProductsCandies() {
                                     ),
                                   })
                                 }
+                              />
+                            </td>
+
+                            <td className="p-2 border">
+                              <input
+                                className="w-56 border rounded px-2 py-1"
+                                value={r.barcode || ""}
+                                onChange={(e) =>
+                                  updateImportRow(i, {
+                                    barcode: e.target.value.trim() || undefined,
+                                  })
+                                }
+                                placeholder="EAN/UPC (opcional)"
                               />
                             </td>
 

@@ -55,6 +55,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
         { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
         { key: "cier", label: "Cierres", to: `${base}/cierreVentasCandies` },
         { key: "cash", label: "Cash", to: `${base}/cashDeliveries` },
+        { key: "items", label: "Items", to: `${base}/productsCandies` },
       ];
     }
 
@@ -71,6 +72,8 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
     if (isVendDulces) {
       return [
         { key: "venta", label: "Vender", to: `${base}/salesCandies` },
+        { key: "precios", label: "Precios", to: `${base}/productsPricesCandies` },
+
         {
           key: "ped",
           label: "Inventario",

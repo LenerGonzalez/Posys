@@ -11,6 +11,7 @@
   "dependencies": {
     "@types/react-router": "^5.1.20",
     "@types/react-router-dom": "^5.3.3",
+    "@zxing/browser": "^0.1.5",
     "date-fns": "^4.1.0",
     "firebase": "^10.14.0",
     "html2canvas": "^1.4.1",
