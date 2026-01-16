@@ -336,7 +336,7 @@ export default function PrecioVentas() {
         </div>
       </div>
 
-      {/* ===== MOBILE: lista/cards ===== */}
+      {/* ===== MOBILE: lista/cards (COMPACTO) ===== */}
       <div className="md:hidden">
         {loading ? (
           <div className="bg-white rounded-xl border shadow p-4 text-center">
@@ -351,25 +351,33 @@ export default function PrecioVentas() {
             {filtered.map((r) => (
               <div
                 key={r.productId}
-                className="bg-white rounded-xl border shadow-sm p-3"
+                className="bg-white rounded-xl border shadow-sm px-3 py-2"
               >
-                <div className="text-xs text-gray-600">{r.category}</div>
-                <div className="text-base font-bold leading-tight">
-                  {r.productName}
-                </div>
-
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <div className="rounded-lg border bg-gray-50 p-2">
-                    <div className="text-[11px] text-gray-600">Isla</div>
-                    <div className="text-lg font-extrabold tabular-nums">
-                      {money(r.priceIsla)}
+                {/* Línea superior: nombre + precios */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-gray-500 leading-tight truncate">
+                      {r.category}
+                    </div>
+                    <div className="text-sm font-semibold leading-tight truncate">
+                      {r.productName}
                     </div>
                   </div>
 
-                  <div className="rounded-lg border bg-gray-50 p-2">
-                    <div className="text-[11px] text-gray-600">Rivas</div>
-                    <div className="text-lg font-extrabold tabular-nums">
-                      {money(r.priceRivas)}
+                  {/* Precios compactos */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-baseline gap-1 rounded-lg border bg-gray-50 px-2 py-1">
+                      <span className="text-[10px] text-gray-600">Isla</span>
+                      <span className="text-sm font-bold tabular-nums">
+                        {money(r.priceIsla)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-baseline gap-1 rounded-lg border bg-gray-50 px-2 py-1">
+                      <span className="text-[10px] text-gray-600">Rivas</span>
+                      <span className="text-sm font-bold tabular-nums">
+                        {money(r.priceRivas)}
+                      </span>
                     </div>
                   </div>
                 </div>

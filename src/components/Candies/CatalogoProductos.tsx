@@ -127,10 +127,12 @@ function CodeModal({
 }
 
 // ============================
-//  MODAL: Escáner (sin librerías, BarcodeDetector + getUserMedia)
-//  - Funciona bien en Android/Chrome (PWA)
+//  MODAL: Escáner (ZXing)
+//  ✅ FIX PERMISOS:
+//  - NO enumeramos cámaras antes (en Android/iOS puede devolver vacío si no hay permiso)
+//  - Primero forzamos getUserMedia para disparar el prompt de permisos
+//  - Luego iniciamos decodeFromConstraints
 // ============================
-
 function BarcodeScanModal({
   open,
   onClose,
@@ -173,24 +175,26 @@ function BarcodeScanModal({
       try {
         if (!videoRef.current) return;
 
-        // Lista cámaras
-        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-
-        // Preferir trasera (en iPhone a veces label viene vacío; igual elegimos la última como fallback)
-        const back =
-          devices.find((d) => /back|rear|environment/i.test(d.label || "")) ||
-          devices[devices.length - 1] ||
-          devices[0];
-
-        if (!back?.deviceId) {
-          setErr("No se encontró cámara.");
-          return;
+        // ✅ 1) Forzar prompt de permiso (warm-up)
+        // Esto hace que Android/iOS muestren el permiso "Cámara" para el sitio.
+        try {
+          const warm = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+          });
+          warm.getTracks().forEach((t) => t.stop());
+        } catch (e: any) {
+          // Si aquí falla por permiso, lo capturamos abajo igualmente.
         }
 
-        // decodeFromVideoDevice maneja getUserMedia + stream
+        // ✅ 2) Iniciar ZXing (esto también usa getUserMedia)
         const controls = await reader.decodeFromConstraints(
           {
-            video: { facingMode: { ideal: "environment" } },
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
             audio: false,
           } as any,
           videoRef.current,
@@ -214,13 +218,22 @@ function BarcodeScanModal({
         controlsRef.current = controls;
       } catch (e: any) {
         const msg = String(e?.message || "");
+        const name = String(e?.name || "");
         if (
           msg.toLowerCase().includes("permission") ||
-          e?.name === "NotAllowedError"
+          name === "NotAllowedError"
         ) {
           setErr("Permiso de cámara denegado.");
-        } else if (e?.name === "NotFoundError") {
+        } else if (
+          name === "NotFoundError" ||
+          msg.toLowerCase().includes("notfound")
+        ) {
           setErr("No se encontró cámara en este dispositivo.");
+        } else if (
+          msg.toLowerCase().includes("secure") ||
+          msg.toLowerCase().includes("https")
+        ) {
+          setErr("La cámara requiere HTTPS (sitio seguro).");
         } else {
           setErr(msg || "No se pudo iniciar el escáner.");
         }
@@ -306,7 +319,7 @@ export default function ProductsCandies() {
 
   // filtros
   const [search, setSearch] = useState("");
-  const [searchCode, setSearchCode] = useState(""); // ✅ NUEVO: buscar por barcode
+  const [searchCode, setSearchCode] = useState(""); // ✅ NUEVO
 
   // modal código
   const [codeModalOpen, setCodeModalOpen] = useState(false);
@@ -322,6 +335,32 @@ export default function ProductsCandies() {
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importLoading, setImportLoading] = useState(false);
+
+  // ✅ responsive simple
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener?.("change", update);
+    return () => mq.removeEventListener?.("change", update);
+  }, []);
+
+  // ✅ colapsables (solo móvil nacen colapsados)
+  const [createOpen, setCreateOpen] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  useEffect(() => {
+    if (isMobile) {
+      setCreateOpen(false);
+      setFiltersOpen(false);
+    } else {
+      setCreateOpen(true);
+      setFiltersOpen(true);
+    }
+  }, [isMobile]);
+
+  // ✅ cards colapsables en móvil
+  const [openCardId, setOpenCardId] = useState<string | null>(null);
 
   // ============================
   //  LOAD CATALOG
@@ -343,7 +382,7 @@ export default function ProductsCandies() {
             category: x.category || "",
             providerPrice: Number(x.providerPrice || 0),
             unitsPerPackage: Number(x.unitsPerPackage || 1),
-            barcode: String(x.barcode || "").trim() || undefined, // ✅ NUEVO
+            barcode: String(x.barcode || "").trim() || undefined,
             createdAt: x.createdAt,
           });
         });
@@ -374,7 +413,6 @@ export default function ProductsCandies() {
     });
   }, [products, search, searchCode]);
 
-  // ✅ categorías existentes (para ayudarte en UI / import)
   const categoryOptions = useMemo(() => {
     const set = new Set<string>();
     products.forEach((p) => {
@@ -410,7 +448,6 @@ export default function ProductsCandies() {
     if (pp <= 0) return setMsg("⚠️ El precio proveedor debe ser > 0.");
     if (upp <= 0) return setMsg("⚠️ Und x paquete debe ser > 0.");
 
-    // evitar duplicados exactos (category+name)
     const exists = products.some(
       (p) => norm(p.category) === norm(c) && norm(p.name) === norm(n)
     );
@@ -418,7 +455,6 @@ export default function ProductsCandies() {
       return setMsg("⚠️ Ya existe un producto con esa categoría y nombre.");
     }
 
-    // evitar duplicado de barcode si viene lleno
     if (bc) {
       const dupCode = products.some((p) => String(p.barcode || "") === bc);
       if (dupCode) {
@@ -459,7 +495,7 @@ export default function ProductsCandies() {
     setEditName(p.name);
     setEditProviderPrice(p.providerPrice);
     setEditUnitsPerPackage(p.unitsPerPackage || 1);
-    setEditBarcode(String(p.barcode || "")); // ✅ NUEVO
+    setEditBarcode(String(p.barcode || ""));
     setMsg("");
   };
 
@@ -487,7 +523,6 @@ export default function ProductsCandies() {
     if (pp <= 0) return setMsg("⚠️ El precio proveedor debe ser > 0.");
     if (upp <= 0) return setMsg("⚠️ Und x paquete debe ser > 0.");
 
-    // evitar duplicado con otro id
     const dup = products.some(
       (p) =>
         p.id !== editingId &&
@@ -497,7 +532,6 @@ export default function ProductsCandies() {
     if (dup)
       return setMsg("⚠️ Ya existe otro producto con esa categoría y nombre.");
 
-    // evitar duplicado de barcode si viene lleno
     if (bc) {
       const dupCode = products.some(
         (p) => p.id !== editingId && String(p.barcode || "") === bc
@@ -518,10 +552,6 @@ export default function ProductsCandies() {
         updatedAt: Timestamp.now(),
       };
 
-      // ✅ Si bc viene vacío, lo guardamos como ""? NO: lo limpiamos (remove field)
-      // Firestore no tiene "unset" sin FieldValue.delete(); como vos no lo tenés importado,
-      // aquí hacemos: si viene vacío, seteamos "" para que quede claro sin código.
-      // Si preferís borrar el campo, decime y lo ajusto con deleteField().
       payload.barcode = bc || "";
 
       await updateDoc(doc(db, "products_candies", editingId), payload);
@@ -576,12 +606,12 @@ export default function ProductsCandies() {
   const downloadTemplateXlsx = () => {
     const data = [
       {
-        Id: "", // ✅ opcional (si lo llenás, actualiza directo)
+        Id: "",
         Categoria: "Gomitas",
         Producto: "Gomita Fresa",
         PrecioProveedor: 120,
         UnidadesPorPaquete: 24,
-        Codigo: "7445074183182", // ✅ opcional
+        Codigo: "7445074183182",
       },
     ];
 
@@ -650,7 +680,6 @@ export default function ProductsCandies() {
         "unitsPerPackage",
       ]);
 
-      // ✅ barcode opcional
       const bcRaw = pickCol(r, [
         "Codigo",
         "Código",
@@ -665,9 +694,8 @@ export default function ProductsCandies() {
       const providerPrice = Math.max(0, toNum(ppRaw, 0));
       const unitsPerPackage = roundInt(uppRaw, 1);
 
-      const rowNumber = idx + 2; // asumiendo fila 1 header
+      const rowNumber = idx + 2;
 
-      // si viene id, permitimos que cat/name vengan en blanco? NO: igual exigimos.
       if (!cat) errors.push(`Fila ${rowNumber}: falta Categoria.`);
       if (!prod) errors.push(`Fila ${rowNumber}: falta Producto/Nombre.`);
       if (providerPrice <= 0)
@@ -688,13 +716,10 @@ export default function ProductsCandies() {
       }
     });
 
-    // Deduplicar dentro del archivo:
-    // - si viene id => key por id
-    // - si no viene id => key por (cat+name)
     const map = new Map<string, ImportRow>();
     for (const r of rows) {
       const k = r.id ? `id::${r.id}` : `${norm(r.category)}::${norm(r.name)}`;
-      map.set(k, r); // gana la última fila
+      map.set(k, r);
     }
 
     return {
@@ -753,7 +778,6 @@ export default function ProductsCandies() {
     }
   };
 
-  // ✅ editar filas del import antes de confirmar
   const updateImportRow = (index: number, patch: Partial<ImportRow>) => {
     setImportRows((prev) => {
       const copy = [...prev];
@@ -778,7 +802,6 @@ export default function ProductsCandies() {
     try {
       setImportLoading(true);
 
-      // index por id y por (cat+name)
       const existingById: Record<string, CandyProduct> = {};
       const existingByKey: Record<string, CandyProduct> = {};
       const existingByBarcode: Record<string, CandyProduct> = {};
@@ -803,17 +826,14 @@ export default function ProductsCandies() {
 
         if (!c || !n || pp <= 0 || upp <= 0) continue;
 
-        // 1) si viene id y existe
         let existing: CandyProduct | undefined = undefined;
         if (r.id && existingById[r.id]) {
           existing = existingById[r.id];
         } else {
-          // 2) fallback por key cat+name
           const key = `${norm(c)}::${norm(n)}`;
           existing = existingByKey[key];
         }
 
-        // ✅ si no encontró por id/key, y viene barcode, intentamos por barcode
         if (!existing && bc && existingByBarcode[bc]) {
           existing = existingByBarcode[bc];
         }
@@ -827,7 +847,6 @@ export default function ProductsCandies() {
             updatedAt: Timestamp.now(),
           };
 
-          // ✅ Import: solo toca barcode si viene en el archivo
           if (r.barcode != null) payload.barcode = bc || "";
 
           batch.update(doc(db, "products_candies", existing.id), payload);
@@ -866,7 +885,6 @@ export default function ProductsCandies() {
     }
   };
 
-  // preview stats
   const importStats = useMemo(() => {
     const existingById = new Set(products.map((p) => p.id));
     const existingKeys = new Set(
@@ -903,11 +921,43 @@ export default function ProductsCandies() {
   return (
     <div className="max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Catálogo de Productos (Dulces)</h2>
+        <h2 className="text-2xl font-bold">Productos</h2>
         <div className="flex gap-2">
-          <RefreshButton onClick={refresh} loading={loading || importLoading} />
+          <div className="flex gap-2">
+            <RefreshButton
+              onClick={refresh}
+              loading={loading || importLoading}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ✅ MOBILE: BOTONES COLAPSABLES */}
+      {isMobile && (
+        <div className="flex flex-col gap-2 mb-3">
+          {/* 🔄 REFRESCAR */}
+          {/* <button
+            type="button"
+            className="w-full px-3 py-2 rounded bg-white border shadow-sm"
+            onClick={refresh}
+            disabled={loading || importLoading}
+          >
+            Refrescar
+          </button> */}
+
+          {/* ➕ CREAR PRODUCTO */}
           <button
-            className="px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+            type="button"
+            className="w-full px-3 py-2 rounded bg-gray-900 text-white"
+            onClick={() => setCreateOpen((v) => !v)}
+          >
+            {createOpen ? "Ocultar creación" : "Crear producto"}
+          </button>
+
+          {/* 📥 IMPORTAR */}
+          <button
+            type="button"
+            className="w-full px-3 py-2 rounded bg-white border shadow-sm"
             onClick={() => {
               setImportOpen(true);
               setImportRows([]);
@@ -915,310 +965,548 @@ export default function ProductsCandies() {
               setImportFileName("");
             }}
           >
-            Importar (.xlsx)
+            Importar
           </button>
-        </div>
-      </div>
 
-      {/* FORM CREAR */}
-      <form
-        onSubmit={createProduct}
-        className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
-      >
-        <div>
-          <label className="block font-semibold">Categoría</label>
-          <input
-            className="w-full border rounded px-2 py-1"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            placeholder="Ej: Gomitas"
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <label className="block font-semibold">Producto</label>
-          <input
-            className="w-full border rounded px-2 py-1"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Ej: Gomita Fresa"
-          />
-        </div>
-
-        <div>
-          <label className="block font-semibold">Precio proveedor (paq)</label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border rounded px-2 py-1 text-right"
-            value={Number.isNaN(providerPrice) ? "" : providerPrice}
-            onChange={(e) =>
-              setProviderPrice(Math.max(0, toNum(e.target.value, 0)))
-            }
-          />
-        </div>
-
-        <div>
-          <label className="block font-semibold">Und x paquete</label>
-          <input
-            type="number"
-            min={1}
-            className="w-full border rounded px-2 py-1 text-right"
-            value={unitsPerPackage}
-            onChange={(e) => setUnitsPerPackage(roundInt(e.target.value, 1))}
-          />
-        </div>
-
-        {/* ✅ NUEVO: Código + Escanear */}
-        <div>
-          <label className="block font-semibold">Código (opcional)</label>
-          <div className="flex gap-2">
-            <input
-              className="w-full border rounded px-2 py-1"
-              value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
-              placeholder="EAN/UPC"
-            />
-            <button
-              type="button"
-              className="px-3 py-2 rounded bg-gray-800 text-white hover:bg-black whitespace-nowrap"
-              onClick={() => {
-                setScanTarget("create");
-                setScanOpen(true);
-              }}
-            >
-              Escanear
-            </button>
-          </div>
-        </div>
-
-        <div className="md:col-span-6 flex justify-end gap-2">
+          {/* 🔍 FILTROS */}
           <button
             type="button"
-            className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-            onClick={resetForm}
+            className="w-full px-3 py-2 rounded bg-gray-200"
+            onClick={() => setFiltersOpen((v) => !v)}
           >
-            Limpiar
-          </button>
-          <button
-            type="submit"
-            className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
-            disabled={loading}
-          >
-            Crear producto
+            {filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
           </button>
         </div>
-      </form>
+      )}
 
-      {/* BUSCADOR */}
-      <div className="bg-white p-3 rounded shadow border mb-3 flex flex-col md:flex-row gap-3 items-center text-sm">
-        <div className="w-full md:w-1/2">
-          <label className="block font-semibold">Buscar</label>
-          <input
-            className="w-full border rounded px-2 py-1"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar por categoría o producto…"
-          />
+      {/* FORM CREAR (colapsable en móvil) */}
+      {createOpen && (
+        <form
+          onSubmit={createProduct}
+          className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
+        >
+          <div>
+            <label className="block font-semibold">Categoría</label>
+            <input
+              className="w-full border rounded px-2 py-1"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              placeholder="Ej: Gomitas"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block font-semibold">Producto</label>
+            <input
+              className="w-full border rounded px-2 py-1"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ej: Gomita Fresa"
+            />
+          </div>
+
+          <div>
+            <label className="block font-semibold">
+              Precio proveedor (paq)
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              inputMode="decimal"
+              className="w-full border rounded px-2 py-1 text-right"
+              value={Number.isNaN(providerPrice) ? "" : providerPrice}
+              onChange={(e) =>
+                setProviderPrice(Math.max(0, toNum(e.target.value, 0)))
+              }
+            />
+          </div>
+
+          <div>
+            <label className="block font-semibold">Und x paquete</label>
+            <input
+              type="number"
+              min={1}
+              className="w-full border rounded px-2 py-1 text-right"
+              value={unitsPerPackage}
+              onChange={(e) => setUnitsPerPackage(roundInt(e.target.value, 1))}
+            />
+          </div>
+
+          <div>
+            <label className="block font-semibold">Código (opcional)</label>
+            <div className="flex gap-2">
+              <input
+                className="w-full border rounded px-2 py-1"
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                placeholder="EAN/UPC"
+              />
+              <button
+                type="button"
+                className="px-3 py-2 rounded bg-gray-800 text-white hover:bg-black whitespace-nowrap"
+                onClick={() => {
+                  setScanTarget("create");
+                  setScanOpen(true);
+                }}
+              >
+                Escanear
+              </button>
+            </div>
+          </div>
+
+          <div className="md:col-span-6 flex justify-end gap-2">
+            <button
+              type="button"
+              className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+              onClick={resetForm}
+            >
+              Limpiar
+            </button>
+            <button
+              type="submit"
+              className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+              disabled={loading}
+            >
+              Crear producto
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* FILTROS (colapsable en móvil) */}
+      {filtersOpen && (
+        <div className="bg-white p-3 rounded shadow border mb-3 flex flex-col md:flex-row gap-3 items-center text-sm">
+          <div className="w-full md:w-1/2">
+            <label className="block font-semibold">Buscar</label>
+            <input
+              className="w-full border rounded px-2 py-1"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar por categoría o producto…"
+            />
+          </div>
+
+          <div className="w-full md:w-1/2">
+            <label className="block font-semibold">Buscar por código</label>
+            <input
+              className="w-full border rounded px-2 py-1"
+              value={searchCode}
+              onChange={(e) => setSearchCode(e.target.value)}
+              placeholder="Ej: 7445074183182"
+            />
+          </div>
+
+          <div className="w-full md:w-auto text-right">
+            <div className="text-xs text-gray-600">Productos en catálogo</div>
+            <div className="text-lg font-semibold">{filtered.length}</div>
+          </div>
         </div>
+      )}
 
-        {/* ✅ NUEVO: Buscar por código */}
-        <div className="w-full md:w-1/2">
-          <label className="block font-semibold">Buscar por código</label>
-          <input
-            className="w-full border rounded px-2 py-1"
-            value={searchCode}
-            onChange={(e) => setSearchCode(e.target.value)}
-            placeholder="Ej: 7445074183182"
-          />
+      {/* ✅ MOBILE: CARDS (sin scroll horizontal) */}
+      {isMobile ? (
+        <div className="space-y-2">
+          {loading ? (
+            <div className="bg-white border rounded p-4 text-center">
+              Cargando…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="bg-white border rounded p-4 text-center">
+              Sin productos.
+            </div>
+          ) : (
+            filtered.map((p) => {
+              const isEd = editingId === p.id;
+              const expanded = openCardId === p.id;
+              const hasCode = !!String(p.barcode || "").trim();
+
+              return (
+                <div
+                  key={p.id}
+                  className="bg-white border rounded-2xl shadow-sm overflow-hidden"
+                >
+                  {/* header card (colapsada): nombre + "precio isla" (aquí solo tenemos providerPrice) */}
+                  <button
+                    type="button"
+                    className="w-full px-3 py-3 flex items-center justify-between text-left"
+                    onClick={() =>
+                      setOpenCardId((cur) => (cur === p.id ? null : p.id))
+                    }
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold truncate">{p.name}</div>
+                      <div className="text-xs text-gray-600 truncate">
+                        {p.category}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-gray-600">
+                        Precio proveedor
+                      </div>
+                      <div className="font-bold tabular-nums">
+                        {money(p.providerPrice)}
+                      </div>
+                    </div>
+                  </button>
+
+                  {expanded && (
+                    <div className="px-3 pb-3 border-t">
+                      <div className="pt-3 space-y-2 text-sm">
+                        {/* si está en edición, mostramos inputs; si no, texto */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <div className="text-xs text-gray-600">
+                              Categoría
+                            </div>
+                            {isEd ? (
+                              <input
+                                className="w-full border rounded px-2 py-1"
+                                value={editCategory}
+                                onChange={(e) =>
+                                  setEditCategory(e.target.value)
+                                }
+                              />
+                            ) : (
+                              <div className="font-semibold">{p.category}</div>
+                            )}
+                          </div>
+
+                          <div>
+                            <div className="text-xs text-gray-600">
+                              Und x paquete
+                            </div>
+                            {isEd ? (
+                              <input
+                                type="number"
+                                min={1}
+                                className="w-full border rounded px-2 py-1 text-right"
+                                value={editUnitsPerPackage}
+                                onChange={(e) =>
+                                  setEditUnitsPerPackage(
+                                    roundInt(e.target.value, 1)
+                                  )
+                                }
+                              />
+                            ) : (
+                              <div className="font-semibold text-right tabular-nums">
+                                {p.unitsPerPackage}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="col-span-2">
+                            <div className="text-xs text-gray-600">
+                              Producto
+                            </div>
+                            {isEd ? (
+                              <input
+                                className="w-full border rounded px-2 py-1"
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                              />
+                            ) : (
+                              <div className="font-semibold">{p.name}</div>
+                            )}
+                          </div>
+
+                          <div>
+                            <div className="text-xs text-gray-600">
+                              Precio proveedor
+                            </div>
+                            {isEd ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                inputMode="decimal"
+                                className="w-full border rounded px-2 py-1 text-right"
+                                value={
+                                  Number.isNaN(editProviderPrice)
+                                    ? ""
+                                    : editProviderPrice
+                                }
+                                onChange={(e) =>
+                                  setEditProviderPrice(
+                                    Math.max(0, toNum(e.target.value, 0))
+                                  )
+                                }
+                              />
+                            ) : (
+                              <div className="font-semibold tabular-nums">
+                                {money(p.providerPrice)}
+                              </div>
+                            )}
+                          </div>
+
+                          <div>
+                            <div className="text-xs text-gray-600">Código</div>
+                            {isEd ? (
+                              <div className="flex gap-2">
+                                <input
+                                  className="flex-1 border rounded px-2 py-1"
+                                  value={editBarcode}
+                                  onChange={(e) =>
+                                    setEditBarcode(e.target.value)
+                                  }
+                                  placeholder="EAN/UPC"
+                                />
+                                <button
+                                  type="button"
+                                  className="px-3 py-2 rounded bg-gray-800 text-white"
+                                  onClick={() => {
+                                    setScanTarget("edit");
+                                    setScanOpen(true);
+                                  }}
+                                >
+                                  Escanear
+                                </button>
+                              </div>
+                            ) : hasCode ? (
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
+                                onClick={() => {
+                                  setCodeModalValue(
+                                    String(p.barcode || "").trim()
+                                  );
+                                  setCodeModalOpen(true);
+                                }}
+                              >
+                                Ver código
+                              </button>
+                            ) : (
+                              <div className="text-gray-600">No</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* acciones */}
+                        <div className="pt-2 flex gap-2">
+                          {isEd ? (
+                            <>
+                              <button
+                                className="flex-1 px-3 py-2 rounded bg-blue-600 text-white"
+                                onClick={saveEdit}
+                                type="button"
+                              >
+                                Guardar
+                              </button>
+                              <button
+                                className="flex-1 px-3 py-2 rounded bg-gray-200"
+                                onClick={cancelEdit}
+                                type="button"
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="flex-1 px-3 py-2 rounded bg-yellow-400"
+                                onClick={() => startEdit(p)}
+                                type="button"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                className="flex-1 px-3 py-2 rounded bg-red-600 text-white"
+                                onClick={() => removeProduct(p)}
+                                type="button"
+                              >
+                                Borrar
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
-
-        <div className="w-full md:w-auto text-right">
-          <div className="text-xs text-gray-600">Productos en catálogo</div>
-          <div className="text-lg font-semibold">{filtered.length}</div>
-        </div>
-      </div>
-
-      {/* TABLA */}
-      <div className="bg-white rounded shadow border w-full overflow-x-auto">
-        <table className="min-w-[1050px] w-full text-xs md:text-sm">
-          <thead className="bg-gray-100">
-            <tr className="whitespace-nowrap">
-              <th className="p-2 border text-left">Categoría</th>
-              <th className="p-2 border text-left">Producto</th>
-              <th className="p-2 border text-right">Precio proveedor</th>
-              <th className="p-2 border text-right">Und x paquete</th>
-              <th className="p-2 border text-center">Código</th>
-              <th className="p-2 border text-center">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td className="p-4 text-center" colSpan={6}>
-                  Cargando…
-                </td>
+      ) : (
+        /* ✅ WEB: TABLA igual */
+        <div className="bg-white rounded shadow border w-full overflow-x-auto">
+          <table className="min-w-[1050px] w-full text-xs md:text-sm">
+            <thead className="bg-gray-100">
+              <tr className="whitespace-nowrap">
+                <th className="p-2 border text-left">Categoría</th>
+                <th className="p-2 border text-left">Producto</th>
+                <th className="p-2 border text-right">Precio proveedor</th>
+                <th className="p-2 border text-right">Und x paquete</th>
+                <th className="p-2 border text-center">Código</th>
+                <th className="p-2 border text-center">Acciones</th>
               </tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td className="p-4 text-center" colSpan={6}>
-                  Sin productos.
-                </td>
-              </tr>
-            ) : (
-              filtered.map((p) => {
-                const isEd = editingId === p.id;
-                const hasCode = !!String(p.barcode || "").trim();
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td className="p-4 text-center" colSpan={6}>
+                    Cargando…
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td className="p-4 text-center" colSpan={6}>
+                    Sin productos.
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((p) => {
+                  const isEd = editingId === p.id;
+                  const hasCode = !!String(p.barcode || "").trim();
 
-                return (
-                  <tr key={p.id} className="align-top">
-                    <td className="p-2 border">
-                      {isEd ? (
-                        <input
-                          className="w-full border rounded px-2 py-1"
-                          value={editCategory}
-                          onChange={(e) => setEditCategory(e.target.value)}
-                        />
-                      ) : (
-                        p.category
-                      )}
-                    </td>
-
-                    <td className="p-2 border">
-                      {isEd ? (
-                        <input
-                          className="w-full border rounded px-2 py-1"
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                        />
-                      ) : (
-                        p.name
-                      )}
-                    </td>
-
-                    <td className="p-2 border text-right tabular-nums">
-                      {isEd ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          className="w-28 border rounded px-2 py-1 text-right"
-                          value={
-                            Number.isNaN(editProviderPrice)
-                              ? ""
-                              : editProviderPrice
-                          }
-                          onChange={(e) =>
-                            setEditProviderPrice(
-                              Math.max(0, toNum(e.target.value, 0))
-                            )
-                          }
-                        />
-                      ) : (
-                        money(p.providerPrice)
-                      )}
-                    </td>
-
-                    <td className="p-2 border text-right tabular-nums">
-                      {isEd ? (
-                        <input
-                          type="number"
-                          min={1}
-                          className="w-24 border rounded px-2 py-1 text-right"
-                          value={editUnitsPerPackage}
-                          onChange={(e) =>
-                            setEditUnitsPerPackage(roundInt(e.target.value, 1))
-                          }
-                        />
-                      ) : (
-                        p.unitsPerPackage
-                      )}
-                    </td>
-
-                    {/* ✅ NUEVO: Columna Código */}
-                    <td className="p-2 border text-center">
-                      {isEd ? (
-                        <div className="flex gap-2 justify-center">
+                  return (
+                    <tr key={p.id} className="align-top">
+                      <td className="p-2 border">
+                        {isEd ? (
                           <input
-                            className="w-44 border rounded px-2 py-1"
-                            value={editBarcode}
-                            onChange={(e) => setEditBarcode(e.target.value)}
-                            placeholder="EAN/UPC"
+                            className="w-full border rounded px-2 py-1"
+                            value={editCategory}
+                            onChange={(e) => setEditCategory(e.target.value)}
                           />
+                        ) : (
+                          p.category
+                        )}
+                      </td>
+
+                      <td className="p-2 border">
+                        {isEd ? (
+                          <input
+                            className="w-full border rounded px-2 py-1"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                          />
+                        ) : (
+                          p.name
+                        )}
+                      </td>
+
+                      <td className="p-2 border text-right tabular-nums">
+                        {isEd ? (
+                          <input
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            className="w-28 border rounded px-2 py-1 text-right"
+                            value={
+                              Number.isNaN(editProviderPrice)
+                                ? ""
+                                : editProviderPrice
+                            }
+                            onChange={(e) =>
+                              setEditProviderPrice(
+                                Math.max(0, toNum(e.target.value, 0))
+                              )
+                            }
+                          />
+                        ) : (
+                          money(p.providerPrice)
+                        )}
+                      </td>
+
+                      <td className="p-2 border text-right tabular-nums">
+                        {isEd ? (
+                          <input
+                            type="number"
+                            min={1}
+                            className="w-24 border rounded px-2 py-1 text-right"
+                            value={editUnitsPerPackage}
+                            onChange={(e) =>
+                              setEditUnitsPerPackage(
+                                roundInt(e.target.value, 1)
+                              )
+                            }
+                          />
+                        ) : (
+                          p.unitsPerPackage
+                        )}
+                      </td>
+
+                      <td className="p-2 border text-center">
+                        {isEd ? (
+                          <div className="flex gap-2 justify-center">
+                            <input
+                              className="w-44 border rounded px-2 py-1"
+                              value={editBarcode}
+                              onChange={(e) => setEditBarcode(e.target.value)}
+                              placeholder="EAN/UPC"
+                            />
+                            <button
+                              type="button"
+                              className="px-2 py-1 rounded bg-gray-800 text-white hover:bg-black"
+                              onClick={() => {
+                                setScanTarget("edit");
+                                setScanOpen(true);
+                              }}
+                            >
+                              Escanear
+                            </button>
+                          </div>
+                        ) : hasCode ? (
                           <button
                             type="button"
-                            className="px-2 py-1 rounded bg-gray-800 text-white hover:bg-black"
+                            className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
                             onClick={() => {
-                              setScanTarget("edit");
-                              setScanOpen(true);
+                              setCodeModalValue(String(p.barcode || "").trim());
+                              setCodeModalOpen(true);
                             }}
                           >
-                            Escanear
+                            Sí
                           </button>
-                        </div>
-                      ) : hasCode ? (
-                        <button
-                          type="button"
-                          className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
-                          onClick={() => {
-                            setCodeModalValue(String(p.barcode || "").trim());
-                            setCodeModalOpen(true);
-                          }}
-                        >
-                          Sí
-                        </button>
-                      ) : (
-                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-600">
-                          No
-                        </span>
-                      )}
-                    </td>
+                        ) : (
+                          <span className="px-2 py-1 rounded bg-gray-100 text-gray-600">
+                            No
+                          </span>
+                        )}
+                      </td>
 
-                    <td className="p-2 border">
-                      {isEd ? (
-                        <div className="flex gap-2 justify-center">
-                          <button
-                            className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                            onClick={saveEdit}
-                            type="button"
-                          >
-                            Guardar
-                          </button>
-                          <button
-                            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                            onClick={cancelEdit}
-                            type="button"
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2 justify-center flex-wrap">
-                          <button
-                            className="px-2 py-1 rounded bg-yellow-400 hover:bg-yellow-500"
-                            onClick={() => startEdit(p)}
-                            type="button"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
-                            onClick={() => removeProduct(p)}
-                            type="button"
-                          >
-                            Borrar
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                      <td className="p-2 border">
+                        {isEd ? (
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                              onClick={saveEdit}
+                              type="button"
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                              onClick={cancelEdit}
+                              type="button"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2 justify-center flex-wrap">
+                            <button
+                              className="px-2 py-1 rounded bg-yellow-400 hover:bg-yellow-500"
+                              onClick={() => startEdit(p)}
+                              type="button"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+                              onClick={() => removeProduct(p)}
+                              type="button"
+                            >
+                              Borrar
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
@@ -1239,7 +1527,7 @@ export default function ProductsCandies() {
         }}
       />
 
-      {/* MODAL IMPORTACIÓN */}
+      {/* MODAL IMPORTACIÓN (igual) */}
       {importOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white w-full max-w-6xl max-h-[90vh] overflow-y-auto rounded shadow-lg p-5 text-sm">
