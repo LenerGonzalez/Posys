@@ -921,7 +921,7 @@ export default function ProductsCandies() {
   return (
     <div className="max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Productos</h2>
+        <h2 className="text-2xl font-bold">PRoducto</h2>
         <div className="flex gap-2">
           <div className="flex gap-2">
             <RefreshButton

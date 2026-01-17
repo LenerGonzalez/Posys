@@ -510,7 +510,7 @@ export default function CandyMainOrders() {
       return;
     }
 
-    // Usa los márgenes actuales del header como default en el excel
+    // Defaults: usa los márgenes actuales del header (por si querés usar margen)
     const mR = Number(marginRivas || 0);
     const mSJ = Number(marginSanJorge || 0);
     const mI = Number(marginIsla || 0);
@@ -520,17 +520,24 @@ export default function CandyMainOrders() {
       .sort((a, b) => a.name.localeCompare(b.name, "es"))
       .map((p) => ({
         Producto: p.name,
-        Paquetes: "", // 👈 vos lo llenás
+        Paquetes: "",
+
+        // Márgenes (opcionales)
         "Margen Rivas": mR,
         "Margen San Jorge": mSJ,
         "Margen Isla": mI,
+
+        // ✅ Precio de venta por PAQUETE (opcionales)
+        // Si llenás estos, mandan sobre el margen en el import
+        "P. unidad Rivas": "",
+        "P. unidad San Jorge": "",
+        "P. unidad Isla": "",
       }));
 
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Plantilla");
 
-    // nombre del archivo
     const dateStr =
       (orderDate && String(orderDate).trim()) ||
       new Date().toISOString().slice(0, 10);
@@ -579,7 +586,7 @@ export default function CandyMainOrders() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // para que puedas volver a importar el mismo archivo si querés
+    // permite reimportar el mismo archivo
     e.target.value = "";
 
     setImporting(true);
@@ -596,20 +603,30 @@ export default function CandyMainOrders() {
         return;
       }
 
-      // índice rápido por nombre
+      // índice por nombre de producto (catálogo)
       const catalogByName = new Map<string, CatalogCandyProduct>();
       for (const p of catalog) catalogByName.set(norm(p.name), p);
 
       const errors: string[] = [];
+
+      // Acumulamos por productId (si viene repetido en excel, sumamos paquetes)
       const incomingById = new Map<
         string,
-        { packages: number; mR: number; mSJ: number; mI: number }
+        {
+          packages: number;
+          mR: number;
+          mSJ: number;
+          mI: number;
+          puR?: number; // precio por PAQUETE (Rivas)
+          puSJ?: number; // precio por PAQUETE (San Jorge)
+          puI?: number; // precio por PAQUETE (Isla)
+        }
       >();
 
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
 
-        // Acepta headers típicos: "Producto", "product", "Nombre", etc.
+        // requeridos
         const productName = getRowValue(r, [
           "Producto",
           "Product",
@@ -617,6 +634,8 @@ export default function CandyMainOrders() {
           "Name",
         ]);
         const packagesVal = getRowValue(r, ["Paquetes", "Packages"]);
+
+        // márgenes (opcionales)
         const mRVal = getRowValue(r, [
           "Margen Rivas",
           "Margen Rivas (%)",
@@ -634,6 +653,26 @@ export default function CandyMainOrders() {
           "Margen Isla (%)",
           "Margin Isla",
           "Margin Isla (%)",
+        ]);
+
+        // ✅ precios por PAQUETE (opcionales) -> si vienen, mandan
+        const puRVal = getRowValue(r, [
+          "P. unidad Rivas",
+          "P unidad Rivas",
+          "Precio Rivas",
+          "Precio venta Rivas",
+        ]);
+        const puSJVal = getRowValue(r, [
+          "P. unidad San Jorge",
+          "P unidad San Jorge",
+          "Precio San Jorge",
+          "Precio venta San Jorge",
+        ]);
+        const puIVal = getRowValue(r, [
+          "P. unidad Isla",
+          "P unidad Isla",
+          "Precio Isla",
+          "Precio venta Isla",
         ]);
 
         const prodKey = norm(productName);
@@ -660,21 +699,25 @@ export default function CandyMainOrders() {
           continue;
         }
 
-        // si no vienen márgenes en el excel, usa los de la cabecera (tus inputs)
+        // Si margen no viene, usa el del header
         const mR =
-          Number.isFinite(num(mRVal)) && String(mRVal).trim() !== ""
+          String(mRVal ?? "").trim() !== ""
             ? num(mRVal)
             : Number(marginRivas || 0);
         const mSJ =
-          Number.isFinite(num(mSJVal)) && String(mSJVal).trim() !== ""
+          String(mSJVal ?? "").trim() !== ""
             ? num(mSJVal)
             : Number(marginSanJorge || 0);
         const mI =
-          Number.isFinite(num(mIVal)) && String(mIVal).trim() !== ""
+          String(mIVal ?? "").trim() !== ""
             ? num(mIVal)
             : Number(marginIsla || 0);
 
-        // si el excel trae duplicado el mismo producto, sumamos paquetes (y dejamos el último margen que venga)
+        // Precios por PAQUETE (enteros normalmente)
+        const puR = Math.floor(num(puRVal));
+        const puSJ = Math.floor(num(puSJVal));
+        const puI = Math.floor(num(puIVal));
+
         const prev = incomingById.get(catProd.id);
         if (prev) {
           incomingById.set(catProd.id, {
@@ -682,14 +725,26 @@ export default function CandyMainOrders() {
             mR,
             mSJ,
             mI,
+            puR: puR > 0 ? puR : prev.puR,
+            puSJ: puSJ > 0 ? puSJ : prev.puSJ,
+            puI: puI > 0 ? puI : prev.puI,
           });
         } else {
-          incomingById.set(catProd.id, { packages: packagesNum, mR, mSJ, mI });
+          incomingById.set(catProd.id, {
+            packages: packagesNum,
+            mR,
+            mSJ,
+            mI,
+            puR: puR > 0 ? puR : undefined,
+            puSJ: puSJ > 0 ? puSJ : undefined,
+            puI: puI > 0 ? puI : undefined,
+          });
         }
       }
 
-      // construir items nuevos con tu misma lógica
+      // Construir items nuevos
       const newItems: CandyOrderItem[] = [];
+
       incomingById.forEach((x, productId) => {
         const catProd = catalog.find((p) => p.id === productId);
         if (!catProd) return;
@@ -698,11 +753,70 @@ export default function CandyMainOrders() {
         const unitsNum = Math.max(1, safeInt(catProd.unitsPerPackage || 1));
         const packagesNum = Math.max(1, safeInt(x.packages));
 
-        const vals = calcOrderItemValues(providerPriceNum, packagesNum, {
-          marginR: x.mR,
-          marginSJ: x.mSJ,
-          marginIsla: x.mI,
-        });
+        const subtotalCalc = providerPriceNum * packagesNum;
+
+        // precios por PAQUETE (si vienen, mandan)
+        const priceR = Number(x.puR || 0);
+        const priceSJ = Number(x.puSJ || 0);
+        const priceI = Number(x.puI || 0);
+
+        const hasAnyPrice = priceR > 0 || priceSJ > 0 || priceI > 0;
+
+        let finalMR = x.mR;
+        let finalMSJ = x.mSJ;
+        let finalMI = x.mI;
+
+        let vals: ReturnType<typeof calcOrderItemValues>;
+
+        if (hasAnyPrice) {
+          // fallback por margen para sucursales que no traen precio
+          const fallback = calcOrderItemValues(providerPriceNum, packagesNum, {
+            marginR: finalMR,
+            marginSJ: finalMSJ,
+            marginIsla: finalMI,
+          });
+
+          const totalR =
+            priceR > 0 ? priceR * packagesNum : fallback.totalRivas;
+          const totalSJ =
+            priceSJ > 0 ? priceSJ * packagesNum : fallback.totalSanJorge;
+          const totalI = priceI > 0 ? priceI * packagesNum : fallback.totalIsla;
+
+          const deriveMargin = (total: number) => {
+            if (!Number.isFinite(total) || total <= 0) return 0;
+            const m = (1 - subtotalCalc / total) * 100;
+            return Math.min(Math.max(m, 0), 99.9);
+          };
+
+          // derivar margen SOLO donde vino precio
+          if (priceR > 0) finalMR = deriveMargin(totalR);
+          if (priceSJ > 0) finalMSJ = deriveMargin(totalSJ);
+          if (priceI > 0) finalMI = deriveMargin(totalI);
+
+          vals = {
+            subtotal: subtotalCalc,
+            totalRivas: totalR,
+            totalSanJorge: totalSJ,
+            totalIsla: totalI,
+            gainRivas: totalR - subtotalCalc,
+            gainSanJorge: totalSJ - subtotalCalc,
+            gainIsla: totalI - subtotalCalc,
+            // tu "P. unidad" es precio por PAQUETE
+            unitPriceRivas:
+              packagesNum > 0 ? roundToInt(totalR / packagesNum) : 0,
+            unitPriceSanJorge:
+              packagesNum > 0 ? roundToInt(totalSJ / packagesNum) : 0,
+            unitPriceIsla:
+              packagesNum > 0 ? roundToInt(totalI / packagesNum) : 0,
+          };
+        } else {
+          // flujo normal por margen (tu lógica original)
+          vals = calcOrderItemValues(providerPriceNum, packagesNum, {
+            marginR: finalMR,
+            marginSJ: finalMSJ,
+            marginIsla: finalMI,
+          });
+        }
 
         newItems.push({
           id: catProd.id,
@@ -713,9 +827,9 @@ export default function CandyMainOrders() {
           packages: packagesNum,
           unitsPerPackage: unitsNum,
 
-          marginRivas: x.mR,
-          marginSanJorge: x.mSJ,
-          marginIsla: x.mI,
+          marginRivas: finalMR,
+          marginSanJorge: finalMSJ,
+          marginIsla: finalMI,
 
           subtotal: vals.subtotal,
           totalRivas: vals.totalRivas,
@@ -728,11 +842,11 @@ export default function CandyMainOrders() {
           unitPriceSanJorge: vals.unitPriceSanJorge,
           unitPriceIsla: vals.unitPriceIsla,
 
-          remainingPackages: packagesNum, // ✅ igual que cuando se crea manual
+          remainingPackages: packagesNum,
         });
       });
 
-      // merge con lo que ya tenías en la orden (si ya agregaste algo manual)
+      // Merge con lo existente (si ya agregaste manual antes del import)
       setOrderItems((prev) => {
         const map = new Map<string, CandyOrderItem>();
         prev.forEach((it) => map.set(it.id, it));
@@ -742,9 +856,10 @@ export default function CandyMainOrders() {
           if (!existing) {
             map.set(it.id, it);
           } else {
-            // sumamos paquetes y recalculamos con márgenes del import (últimos)
             const mergedPackages =
               safeInt(existing.packages) + safeInt(it.packages);
+
+            // recalculamos por margen usando los márgenes finales del import
             const vals = calcOrderItemValues(
               existing.providerPrice,
               mergedPackages,
@@ -778,18 +893,16 @@ export default function CandyMainOrders() {
 
       if (errors.length) {
         setMsg(
-          `⚠️ Importado con detalles: ${newItems.length} productos. Errores: ${errors.length}. (Revisá nombres/paquetes).`
+          `⚠️ Importado con detalles. Errores: ${errors.length}. (Revisá nombres/paquetes).`
         );
         console.warn("Errores import:", errors);
       } else {
-        setMsg(
-          `✅ Importación lista: ${newItems.length} productos agregados a la tabla.`
-        );
+        setMsg(`✅ Importación lista: ${newItems.length} productos agregados.`);
       }
     } catch (err) {
       console.error(err);
       setMsg(
-        "❌ Error importando Excel. Revisá que sea .xlsx y que tenga columnas Producto/Paquetes/Márgenes."
+        "❌ Error importando Excel. Revisá columnas: Producto, Paquetes, y opcional Márgenes o P. unidad."
       );
     } finally {
       setImporting(false);

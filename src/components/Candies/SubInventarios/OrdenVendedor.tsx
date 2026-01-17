@@ -253,7 +253,12 @@ export default function VendorCandyOrders({
     [sellerId, sellers]
   );
 
+  const [productSearch, setProductSearch] = useState("");
+
   const sellerBranch: Branch | undefined = selectedSeller?.branch;
+
+  const [orderItemsSearch, setOrderItemsSearch] = useState("");
+
 
   // Producto seleccionado viene del catálogo completo
   const selectedProduct = useMemo(
@@ -277,6 +282,16 @@ export default function VendorCandyOrders({
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [productsAll, availablePacks, inOrderSet]);
+
+  const filteredProductsForPicker = useMemo(() => {
+    const q = productSearch.trim().toLowerCase();
+    if (!q) return productsForPicker;
+
+    return productsForPicker.filter((p) => {
+      const name = `${p.category ?? ""} ${p.name ?? ""}`.toLowerCase();
+      return name.includes(q);
+    });
+  }, [productsForPicker, productSearch]);
 
   const sellersById = useMemo(() => {
     const m: Record<string, Seller> = {};
@@ -907,6 +922,7 @@ export default function VendorCandyOrders({
         masterOrderId,
         units,
         unitsPerPackage: upp,
+        
       });
     }
 
@@ -1396,6 +1412,8 @@ export default function VendorCandyOrders({
     setSelectedProductId("");
     setPackagesToAdd("0");
     setOpenForm(true);
+    setProductSearch("");
+
   };
 
   // ===== Eliminar pedido completo =====
@@ -2229,15 +2247,29 @@ export default function VendorCandyOrders({
                     <label className="block text-sm font-semibold">
                       Producto
                     </label>
+
+                    <input
+                      type="text"
+                      className="w-full border p-2 rounded mb-2"
+                      placeholder="Buscar producto (nombre o categoría)..."
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      disabled={isReadOnly}
+                    />
+
                     <select
                       className="w-full border p-2 rounded"
                       value={selectedProductId}
                       onChange={(e) => setSelectedProductId(e.target.value)}
                       disabled={isReadOnly}
                     >
-                      <option value="">Selecciona un producto…</option>
+                      <option value="">
+                        {productSearch.trim()
+                          ? `Resultados: ${filteredProductsForPicker.length}`
+                          : "Selecciona un producto…"}
+                      </option>
 
-                      {productsForPicker.map((p) => {
+                      {filteredProductsForPicker.map((p) => {
                         const avail = availablePacks[p.id] ?? 0;
                         const labelParts: string[] = [];
 
