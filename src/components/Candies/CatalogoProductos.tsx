@@ -12,6 +12,7 @@ import {
   updateDoc,
   writeBatch,
   Timestamp,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
@@ -24,6 +25,7 @@ type CandyProduct = {
   providerPrice: number; // por paquete
   unitsPerPackage: number; // und por paquete
   barcode?: string; // ✅ NUEVO (opcional)
+  packaging?: string; // Empaque: Tarro, Bolsa, Ristra, Caja, Vaso, Pana
   createdAt?: any;
 };
 
@@ -73,6 +75,7 @@ type ImportRow = {
   providerPrice: number;
   unitsPerPackage: number;
   barcode?: string; // ✅ opcional
+  packaging?: string; // Empaque (opcional)
   _raw?: Record<string, any>;
 };
 
@@ -212,7 +215,7 @@ function BarcodeScanModal({
               onDetected(code);
               onClose();
             }
-          }
+          },
         );
 
         controlsRef.current = controls;
@@ -308,6 +311,7 @@ export default function ProductsCandies() {
   const [providerPrice, setProviderPrice] = useState<number>(0);
   const [unitsPerPackage, setUnitsPerPackage] = useState<number>(1);
   const [barcode, setBarcode] = useState(""); // ✅ NUEVO
+  const [packaging, setPackaging] = useState<string>(""); // Empaque (create)
 
   // edición inline
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -316,10 +320,12 @@ export default function ProductsCandies() {
   const [editProviderPrice, setEditProviderPrice] = useState<number>(0);
   const [editUnitsPerPackage, setEditUnitsPerPackage] = useState<number>(1);
   const [editBarcode, setEditBarcode] = useState(""); // ✅ NUEVO
+  const [editPackaging, setEditPackaging] = useState<string>("");
 
   // filtros
   const [search, setSearch] = useState("");
   const [searchCode, setSearchCode] = useState(""); // ✅ NUEVO
+  const [packagingFilter, setPackagingFilter] = useState(""); // filtro Empaque
 
   // modal código
   const [codeModalOpen, setCodeModalOpen] = useState(false);
@@ -327,7 +333,9 @@ export default function ProductsCandies() {
 
   // escáner
   const [scanOpen, setScanOpen] = useState(false);
-  const [scanTarget, setScanTarget] = useState<"create" | "edit">("create");
+  const [scanTarget, setScanTarget] = useState<"create" | "edit" | "search">(
+    "create",
+  );
 
   // importación
   const [importOpen, setImportOpen] = useState(false);
@@ -366,39 +374,82 @@ export default function ProductsCandies() {
   //  LOAD CATALOG
   // ============================
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setMsg("");
-      try {
-        const snap = await getDocs(
-          query(collection(db, "products_candies"), orderBy("name", "asc"))
-        );
+    setLoading(true);
+    setMsg("");
+    const col = collection(db, "products_candies");
+    const q = query(col, orderBy("name", "asc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
         const list: CandyProduct[] = [];
+        const bcMap: Record<string, string> = {};
         snap.forEach((d) => {
           const x = d.data() as any;
+          const bc = String(x.barcode || "").trim() || undefined;
+          if (bc) bcMap[d.id] = bc;
           list.push({
             id: d.id,
             name: x.name || "",
             category: x.category || "",
             providerPrice: Number(x.providerPrice || 0),
             unitsPerPackage: Number(x.unitsPerPackage || 1),
-            barcode: String(x.barcode || "").trim() || undefined,
+            barcode: bc,
+            packaging:
+              String(x.packaging || x.empaque || "").trim() || undefined,
             createdAt: x.createdAt,
           });
         });
+
+        // detect changes vs previous barcode map and notify (skip initial)
+        const prev = productsBarcodeRef.current || {};
+        let changed = false;
+        for (const id of Object.keys(bcMap)) {
+          if ((bcMap[id] || "") !== (prev[id] || "")) {
+            changed = true;
+            break;
+          }
+        }
+
         setProducts(list);
-      } catch (e) {
-        console.error(e);
-        setMsg("❌ Error cargando catálogo de dulces.");
-      } finally {
+        productsBarcodeRef.current = bcMap;
         setLoading(false);
-      }
-    })();
+
+        if (!initialCatalogSnapshot.current && changed) {
+          setMsg("✅ Catálogo actualizado.");
+          setTimeout(() => setMsg(""), 3000);
+        }
+        initialCatalogSnapshot.current = false;
+      },
+      (err) => {
+        console.error(err);
+        setMsg("❌ Error sincronizando catálogo de dulces.");
+        setLoading(false);
+      },
+    );
+
+    return () => unsub();
   }, [refreshKey]);
+
+  const productsBarcodeRef = useRef<Record<string, string>>({});
+  const initialCatalogSnapshot = useRef(true);
 
   const filtered = useMemo(() => {
     const q = norm(search);
     const qc = String(searchCode || "").trim();
+    const pf = String(packagingFilter || "")
+      .trim()
+      .toLowerCase();
+
+    // If packaging filter is selected, show only products matching that
+    // packaging and ignore the other filters (behaves like the search input).
+    if (pf) {
+      return products.filter((p) => {
+        const pk = String(p.packaging || "")
+          .trim()
+          .toLowerCase();
+        return pk === pf;
+      });
+    }
 
     if (!q && !qc) return products;
 
@@ -411,7 +462,7 @@ export default function ProductsCandies() {
 
       return okText && okCode;
     });
-  }, [products, search, searchCode]);
+  }, [products, search, searchCode, packagingFilter]);
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -431,6 +482,7 @@ export default function ProductsCandies() {
     setProviderPrice(0);
     setUnitsPerPackage(1);
     setBarcode("");
+    setPackaging("");
   };
 
   const createProduct = async (e: React.FormEvent) => {
@@ -449,7 +501,7 @@ export default function ProductsCandies() {
     if (upp <= 0) return setMsg("⚠️ Und x paquete debe ser > 0.");
 
     const exists = products.some(
-      (p) => norm(p.category) === norm(c) && norm(p.name) === norm(n)
+      (p) => norm(p.category) === norm(c) && norm(p.name) === norm(n),
     );
     if (exists) {
       return setMsg("⚠️ Ya existe un producto con esa categoría y nombre.");
@@ -472,12 +524,14 @@ export default function ProductsCandies() {
         createdAt: Timestamp.now(),
       };
       if (bc) payload.barcode = bc;
+      const pk = String(packaging || "").trim();
+      if (pk) payload.packaging = pk;
 
       const ref = await addDoc(collection(db, "products_candies"), payload);
       setProducts((prev) =>
         [...prev, { id: ref.id, ...payload } as CandyProduct].sort((a, b) =>
-          a.name.localeCompare(b.name, "es")
-        )
+          a.name.localeCompare(b.name, "es"),
+        ),
       );
       setMsg("✅ Producto creado.");
       resetForm();
@@ -496,6 +550,7 @@ export default function ProductsCandies() {
     setEditProviderPrice(p.providerPrice);
     setEditUnitsPerPackage(p.unitsPerPackage || 1);
     setEditBarcode(String(p.barcode || ""));
+    setEditPackaging(String(p.packaging || ""));
     setMsg("");
   };
 
@@ -506,6 +561,7 @@ export default function ProductsCandies() {
     setEditProviderPrice(0);
     setEditUnitsPerPackage(1);
     setEditBarcode("");
+    setEditPackaging("");
   };
 
   const saveEdit = async () => {
@@ -517,6 +573,7 @@ export default function ProductsCandies() {
     const pp = Math.max(0, toNum(editProviderPrice, 0));
     const upp = roundInt(editUnitsPerPackage, 1);
     const bc = String(editBarcode || "").trim();
+    const pk = String(editPackaging || "").trim();
 
     if (!c) return setMsg("⚠️ La categoría es requerida.");
     if (!n) return setMsg("⚠️ El nombre del producto es requerido.");
@@ -527,14 +584,14 @@ export default function ProductsCandies() {
       (p) =>
         p.id !== editingId &&
         norm(p.category) === norm(c) &&
-        norm(p.name) === norm(n)
+        norm(p.name) === norm(n),
     );
     if (dup)
       return setMsg("⚠️ Ya existe otro producto con esa categoría y nombre.");
 
     if (bc) {
       const dupCode = products.some(
-        (p) => p.id !== editingId && String(p.barcode || "") === bc
+        (p) => p.id !== editingId && String(p.barcode || "") === bc,
       );
       if (dupCode) {
         return setMsg("⚠️ Ya existe otro producto con ese código de barras.");
@@ -553,6 +610,7 @@ export default function ProductsCandies() {
       };
 
       payload.barcode = bc || "";
+      payload.packaging = pk || "";
 
       await updateDoc(doc(db, "products_candies", editingId), payload);
 
@@ -567,13 +625,14 @@ export default function ProductsCandies() {
                   providerPrice: pp,
                   unitsPerPackage: upp,
                   barcode: bc || undefined,
+                  packaging: pk || undefined,
                 }
-              : p
+              : p,
           )
-          .sort((a, b) => a.name.localeCompare(b.name, "es"))
+          .sort((a, b) => a.name.localeCompare(b.name, "es")),
       );
 
-      setMsg("✅ Producto actualizado.");
+      if (isMobile) setMsg("✅ Producto guardado.");
       cancelEdit();
     } catch (e) {
       console.error(e);
@@ -611,6 +670,7 @@ export default function ProductsCandies() {
         Producto: "Gomita Fresa",
         PrecioProveedor: 120,
         UnidadesPorPaquete: 24,
+        Empaque: "Tarro",
         Codigo: "7445074183182",
       },
     ];
@@ -643,12 +703,12 @@ export default function ProductsCandies() {
       if (isEmptyRow(r)) return;
 
       const id = String(
-        pickCol(r, ["Id", "ID", "productId", "docId"]) ?? ""
+        pickCol(r, ["Id", "ID", "productId", "docId"]) ?? "",
       ).trim();
 
       const cat = String(
         pickCol(r, ["Categoria", "Categoría", "Category", "cat", "category"]) ??
-          ""
+          "",
       ).trim();
 
       const prod = String(
@@ -659,7 +719,7 @@ export default function ProductsCandies() {
           "Name",
           "producto",
           "name",
-        ]) ?? ""
+        ]) ?? "",
       ).trim();
 
       const ppRaw = pickCol(r, [
@@ -691,6 +751,15 @@ export default function ProductsCandies() {
       ]);
       const bc = String(bcRaw ?? "").trim();
 
+      const packagingRaw = pickCol(r, [
+        "Empaque",
+        "Packaging",
+        "PackagingType",
+        "Pack",
+        "Formato",
+      ]);
+      const packaging = String(packagingRaw ?? "").trim();
+
       const providerPrice = Math.max(0, toNum(ppRaw, 0));
       const unitsPerPackage = roundInt(uppRaw, 1);
 
@@ -711,6 +780,7 @@ export default function ProductsCandies() {
           providerPrice,
           unitsPerPackage,
           barcode: bc || undefined,
+          packaging: packaging || undefined,
           _raw: r,
         });
       }
@@ -848,6 +918,8 @@ export default function ProductsCandies() {
           };
 
           if (r.barcode != null) payload.barcode = bc || "";
+          if (r.packaging != null)
+            payload.packaging = String(r.packaging || "") || "";
 
           batch.update(doc(db, "products_candies", existing.id), payload);
           toUpdate += 1;
@@ -861,6 +933,7 @@ export default function ProductsCandies() {
             createdAt: Timestamp.now(),
           };
           if (bc) payload.barcode = bc;
+          if (r.packaging) payload.packaging = r.packaging;
 
           batch.set(ref, payload);
           toCreate += 1;
@@ -870,7 +943,7 @@ export default function ProductsCandies() {
       await batch.commit();
 
       setMsg(
-        `✅ Importación lista. Creados: ${toCreate}, Actualizados: ${toUpdate}`
+        `✅ Importación lista. Creados: ${toCreate}, Actualizados: ${toUpdate}`,
       );
       setImportOpen(false);
       setImportRows([]);
@@ -888,10 +961,10 @@ export default function ProductsCandies() {
   const importStats = useMemo(() => {
     const existingById = new Set(products.map((p) => p.id));
     const existingKeys = new Set(
-      products.map((p) => `${norm(p.category)}::${norm(p.name)}`)
+      products.map((p) => `${norm(p.category)}::${norm(p.name)}`),
     );
     const existingCodes = new Set(
-      products.map((p) => String(p.barcode || "").trim()).filter(Boolean)
+      products.map((p) => String(p.barcode || "").trim()).filter(Boolean),
     );
 
     let willUpdate = 0;
@@ -921,13 +994,27 @@ export default function ProductsCandies() {
   return (
     <div className="max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">PRoducto</h2>
+        <h2 className="text-2xl font-bold">Catalogo</h2>
         <div className="flex gap-2">
           <div className="flex gap-2">
             <RefreshButton
               onClick={refresh}
               loading={loading || importLoading}
             />
+            {!isMobile && (
+              <button
+                type="button"
+                className="px-3 py-2 rounded bg-white border shadow-sm"
+                onClick={() => {
+                  setImportOpen(true);
+                  setImportRows([]);
+                  setImportErrors([]);
+                  setImportFileName("");
+                }}
+              >
+                Importar
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -954,6 +1041,8 @@ export default function ProductsCandies() {
             {createOpen ? "Ocultar creación" : "Crear producto"}
           </button>
 
+          {/* (Escanear producto) moved into filtros below */}
+
           {/* 📥 IMPORTAR */}
           <button
             type="button"
@@ -976,6 +1065,26 @@ export default function ProductsCandies() {
           >
             {filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
           </button>
+
+          {/* Empaque (mobile quick filter shown when filters open) */}
+          {filtersOpen && (
+            <div className="bg-white p-3 rounded shadow-sm border">
+              <label className="block font-semibold">Empaque</label>
+              <select
+                className="w-full border rounded px-2 py-1"
+                value={packagingFilter}
+                onChange={(e) => setPackagingFilter(e.target.value)}
+              >
+                <option value="">Todos</option>
+                <option value="Tarro">Tarro</option>
+                <option value="Bolsa">Bolsa</option>
+                <option value="Ristra">Ristra</option>
+                <option value="Caja">Caja</option>
+                <option value="Vaso">Vaso</option>
+                <option value="Pana">Pana</option>
+              </select>
+            </div>
+          )}
         </div>
       )}
 
@@ -1003,6 +1112,40 @@ export default function ProductsCandies() {
               onChange={(e) => setName(e.target.value)}
               placeholder="Ej: Gomita Fresa"
             />
+          </div>
+
+          <div>
+            <label className="block font-semibold">Empaque</label>
+            <select
+              className="w-full border rounded px-2 py-1"
+              value={packaging}
+              onChange={(e) => setPackaging(e.target.value)}
+            >
+              <option value="">Seleccionar</option>
+              <option value="Tarro">Tarro</option>
+              <option value="Bolsa">Bolsa</option>
+              <option value="Ristra">Ristra</option>
+              <option value="Caja">Caja</option>
+              <option value="Vaso">Vaso</option>
+              <option value="Pana">Pana</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block font-semibold">Empaque</label>
+            <select
+              className="w-full border rounded px-2 py-1"
+              value={packaging}
+              onChange={(e) => setPackaging(e.target.value)}
+            >
+              <option value="">—</option>
+              <option value="Tarro">Tarro</option>
+              <option value="Bolsa">Bolsa</option>
+              <option value="Ristra">Ristra</option>
+              <option value="Caja">Caja</option>
+              <option value="Vaso">Vaso</option>
+              <option value="Pana">Pana</option>
+            </select>
           </div>
 
           <div>
@@ -1084,6 +1227,22 @@ export default function ProductsCandies() {
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar por categoría o producto…"
             />
+            <div className="mt-2">
+              <label className="block font-semibold">Empaque</label>
+              <select
+                className="w-full border rounded px-2 py-1"
+                value={packagingFilter}
+                onChange={(e) => setPackagingFilter(e.target.value)}
+              >
+                <option value="">Todos</option>
+                <option value="Tarro">Tarro</option>
+                <option value="Bolsa">Bolsa</option>
+                <option value="Ristra">Ristra</option>
+                <option value="Caja">Caja</option>
+                <option value="Vaso">Vaso</option>
+                <option value="Pana">Pana</option>
+              </select>
+            </div>
           </div>
 
           <div className="w-full md:w-1/2">
@@ -1094,6 +1253,31 @@ export default function ProductsCandies() {
               onChange={(e) => setSearchCode(e.target.value)}
               placeholder="Ej: 7445074183182"
             />
+            <div className="mt-2 md:mt-0">
+              <button
+                type="button"
+                className="w-full md:w-auto px-3 py-2 rounded bg-gray-800 text-white"
+                onClick={() => {
+                  setScanTarget("search");
+                  setScanOpen(true);
+                  setFiltersOpen(true);
+                }}
+              >
+                Escanear producto
+              </button>
+            </div>
+            <div className="mt-2 md:mt-0">
+              <button
+                type="button"
+                className="w-full md:w-auto px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => {
+                  setSearch("");
+                  setSearchCode("");
+                }}
+              >
+                Limpiar filtros
+              </button>
+            </div>
           </div>
 
           <div className="w-full md:w-auto text-right">
@@ -1183,7 +1367,7 @@ export default function ProductsCandies() {
                                 value={editUnitsPerPackage}
                                 onChange={(e) =>
                                   setEditUnitsPerPackage(
-                                    roundInt(e.target.value, 1)
+                                    roundInt(e.target.value, 1),
                                   )
                                 }
                               />
@@ -1195,17 +1379,27 @@ export default function ProductsCandies() {
                           </div>
 
                           <div className="col-span-2">
-                            <div className="text-xs text-gray-600">
-                              Producto
-                            </div>
+                            <div className="text-xs text-gray-600">Empaque</div>
                             {isEd ? (
-                              <input
+                              <select
                                 className="w-full border rounded px-2 py-1"
-                                value={editName}
-                                onChange={(e) => setEditName(e.target.value)}
-                              />
+                                value={editPackaging}
+                                onChange={(e) =>
+                                  setEditPackaging(e.target.value)
+                                }
+                              >
+                                <option value="">Seleccionar</option>
+                                <option value="Tarro">Tarro</option>
+                                <option value="Bolsa">Bolsa</option>
+                                <option value="Ristra">Ristra</option>
+                                <option value="Caja">Caja</option>
+                                <option value="Vaso">Vaso</option>
+                                <option value="Pana">Pana</option>
+                              </select>
                             ) : (
-                              <div className="font-semibold">{p.name}</div>
+                              <div className="font-semibold">
+                                {p.packaging || "—"}
+                              </div>
                             )}
                           </div>
 
@@ -1226,7 +1420,7 @@ export default function ProductsCandies() {
                                 }
                                 onChange={(e) =>
                                   setEditProviderPrice(
-                                    Math.max(0, toNum(e.target.value, 0))
+                                    Math.max(0, toNum(e.target.value, 0)),
                                   )
                                 }
                               />
@@ -1266,7 +1460,7 @@ export default function ProductsCandies() {
                                 className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
                                 onClick={() => {
                                   setCodeModalValue(
-                                    String(p.barcode || "").trim()
+                                    String(p.barcode || "").trim(),
                                   );
                                   setCodeModalOpen(true);
                                 }}
@@ -1289,6 +1483,16 @@ export default function ProductsCandies() {
                                 type="button"
                               >
                                 Guardar
+                              </button>
+                              <button
+                                className="flex-1 px-3 py-2 rounded bg-gray-800 text-white"
+                                onClick={() => {
+                                  setScanTarget("edit");
+                                  setScanOpen(true);
+                                }}
+                                type="button"
+                              >
+                                Escanear
                               </button>
                               <button
                                 className="flex-1 px-3 py-2 rounded bg-gray-200"
@@ -1333,6 +1537,7 @@ export default function ProductsCandies() {
               <tr className="whitespace-nowrap">
                 <th className="p-2 border text-left">Categoría</th>
                 <th className="p-2 border text-left">Producto</th>
+                <th className="p-2 border text-left">Empaque</th>
                 <th className="p-2 border text-right">Precio proveedor</th>
                 <th className="p-2 border text-right">Und x paquete</th>
                 <th className="p-2 border text-center">Código</th>
@@ -1342,13 +1547,13 @@ export default function ProductsCandies() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td className="p-4 text-center" colSpan={6}>
+                  <td className="p-4 text-center" colSpan={7}>
                     Cargando…
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td className="p-4 text-center" colSpan={6}>
+                  <td className="p-4 text-center" colSpan={7}>
                     Sin productos.
                   </td>
                 </tr>
@@ -1383,6 +1588,26 @@ export default function ProductsCandies() {
                         )}
                       </td>
 
+                      <td className="p-2 border">
+                        {isEd ? (
+                          <select
+                            className="w-full border rounded px-2 py-1"
+                            value={editPackaging}
+                            onChange={(e) => setEditPackaging(e.target.value)}
+                          >
+                            <option value="">—</option>
+                            <option value="Tarro">Tarro</option>
+                            <option value="Bolsa">Bolsa</option>
+                            <option value="Ristra">Ristra</option>
+                            <option value="Caja">Caja</option>
+                            <option value="Vaso">Vaso</option>
+                            <option value="Pana">Pana</option>
+                          </select>
+                        ) : (
+                          p.packaging || "—"
+                        )}
+                      </td>
+
                       <td className="p-2 border text-right tabular-nums">
                         {isEd ? (
                           <input
@@ -1397,7 +1622,7 @@ export default function ProductsCandies() {
                             }
                             onChange={(e) =>
                               setEditProviderPrice(
-                                Math.max(0, toNum(e.target.value, 0))
+                                Math.max(0, toNum(e.target.value, 0)),
                               )
                             }
                           />
@@ -1415,7 +1640,7 @@ export default function ProductsCandies() {
                             value={editUnitsPerPackage}
                             onChange={(e) =>
                               setEditUnitsPerPackage(
-                                roundInt(e.target.value, 1)
+                                roundInt(e.target.value, 1),
                               )
                             }
                           />
@@ -1508,7 +1733,25 @@ export default function ProductsCandies() {
         </div>
       )}
 
-      {msg && <p className="mt-2 text-sm">{msg}</p>}
+      {msg ? (
+        isMobile && msg === "✅ Producto guardado." ? (
+          <div className="mt-2 flex items-center gap-3">
+            <div className="flex-1 text-sm">{msg}</div>
+            <button
+              className="px-3 py-1 rounded bg-blue-600 text-white"
+              onClick={() => {
+                setMsg("");
+                cancelEdit();
+                setScanOpen(false);
+              }}
+            >
+              Aceptar
+            </button>
+          </div>
+        ) : (
+          <p className="mt-2 text-sm">{msg}</p>
+        )
+      ) : null}
 
       {/* MODAL CÓDIGO */}
       <CodeModal
@@ -1521,7 +1764,50 @@ export default function ProductsCandies() {
       <BarcodeScanModal
         open={scanOpen}
         onClose={() => setScanOpen(false)}
-        onDetected={(code) => {
+        onDetected={async (code) => {
+          const bc = String(code || "").trim();
+          if (!bc) return;
+
+          // Si viene de edición y hay un producto en edición, guardar directamente
+          if (scanTarget === "edit" && editingId) {
+            // verificar duplicados
+            const dup = products.some(
+              (p) => p.id !== editingId && String(p.barcode || "") === bc,
+            );
+            if (dup) {
+              setMsg("⚠️ Ya existe otro producto con ese código de barras.");
+              setEditBarcode(bc);
+              setScanOpen(false);
+              return;
+            }
+
+            try {
+              await updateDoc(doc(db, "products_candies", editingId), {
+                barcode: bc,
+              });
+              setProducts((prev) =>
+                prev.map((p) =>
+                  p.id === editingId ? { ...p, barcode: bc } : p,
+                ),
+              );
+              setEditBarcode(bc);
+              if (isMobile) setMsg("✅ Producto guardado.");
+            } catch (e) {
+              console.error(e);
+              setMsg("❌ Error guardando código de barras.");
+            } finally {
+              setScanOpen(false);
+            }
+            return;
+          }
+
+          // Si viene en modo búsqueda, llenar el campo searchCode para filtrar
+          if (scanTarget === "search") {
+            setSearchCode(bc);
+            setScanOpen(false);
+            return;
+          }
+
           if (scanTarget === "create") setBarcode(code);
           else setEditBarcode(code);
         }}
@@ -1549,8 +1835,8 @@ export default function ProductsCandies() {
                   <div className="font-semibold">1) Subí tu archivo</div>
                   <div className="text-xs text-gray-600">
                     Columnas esperadas (flexible): Id (opcional), Categoria,
-                    Producto/Nombre, PrecioProveedor, UnidadesPorPaquete, Codigo
-                    (opcional).
+                    Producto/Nombre, PrecioProveedor, UnidadesPorPaquete,
+                    Empaque (opcional), Codigo (opcional).
                   </div>
                 </div>
                 <button
@@ -1629,6 +1915,9 @@ export default function ProductsCandies() {
                       </th>
                       <th className="p-2 border text-right">Und x paquete</th>
                       <th className="p-2 border text-left">
+                        Empaque (opcional)
+                      </th>
+                      <th className="p-2 border text-left">
                         Codigo (opcional)
                       </th>
                       <th className="p-2 border text-center">Acción</th>
@@ -1638,7 +1927,7 @@ export default function ProductsCandies() {
                     {importRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={7}
+                          colSpan={8}
                           className="p-4 text-center text-gray-500"
                         >
                           Subí un archivo para ver la previsualización.
@@ -1652,11 +1941,11 @@ export default function ProductsCandies() {
                         const byKey = products.some(
                           (p) =>
                             `${norm(p.category)}::${norm(p.name)}` ===
-                            `${norm(r.category)}::${norm(r.name)}`
+                            `${norm(r.category)}::${norm(r.name)}`,
                         );
                         const byCode = r.barcode
                           ? products.some(
-                              (p) => String(p.barcode || "") === r.barcode
+                              (p) => String(p.barcode || "") === r.barcode,
                             )
                           : false;
                         const exists = byId || byKey || byCode;
@@ -1717,7 +2006,7 @@ export default function ProductsCandies() {
                                   updateImportRow(i, {
                                     providerPrice: Math.max(
                                       0,
-                                      toNum(e.target.value, 0)
+                                      toNum(e.target.value, 0),
                                     ),
                                   })
                                 }
@@ -1734,10 +2023,24 @@ export default function ProductsCandies() {
                                   updateImportRow(i, {
                                     unitsPerPackage: roundInt(
                                       e.target.value,
-                                      1
+                                      1,
                                     ),
                                   })
                                 }
+                              />
+                            </td>
+
+                            <td className="p-2 border">
+                              <input
+                                className="w-56 border rounded px-2 py-1"
+                                value={r.packaging || ""}
+                                onChange={(e) =>
+                                  updateImportRow(i, {
+                                    packaging:
+                                      e.target.value.trim() || undefined,
+                                  })
+                                }
+                                placeholder="Tarro, Bolsa..."
                               />
                             </td>
 

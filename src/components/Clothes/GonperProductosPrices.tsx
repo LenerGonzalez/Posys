@@ -25,6 +25,7 @@ type StationeryProduct = {
   id: string;
   category: string;
   name: string;
+  brand: string;
 
   providerPrice: number;
   quantity: number;
@@ -67,6 +68,15 @@ const CATEGORY_OPTIONS = [
   "Borrador",
   "Corrector",
   "Cartucheras",
+];
+
+const BRAND_OPTIONS = [
+  "Lider",
+  "Scribe",
+  "Smarty",
+  "Pointer",
+  "Paper Mate",
+  "Otro",
 ];
 
 const GENDER_OPTIONS: Gender[] = ["Hombre", "Mujer", "Variado", "NA"];
@@ -199,6 +209,8 @@ export default function ProductsStationery() {
 
   /* ===== form state ===== */
   const [category, setCategory] = useState(CATEGORY_OPTIONS[0]);
+  const [brand, setBrand] = useState(BRAND_OPTIONS[0]);
+
   const [name, setName] = useState("");
   const [providerPrice, setProviderPrice] = useState(0);
   const [quantity, setQuantity] = useState(1);
@@ -226,7 +238,7 @@ export default function ProductsStationery() {
       setMsg("");
       try {
         const snap = await getDocs(
-          query(collection(db, "products_stationery"))
+          query(collection(db, "products_stationery")),
         );
         const list: StationeryProduct[] = [];
         snap.forEach((d) => {
@@ -234,6 +246,7 @@ export default function ProductsStationery() {
           list.push({
             id: d.id,
             category: x.category || "",
+            brand: x.brand || "",
             name: x.name || "",
             providerPrice: Number(x.providerPrice || 0),
             quantity: Number(x.quantity || 1),
@@ -248,7 +261,7 @@ export default function ProductsStationery() {
             updatedAt: x.updatedAt,
             totalEsperado: Number(
               x.totalEsperado ||
-                Number(x.salePrice || 0) * Number(x.quantity || 1)
+                Number(x.salePrice || 0) * Number(x.quantity || 1),
             ),
           });
         });
@@ -310,9 +323,9 @@ export default function ProductsStationery() {
       (a, p) =>
         a +
         Number(
-          p.totalEsperado || Number(p.salePrice || 0) * Number(p.quantity || 1)
+          p.totalEsperado || Number(p.salePrice || 0) * Number(p.quantity || 1),
         ),
-      0
+      0,
     );
 
     const sumGain = products.reduce((a, p) => a + (p.gain || 0), 0);
@@ -344,6 +357,8 @@ export default function ProductsStationery() {
   const openEdit = (p: StationeryProduct) => {
     setEditing(p);
     setCategory(p.category || CATEGORY_OPTIONS[0]);
+    setBrand(p.brand || BRAND_OPTIONS[0]);
+
     setName(p.name || "");
     setProviderPrice(Number(p.providerPrice || 0));
     setQuantity(Number(p.quantity || 1));
@@ -362,6 +377,8 @@ export default function ProductsStationery() {
     setMsg("");
 
     const c = String(category || "").trim();
+    const b = String(brand || "").trim();
+
     const n = String(name || "").trim();
 
     const {
@@ -383,6 +400,7 @@ export default function ProductsStationery() {
 
     const payload = {
       category: c,
+      brand: b,
       name: n,
       providerPrice: pp,
       quantity: qty,
@@ -478,7 +496,7 @@ export default function ProductsStationery() {
               overlay.remove();
               resolve(text);
             }
-          }
+          },
         );
       });
     } catch (e) {
@@ -517,6 +535,7 @@ export default function ProductsStationery() {
     const data = rows.map((p) => ({
       Id: p.id,
       Categoria: p.category,
+      brand: p.brand,
       Producto: p.name,
       PrecioProveedor: p.providerPrice,
       Cantidad: p.quantity,
@@ -544,6 +563,7 @@ export default function ProductsStationery() {
       {
         Id: "",
         Categoria: "Cuaderno",
+        brand: "Lider",
         Producto: "Cuaderno Norma 100 hojas",
         PrecioProveedor: 120,
         Cantidad: 12,
@@ -585,15 +605,19 @@ export default function ProductsStationery() {
       const rowNumber = idx + 2;
 
       const id = String(
-        pickCol(r, ["Id", "ID", "docId", "DocId"]) ?? ""
+        pickCol(r, ["Id", "ID", "docId", "DocId"]) ?? "",
       ).trim();
 
       const cat = String(
-        pickCol(r, ["Categoria", "Categoría", "Category", "category"]) ?? ""
+        pickCol(r, ["Categoria", "Categoría", "Category", "category"]) ?? "",
+      ).trim();
+
+      const br = String(
+        pickCol(r, ["Brand", "Marca", "brand", "marca"]) ?? "",
       ).trim();
 
       const prod = String(
-        pickCol(r, ["Producto", "Product", "Nombre", "Name", "name"]) ?? ""
+        pickCol(r, ["Producto", "Product", "Nombre", "Name", "name"]) ?? "",
       ).trim();
 
       const ppRaw = pickCol(r, [
@@ -617,7 +641,7 @@ export default function ProductsStationery() {
       ]);
 
       const genderRaw = String(
-        pickCol(r, ["Genero", "Género", "Gender", "gender"]) ?? "NA"
+        pickCol(r, ["Genero", "Género", "Gender", "gender"]) ?? "NA",
       ).trim() as Gender;
 
       const typeRaw = String(
@@ -627,7 +651,7 @@ export default function ProductsStationery() {
           "TypeProduct",
           "typeProduct",
           "Tipo producto",
-        ]) ?? ""
+        ]) ?? "",
       ).trim();
 
       const codeRaw = pickCol(r, [
@@ -653,7 +677,7 @@ export default function ProductsStationery() {
         errors.push(`Fila ${rowNumber}: Cantidad debe ser > 0.`);
       if (margin <= 0 && salePrice <= 0)
         errors.push(
-          `Fila ${rowNumber}: Margen debe ser > 0 (o enviar PrecioVenta).`
+          `Fila ${rowNumber}: Margen debe ser > 0 (o enviar PrecioVenta).`,
         );
 
       const genderOk = GENDER_OPTIONS.includes(genderRaw || "NA");
@@ -669,6 +693,7 @@ export default function ProductsStationery() {
         rows.push({
           id: id || undefined,
           category: cat,
+          brand: br,
           name: prod,
           providerPrice,
           quantity,
@@ -753,7 +778,7 @@ export default function ProductsStationery() {
   const importStats = useMemo(() => {
     const existingById = new Set(products.map((p) => p.id));
     const existingKeys = new Set(
-      products.map((p) => `${norm(p.category)}::${norm(p.name)}`)
+      products.map((p) => `${norm(p.category)}::${norm(p.name)}`),
     );
 
     let willUpdate = 0;
@@ -859,7 +884,7 @@ export default function ProductsStationery() {
       await batch.commit();
 
       setMsg(
-        `✅ Importación lista. Creados: ${toCreate}, Actualizados: ${toUpdate}`
+        `✅ Importación lista. Creados: ${toCreate}, Actualizados: ${toUpdate}`,
       );
       setImportOpen(false);
       setImportRows([]);
@@ -1239,7 +1264,7 @@ export default function ProductsStationery() {
               <div className="w-full border rounded px-2 py-2 text-right bg-gray-50 tabular-nums">
                 {money(
                   calcAll({ providerPrice, quantity, margin, salePrice })
-                    .facturado
+                    .facturado,
                 )}
               </div>
             </div>
@@ -1273,7 +1298,7 @@ export default function ProductsStationery() {
                 value={
                   Number.isNaN(
                     calcAll({ providerPrice, quantity, margin, salePrice })
-                      .salePrice
+                      .salePrice,
                   )
                     ? ""
                     : calcAll({ providerPrice, quantity, margin, salePrice })
@@ -1291,7 +1316,7 @@ export default function ProductsStationery() {
               <label className="block font-semibold">Ganancia (auto)</label>
               <div className="w-full border rounded px-2 py-2 text-right bg-gray-50 tabular-nums">
                 {money(
-                  calcAll({ providerPrice, quantity, margin, salePrice }).gain
+                  calcAll({ providerPrice, quantity, margin, salePrice }).gain,
                 )}
               </div>
             </div>
@@ -1568,7 +1593,7 @@ export default function ProductsStationery() {
                         const byKey = products.some(
                           (p) =>
                             `${norm(p.category)}::${norm(p.name)}` ===
-                            `${norm(r.category)}::${norm(r.name)}`
+                            `${norm(r.category)}::${norm(r.name)}`,
                         );
                         const exists = byId || byKey;
 
@@ -1622,7 +1647,7 @@ export default function ProductsStationery() {
                                   updateImportRow(i, {
                                     providerPrice: Math.max(
                                       0,
-                                      toNum(e.target.value, 0)
+                                      toNum(e.target.value, 0),
                                     ),
                                   })
                                 }
@@ -1653,7 +1678,7 @@ export default function ProductsStationery() {
                                   updateImportRow(i, {
                                     margin: Math.max(
                                       0,
-                                      toNum(e.target.value, 0)
+                                      toNum(e.target.value, 0),
                                     ),
                                   })
                                 }

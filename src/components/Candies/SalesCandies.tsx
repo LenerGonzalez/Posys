@@ -1,7 +1,8 @@
 // src/components/Candies/SalesCandiesPOS.tsx
 // IMPORTANTE: ahora la venta descuenta del pedido del vendedor (inventory_candies_sellers)
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
+import { BrowserMultiFormatReader, IScannerControls } from "@zxing/browser";
 import {
   addDoc,
   collection,
@@ -33,6 +34,19 @@ const PLACES = [
   "Calaysa",
   "Urbaite",
   "Las Pilas",
+  "Pull",
+  "Tilgue",
+  "Balgüe",
+  "Santa Cruz",
+  "Moyogalpa",
+  "Santo Domingo",
+  "San José del Sur",
+  "San Fernando",
+  "Merida",
+  "La Paloma",
+  "San Lorenzo",
+  "San Carlos",
+  "San Miguel",
 ] as const;
 type Place = (typeof PLACES)[number];
 
@@ -56,6 +70,7 @@ interface Product {
   priceRivas: number;
   priceSanJorge: number;
   priceIsla: number;
+  barcode?: string;
 }
 
 // Catálogo de vendedores
@@ -84,6 +99,8 @@ interface SelectedItem {
   availableUnits: number; // stock real (unidades)
   qtyPackages: number; // cantidad vendida (paquetes)
   discount: number; // entero (C$) aplicado a este ítem
+  providerPricePerPackage?: number; // precio proveedor por paquete (referencia)
+  margenVendedor?: number; // comisión calculada sobre la ganancia bruta
 }
 
 interface VoucherItem {
@@ -231,14 +248,14 @@ function generateCandyVoucherPDF(args: {
 // Helpers: AHORA lee stock desde el PEDIDO DEL VENDEDOR de forma más tolerante
 async function getAvailableUnitsForCandyFromVendor(
   productId: string,
-  vendorId: string
+  vendorId: string,
 ): Promise<number> {
   if (!productId || !vendorId) return 0;
 
   const qRef = query(
     collection(db, "inventory_candies_sellers"),
     where("sellerId", "==", vendorId),
-    where("productId", "==", productId)
+    where("productId", "==", productId),
     // OJO: ya no filtramos aquí por remainingUnits > 0 para evitar problemas de índices
   );
 
@@ -299,7 +316,7 @@ async function allocateSaleFIFOCandyFromVendor(args: {
     where("productId", "==", productId),
     where("remainingUnits", ">", 0),
     orderBy("date", "asc"),
-    orderBy("createdAt", "asc")
+    orderBy("createdAt", "asc"),
   );
 
   const snap = await getDocs(qRef);
@@ -314,7 +331,7 @@ async function allocateSaleFIFOCandyFromVendor(args: {
     const newRemUnits = remUnits - take;
     const unitsPerPackage = Math.max(
       1,
-      Math.floor(Number(data.unitsPerPackage || 1))
+      Math.floor(Number(data.unitsPerPackage || 1)),
     );
     const newRemPacks = Math.floor(newRemUnits / unitsPerPackage);
 
@@ -337,7 +354,7 @@ async function allocateSaleFIFOCandyFromVendor(args: {
   if (remaining > 0) {
     console.warn(
       "[allocateSaleFIFOCandyFromVendor] No alcanzó el inventario del vendedor, faltaron unidades.",
-      { productId, vendorId, remaining }
+      { productId, vendorId, remaining },
     );
   }
 
@@ -380,7 +397,7 @@ export default function SalesCandiesPOS({
 
   // stockByProduct → stock en UNIDADES por productId DEL PEDIDO DEL VENDEDOR
   const [stockByProduct, setStockByProduct] = useState<Record<string, number>>(
-    {}
+    {},
   );
 
   // Generales
@@ -405,15 +422,15 @@ export default function SalesCandiesPOS({
   // Totales
   const totalPackages = useMemo(
     () => items.reduce((acc, it) => acc + (it.qtyPackages || 0), 0),
-    [items]
+    [items],
   );
   const totalUnitsSold = useMemo(
     () =>
       items.reduce(
         (acc, it) => acc + (it.qtyPackages || 0) * (it.unitsPerPackage || 1),
-        0
+        0,
       ),
-    [items]
+    [items],
   );
   const totalAmount = useMemo(() => {
     const sum = items.reduce((acc, it) => {
@@ -448,14 +465,184 @@ export default function SalesCandiesPOS({
     setMCreditLimit(0);
   };
 
+  // scanner state & handler
+  const [scanOpen, setScanOpen] = useState(false);
+  const onDetectedFromScanner = async (code: string) => {
+    const c = String(code || "").trim();
+    if (!c) return;
+    // buscar en productos disponibles para el picker
+    const byBarcode = productsForVendorPicker.find(
+      (p) => String((p as any).barcode || "") === c,
+    );
+    const bySku = productsForVendorPicker.find(
+      (p) => String(p.sku || "") === c,
+    );
+    const byId = productsForVendorPicker.find((p) => String(p.id || "") === c);
+    const found = byBarcode || bySku || byId || null;
+    if (found) {
+      await addProductToList(found.id);
+      setMsg("✅ Producto agregado desde escáner.");
+      setTimeout(() => setMsg(""), 2500);
+    } else {
+      setMsg("⚠️ Código no corresponde a ningún producto disponible.");
+      setTimeout(() => setMsg(""), 2500);
+    }
+  };
+
+  function BarcodeScanModal({
+    open,
+    onClose,
+    onDetected,
+  }: {
+    open: boolean;
+    onClose: () => void;
+    onDetected: (code: string) => void;
+  }) {
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+    const controlsRef = useRef<IScannerControls | null>(null);
+    const [err, setErr] = useState<string>("");
+    const lastRef = useRef<string>("");
+
+    useEffect(() => {
+      if (!open) return;
+      let cancelled = false;
+      const reader = new BrowserMultiFormatReader();
+
+      const stopAll = () => {
+        try {
+          controlsRef.current?.stop();
+        } catch {}
+        controlsRef.current = null;
+        try {
+          const stream = videoRef.current?.srcObject as MediaStream | null;
+          stream?.getTracks?.forEach((t: MediaStreamTrack) => t.stop());
+        } catch {}
+        try {
+          if (videoRef.current) videoRef.current.srcObject = null;
+        } catch {}
+      };
+
+      const start = async () => {
+        setErr("");
+        try {
+          if (!videoRef.current) return;
+          try {
+            const warm = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: "environment" } },
+              audio: false,
+            });
+            warm.getTracks().forEach((t) => t.stop());
+          } catch (e: any) {}
+
+          const controls = await reader.decodeFromConstraints(
+            {
+              video: {
+                facingMode: { ideal: "environment" },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+              audio: false,
+            } as any,
+            videoRef.current,
+            (result) => {
+              if (cancelled) return;
+              if (result) {
+                const code = String(result.getText() || "")
+                  .trim()
+                  .replace(/\s+/g, "");
+                if (!code) return;
+                if (code === lastRef.current) return;
+                lastRef.current = code;
+                stopAll();
+                onDetected(code);
+                onClose();
+              }
+            },
+          );
+          controlsRef.current = controls;
+        } catch (e: any) {
+          const msg = String(e?.message || "");
+          const name = String(e?.name || "");
+          if (
+            msg.toLowerCase().includes("permission") ||
+            name === "NotAllowedError"
+          ) {
+            setErr("Permiso de cámara denegado.");
+          } else if (
+            name === "NotFoundError" ||
+            msg.toLowerCase().includes("notfound")
+          ) {
+            setErr("No se encontró cámara en este dispositivo.");
+          } else if (
+            msg.toLowerCase().includes("secure") ||
+            msg.toLowerCase().includes("https")
+          ) {
+            setErr("La cámara requiere HTTPS (sitio seguro).");
+          } else {
+            setErr(msg || "No se pudo iniciar el escáner.");
+          }
+        }
+      };
+
+      start();
+      return () => {
+        cancelled = true;
+        try {
+          controlsRef.current?.stop();
+        } catch {}
+        controlsRef.current = null;
+      };
+    }, [open, onClose, onDetected]);
+
+    if (!open) return null;
+    return (
+      <div className="fixed inset-0 bg-black/70 z-50 p-3 flex items-center justify-center">
+        <div className="bg-white w-full max-w-md rounded-2xl shadow-lg border overflow-hidden">
+          <div className="flex items-center justify-between p-3 border-b">
+            <div className="font-bold">Escanear código</div>
+            <button
+              className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+              onClick={onClose}
+              type="button"
+            >
+              Cerrar
+            </button>
+          </div>
+          <div className="p-3">
+            <div className="relative w-full aspect-[3/4] bg-black rounded-xl overflow-hidden">
+              <video
+                ref={videoRef}
+                className="w-full h-full object-cover"
+                muted
+                playsInline
+                autoPlay
+              />
+              <div className="absolute inset-0 pointer-events-none">
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[85%] h-40 border-2 border-white/70 rounded-xl" />
+              </div>
+            </div>
+            {err && (
+              <div className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">
+                {err}
+              </div>
+            )}
+            <div className="mt-2 text-xs text-gray-600">
+              Apuntá al código de barras y mantenelo estable.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId),
-    [customers, customerId]
+    [customers, customerId],
   );
   const customersForCredit = useMemo(() => {
     if (lockVendor && vendorId) {
       return customers.filter(
-        (c) => ((c as any).vendorId ?? c.sellerId ?? "") === vendorId
+        (c) => ((c as any).vendorId ?? c.sellerId ?? "") === vendorId,
       );
     }
     return customers;
@@ -471,7 +658,7 @@ export default function SalesCandiesPOS({
 
   const selectedVendor = useMemo(
     () => vendors.find((v) => v.id === vendorId) || null,
-    [vendors, vendorId]
+    [vendors, vendorId],
   );
 
   const vendorCommissionPercent = selectedVendor?.commissionPercent || 0;
@@ -489,7 +676,7 @@ export default function SalesCandiesPOS({
       // clientes (dulces)
       const qC = query(
         collection(db, "customers_candies"),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
       );
       const cSnap = await getDocs(qC);
       const listC: Customer[] = [];
@@ -512,7 +699,7 @@ export default function SalesCandiesPOS({
         try {
           const qMov = query(
             collection(db, "ar_movements"),
-            where("customerId", "==", c.id)
+            where("customerId", "==", c.id),
           );
           const mSnap = await getDocs(qMov);
           let sum = 0;
@@ -528,7 +715,7 @@ export default function SalesCandiesPOS({
       // productos (dulces)
       const qP = query(
         collection(db, "products_candies"),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
       );
       const pSnap = await getDocs(qP);
       const listP: Product[] = [];
@@ -539,6 +726,7 @@ export default function SalesCandiesPOS({
           name: x.name ?? "(sin nombre)",
           sku: x.sku ?? "",
           unitsPerPackage: Number(x.unitsPerPackage ?? 1),
+          barcode: String(x.barcode || ""),
           priceRivas: Number(x.unitPriceRivas ?? 0),
           priceSanJorge: Number(x.unitPriceSanJorge ?? 0),
           priceIsla: Number(x.unitPriceIsla ?? 0),
@@ -617,7 +805,7 @@ export default function SalesCandiesPOS({
 
     const qStockVendor = query(
       collection(db, "inventory_candies_sellers"),
-      where("sellerId", "==", sellerId)
+      where("sellerId", "==", sellerId),
       // Igual que arriba: sin filtro de remainingUnits para evitar problemas de índice
     );
 
@@ -677,10 +865,10 @@ export default function SalesCandiesPOS({
           branch === "RIVAS"
             ? prod.priceRivas
             : branch === "SAN_JORGE"
-            ? prod.priceSanJorge
-            : prod.priceIsla;
+              ? prod.priceSanJorge
+              : prod.priceIsla;
         return { ...it, pricePerPackage: Number(price) || 0 };
-      })
+      }),
     );
   }, [branch, products]);
 
@@ -695,7 +883,7 @@ export default function SalesCandiesPOS({
     const qRef = query(
       collection(db, "inventory_candies_sellers"),
       where("sellerId", "==", vendorId),
-      where("productId", "==", productId)
+      where("productId", "==", productId),
     );
 
     const snap = await getDocs(qRef);
@@ -713,8 +901,8 @@ export default function SalesCandiesPOS({
       branch === "RIVAS"
         ? Number(x.unitPriceRivas ?? 0)
         : branch === "SAN_JORGE"
-        ? Number(x.unitPriceSanJorge ?? 0)
-        : Number(x.unitPriceIsla ?? 0);
+          ? Number(x.unitPriceSanJorge ?? 0)
+          : Number(x.unitPriceIsla ?? 0);
 
     return Number(p || 0);
   }
@@ -741,7 +929,7 @@ export default function SalesCandiesPOS({
     // Stock del pedido del vendedor en UNIDADES
     const availableUnits = await getAvailableUnitsForCandyFromVendor(
       pid,
-      vendorId
+      vendorId,
     );
 
     // 🔒 FIX BLINDADO: tomar sucursal REAL del vendedor, no del state todavía
@@ -754,6 +942,34 @@ export default function SalesCandiesPOS({
       branch: effectiveBranch,
     });
 
+    // provider price (costo) por paquete: tomar de inventory_candies_sellers (primer doc)
+    const getProviderPricePerPackageFromVendorOrder = async (args: {
+      productId: string;
+      vendorId: string;
+    }): Promise<number> => {
+      const { productId, vendorId } = args;
+      if (!productId || !vendorId) return 0;
+      try {
+        const qRef = query(
+          collection(db, "inventory_candies_sellers"),
+          where("sellerId", "==", vendorId),
+          where("productId", "==", productId),
+        );
+        const snap = await getDocs(qRef);
+        if (snap.empty) return 0;
+        const x = snap.docs[0].data() as any;
+        return Number(x.providerPrice ?? 0);
+      } catch (e) {
+        return 0;
+      }
+    };
+
+    const providerPricePerPackage =
+      await getProviderPricePerPackageFromVendorOrder({
+        productId: pid,
+        vendorId,
+      });
+
     const newItem: SelectedItem = {
       productId: pid,
       productName: prod.name || "",
@@ -763,6 +979,8 @@ export default function SalesCandiesPOS({
       availableUnits: Number(availableUnits) || 0,
       qtyPackages: 0,
       discount: 0,
+      providerPricePerPackage: Number(providerPricePerPackage) || 0,
+      margenVendedor: 0,
     };
     setItems((prev) => [...prev, newItem]);
     setProductId("");
@@ -774,8 +992,32 @@ export default function SalesCandiesPOS({
         if (it.productId !== pid) return it;
         if (qtyRaw === "") return { ...it, qtyPackages: 0 };
         const n = Math.max(0, Math.floor(Number(qtyRaw)));
-        return { ...it, qtyPackages: n };
-      })
+
+        // calcular paquetes disponibles según stock del vendedor
+        const availableUnits = stockByProduct[pid] ?? it.availableUnits ?? 0;
+        const upp = Math.max(1, Number(it.unitsPerPackage || 1));
+        const availablePackages = Math.floor(availableUnits / upp);
+
+        let finalQty = n;
+        if (n > availablePackages) {
+          finalQty = availablePackages;
+          setMsg(`⚠️ Solo hay ${availablePackages} paquetes disponibles.`);
+          setTimeout(() => setMsg(""), 2500);
+        }
+
+        // recalcular margen vendedor para este item (usar venta neta = venta - descuento)
+        const grossSale = Number(it.pricePerPackage || 0) * finalQty;
+        const saleNet = Math.max(0, grossSale - Number(it.discount || 0));
+        const costoFacturado =
+          Number(it.providerPricePerPackage || 0) * finalQty;
+        const gananciaBruta = saleNet - costoFacturado;
+        const margenVendedor = Math.max(
+          0,
+          Number((gananciaBruta * 0.25).toFixed(2)),
+        );
+
+        return { ...it, qtyPackages: finalQty, margenVendedor };
+      }),
     );
   };
 
@@ -786,8 +1028,18 @@ export default function SalesCandiesPOS({
         if (it.productId !== pid) return it;
         if (discRaw === "") return { ...it, discount: 0 };
         const n = Math.max(0, Math.floor(Number(discRaw)));
-        return { ...it, discount: n };
-      })
+        // recalcular margen vendedor considerando descuento (reduce la venta neta)
+        const qty = it.qtyPackages || 0;
+        const saleTotal = Number(it.pricePerPackage || 0) * qty;
+        const costoFacturado = Number(it.providerPricePerPackage || 0) * qty;
+        const gananciaBruta = saleTotal - costoFacturado - Number(n || 0);
+        const margenVendedor = Math.max(
+          0,
+          Number((gananciaBruta * 0.25).toFixed(2)),
+        );
+
+        return { ...it, discount: n, margenVendedor };
+      }),
     );
   };
 
@@ -823,7 +1075,7 @@ export default function SalesCandiesPOS({
 
       const availableUnits = await getAvailableUnitsForCandyFromVendor(
         it.productId,
-        vendorId
+        vendorId,
       );
       const availablePackages = Math.floor(availableUnits / unitsPerPackage);
 
@@ -866,6 +1118,15 @@ export default function SalesCandiesPOS({
           const lineGross = (Number(it.pricePerPackage) || 0) * (qtyPaq || 0);
           const disc = Math.max(0, Math.floor(Number(it.discount) || 0));
           const lineNet = Math.max(0, lineGross - disc);
+          const providerPricePerPackage = Number(
+            it.providerPricePerPackage || 0,
+          );
+          const facturadoCosto = providerPricePerPackage * qtyPaq;
+          const gananciaBruta = lineNet - facturadoCosto;
+          const margenVendedor = Math.max(
+            0,
+            Number((gananciaBruta * 0.25).toFixed(2)),
+          );
 
           return {
             productId: it.productId,
@@ -878,6 +1139,8 @@ export default function SalesCandiesPOS({
             unitPricePackage: Number(it.pricePerPackage) || 0,
             discount: disc,
             total: Math.floor(lineNet * 100) / 100,
+            providerPricePerPackage,
+            margenVendedor,
           };
         });
 
@@ -1052,8 +1315,8 @@ export default function SalesCandiesPOS({
                     (Number(totalAmount) || 0) -
                     (Number(downPayment) || 0),
                 }
-              : c
-          )
+              : c,
+          ),
         );
       }
 
@@ -1086,6 +1349,18 @@ export default function SalesCandiesPOS({
       })
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [products, stockByProduct]);
+
+  const [productQuery, setProductQuery] = useState("");
+  const filteredProductsForPicker = useMemo(() => {
+    const q = String(productQuery || "")
+      .trim()
+      .toLowerCase();
+    if (!q) return productsForVendorPicker;
+    return productsForVendorPicker.filter((p) => {
+      const hay = `${p.name || ""} ${p.sku || ""}`.toLowerCase();
+      return hay.includes(q) || String(p.id || "").includes(q);
+    });
+  }, [productQuery, productsForVendorPicker]);
 
   // UI
   return (
@@ -1285,6 +1560,38 @@ export default function SalesCandiesPOS({
           {/* Selector de producto */}
           <div className="md:col-span-2">
             <label className="block text-sm font-semibold">Producto</label>
+            <div className="mt-1 mb-2 flex gap-2">
+              <input
+                className="flex-1 border rounded px-2 py-2"
+                placeholder={
+                  vendorId
+                    ? "Buscar producto por nombre o SKU"
+                    : "Selecciona un vendedor primero"
+                }
+                value={productQuery}
+                onChange={(e) => setProductQuery(e.target.value)}
+                disabled={!vendorId}
+              />
+              <button
+                type="button"
+                className="px-3 py-2 rounded bg-gray-800 text-white"
+                onClick={() => setScanOpen(true)}
+                disabled={!vendorId}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                >
+                  <rect x="3" y="3" width="6" height="6" rx="1" />
+                  <rect x="15" y="3" width="6" height="6" rx="1" />
+                  <rect x="3" y="15" width="6" height="6" rx="1" />
+                  <rect x="15" y="15" width="6" height="6" rx="1" />
+                </svg>
+              </button>
+            </div>
             <select
               className="w-full border p-2 rounded"
               value={productId}
@@ -1301,7 +1608,7 @@ export default function SalesCandiesPOS({
                   : "Selecciona un vendedor primero"}
               </option>
 
-              {productsForVendorPicker.map((p) => {
+              {filteredProductsForPicker.map((p) => {
                 const already = items.some((it) => it.productId === p.id);
 
                 const units = stockByProduct[p.id] || 0;
@@ -1360,14 +1667,14 @@ export default function SalesCandiesPOS({
 
                     const visualStock = Math.max(
                       0,
-                      packagesAvailable - (it.qtyPackages || 0)
+                      packagesAvailable - (it.qtyPackages || 0),
                     );
 
                     const lineGross =
                       (Number(it.pricePerPackage) || 0) * (it.qtyPackages || 0);
                     const lineNet = Math.max(
                       0,
-                      lineGross - (Number(it.discount) || 0)
+                      lineGross - (Number(it.discount) || 0),
                     );
 
                     return (
@@ -1603,7 +1910,7 @@ export default function SalesCandiesPOS({
                         value={downPayment === 0 ? "" : downPayment}
                         onChange={(e) =>
                           setDownPayment(
-                            Math.max(0, Number(e.target.value || 0))
+                            Math.max(0, Number(e.target.value || 0)),
                           )
                         }
                         placeholder="0.00"
@@ -1661,6 +1968,38 @@ export default function SalesCandiesPOS({
                   <label className="block text-sm font-semibold">
                     Productos
                   </label>
+                  <div className="mt-1 mb-2 flex gap-2">
+                    <input
+                      className="flex-1 border rounded px-2 py-2"
+                      placeholder={
+                        vendorId
+                          ? "Buscar producto por nombre o SKU"
+                          : "Selecciona un vendedor primero"
+                      }
+                      value={productQuery}
+                      onChange={(e) => setProductQuery(e.target.value)}
+                      disabled={!vendorId}
+                    />
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded bg-gray-800 text-white"
+                      onClick={() => setScanOpen(true)}
+                      disabled={!vendorId}
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-5 w-5"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                      >
+                        <rect x="3" y="3" width="6" height="6" rx="1" />
+                        <rect x="15" y="3" width="6" height="6" rx="1" />
+                        <rect x="3" y="15" width="6" height="6" rx="1" />
+                        <rect x="15" y="15" width="6" height="6" rx="1" />
+                      </svg>
+                    </button>
+                  </div>
                   <select
                     className="w-full border p-2 rounded"
                     value={productId}
@@ -1677,7 +2016,7 @@ export default function SalesCandiesPOS({
                         : "Selecciona un vendedor primero"}
                     </option>
 
-                    {productsForVendorPicker.map((p) => {
+                    {filteredProductsForPicker.map((p) => {
                       const already = items.some((it) => it.productId === p.id);
                       const units = stockByProduct[p.id] || 0;
                       const upp = Math.max(1, Number(p.unitsPerPackage || 1));
@@ -1714,7 +2053,7 @@ export default function SalesCandiesPOS({
 
                       const visualStock = Math.max(
                         0,
-                        packagesAvailable - (it.qtyPackages || 0)
+                        packagesAvailable - (it.qtyPackages || 0),
                       );
 
                       const lineGross =
@@ -1723,7 +2062,7 @@ export default function SalesCandiesPOS({
 
                       const lineNet = Math.max(
                         0,
-                        lineGross - (Number(it.discount) || 0)
+                        lineGross - (Number(it.discount) || 0),
                       );
 
                       return (
@@ -1807,7 +2146,7 @@ export default function SalesCandiesPOS({
                               Total {money(lineNet)}
                             </div>
                             <div className="font-regular text-gray-600">
-                              Comision {money(vendorCommissionAmount)}
+                              Comision {money(it.margenVendedor || 0)}
                             </div>
                             <button
                               type="button"
@@ -1859,10 +2198,185 @@ export default function SalesCandiesPOS({
             <h3 className="text-lg font-bold mb-3">Nuevo cliente</h3>
 
             {/* (tu modal sigue EXACTO como lo tenías, no lo toqué) */}
-            {/* ... */}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-semibold">Nombre</label>
+                <input
+                  className="w-full border p-2 rounded"
+                  value={mName}
+                  onChange={(e) => setMName(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">Teléfono</label>
+                <input
+                  className="w-full border p-2 rounded"
+                  value={mPhone}
+                  onChange={(e) => setMPhone(normalizePhone(e.target.value))}
+                  placeholder="+505 88888888"
+                  inputMode="numeric"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold">Lugar</label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={mPlace}
+                  onChange={(e) => setMPlace(e.target.value as Place)}
+                >
+                  <option value="">—</option>
+                  {PLACES.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {/* <div>
+                <label className="block text-sm font-semibold">Estado</label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={mStatus}
+                  onChange={(e) => setMStatus(e.target.value as Status)}
+                >
+                  <option value="ACTIVO">ACTIVO</option>
+                  <option value="BLOQUEADO">BLOQUEADO</option>
+                </select>
+              </div> */}
+              {!lockVendor && (
+                <div>
+                  <label className="block text-sm font-semibold">
+                    Vendedor
+                  </label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={mSellerId}
+                    onChange={(e) => setMSellerId(e.target.value)}
+                  >
+                    <option value="">Selecciona un vendedor</option>
+                    {vendors
+                      .filter((v) => (v.status ?? "ACTIVO") === "ACTIVO")
+                      .map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name} — {v.branchLabel}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+
+              {/* <div>
+                <label className="block text-sm font-semibold">
+                  Límite de crédito (opcional)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  className="w-full border p-2 rounded"
+                  value={mCreditLimit === 0 ? "" : mCreditLimit}
+                  onChange={(e) =>
+                    setMCreditLimit(Math.max(0, Number(e.target.value || 0)))
+                  }
+                  placeholder="Ej: 2000"
+                />
+              </div> */}
+              <div className="md:col-span-2">
+                <label className="block text-sm font-semibold">
+                  Comentario
+                </label>
+                <textarea
+                  className="w-full border p-2 rounded resize-y min-h-20"
+                  value={mNotes}
+                  onChange={(e) => setMNotes(e.target.value)}
+                  maxLength={500}
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-col sm:flex-row justify-end gap-2">
+              <button
+                className="w-full sm:w-auto px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => {
+                  resetModal();
+                  setShowModal(false);
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="w-full sm:w-auto px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+                onClick={async () => {
+                  const sellerIdToSave = lockVendor
+                    ? vendorId || sellerCandyId
+                    : mSellerId;
+
+                  if (!sellerIdToSave) {
+                    setMsg("Selecciona el vendedor para asociar este cliente.");
+                    return;
+                  }
+
+                  setMsg("");
+                  if (!mName.trim()) {
+                    setMsg("Ingresa el nombre del nuevo cliente.");
+                    return;
+                  }
+
+                  const cleanPhone = normalizePhone(mPhone);
+
+                  try {
+                    const ref = await addDoc(
+                      collection(db, "customers_candies"),
+                      {
+                        name: mName.trim(),
+                        phone: cleanPhone,
+                        place: mPlace || "",
+                        notes: mNotes || "",
+                        status: mStatus,
+                        creditLimit: Number(mCreditLimit || 0),
+                        createdAt: Timestamp.now(),
+                        sellerId: sellerIdToSave,
+                        vendorId: sellerIdToSave,
+                        vendorName:
+                          vendors.find((v) => v.id === sellerIdToSave)?.name ||
+                          "",
+                      },
+                    );
+                    const newC: Customer = {
+                      id: ref.id,
+                      name: mName.trim(),
+                      phone: cleanPhone,
+                      place: mPlace || "",
+                      status: mStatus,
+                      creditLimit: Number(mCreditLimit || 0),
+                      balance: 0,
+                      sellerId: sellerIdToSave,
+                    };
+                    setCustomers((prev) => [newC, ...prev]);
+                    setCustomerId(ref.id);
+                    resetModal();
+                    setShowModal(false);
+                    setMsg("✅ Cliente creado");
+                  } catch (e) {
+                    console.error(e);
+                    setMsg("❌ Error al crear cliente");
+                  }
+                }}
+              >
+                Guardar cliente
+              </button>
+            </div>
           </div>
         </div>
       )}
+
+      {/* Scanner modal */}
+      <BarcodeScanModal
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onDetected={onDetectedFromScanner}
+      />
 
       {/* Overlay de guardado */}
       {saving && (

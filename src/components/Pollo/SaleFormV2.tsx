@@ -20,7 +20,7 @@ import { roundQty, addQty, gteQty } from "../../Services/decimal";
 // --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
 async function fixBatchesProductIdByName(
   productName: string,
-  newProductId: string
+  newProductId: string,
 ) {
   const snap = await getDocs(collection(db, "inventory_batches"));
   const lower = productName.trim().toLowerCase();
@@ -72,9 +72,12 @@ export default function SaleForm({ user }: { user: any }) {
   // ===== Form =====
   const [selectedProductId, setSelectedProductId] = useState("");
   const [saleDate, setSaleDate] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
+    format(new Date(), "yyyy-MM-dd"),
   );
   const [clientName, setClientName] = useState("");
+
+  // mobile product search
+  const [productQuery, setProductQuery] = useState("");
 
   // Carrito
   const [items, setItems] = useState<CartItem[]>([]);
@@ -97,7 +100,7 @@ export default function SaleForm({ user }: { user: any }) {
 
   // ✅ precio aplicado por línea (si specialPrice > 0 usa ese; si no, usa price normal)
   const getAppliedUnitPrice = (
-    it: Pick<CartItem, "price" | "specialPrice">
+    it: Pick<CartItem, "price" | "specialPrice">,
   ) => {
     const sp = Number(it.specialPrice || 0);
     return sp > 0 ? sp : Number(it.price || 0);
@@ -108,7 +111,7 @@ export default function SaleForm({ user }: { user: any }) {
     if (!productId) return 0;
     const qId = query(
       collection(db, "inventory_batches"),
-      where("productId", "==", productId)
+      where("productId", "==", productId),
     );
     const snap = await getDocs(qId);
     let total = 0;
@@ -213,6 +216,29 @@ export default function SaleForm({ user }: { user: any }) {
     setSelectedProductId("");
   };
 
+  // Add product by id (used by mobile auto-add on select)
+  const addProductById = async (productId: string) => {
+    if (!productId) return;
+    const p = products.find((pp) => pp.id === productId);
+    if (!p) return;
+    if (items.some((it) => it.productId === p.id)) return;
+    const stock = await getDisponibleByProductId(p.id);
+    setItems((prev) => [
+      ...prev,
+      {
+        productId: p.id,
+        productName: p.productName,
+        measurement: p.measurement,
+        price: Number(p.price || 0),
+        specialPrice: 0,
+        stock,
+        qty: 0,
+        discount: 0,
+      },
+    ]);
+    setSelectedProductId("");
+  };
+
   // Quitar producto
   const removeItem = (productId: string) => {
     setItems((prev) => prev.filter((it) => it.productId !== productId));
@@ -227,7 +253,7 @@ export default function SaleForm({ user }: { user: any }) {
         const num = raw === "" ? 0 : Number(raw);
         const qty = isUnit ? Math.max(0, Math.round(num)) : roundQty(num);
         return { ...it, qty };
-      })
+      }),
     );
   };
 
@@ -240,7 +266,7 @@ export default function SaleForm({ user }: { user: any }) {
         const num = txt.trim() === "" ? 0 : Number(txt);
         const safe = Number.isFinite(num) ? Math.max(0, round2(num)) : 0;
         return { ...it, specialPrice: safe };
-      })
+      }),
     );
   };
 
@@ -251,7 +277,7 @@ export default function SaleForm({ user }: { user: any }) {
         if (it.productId !== productId) return it;
         const d = Math.max(0, Math.floor(Number(raw || 0)));
         return { ...it, discount: d };
-      })
+      }),
     );
   };
 
@@ -287,6 +313,16 @@ export default function SaleForm({ user }: { user: any }) {
     }
   };
 
+  // responsive: mobile only UI
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener?.("change", update);
+    return () => mq.removeEventListener?.("change", update);
+  }, []);
+
   // Validación rápida
   const validate = async (): Promise<string | null> => {
     if (items.length === 0) return "Agrega al menos un producto.";
@@ -300,7 +336,7 @@ export default function SaleForm({ user }: { user: any }) {
         if (gteQty(disponibleByName, 0) && !gteQty(disponibleById, 0)) {
           const changed = await fixBatchesProductIdByName(
             it.productName,
-            it.productId
+            it.productId,
           );
           const dispAfter = await getDisponibleByProductId(it.productId);
           if (!gteQty(dispAfter, it.qty)) {
@@ -407,14 +443,206 @@ export default function SaleForm({ user }: { user: any }) {
   // Productos ya elegidos (para bloquear en el select)
   const chosenIds = useMemo(
     () => new Set(items.map((i) => i.productId)),
-    [items]
+    [items],
   );
 
   // solo mostrar en el selector los que tienen stock > 0
   const selectableProducts = useMemo(
     () => products.filter((p) => (stockById[p.id] || 0) > 0),
-    [products, stockById]
+    [products, stockById],
   );
+
+  const filteredProductsForPicker = useMemo(() => {
+    const q = String(productQuery || "")
+      .trim()
+      .toLowerCase();
+    if (!q) return selectableProducts;
+    return selectableProducts.filter((p) =>
+      `${p.productName || ""}`.toLowerCase().includes(q),
+    );
+  }, [selectableProducts, productQuery]);
+
+  if (isMobile) {
+    return (
+      <div className="w-full max-w-lg mx-auto p-3">
+        <div className="bg-white rounded-2xl shadow p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-lg text-blue-700">
+              Registrar venta (Pollo)
+            </h2>
+            <input
+              type="date"
+              className="text-sm text-gray-700 border rounded px-2 py-1"
+              value={saleDate}
+              onChange={(e) => setSaleDate(e.target.value)}
+              aria-label="Fecha de la venta"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-semibold">Cliente</label>
+            <input
+              className="w-full border rounded px-2 py-2"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              placeholder="Opcional"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-semibold">Producto</label>
+            <input
+              className="w-full border rounded px-2 py-2 mb-2"
+              placeholder="Buscar producto por nombre..."
+              value={productQuery}
+              onChange={(e) => setProductQuery(e.target.value)}
+            />
+            <div className="flex gap-2">
+              <select
+                className="flex-1 border rounded px-2 py-2"
+                value={selectedProductId}
+                onChange={async (e) => {
+                  const id = e.target.value;
+                  setSelectedProductId(id);
+                  await addProductById(id);
+                }}
+              >
+                <option value="" disabled>
+                  Selecciona un producto
+                </option>
+                {filteredProductsForPicker.map((p) => (
+                  <option
+                    key={p.id}
+                    value={p.id}
+                    disabled={chosenIds.has(p.id)}
+                  >
+                    {p.productName} — {p.measurement} — C$ {p.price}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-semibold">Items</div>
+            {items.length === 0 ? (
+              <div className="text-gray-500">Agrega productos al carrito.</div>
+            ) : (
+              <div className="space-y-2">
+                {items.map((it) => {
+                  const unitApplied = getAppliedUnitPrice(it);
+                  const line = Number(unitApplied || 0) * Number(it.qty || 0);
+                  const net = Math.max(
+                    0,
+                    line - Math.max(0, Number(it.discount || 0)),
+                  );
+                  const isUnit = (it.measurement || "").toLowerCase() !== "lb";
+                  return (
+                    <div key={it.productId} className="border rounded p-2">
+                      <div className="flex justify-between items-center">
+                        <div className="font-semibold">{it.productName}</div>
+                        <div className="text-sm">
+                          C$ {round2(unitApplied).toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-3 gap-2 items-center">
+                        <input
+                          className="border rounded px-2 py-1 text-right"
+                          inputMode={isUnit ? "numeric" : "decimal"}
+                          step={isUnit ? 1 : 0.01}
+                          value={it.qty === 0 ? "" : it.qty}
+                          onChange={(e) =>
+                            setItemQty(it.productId, e.target.value)
+                          }
+                          placeholder={isUnit ? "Unid" : "Libras"}
+                          title={isUnit ? "Unidades" : "Libras"}
+                        />
+                        <input
+                          className="border rounded px-1 py-1 text-right"
+                          inputMode="numeric"
+                          value={it.discount === 0 ? "" : it.discount}
+                          onChange={(e) =>
+                            setItemDiscount(it.productId, e.target.value)
+                          }
+                          placeholder="Descuento"
+                          title="Descuento (C$)"
+                        />
+                        <input
+                          className="border rounded px-2 py-1 text-right"
+                          inputMode="decimal"
+                          value={it.specialPrice === 0 ? "" : it.specialPrice}
+                          onChange={(e) =>
+                            setItemSpecialPrice(it.productId, e.target.value)
+                          }
+                          placeholder="Sugerido"
+                          title="Precio sugerido (opcional)"
+                        />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <div className="text-sm text-gray-600">
+                          Exist:{" "}
+                          {roundQty(
+                            Number(it.stock) - Number(it.qty || 0),
+                          ).toFixed(3)}
+                        </div>
+                        <div className="font-semibold">
+                          C$ {round2(net).toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="mt-2 text-right">
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded bg-red-100 text-red-600"
+                          onClick={() => removeItem(it.productId)}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-semibold">💵 Monto total</div>
+            <div className="text-xl font-bold">
+              C$ {amountCharged.toFixed(2)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              className="border rounded px-2 py-2"
+              inputMode="decimal"
+              value={amountReceived === 0 ? "" : amountReceived}
+              onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
+              placeholder="Monto recibido"
+            />
+            <div className="border rounded px-2 py-2 bg-gray-100">
+              Cambio: C$ {amountChange}
+            </div>
+          </div>
+
+          <button
+            onClick={handleSubmit as any}
+            disabled={items.length === 0 || saving}
+            className="w-full bg-blue-600 text-white px-4 py-2 rounded"
+          >
+            {saving ? "Guardando..." : "Guardar venta"}
+          </button>
+
+          {message && (
+            <div
+              className={`text-sm ${message.startsWith("✅") ? "text-green-600" : message.startsWith("⚠️") ? "text-yellow-600" : "text-red-600"}`}
+            >
+              {message}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative">
@@ -531,11 +759,11 @@ export default function SaleForm({ user }: { user: any }) {
                   const line = Number(unitApplied || 0) * Number(it.qty || 0);
                   const net = Math.max(
                     0,
-                    line - Math.max(0, Number(it.discount || 0))
+                    line - Math.max(0, Number(it.discount || 0)),
                   );
                   const isUnit = (it.measurement || "").toLowerCase() !== "lb";
                   const shownExist = roundQty(
-                    Number(it.stock) - Number(it.qty || 0)
+                    Number(it.stock) - Number(it.qty || 0),
                   );
 
                   return (
@@ -685,8 +913,8 @@ export default function SaleForm({ user }: { user: any }) {
               message.startsWith("✅")
                 ? "text-green-600"
                 : message.startsWith("⚠️")
-                ? "text-yellow-600"
-                : "text-red-600"
+                  ? "text-yellow-600"
+                  : "text-red-600"
             }`}
           >
             {message}

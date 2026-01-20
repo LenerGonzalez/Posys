@@ -42,6 +42,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
     if (isAdmin) {
       if (rubro === "POLLO") {
         return [
+          { key: "venta", label: "Venta", to: `${base}/salesV2` },
           { key: "dash", label: "Dashboard", to: `${base}/financialDashboard` },
           { key: "inv", label: "Inventario", to: `${base}/batches` },
           { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
@@ -89,12 +90,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
           to: `${base}/productsPricesCandies`,
         },
         {
-          key: "precios",
-          label: "Precio Ventas",
-          to: `${base}/productsPricesCandies`,
-        },
-        {
-          key: "precios",
+          key: "gonper",
           label: "Productos Gonper",
           to: `${base}/notebooksInventory`,
         },
@@ -124,7 +120,11 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
           label: "Inventario",
           to: `${base}/productsVendorsCandies`,
         },
-        { key: "cli", label: "Saldos Pendientes", to: `${base}/customersCandies` },
+        {
+          key: "cli",
+          label: "Saldos Pendientes",
+          to: `${base}/customersCandies`,
+        },
         { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
         { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
       ];
@@ -168,7 +168,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
     cn(
       "flex-1 text-center text-[11px] py-1.5 rounded-lg",
       "leading-none select-none",
-      isActive ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-gray-100"
+      isActive ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-gray-100",
     );
 
   // ✅ Regla: si hay muchos tabs, ocultamos barra de abajo y usamos Drawer
@@ -179,7 +179,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
       "w-full flex items-center justify-between px-4 py-3 rounded-xl border",
       isActive
         ? "bg-blue-600 text-white border-blue-600"
-        : "bg-white text-gray-800 border-gray-200 hover:bg-gray-50"
+        : "bg-white text-gray-800 border-gray-200 hover:bg-gray-50",
     );
 
   return (
@@ -197,7 +197,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
                   "px-3 py-2 rounded-2xl text-sm font-semibold",
                   rubro === "POLLO"
                     ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700"
+                    : "bg-gray-100 text-gray-700",
                 )}
               >
                 Carniceria
@@ -209,7 +209,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
                   "px-3 py-2 rounded-2xl text-sm font-semibold",
                   rubro === "DULCES"
                     ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700"
+                    : "bg-gray-100 text-gray-700",
                 )}
               >
                 Mr. Candy
@@ -220,8 +220,8 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
               {isVendPollo
                 ? "Pollos Bea"
                 : isVendDulces
-                ? "CandyShop"
-                : "Posys"}
+                  ? "CandyShop"
+                  : "Posys"}
             </div>
           )}
 
@@ -297,7 +297,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
           "flex-1 overflow-y-auto px-3 pt-3",
           showBottomTabs
             ? "pb-[calc(92px+env(safe-area-inset-bottom))]"
-            : "pb-[calc(16px+env(safe-area-inset-bottom))]"
+            : "pb-[calc(16px+env(safe-area-inset-bottom))]",
         )}
       >
         <Outlet />
