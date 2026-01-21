@@ -48,6 +48,7 @@ type StationeryProduct = {
 type ImportRow = {
   id?: string; // opcional para update exacto
   category: string;
+  brand?: string;
   name: string;
   providerPrice: number;
   quantity: number;

@@ -67,11 +67,11 @@ function normalizePhone(input: string): string {
 async function deleteARMovesBySaleId(saleId: string) {
   const qMov = query(
     collection(db, "ar_movements"),
-    where("ref.saleId", "==", saleId)
+    where("ref.saleId", "==", saleId),
   );
   const snap = await getDocs(qMov);
   await Promise.all(
-    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id)))
+    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id))),
   );
 }
 
@@ -97,15 +97,15 @@ export default function CustomersClothes() {
     setItemsModalRows([]);
     try {
       const snap = await getDocs(
-        query(collection(db, "sales_clothes"), where("__name__", "==", saleId))
+        query(collection(db, "sales_clothes"), where("__name__", "==", saleId)),
       );
       const docSnap = snap.docs[0];
       const data = docSnap?.data() as any;
       const arr = Array.isArray(data?.items)
         ? data.items
         : data?.item
-        ? [data.item]
-        : [];
+          ? [data.item]
+          : [];
       const rows = arr.map((it: any) => ({
         productName: String(it.productName || ""),
         qty: Number(it.qty || 0),
@@ -157,7 +157,7 @@ export default function CustomersClothes() {
   const [showAbono, setShowAbono] = useState(false);
   const [abonoAmount, setAbonoAmount] = useState<number>(0);
   const [abonoDate, setAbonoDate] = useState<string>(
-    new Date().toISOString().slice(0, 10)
+    new Date().toISOString().slice(0, 10),
   );
   const [abonoComment, setAbonoComment] = useState<string>("");
   const [savingAbono, setSavingAbono] = useState(false);
@@ -176,7 +176,7 @@ export default function CustomersClothes() {
     (async () => {
       const qC = query(
         collection(db, "customers_clothes"),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
       );
       const snap = await getDocs(qC);
       const list: CustomerRow[] = [];
@@ -200,7 +200,7 @@ export default function CustomersClothes() {
         try {
           const qMov = query(
             collection(db, "ar_movements"),
-            where("customerId", "==", c.id)
+            where("customerId", "==", c.id),
           );
           const mSnap = await getDocs(qMov);
           let sum = 0;
@@ -321,8 +321,8 @@ export default function CustomersClothes() {
                 status: eStatus,
                 creditLimit: Number(eCreditLimit || 0),
               }
-            : x
-        )
+            : x,
+        ),
       );
       cancelEdit();
       setMsg("✅ Cliente actualizado");
@@ -335,7 +335,7 @@ export default function CustomersClothes() {
   // ===== Eliminar cliente (+ devolver prendas de TODAS sus compras) =====
   const handleDelete = async (row: CustomerRow) => {
     const ok = confirm(
-      `¿Eliminar al cliente "${row.name}"?\nSe devolverán al inventario todas las prendas de sus compras y se borrarán sus movimientos.`
+      `¿Eliminar al cliente "${row.name}"?\nSe devolverán al inventario todas las prendas de sus compras y se borrarán sus movimientos.`,
     );
     if (!ok) return;
 
@@ -345,7 +345,7 @@ export default function CustomersClothes() {
       // 1) Ventas del cliente
       const qSales = query(
         collection(db, "sales_clothes"),
-        where("customerId", "==", row.id)
+        where("customerId", "==", row.id),
       );
       const sSnap = await getDocs(qSales);
 
@@ -366,11 +366,11 @@ export default function CustomersClothes() {
       // 3) Movimientos sueltos del cliente (sin saleId)
       const qMov = query(
         collection(db, "ar_movements"),
-        where("customerId", "==", row.id)
+        where("customerId", "==", row.id),
       );
       const mSnap = await getDocs(qMov);
       await Promise.all(
-        mSnap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id)))
+        mSnap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id))),
       );
 
       // 4) Borrar cliente
@@ -402,7 +402,7 @@ export default function CustomersClothes() {
     try {
       const qMov = query(
         collection(db, "ar_movements"),
-        where("customerId", "==", customer.id)
+        where("customerId", "==", customer.id),
       );
       const snap = await getDocs(qMov);
       const list: MovementRow[] = [];
@@ -504,11 +504,11 @@ export default function CustomersClothes() {
         prev.map((c) =>
           c.id === stCustomer.id
             ? { ...c, balance: (c.balance || 0) - safeAmt }
-            : c
-        )
+            : c,
+        ),
       );
       setStCustomer((prev) =>
-        prev ? { ...prev, balance: (prev.balance || 0) - safeAmt } : prev
+        prev ? { ...prev, balance: (prev.balance || 0) - safeAmt } : prev,
       );
 
       setAbonoAmount(0);
@@ -581,12 +581,12 @@ export default function CustomersClothes() {
 
       const nuevoSaldo = newList.reduce(
         (acc, it) => acc + (Number(it.amount) || 0),
-        0
+        0,
       );
       setRows((prev) =>
         prev.map((c) =>
-          c.id === stCustomer?.id ? { ...c, balance: nuevoSaldo } : c
-        )
+          c.id === stCustomer?.id ? { ...c, balance: nuevoSaldo } : c,
+        ),
       );
       setStCustomer((prev) => (prev ? { ...prev, balance: nuevoSaldo } : prev));
 
@@ -607,7 +607,7 @@ export default function CustomersClothes() {
         m.type === "CARGO" && m.ref?.saleId
           ? "\nSe devolverán al inventario las prendas de esa venta."
           : ""
-      }`
+      }`,
     );
     if (!ok) return;
 
@@ -639,12 +639,12 @@ export default function CustomersClothes() {
 
       const nuevoSaldo = newList.reduce(
         (acc, it) => acc + (Number(it.amount) || 0),
-        0
+        0,
       );
       setRows((prev) =>
         prev.map((c) =>
-          c.id === stCustomer?.id ? { ...c, balance: nuevoSaldo } : c
-        )
+          c.id === stCustomer?.id ? { ...c, balance: nuevoSaldo } : c,
+        ),
       );
       setStCustomer((prev) => (prev ? { ...prev, balance: nuevoSaldo } : prev));
 
@@ -796,7 +796,7 @@ export default function CustomersClothes() {
                           value={Number.isNaN(eCreditLimit) ? "" : eCreditLimit}
                           onChange={(e) =>
                             setECreditLimit(
-                              Math.max(0, Number(e.target.value || 0))
+                              Math.max(0, Number(e.target.value || 0)),
                             )
                           }
                         />
@@ -1003,7 +1003,7 @@ export default function CustomersClothes() {
               </form>
             </div>
           </div>,
-          document.body
+          document.body,
         )}
 
       {/* ===== Modal: Estado de cuenta ===== */}

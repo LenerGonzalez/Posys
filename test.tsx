@@ -251,8 +251,6 @@ export default function VendorCandyOrders({
   // Bloqueo de boton de guardar
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
-  
-
   // ===== Paginación =====
   const PAGE_SIZE = 20;
   const [page, setPage] = useState(1);
@@ -387,45 +385,6 @@ export default function VendorCandyOrders({
       setTransferAgg({});
     }
   };
-
-     {
-       useEffect(() => {
-         if (!orderItems.length) return;
-
-         setOrderItems((prev) =>
-           prev.map((it) => {
-             const {
-               subtotal,
-               totalVendor,
-               gainVendor,
-               pricePerPackage,
-               totalRivas,
-               totalSanJorge,
-               totalIsla,
-             } = recalcItemFinancials({
-               providerPrice: it.providerPrice,
-               unitPriceRivas: it.unitPriceRivas,
-               unitPriceSanJorge: it.unitPriceSanJorge,
-               unitPriceIsla: it.unitPriceIsla,
-               packages: it.packages,
-               sellerBranch,
-             });
-
-             return {
-               ...it,
-               subtotal,
-               totalVendor,
-               gainVendor,
-               pricePerPackage,
-               totalRivas,
-               totalSanJorge,
-               totalIsla,
-             };
-           }),
-         );
-         // eslint-disable-next-line react-hooks/exhaustive-deps
-       }, [sellerBranch]);
-     }
 
   // ===== Carga de datos =====
   useEffect(() => {
@@ -734,60 +693,24 @@ export default function VendorCandyOrders({
   // 2) Total esperado (antes totalVendor)
   // 3) Utilidad bruta (antes "comisión posible", aquí: totalEsperado - costo)
   // 4) Utilidad vendedor (comisión del vendedor)
-//   const orderSummary = useMemo(() => {
-//     const totalPackages = orderItems.reduce((acc, it) => acc + it.packages, 0);
-//     const subtotal = orderItems.reduce((acc, it) => acc + it.subtotal, 0);
-//     const totalExpected = orderItems.reduce(
-//       (acc, it) => acc + it.totalVendor,
-//       0,
-//     );
-//     const grossProfit = totalExpected - subtotal;
-// 
-//     const commissionPercent = Number(selectedSeller?.commissionPercent || 0);
-//     const vendorProfit = (totalExpected * commissionPercent) / 100;
-// 
-//     return {
-//       totalPackages,
-//       subtotal,
-//       totalExpected,
-//       grossProfit,
-//       commissionPercent,
-//       vendorProfit,
-//     };
-//   }, [orderItems, selectedSeller]);
-const orderSummary = useMemo(() => {
-  const totalPackages = orderItems.reduce(
-    (acc, it) => acc + Number(it.packages || 0),
-    0,
-  );
+  const orderSummary = useMemo(() => {
+    const totalPackages = orderItems.reduce((acc, it) => acc + it.packages, 0);
+    const subtotal = orderItems.reduce((acc, it) => acc + it.subtotal, 0);
+    const totalExpected = orderItems.reduce((acc, it) => acc + it.totalVendor, 0);
+    const grossProfit = totalExpected - subtotal;
 
-  // Total esperado = suma de ventas (precio de venta por sucursal del vendedor)
-  const totalExpected = orderItems.reduce(
-    (acc, it) => acc + Number(it.totalVendor || 0),
-    0,
-  );
+    const commissionPercent = Number(selectedSeller?.commissionPercent || 0);
+    const vendorProfit = (totalExpected * commissionPercent) / 100;
 
-  // Utilidad bruta = Total esperado - Costo proveedor
-  const totalCost = orderItems.reduce(
-    (acc, it) => acc + Number(it.subtotal || 0),
-    0,
-  );
-  const grossProfit = totalExpected - totalCost;
-
-  // Utilidad vendedor = suma de utilidades por producto (gainVendor) del pedido
-  const vendorProfit = orderItems.reduce(
-    (acc, it) => acc + Number(it.gainVendor || 0),
-    0,
-  );
-
-  return {
-    totalPackages,
-    totalExpected,
-    grossProfit,
-    vendorProfit,
-  };
-}, [orderItems]);
-
+    return {
+      totalPackages,
+      subtotal,
+      totalExpected,
+      grossProfit,
+      commissionPercent,
+      vendorProfit,
+    };
+  }, [orderItems, selectedSeller]);
 
   // ===== Helpers =====
   const resetOrder = () => {
@@ -1345,9 +1268,8 @@ const orderSummary = useMemo(() => {
 
     const rowsHtml = orderItems
       .map((it) => {
-       const uBruta = Number(it.totalVendor || 0) - Number(it.subtotal || 0);
-       const uVendedor = Number(it.gainVendor || 0);
-
+        const uBruta = Number(it.totalVendor || 0) - Number(it.subtotal || 0);
+        const uVendedor = (Number(it.totalVendor || 0) * commissionPercent) / 100;
 
         return `
       <tr>
@@ -1403,28 +1325,24 @@ const orderSummary = useMemo(() => {
     }
   </div>
 
- <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Paquetes totales asociados</div>
-    <div className="text-lg font-bold">{orderSummary.totalPackages}</div>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Paquetes totales asociados</div>
+      <div class="value">${orderSummary.totalPackages}</div>
+    </div>
+    <div class="card">
+      <div class="label">Total esperado</div>
+      <div class="value">${money(orderSummary.totalExpected)}</div>
+    </div>
+    <div class="card">
+      <div class="label">Utilidad bruta</div>
+      <div class="value">${money(orderSummary.grossProfit)}</div>
+    </div>
+    <div class="card">
+      <div class="label">Utilidad vendedor</div>
+      <div class="value">${money(orderSummary.vendorProfit)}</div>
+    </div>
   </div>
-
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Total esperado</div>
-    <div className="text-lg font-bold">{money(orderSummary.totalExpected)}</div>
-  </div>
-
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Utilidad bruta</div>
-    <div className="text-lg font-bold">{money(orderSummary.grossProfit)}</div>
-  </div>
-
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Utilidad vendedor</div>
-    <div className="text-lg font-bold">{money(orderSummary.vendorProfit)}</div>
-  </div>
-</div>
-
 
   <h2>Detalle del pedido</h2>
   <table>
@@ -1925,13 +1843,7 @@ const orderSummary = useMemo(() => {
   const downloadTemplate = () => {
     // Requisito: plantilla con productos existentes en orden maestra (aquí: catálogo completo)
     // Cols: productId, categoria, producto, existentes, paquetes
-    const header = [
-      "productId",
-      "categoria",
-      "producto",
-      "existentes",
-      "paquetes",
-    ];
+    const header = ["productId", "categoria", "producto", "existentes", "paquetes"];
     const lines: string[] = [header.join(",")];
 
     const list = [...productsAll].sort((a, b) =>
@@ -2007,8 +1919,7 @@ const orderSummary = useMemo(() => {
         cur.push(field);
         field = "";
         // evitar filas vacías al final
-        if (cur.some((x) => String(x ?? "").trim() !== ""))
-          rowsParsed.push(cur);
+        if (cur.some((x) => String(x ?? "").trim() !== "")) rowsParsed.push(cur);
         cur = [];
         continue;
       }
@@ -2028,9 +1939,7 @@ const orderSummary = useMemo(() => {
     if (!file) return;
     if (isReadOnly) return;
     if (editingOrderKey) {
-      setMsg(
-        "La importación se usa en el modal de NUEVA orden (no en edición).",
-      );
+      setMsg("La importación se usa en el modal de NUEVA orden (no en edición).");
       return;
     }
 
@@ -2045,11 +1954,7 @@ const orderSummary = useMemo(() => {
         return;
       }
 
-      const header = parsed[0].map((h) =>
-        String(h || "")
-          .trim()
-          .toLowerCase(),
-      );
+      const header = parsed[0].map((h) => String(h || "").trim().toLowerCase());
       const idxProductId = header.indexOf("productid");
       const idxPackages = header.indexOf("paquetes");
 
@@ -2627,6 +2532,7 @@ const orderSummary = useMemo(() => {
 
                     <div className="flex gap-2 items-center">
                       <button
+                      
                         type="button"
                         className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
                         onClick={downloadTemplate}
@@ -2662,6 +2568,42 @@ const orderSummary = useMemo(() => {
               {/* Nota: no rompe nada, solo recalcula usando precios ya guardados en el item */}
               {/* */}
               {/* eslint-disable-next-line react-hooks/rules-of-hooks */}
+              {useEffect(() => {
+                if (!orderItems.length) return;
+
+                setOrderItems((prev) =>
+                  prev.map((it) => {
+                    const {
+                      subtotal,
+                      totalVendor,
+                      gainVendor,
+                      pricePerPackage,
+                      totalRivas,
+                      totalSanJorge,
+                      totalIsla,
+                    } = recalcItemFinancials({
+                      providerPrice: it.providerPrice,
+                      unitPriceRivas: it.unitPriceRivas,
+                      unitPriceSanJorge: it.unitPriceSanJorge,
+                      unitPriceIsla: it.unitPriceIsla,
+                      packages: it.packages,
+                      sellerBranch,
+                    });
+
+                    return {
+                      ...it,
+                      subtotal,
+                      totalVendor,
+                      gainVendor,
+                      pricePerPackage,
+                      totalRivas,
+                      totalSanJorge,
+                      totalIsla,
+                    };
+                  }),
+                );
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+              }, [sellerBranch])}
 
               {/* Selector de producto + cantidad */}
               <div className="border rounded p-3 bg-gray-50">
@@ -2742,13 +2684,18 @@ const orderSummary = useMemo(() => {
               </div>
 
               {/* KPIs del pedido */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                 <div className="border rounded p-2 bg-white">
-                  <div className="text-xs text-gray-600">
-                    Paquetes totales asociados
-                  </div>
+                  <div className="text-xs text-gray-600">Paquetes</div>
                   <div className="text-lg font-bold">
                     {orderSummary.totalPackages}
+                  </div>
+                </div>
+
+                <div className="border rounded p-2 bg-white">
+                  <div className="text-xs text-gray-600">Costo</div>
+                  <div className="text-lg font-bold">
+                    {money(orderSummary.subtotal)}
                   </div>
                 </div>
 
@@ -2767,7 +2714,12 @@ const orderSummary = useMemo(() => {
                 </div>
 
                 <div className="border rounded p-2 bg-white">
-                  <div className="text-xs text-gray-600">Utilidad vendedor</div>
+                  <div className="text-xs text-gray-600">
+                    Utilidad vendedor{" "}
+                    {orderSummary.commissionPercent
+                      ? `(${orderSummary.commissionPercent.toFixed(1)}%)`
+                      : ""}
+                  </div>
                   <div className="text-lg font-bold">
                     {money(orderSummary.vendorProfit)}
                   </div>
@@ -2803,10 +2755,11 @@ const orderSummary = useMemo(() => {
                         const commissionPercent = Number(
                           selectedSeller?.commissionPercent || 0,
                         );
-                      const uBruta =
-                        Number(it.totalVendor || 0) - Number(it.subtotal || 0);
-                      const uVendedor = Number(it.gainVendor || 0);
-
+                        const uBruta =
+                          Number(it.totalVendor || 0) - Number(it.subtotal || 0);
+                        const uVendedor =
+                          (Number(it.totalVendor || 0) * commissionPercent) /
+                          100;
 
                         return (
                           <tr key={it.id} className="text-center">
@@ -2833,7 +2786,9 @@ const orderSummary = useMemo(() => {
                               />
                             </td>
 
-                            <td className="p-2 border">{money(it.subtotal)}</td>
+                            <td className="p-2 border">
+                              {money(it.subtotal)}
+                            </td>
                             <td className="p-2 border">
                               {money(it.totalVendor)}
                             </td>
@@ -2962,7 +2917,9 @@ const orderSummary = useMemo(() => {
                       <td className="p-2 border text-left">{o.date}</td>
                       <td className="p-2 border text-left">{o.sellerName}</td>
                       <td className="p-2 border">{o.totalPackages}</td>
-                      <td className="p-2 border font-semibold">{remaining}</td>
+                      <td className="p-2 border font-semibold">
+                        {remaining}
+                      </td>
                       <td className="p-2 border">{money(o.subtotal)}</td>
                       <td className="p-2 border font-semibold">
                         {money(o.totalVendor)}
@@ -3076,9 +3033,7 @@ const orderSummary = useMemo(() => {
                           </div>
 
                           <div className="border rounded p-2 bg-gray-50">
-                            <div className="text-gray-600">
-                              Traslados salida
-                            </div>
+                            <div className="text-gray-600">Traslados salida</div>
                             <div className="font-semibold">
                               {Number(o.transferredOut || 0)}
                             </div>

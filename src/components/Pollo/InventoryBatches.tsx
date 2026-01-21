@@ -13,6 +13,7 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import { hasRole } from "../../utils/roles";
 import { newBatch, markBatchAsPaid } from "../../Services/inventory";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { roundQty } from "../../Services/decimal";
@@ -28,6 +29,7 @@ interface Product {
   category: string;
   measurement: string; // lb / unidad / etc.
   price: number;
+  providerPrice?: number;
 }
 
 interface Batch {
@@ -82,7 +84,9 @@ type RoleProp =
   | "admin"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "supervisor_pollo"
+  | "contador";
 
 interface InventoryBatchesProps {
   role?: RoleProp;
@@ -92,23 +96,26 @@ interface InventoryBatchesProps {
 
 export default function InventoryBatches({
   role = "",
+  roles,
   sellerCandyId = "",
   currentUserEmail,
-}: InventoryBatchesProps) {
+}: InventoryBatchesProps & { roles?: RoleProp[] | string[] }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
   const { refreshKey, refresh } = useManualRefresh();
 
-  const isAdmin = role === "admin";
+  const subject = (roles && (roles as any).length ? roles : role) as any;
+  const isAdmin = hasRole(subject, "admin");
+  const canCreateBatch = isAdmin || hasRole(subject, "contador");
 
   // 🔎 Filtro por fecha
   const [fromDate, setFromDate] = useState<string>(
-    format(startOfMonth(new Date()), "yyyy-MM-dd")
+    format(startOfMonth(new Date()), "yyyy-MM-dd"),
   );
   const [toDate, setToDate] = useState<string>(
-    format(endOfMonth(new Date()), "yyyy-MM-dd")
+    format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
 
   // 🔵 Filtro por producto
@@ -120,7 +127,7 @@ export default function InventoryBatches({
   // ===== Form header del pedido =====
   const [orderName, setOrderName] = useState<string>("");
   const [orderDate, setOrderDate] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
+    format(new Date(), "yyyy-MM-dd"),
   );
 
   // ===== Filtro unidad ANTES de seleccionar producto =====
@@ -129,7 +136,7 @@ export default function InventoryBatches({
   // ===== Inputs para agregar producto al pedido =====
   const [productId, setProductId] = useState("");
   const [quantity, setQuantity] = useState<number>(0);
-  const [purchasePrice, setPurchasePrice] = useState<number>(0);
+  const [purchasePrice, setPurchasePrice] = useState<number>(NaN);
   const [salePrice, setSalePrice] = useState<number>(0);
 
   // items agregados al pedido
@@ -162,6 +169,15 @@ export default function InventoryBatches({
   const [showPayDialog, setShowPayDialog] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<GroupRow | null>(null);
 
+  // acordeón móvil: id del grupo expandido (null = ninguno)
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  const toggleGroupExpand = (groupId: string) =>
+    setExpandedGroupId((prev) => (prev === groupId ? null : groupId));
+
+  // estado para KPIs colapsable
+  const [kpisExpanded, setKpisExpanded] = useState<boolean>(false);
+  const toggleKpis = () => setKpisExpanded((v) => !v);
+
   const isPounds = (u: string) => {
     const s = (u || "").toLowerCase();
     return /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(s) || s === "lb";
@@ -185,6 +201,12 @@ export default function InventoryBatches({
           category: it.category ?? "(sin categoría)",
           measurement: it.measurement ?? "lb",
           price: Number(it.price ?? 0),
+          providerPrice: Object.prototype.hasOwnProperty.call(
+            it,
+            "providerPrice",
+          )
+            ? Number(it.providerPrice)
+            : undefined,
         });
       });
       setProducts(prods);
@@ -192,7 +214,7 @@ export default function InventoryBatches({
       // batches
       const qB = query(
         collection(db, "inventory_batches"),
-        orderBy("date", "desc")
+        orderBy("date", "desc"),
       );
       const bsnap = await getDocs(qB);
 
@@ -251,11 +273,11 @@ export default function InventoryBatches({
   const totals = useMemo(() => {
     const totalFacturado = filteredBatches.reduce(
       (a, b) => a + Number(b.invoiceTotal || 0),
-      0
+      0,
     );
     const totalEsperado = filteredBatches.reduce(
       (a, b) => a + Number(b.expectedTotal || 0),
-      0
+      0,
     );
 
     let lbsIng = 0,
@@ -314,13 +336,13 @@ export default function InventoryBatches({
         "Pedido";
 
       const cats = new Set(
-        ordered.map((x) => String(x.category || "").trim()).filter(Boolean)
+        ordered.map((x) => String(x.category || "").trim()).filter(Boolean),
       );
       const typeLabel =
         cats.size === 1 ? Array.from(cats)[0].toUpperCase() : "MIXTO";
 
       const status: "PENDIENTE" | "PAGADO" = ordered.some(
-        (x) => x.status === "PENDIENTE"
+        (x) => x.status === "PENDIENTE",
       )
         ? "PENDIENTE"
         : "PAGADO";
@@ -328,25 +350,25 @@ export default function InventoryBatches({
       const lbsIn = roundQty(
         ordered.reduce(
           (acc, x) => acc + (isPounds(x.unit) ? Number(x.quantity || 0) : 0),
-          0
-        )
+          0,
+        ),
       );
       const lbsRem = roundQty(
         ordered.reduce(
           (acc, x) => acc + (isPounds(x.unit) ? Number(x.remaining || 0) : 0),
-          0
-        )
+          0,
+        ),
       );
 
       const totalFacturado = Number(
         ordered
           .reduce((acc, x) => acc + Number(x.invoiceTotal || 0), 0)
-          .toFixed(2)
+          .toFixed(2),
       );
       const totalEsperado = Number(
         ordered
           .reduce((acc, x) => acc + Number(x.expectedTotal || 0), 0)
-          .toFixed(2)
+          .toFixed(2),
       );
       const utilidadBruta = Number((totalEsperado - totalFacturado).toFixed(2));
 
@@ -371,8 +393,8 @@ export default function InventoryBatches({
           ? 1
           : -1
         : a.date < b.date
-        ? 1
-        : -1
+          ? 1
+          : -1,
     );
 
     return rows;
@@ -387,15 +409,25 @@ export default function InventoryBatches({
       (p) =>
         String(p.measurement || "")
           .toLowerCase()
-          .trim() === u
+          .trim() === u,
     );
     return list.sort((a, b) => a.name.localeCompare(b.name, "es"));
   }, [products, unitFilter]);
 
-  // sugerir salePrice
+  // autocompletar precio proveedor si el producto tiene `providerPrice`
   useEffect(() => {
     const p = products.find((x) => x.id === productId);
-    if (p) setSalePrice(Number(p.price || 0));
+    if (p) {
+      setSalePrice(Number(p.price || 0));
+      if (p.providerPrice != null && Number.isFinite(Number(p.providerPrice))) {
+        setPurchasePrice(Number(p.providerPrice));
+      } else {
+        setPurchasePrice(NaN);
+      }
+    } else {
+      setSalePrice(0);
+      setPurchasePrice(NaN);
+    }
   }, [productId, products, refreshKey]);
 
   // ===== Crear pedido: agregar item =====
@@ -404,7 +436,7 @@ export default function InventoryBatches({
 
     const p = products.find((x) => x.id === productId);
     if (!p) return setMsg("Selecciona un producto.");
-    if (quantity <= 0 || purchasePrice <= 0)
+    if (quantity <= 0 || !Number.isFinite(purchasePrice) || purchasePrice <= 0)
       return setMsg("Completa libras a ingresar y precio proveedor.");
 
     const qtyR = roundQty(quantity);
@@ -429,8 +461,8 @@ export default function InventoryBatches({
                 invoiceTotal: inv,
                 expectedTotal: exp,
                 utilidadBruta: util,
-              }
-        )
+              },
+        ),
       );
     } else {
       setOrderItems((prev) => [
@@ -454,7 +486,7 @@ export default function InventoryBatches({
 
     setProductId("");
     setQuantity(0);
-    setPurchasePrice(0);
+    setPurchasePrice(NaN);
     setSalePrice(0);
   };
 
@@ -465,7 +497,7 @@ export default function InventoryBatches({
   const updateOrderItemField = (
     tempId: string,
     field: "quantity" | "purchasePrice" | "salePrice",
-    value: number
+    value: number,
   ) => {
     setOrderItems((prev) =>
       prev.map((it) => {
@@ -484,17 +516,17 @@ export default function InventoryBatches({
           updated.salePrice = Math.max(0, Number(value || 0));
 
         updated.invoiceTotal = Number(
-          (updated.quantity * updated.purchasePrice).toFixed(2)
+          (updated.quantity * updated.purchasePrice).toFixed(2),
         );
         updated.expectedTotal = Number(
-          (updated.quantity * updated.salePrice).toFixed(2)
+          (updated.quantity * updated.salePrice).toFixed(2),
         );
         updated.utilidadBruta = Number(
-          (updated.expectedTotal - updated.invoiceTotal).toFixed(2)
+          (updated.expectedTotal - updated.invoiceTotal).toFixed(2),
         );
 
         return updated;
-      })
+      }),
     );
   };
 
@@ -502,25 +534,25 @@ export default function InventoryBatches({
     const lbsIn = roundQty(
       orderItems.reduce(
         (acc, it) => acc + (isPounds(it.unit) ? Number(it.quantity || 0) : 0),
-        0
-      )
+        0,
+      ),
     );
     const lbsRem = roundQty(
       orderItems.reduce(
         (acc, it) => acc + (isPounds(it.unit) ? Number(it.remaining || 0) : 0),
-        0
-      )
+        0,
+      ),
     );
 
     const totalFacturado = Number(
       orderItems
         .reduce((acc, it) => acc + Number(it.invoiceTotal || 0), 0)
-        .toFixed(2)
+        .toFixed(2),
     );
     const totalEsperado = Number(
       orderItems
         .reduce((acc, it) => acc + Number(it.expectedTotal || 0), 0)
-        .toFixed(2)
+        .toFixed(2),
     );
     const utilidadBruta = Number((totalEsperado - totalFacturado).toFixed(2));
 
@@ -535,7 +567,7 @@ export default function InventoryBatches({
     setUnitFilter("lb");
     setProductId("");
     setQuantity(0);
-    setPurchasePrice(0);
+    setPurchasePrice(NaN);
     setSalePrice(0);
     setOrderItems([]);
   };
@@ -713,7 +745,7 @@ export default function InventoryBatches({
           productName: b.productName,
           quantity: b.quantity,
           amount: Number(
-            (b.expectedTotal ?? b.salePrice * b.quantity).toFixed(2)
+            (b.expectedTotal ?? b.salePrice * b.quantity).toFixed(2),
           ),
           allocations: [
             {
@@ -753,7 +785,7 @@ export default function InventoryBatches({
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Inventario</h2>
 
-        {isAdmin && (
+        {canCreateBatch && (
           <button
             className="px-3 py-2 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
             type="button"
@@ -823,42 +855,67 @@ export default function InventoryBatches({
 
       {/* KPIs (igual que tu grid, pero mobile-first) */}
       <div className="bg-gray-50 p-3 rounded-2xl shadow-2xl border mb-3 text-base">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2 gap-x-8">
-          <div>
-            <span className="font-semibold">Libras ingresadas:</span>{" "}
-            {totals.lbsIng.toFixed(3)}
+        <div
+          className="flex items-center justify-between cursor-pointer"
+          onClick={toggleKpis}
+          role="button"
+          aria-expanded={kpisExpanded}
+        >
+          <div className="flex gap-6 items-center">
+            <div>
+              <span className="font-semibold">Libras ingresadas:</span>{" "}
+              {totals.lbsIng.toFixed(3)}
+            </div>
+            <div>
+              <span className="font-semibold">Libras restantes:</span>{" "}
+              {totals.lbsRem.toFixed(3)}
+            </div>
           </div>
-          <div>
-            <span className="font-semibold">Libras restantes:</span>{" "}
-            {totals.lbsRem.toFixed(3)}
-          </div>
-          <div>
-            <span className="font-semibold">Unidades ingresadas:</span>{" "}
-            {totals.udsIng.toFixed(3)}
-          </div>
-          <div>
-            <span className="font-semibold">Unidades restantes:</span>{" "}
-            {totals.udsRem.toFixed(3)}
-          </div>
-          <div>
-            <span className="font-semibold">Total esperado en ventas:</span> C${" "}
-            {totals.totalEsperado.toFixed(2)}
-          </div>
-          <div>
-            <span className="font-semibold">Total facturado:</span> C${" "}
-            {totals.totalFacturado.toFixed(2)}
-          </div>
-          <div>
-            <span className="font-semibold">Ganancia sin gastos:</span> C${" "}
-            {(totals.totalEsperado - totals.totalFacturado).toFixed(2)}
-          </div>
-          <div>
-            <span className="font-semibold">
-              Cantidad de Lotes (por filtro):
-            </span>{" "}
-            {filteredBatches.length.toLocaleString()}
+          <div className="text-sm text-gray-500">
+            {kpisExpanded ? "Cerrar" : "Ver más"}
           </div>
         </div>
+
+        {kpisExpanded && (
+          <div className="mt-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2 gap-x-8">
+              <div>
+                <span className="font-semibold">Libras ingresadas:</span>{" "}
+                {totals.lbsIng.toFixed(3)}
+              </div>
+              <div>
+                <span className="font-semibold">Libras restantes:</span>{" "}
+                {totals.lbsRem.toFixed(3)}
+              </div>
+              <div>
+                <span className="font-semibold">Unidades ingresadas:</span>{" "}
+                {totals.udsIng.toFixed(3)}
+              </div>
+              <div>
+                <span className="font-semibold">Unidades restantes:</span>{" "}
+                {totals.udsRem.toFixed(3)}
+              </div>
+              <div>
+                <span className="font-semibold">Total esperado en ventas:</span>{" "}
+                C$ {totals.totalEsperado.toFixed(2)}
+              </div>
+              <div>
+                <span className="font-semibold">Total facturado:</span> C${" "}
+                {totals.totalFacturado.toFixed(2)}
+              </div>
+              <div>
+                <span className="font-semibold">Ganancia sin gastos:</span> C${" "}
+                {(totals.totalEsperado - totals.totalFacturado).toFixed(2)}
+              </div>
+              <div>
+                <span className="font-semibold">
+                  Cantidad de Lotes (por filtro):
+                </span>{" "}
+                {filteredBatches.length.toLocaleString()}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ===================== */}
@@ -874,104 +931,122 @@ export default function InventoryBatches({
             Sin lotes
           </div>
         ) : (
-          groupedRows.map((g) => (
-            <div
-              key={g.groupId}
-              className="bg-white border rounded-2xl p-4 shadow"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-semibold text-lg">{g.date}</div>
-                  <div className="text-xs text-gray-500 truncate">
-                    {g.orderName}
-                  </div>
-                </div>
-
-                <span
-                  className={`px-2 py-1 rounded text-xs shrink-0 ${
-                    g.status === "PAGADO"
-                      ? "bg-green-100 text-green-700"
-                      : "bg-yellow-100 text-yellow-700"
-                  }`}
+          groupedRows.map((g) => {
+            const expanded = expandedGroupId === g.groupId;
+            return (
+              <div key={g.groupId} className="bg-white border rounded-2xl">
+                <div
+                  className="p-4 flex items-start justify-between gap-3 cursor-pointer"
+                  onClick={() => toggleGroupExpand(g.groupId)}
                 >
-                  {g.status}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                <div className="bg-gray-50 rounded-xl p-2">
-                  <div className="text-[11px] text-gray-500">Tipo</div>
-                  <div className="font-semibold">{g.typeLabel}</div>
-                </div>
-
-                <div className="bg-gray-50 rounded-xl p-2">
-                  <div className="text-[11px] text-gray-500">
-                    Utilidad bruta
+                  <div className="min-w-0">
+                    <div className="font-semibold text-lg">{g.date}</div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {g.orderName}
+                    </div>
                   </div>
-                  <div className="font-semibold">{money(g.utilidadBruta)}</div>
-                </div>
 
-                <div className="bg-gray-50 rounded-xl p-2">
-                  <div className="text-[11px] text-gray-500">
-                    Lbs ingresadas
-                  </div>
-                  <div className="font-semibold">{g.lbsIn.toFixed(3)}</div>
-                </div>
-
-                <div className="bg-gray-50 rounded-xl p-2">
-                  <div className="text-[11px] text-gray-500">Lbs restantes</div>
-                  <div className="font-semibold">{g.lbsRem.toFixed(3)}</div>
-                </div>
-
-                <div className="bg-gray-50 rounded-xl p-2 col-span-2">
-                  <div className="flex justify-between text-[11px] text-gray-500">
-                    <span>Total facturado</span>
-                    <span>Total esperado</span>
-                  </div>
-                  <div className="flex justify-between font-semibold">
-                    <span>{money(g.totalFacturado)}</span>
-                    <span>{money(g.totalEsperado)}</span>
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`px-2 py-1 rounded text-xs shrink-0 ${
+                        g.status === "PAGADO"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-yellow-100 text-yellow-700"
+                      }`}
+                    >
+                      {g.status}
+                    </span>
+                    <div className="text-sm text-gray-500">{g.typeLabel}</div>
                   </div>
                 </div>
-              </div>
 
-              <div className="mt-3 flex gap-2">
-                <button
-                  className="flex-1 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm"
-                  onClick={() => openDetail(g)}
-                >
-                  Ver detalle
-                </button>
+                {expanded && (
+                  <div className="p-4 pt-0">
+                    <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                      <div className="bg-gray-50 rounded-xl p-2">
+                        <div className="text-[11px] text-gray-500">Tipo</div>
+                        <div className="font-semibold">{g.typeLabel}</div>
+                      </div>
 
-                {isAdmin ? (
-                  <>
-                    {g.status === "PENDIENTE" && (
+                      <div className="bg-gray-50 rounded-xl p-2">
+                        <div className="text-[11px] text-gray-500">
+                          Utilidad bruta
+                        </div>
+                        <div className="font-semibold">
+                          {money(g.utilidadBruta)}
+                        </div>
+                      </div>
+
+                      <div className="bg-gray-50 rounded-xl p-2">
+                        <div className="text-[11px] text-gray-500">
+                          Lbs ingresadas
+                        </div>
+                        <div className="font-semibold">
+                          {g.lbsIn.toFixed(3)}
+                        </div>
+                      </div>
+
+                      <div className="bg-gray-50 rounded-xl p-2">
+                        <div className="text-[11px] text-gray-500">
+                          Lbs restantes
+                        </div>
+                        <div className="font-semibold">
+                          {g.lbsRem.toFixed(3)}
+                        </div>
+                      </div>
+
+                      <div className="bg-gray-50 rounded-xl p-2 col-span-2">
+                        <div className="flex justify-between text-[11px] text-gray-500">
+                          <span>Total facturado</span>
+                          <span>Total esperado</span>
+                        </div>
+                        <div className="flex justify-between font-semibold">
+                          <span>{money(g.totalFacturado)}</span>
+                          <span>{money(g.totalEsperado)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex gap-2">
                       <button
-                        className="px-3 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm"
-                        onClick={() => payGroup(g)}
+                        className="flex-1 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm"
+                        onClick={() => openDetail(g)}
                       >
-                        Pagar
+                        Ver detalle
                       </button>
-                    )}
 
-                    <button
-                      className="px-3 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 text-white text-sm"
-                      onClick={() => openForEdit(g)}
-                    >
-                      Editar
-                    </button>
+                      {isAdmin ? (
+                        <>
+                          {g.status === "PENDIENTE" && (
+                            <button
+                              className="px-3 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm"
+                              onClick={() => payGroup(g)}
+                            >
+                              Pagar
+                            </button>
+                          )}
 
-                    <button
-                      className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm"
-                      onClick={() => deleteGroup(g)}
-                    >
-                      Borrar
-                    </button>
-                  </>
-                ) : null}
+                          <button
+                            className="px-3 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 text-white text-sm"
+                            onClick={() => openForEdit(g)}
+                          >
+                            Editar
+                          </button>
+
+                          <button
+                            className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm"
+                            onClick={() => deleteGroup(g)}
+                          >
+                            Borrar
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -1138,7 +1213,7 @@ export default function InventoryBatches({
                         setUnitFilter(e.target.value);
                         setProductId("");
                         setQuantity(0);
-                        setPurchasePrice(0);
+                        setPurchasePrice(NaN);
                         setSalePrice(0);
                       }}
                     >
@@ -1197,14 +1272,17 @@ export default function InventoryBatches({
                       step="0.01"
                       inputMode="decimal"
                       className="w-full border p-2 rounded"
-                      value={purchasePrice === 0 ? "" : purchasePrice}
+                      value={Number.isNaN(purchasePrice) ? "" : purchasePrice}
                       onChange={(e) => {
                         const raw = e.target.value.replace(",", ".");
+                        if (raw === "") return setPurchasePrice(NaN);
                         const num = parseFloat(raw);
                         const safe = Number.isFinite(num)
                           ? parseFloat(num.toFixed(2))
-                          : 0;
-                        setPurchasePrice(Math.max(0, safe));
+                          : NaN;
+                        setPurchasePrice(
+                          Number.isFinite(safe) ? Math.max(0, safe) : NaN,
+                        );
                       }}
                       disabled={!productId}
                     />
@@ -1299,7 +1377,7 @@ export default function InventoryBatches({
                                 updateOrderItemField(
                                   it.tempId,
                                   "quantity",
-                                  safe
+                                  safe,
                                 );
                               }}
                             />
@@ -1325,7 +1403,7 @@ export default function InventoryBatches({
                                 updateOrderItemField(
                                   it.tempId,
                                   "purchasePrice",
-                                  safe
+                                  safe,
                                 );
                               }}
                             />
@@ -1347,7 +1425,7 @@ export default function InventoryBatches({
                                 updateOrderItemField(
                                   it.tempId,
                                   "salePrice",
-                                  safe
+                                  safe,
                                 );
                               }}
                             />
@@ -1433,7 +1511,7 @@ export default function InventoryBatches({
               </div>
             </div>
           </div>,
-          document.body
+          document.body,
         )}
 
       {/* ======================= */}
@@ -1545,7 +1623,7 @@ export default function InventoryBatches({
               </div>
             </div>
           </div>,
-          document.body
+          document.body,
         )}
 
       {/* ======================= */}
@@ -1587,7 +1665,7 @@ export default function InventoryBatches({
               </div>
             </div>
           </div>,
-          document.body
+          document.body,
         )}
     </div>
   );

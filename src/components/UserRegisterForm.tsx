@@ -1,6 +1,6 @@
 // src/components/UserRegisterForm.tsx
 import React, { useEffect, useState } from "react";
-import { getAuth, signOut } from "firebase/auth";
+import { getAuth, signOut, sendPasswordResetEmail } from "firebase/auth";
 import { getApp, initializeApp, deleteApp } from "firebase/app";
 
 import { db } from "../firebase";
@@ -16,6 +16,8 @@ import {
 
 type Role =
   | "admin"
+  | "supervisor_pollo"
+  | "contador"
   | "vendedor_pollo"
   | "vendedor_ropa"
   | "vendedor_dulces"
@@ -25,7 +27,7 @@ interface UserRow {
   id: string; // uid
   email: string;
   name: string;
-  role: Role;
+  roles: Role[];
   sellerCandyId?: string; // id del vendedor (sellers_candies) si es vendedor_dulces
 }
 
@@ -42,7 +44,7 @@ export default function UserRegisterForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [role, setRole] = useState<Role>("vendedor_pollo");
+  const [roles, setRoles] = useState<Role[]>(["vendedor_pollo"]);
   const [message, setMessage] = useState("");
 
   // vendedor de dulces asignado al crear
@@ -54,8 +56,9 @@ export default function UserRegisterForm() {
 
   // edición en tabla
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editRole, setEditRole] = useState<Role>("vendedor_pollo");
+  const [editRoles, setEditRoles] = useState<Role[]>(["vendedor_pollo"]);
   const [editSellerCandyId, setEditSellerCandyId] = useState<string>("");
+  const [origEmail, setOrigEmail] = useState<string>("");
 
   // modal crear
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -68,6 +71,8 @@ export default function UserRegisterForm() {
     if (r === "vendedor") return "vendedor_pollo"; // compat antigua
     if (
       r === "admin" ||
+      r === "supervisor_pollo" ||
+      r === "contador" ||
       r === "vendedor_pollo" ||
       r === "vendedor_ropa" ||
       r === "vendedor_dulces"
@@ -75,6 +80,13 @@ export default function UserRegisterForm() {
       return r;
     }
     return "vendedor_pollo";
+  };
+
+  const normalizeRoles = (input?: any): Role[] => {
+    if (!input) return ["vendedor_pollo"] as Role[];
+    if (Array.isArray(input)) return input.map((x) => normalizeRole(String(x)));
+    // fall back to single string role
+    return [normalizeRole(String(input))];
   };
 
   const loadUsers = async () => {
@@ -87,7 +99,7 @@ export default function UserRegisterForm() {
         id: d.id,
         email: it.email ?? "",
         name: it.name ?? "",
-        role: normalizeRole(it.role),
+        roles: normalizeRoles(it.roles ?? it.role),
         sellerCandyId: it.sellerCandyId ?? "",
       });
     });
@@ -123,17 +135,25 @@ export default function UserRegisterForm() {
     setName("");
     setEmail("");
     setPassword("");
-    setRole("vendedor_pollo");
+    setRoles(["vendedor_pollo"] as Role[]);
     setSellerCandyIdCreate("");
   };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
-
-    if (password.length < 4) {
-      setMessage("❌ La contraseña debe tener al menos 4 caracteres.");
-      return;
+    // When creating a new user, password is required and must be >=6
+    if (!editingId) {
+      if (password.length < 6) {
+        setMessage("❌ La contraseña debe tener al menos 6 caracteres.");
+        return;
+      }
+    } else {
+      // editing: password is optional; if provided must be >=6
+      if (password && password.length > 0 && password.length < 6) {
+        setMessage("❌ La contraseña debe tener al menos 6 caracteres.");
+        return;
+      }
     }
     if (!name.trim()) {
       setMessage("❌ El nombre es obligatorio.");
@@ -141,11 +161,66 @@ export default function UserRegisterForm() {
     }
 
     try {
+      // If editing an existing user -> update Firestore only and optionally send a reset email
+      if (editingId) {
+        const ref = doc(db, "users", editingId);
+        const finalRoles = editRoles.length
+          ? editRoles
+          : (["vendedor_pollo"] as Role[]);
+        const sellerCandyIdToSave = finalRoles.includes("vendedor_dulces")
+          ? editSellerCandyId || sellerCandyIdCreate || ""
+          : "";
+
+        await updateDoc(ref, {
+          email,
+          name: name.trim(),
+          roles: finalRoles,
+          role: finalRoles[0] || "vendedor_pollo",
+          sellerCandyId: sellerCandyIdToSave,
+        });
+
+        setUsers((prev) =>
+          prev.map((x) =>
+            x.id === editingId
+              ? {
+                  ...x,
+                  email,
+                  name: name.trim(),
+                  roles: finalRoles,
+                  sellerCandyId: sellerCandyIdToSave,
+                }
+              : x,
+          ),
+        );
+
+        // If admin filled a new password, send password reset to the original auth email
+        if (password && password.length >= 6) {
+          try {
+            const auth = getAuth();
+            const targetEmail = origEmail || email;
+            await sendPasswordResetEmail(auth, targetEmail);
+            setMessage(
+              `✅ Usuario actualizado. Se envió correo de restablecimiento a ${targetEmail}`,
+            );
+          } catch (err: any) {
+            console.error("Error sending password reset:", err);
+            setMessage(
+              "✅ Usuario actualizado. No se pudo enviar correo de restablecimiento.",
+            );
+          }
+        } else {
+          setMessage("✅ Usuario actualizado correctamente.");
+        }
+
+        cancelEdit();
+        return;
+      }
+
       // 1) Crear instancia secundaria que NO afecta tu sesión actual
       const primaryApp = getApp(); // tu app principal ya inicializada
       const secondaryApp = initializeApp(
         primaryApp.options as any,
-        "Secondary"
+        "Secondary",
       );
       const secondaryAuth = getAuth(secondaryApp);
 
@@ -153,18 +228,20 @@ export default function UserRegisterForm() {
       const userCred = await createUserWithEmailAndPassword(
         secondaryAuth,
         email,
-        password
+        password,
       );
 
       // 3) Guardar su perfil en Firestore (colección users)
-      const finalRole = normalizeRole(role);
-      const sellerCandyIdToSave =
-        finalRole === "vendedor_dulces" ? sellerCandyIdCreate || "" : "";
+      const finalRoles = roles.length ? roles : (["vendedor_pollo"] as Role[]);
+      const sellerCandyIdToSave = finalRoles.includes("vendedor_dulces")
+        ? sellerCandyIdCreate || ""
+        : "";
 
       await setDoc(doc(collection(db, "users"), userCred.user.uid), {
         email,
         name: name.trim(),
-        role: finalRole,
+        roles: finalRoles,
+        role: finalRoles[0] || "vendedor_pollo",
         sellerCandyId: sellerCandyIdToSave,
       });
 
@@ -178,7 +255,7 @@ export default function UserRegisterForm() {
           id: userCred.user.uid,
           email,
           name: name.trim(),
-          role: finalRole,
+          roles: finalRoles,
           sellerCandyId: sellerCandyIdToSave,
         },
         ...prev,
@@ -194,38 +271,30 @@ export default function UserRegisterForm() {
   };
 
   const startEdit = (u: UserRow) => {
+    // Open the create modal populated with the user's data for editing
     setEditingId(u.id);
-    setEditRole(normalizeRole(u.role));
+    setName(u.name || "");
+    setEmail(u.email || "");
+    setOrigEmail(u.email || "");
+    setEditRoles(
+      u.roles && u.roles.length ? u.roles : (["vendedor_pollo"] as Role[]),
+    );
+    setSellerCandyIdCreate(u.sellerCandyId || "");
     setEditSellerCandyId(u.sellerCandyId || "");
+    setPassword("");
+    setShowCreateModal(true);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
-    setEditRole("vendedor_pollo");
+    setEditRoles(["vendedor_pollo"] as Role[]);
     setEditSellerCandyId("");
+    setOrigEmail("");
+    resetCreateForm();
+    setShowCreateModal(false);
   };
 
-  const saveEdit = async () => {
-    if (!editingId) return;
-    const ref = doc(db, "users", editingId);
-    const finalRole = normalizeRole(editRole);
-    const sellerCandyIdToSave =
-      finalRole === "vendedor_dulces" ? editSellerCandyId || "" : "";
-
-    await updateDoc(ref, {
-      role: finalRole,
-      sellerCandyId: sellerCandyIdToSave,
-    });
-
-    setUsers((prev) =>
-      prev.map((x) =>
-        x.id === editingId
-          ? { ...x, role: finalRole, sellerCandyId: sellerCandyIdToSave }
-          : x
-      )
-    );
-    cancelEdit();
-  };
+  // Note: we will handle both create and edit in handleRegister
 
   const deleteUserDoc = async (id: string) => {
     const ok = confirm("¿Eliminar este usuario del listado?");
@@ -238,20 +307,24 @@ export default function UserRegisterForm() {
     const label =
       r === "admin"
         ? "admin"
-        : r === "vendedor_ropa"
-        ? "vendedor_ropa"
-        : r === "vendedor_dulces"
-        ? "vendedor_dulces"
-        : "vendedor_pollo";
+        : r === "supervisor_pollo"
+          ? "supervisor_pollo"
+          : r === "vendedor_ropa"
+            ? "vendedor_ropa"
+            : r === "vendedor_dulces"
+              ? "vendedor_dulces"
+              : "vendedor_pollo";
 
     const cls =
       label === "admin"
         ? "bg-blue-100 text-blue-700"
-        : label === "vendedor_ropa"
-        ? "bg-indigo-100 text-indigo-700"
-        : label === "vendedor_dulces"
-        ? "bg-pink-100 text-pink-700"
-        : "bg-green-100 text-green-700";
+        : label === "supervisor_pollo"
+          ? "bg-amber-100 text-amber-700"
+          : label === "vendedor_ropa"
+            ? "bg-indigo-100 text-indigo-700"
+            : label === "vendedor_dulces"
+              ? "bg-pink-100 text-pink-700"
+              : "bg-green-100 text-green-700";
 
     return (
       <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>
@@ -304,8 +377,9 @@ export default function UserRegisterForm() {
             ) : (
               users.map((u) => {
                 const isEditing = editingId === u.id;
-                const isVendDulcesRow =
-                  (isEditing ? editRole : u.role) === "vendedor_dulces";
+                const isVendDulcesRow = (
+                  isEditing ? editRoles : u.roles
+                ).includes("vendedor_dulces");
 
                 return (
                   <tr key={u.id} className="text-center">
@@ -313,27 +387,37 @@ export default function UserRegisterForm() {
                     <td className="p-2 border">{u.email}</td>
                     <td className="p-2 border">
                       {isEditing ? (
-                        <div className="space-y-2">
-                          <select
-                            className="w-full border p-1 rounded"
-                            value={editRole}
-                            onChange={(e) =>
-                              setEditRole(e.target.value as Role)
-                            }
-                          >
-                            <option value="admin">Admin</option>
-                            <option value="vendedor_pollo">
-                              Vendedor Pollo
-                            </option>
-                            <option value="vendedor_ropa">Vendedor Ropa</option>
-                            <option value="vendedor_dulces">
-                              Vendedor Dulces
-                            </option>
-                          </select>
+                        <div className="space-y-2 text-left">
+                          {[
+                            "supervisor_pollo",
+                            "admin",
+                            "vendedor_pollo",
+                            "vendedor_ropa",
+                            "vendedor_dulces",
+                          ].map((opt) => (
+                            <label
+                              key={opt}
+                              className="inline-flex items-center mr-3"
+                            >
+                              <input
+                                type="checkbox"
+                                className="mr-2"
+                                checked={editRoles.includes(opt as Role)}
+                                onChange={() =>
+                                  setEditRoles((prev) =>
+                                    prev.includes(opt as Role)
+                                      ? prev.filter((x) => x !== (opt as Role))
+                                      : [...prev, opt as Role],
+                                  )
+                                }
+                              />
+                              <span className="text-sm">{opt}</span>
+                            </label>
+                          ))}
 
-                          {editRole === "vendedor_dulces" && (
+                          {editRoles.includes("vendedor_dulces") && (
                             <select
-                              className="w-full border p-1 rounded text-xs"
+                              className="w-full border p-1 rounded text-xs mt-1"
                               value={editSellerCandyId}
                               onChange={(e) =>
                                 setEditSellerCandyId(e.target.value)
@@ -352,10 +436,13 @@ export default function UserRegisterForm() {
                         </div>
                       ) : (
                         <>
-                          {roleBadge(u.role)}
+                          <div className="flex gap-2 justify-center">
+                            {u.roles.map((r) => (
+                              <span key={r}>{roleBadge(r)}</span>
+                            ))}
+                          </div>
                           {isVendDulcesRow && u.sellerCandyId && (
                             <div className="mt-1 text-[11px] text-gray-500">
-                              {/* Solo texto pequeño informativo, sin cambiar columnas */}
                               Vendedor asignado
                             </div>
                           )}
@@ -363,37 +450,20 @@ export default function UserRegisterForm() {
                       )}
                     </td>
                     <td className="p-2 border space-x-2">
-                      {isEditing ? (
-                        <>
-                          <button
-                            className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                            onClick={saveEdit}
-                          >
-                            Guardar
-                          </button>
-                          <button
-                            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                            onClick={cancelEdit}
-                          >
-                            Cancelar
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                            onClick={() => startEdit(u)}
-                          >
-                            Editar
-                          </button>
-                          <button
-                            className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                            onClick={() => deleteUserDoc(u.id)}
-                          >
-                            Eliminar
-                          </button>
-                        </>
-                      )}
+                      <>
+                        <button
+                          className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                          onClick={() => startEdit(u)}
+                        >
+                          Editar
+                        </button>
+                        <button
+                          className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                          onClick={() => deleteUserDoc(u.id)}
+                        >
+                          Eliminar
+                        </button>
+                      </>
                     </td>
                   </tr>
                 );
@@ -414,10 +484,12 @@ export default function UserRegisterForm() {
           />
           <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-lg max-h-[92vh] overflow-auto p-4">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">Registrar nuevo usuario</h3>
+              <h3 className="text-lg font-bold">
+                {editingId ? "Editar usuario" : "Registrar nuevo usuario"}
+              </h3>
               <button
                 className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                onClick={() => setShowCreateModal(false)}
+                onClick={cancelEdit}
                 type="button"
               >
                 Cerrar
@@ -461,7 +533,7 @@ export default function UserRegisterForm() {
                   className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-purple-400 pr-10"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  required
+                  required={!editingId}
                 />
                 <button
                   type="button"
@@ -474,21 +546,51 @@ export default function UserRegisterForm() {
 
               <div className="space-y-1">
                 <label className="block text-sm font-semibold text-gray-700">
-                  Rol
+                  Roles
                 </label>
-                <select
-                  className="w-full border p-2 rounded"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as Role)}
-                >
-                  <option value="admin">Admin</option>
-                  <option value="vendedor_pollo">Vendedor Pollo</option>
-                  <option value="vendedor_ropa">Vendedor Ropa</option>
-                  <option value="vendedor_dulces">Vendedor Dulces</option>
-                </select>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    "supervisor_pollo",
+                    "contador",
+                    "admin",
+                    "vendedor_pollo",
+                    "vendedor_ropa",
+                    "vendedor_dulces",
+                  ].map((opt) => (
+                    <label key={opt} className="inline-flex items-center mr-3">
+                      <input
+                        type="checkbox"
+                        className="mr-2"
+                        checked={
+                          editingId
+                            ? editRoles.includes(opt as Role)
+                            : roles.includes(opt as Role)
+                        }
+                        onChange={() => {
+                          if (editingId) {
+                            setEditRoles((prev) =>
+                              prev.includes(opt as Role)
+                                ? prev.filter((x) => x !== (opt as Role))
+                                : [...prev, opt as Role],
+                            );
+                          } else {
+                            setRoles((prev) =>
+                              prev.includes(opt as Role)
+                                ? prev.filter((x) => x !== (opt as Role))
+                                : [...prev, opt as Role],
+                            );
+                          }
+                        }}
+                      />
+                      <span className="text-sm">{opt}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
 
-              {role === "vendedor_dulces" && (
+              {(editingId
+                ? editRoles.includes("vendedor_dulces")
+                : roles.includes("vendedor_dulces")) && (
                 <div className="space-y-1">
                   <label className="block text-sm font-semibold text-gray-700">
                     Vendedor (dulces)
@@ -514,12 +616,12 @@ export default function UserRegisterForm() {
                 <button
                   type="button"
                   className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                  onClick={() => setShowCreateModal(false)}
+                  onClick={cancelEdit}
                 >
                   Cancelar
                 </button>
                 <button className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
-                  Crear usuario
+                  {editingId ? "Guardar cambios" : "Crear usuario"}
                 </button>
               </div>
             </form>

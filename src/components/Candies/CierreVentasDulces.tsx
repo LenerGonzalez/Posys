@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { hasRole } from "../../utils/roles";
 import { db } from "../../firebase";
 import {
   collection,
@@ -157,7 +158,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   // Totales root para prorratear comisión en multi-ítem
   const saleTotalRoot =
     Number(
-      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0
+      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0,
     ) || 0;
   const saleCommissionRoot = Number(raw.vendorCommissionAmount ?? 0) || 0;
 
@@ -173,7 +174,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         Math.max(
           0,
           Number(it?.unitPricePackage || it?.unitPrice || 0) * qtyPacks -
-            Number(it?.discount || 0)
+            Number(it?.discount || 0),
         );
 
       // ✅ Comisión por línea (prorrateada)
@@ -184,7 +185,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         Number(lineFinal || 0) > 0
       ) {
         lineCommission = round2(
-          (saleCommissionRoot * Number(lineFinal || 0)) / saleTotalRoot
+          (saleCommissionRoot * Number(lineFinal || 0)) / saleTotalRoot,
         );
       }
 
@@ -258,16 +259,20 @@ type RoleCandies =
   | "admin"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "supervisor_pollo"
+  | "contador";
 
 export default function CierreVentasDulces({
   role,
   currentUserEmail,
   sellerCandyId,
+  roles,
 }: {
-  role?: RoleCandies;
+  role?: string;
   currentUserEmail?: string;
   sellerCandyId?: string;
+  roles?: string[];
 }): React.ReactElement {
   const [salesV2, setSales] = useState<SaleData[]>([]);
   const [closure, setClosure] = useState<ClosureData | null>(null);
@@ -292,8 +297,9 @@ export default function CierreVentasDulces({
 
   const pdfRef = useRef<HTMLDivElement>(null);
 
-  const isAdmin = !role || role === "admin";
-  const isVendDulces = role === "vendedor_dulces";
+  const subject = roles && roles.length ? roles : role;
+  const isAdmin = !subject || hasRole(subject, "admin");
+  const isVendDulces = hasRole(subject, "vendedor_dulces");
   const currentEmailNorm = (currentUserEmail || "").trim().toLowerCase();
 
   // vendedores para KPI listado + filtro
@@ -309,7 +315,7 @@ export default function CierreVentasDulces({
       collection(db, "sales_candies"),
       where("date", ">=", startDate),
       where("date", "<=", endDate),
-      orderBy("date", "asc")
+      orderBy("date", "asc"),
     );
 
     const unsub = onSnapshot(
@@ -327,7 +333,7 @@ export default function CierreVentasDulces({
         console.error("Error cargando ventas por periodo:", err);
         setSales([]);
         setLoading(false);
-      }
+      },
     );
 
     return () => unsub();
@@ -338,7 +344,7 @@ export default function CierreVentasDulces({
     const fetchClosure = async () => {
       const qC = query(
         collection(db, "daily_closures_candies"),
-        where("date", "==", today)
+        where("date", "==", today),
       );
       const snapshot = await getDocs(qC);
       if (!snapshot.empty) {
@@ -398,7 +404,7 @@ export default function CierreVentasDulces({
         base = base.filter((s) => (s.vendorId || "") === sellerCandyId);
       } else if (currentEmailNorm) {
         base = base.filter(
-          (s) => (s.sellerEmail || "").toLowerCase() === currentEmailNorm
+          (s) => (s.sellerEmail || "").toLowerCase() === currentEmailNorm,
         );
       } else {
         base = [];
@@ -419,32 +425,32 @@ export default function CierreVentasDulces({
   // ✅ KPIs flotantes/procesadas
   const kpiFloCount = React.useMemo(
     () => visibleSales.filter((s) => s.status === "FLOTANTE").length,
-    [visibleSales]
+    [visibleSales],
   );
   const kpiProCount = React.useMemo(
     () => visibleSales.filter((s) => s.status === "PROCESADA").length,
-    [visibleSales]
+    [visibleSales],
   );
 
   // ✅ NUEVO KPI: ventas crédito / cash (conteo)
   const kpiCreditoCount = React.useMemo(
     () => visibleSales.filter((s) => s.type === "CREDITO").length,
-    [visibleSales]
+    [visibleSales],
   );
   const kpiCashCount = React.useMemo(
     () => visibleSales.filter((s) => s.type !== "CREDITO").length,
-    [visibleSales]
+    [visibleSales],
   );
 
   // Totales visibles (quantity = paquetes)
   const totalPaquetes = round3(
-    visibleSales.reduce((sum, s) => sum + (s.quantity || 0), 0)
+    visibleSales.reduce((sum, s) => sum + (s.quantity || 0), 0),
   );
   const totalCOGSVisible = round2(
-    visibleSales.reduce((sum, s) => sum + Number(s.cogsAmount ?? 0), 0)
+    visibleSales.reduce((sum, s) => sum + Number(s.cogsAmount ?? 0), 0),
   );
   const totalCharged = round2(
-    visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0)
+    visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0),
   );
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
@@ -548,13 +554,13 @@ export default function CierreVentasDulces({
         totalCommission: 0,
       };
     productMap[key].totalQuantity = round3(
-      productMap[key].totalQuantity + (s.quantity || 0)
+      productMap[key].totalQuantity + (s.quantity || 0),
     );
     productMap[key].totalAmount = round2(
-      productMap[key].totalAmount + (s.amount || 0)
+      productMap[key].totalAmount + (s.amount || 0),
     );
     productMap[key].totalCommission = round2(
-      productMap[key].totalCommission + getCommissionAmount(s)
+      productMap[key].totalCommission + getCommissionAmount(s),
     );
   });
 
@@ -564,7 +570,7 @@ export default function CierreVentasDulces({
       totalQuantity: v.totalQuantity,
       totalAmount: v.totalAmount,
       totalCommission: v.totalCommission,
-    })
+    }),
   );
 
   // ✅ Guardar cierre (ADMIN):
@@ -583,16 +589,16 @@ export default function CierreVentasDulces({
 
       const totals = {
         totalCharged: round2(
-          toProcess.reduce((a, s) => a + (s.amount || 0), 0)
+          toProcess.reduce((a, s) => a + (s.amount || 0), 0),
         ),
         totalSuggested: round2(
-          toProcess.reduce((a, s) => a + (s.amountSuggested || 0), 0)
+          toProcess.reduce((a, s) => a + (s.amountSuggested || 0), 0),
         ),
         totalUnits: round3(
-          toProcess.reduce((a, s) => a + (s.quantity || 0), 0)
+          toProcess.reduce((a, s) => a + (s.quantity || 0), 0),
         ),
         totalCOGS: round2(
-          toProcess.reduce((a, s) => a + Number(s.cogsAmount ?? 0), 0)
+          toProcess.reduce((a, s) => a + Number(s.cogsAmount ?? 0), 0),
         ),
       };
 
@@ -622,7 +628,7 @@ export default function CierreVentasDulces({
           amountCredit: 0,
           comCash: 0,
           comCredit: 0,
-        }
+        },
       );
 
       const totalsSplit = {
@@ -677,15 +683,21 @@ export default function CierreVentasDulces({
         })),
 
         productSummary: Object.entries(
-          toProcess.reduce((acc, s) => {
-            const k = s.productName || "(sin nombre)";
-            if (!acc[k]) acc[k] = { totalQuantity: 0, totalAmount: 0 };
-            acc[k].totalQuantity = round3(
-              acc[k].totalQuantity + (s.quantity || 0)
-            );
-            acc[k].totalAmount = round2(acc[k].totalAmount + (s.amount || 0));
-            return acc;
-          }, {} as Record<string, { totalQuantity: number; totalAmount: number }>)
+          toProcess.reduce(
+            (acc, s) => {
+              const k = s.productName || "(sin nombre)";
+              if (!acc[k]) acc[k] = { totalQuantity: 0, totalAmount: 0 };
+              acc[k].totalQuantity = round3(
+                acc[k].totalQuantity + (s.quantity || 0),
+              );
+              acc[k].totalAmount = round2(acc[k].totalAmount + (s.amount || 0));
+              return acc;
+            },
+            {} as Record<
+              string,
+              { totalQuantity: number; totalAmount: number }
+            >,
+          ),
         ).map(([productName, v]) => ({
           productName,
           totalQuantity: v.totalQuantity,
@@ -708,7 +720,7 @@ export default function CierreVentasDulces({
       await batch.commit();
 
       setMessage(
-        `✅ Cierre guardado. Ventas procesadas: ${toProcess.length}. (Proceso: ${today})`
+        `✅ Cierre guardado. Ventas procesadas: ${toProcess.length}. (Proceso: ${today})`,
       );
     } catch (error) {
       console.error(error);
@@ -771,18 +783,18 @@ export default function CierreVentasDulces({
     if (!isAdmin) return;
     if (
       !window.confirm(
-        "¿Eliminar esta venta? Se restaurará el stock (paquetes) en los lotes asignados."
+        "¿Eliminar esta venta? Se restaurará el stock (paquetes) en los lotes asignados.",
       )
     )
       return;
     try {
       const { restored } = await restoreCandySaleAndDelete(
-        saleId.split("#")[0]
+        saleId.split("#")[0],
       );
       setMessage(
         `🗑️ Venta eliminada. Stock restaurado (unidades internas): ${Number(
-          restored
-        ).toFixed(2)}.`
+          restored,
+        ).toFixed(2)}.`,
       );
     } catch (e) {
       console.error(e);

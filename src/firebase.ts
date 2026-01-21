@@ -1,7 +1,11 @@
 // firebase.ts
 import { initializeApp } from "firebase/app";
 import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import {
+  getAuth,
+  setPersistence,
+  browserLocalPersistence,
+} from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyA_ZzeP_DAoXeRuallrOaJ4xFaxjnuhw-8",
@@ -16,6 +20,15 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+
+// Intentar forzar persistencia local por defecto (mantener sesión al cerrar la app)
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  // Esto puede fallar en entornos sin soporte (e.g. some browsers/incognito)
+  console.warn(
+    "⚠️ No se pudo establecer persistencia local para Auth:",
+    err?.code || err,
+  );
+});
 
 // 🔌 Activar persistencia offline
 enableIndexedDbPersistence(db).catch((err) => {

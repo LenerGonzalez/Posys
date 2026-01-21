@@ -48,15 +48,15 @@ export default function ExpensesAdmin() {
 
   // ====== Filtros por fecha ======
   const [fromDate, setFromDate] = useState<string>(
-    format(startOfMonth(new Date()), "yyyy-MM-dd")
+    format(startOfMonth(new Date()), "yyyy-MM-dd"),
   );
   const [toDate, setToDate] = useState<string>(
-    format(endOfMonth(new Date()), "yyyy-MM-dd")
+    format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
 
   // ====== Formulario (crear) ======
   const [dateStr, setDateStr] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
+    format(new Date(), "yyyy-MM-dd"),
   );
   const [category, setCategory] = useState<Category | "">("");
   const [description, setDescription] = useState("");
@@ -77,6 +77,15 @@ export default function ExpensesAdmin() {
   const [eAmount, setEAmount] = useState<number>(0);
   const [eStatus, setEStatus] = useState<Status>("PENDIENTE");
   const [eNotes, setENotes] = useState<string>("");
+
+  // Mobile collapsible states
+  const [formOpen, setFormOpen] = useState<boolean>(false);
+  const toggleForm = () => setFormOpen((v) => !v);
+  const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(
+    null,
+  );
+  const toggleMobileExpense = (id: string) =>
+    setExpandedExpenseId((prev) => (prev === id ? null : id));
 
   // ====== Cargar gastos ======
   useEffect(() => {
@@ -211,7 +220,7 @@ export default function ExpensesAdmin() {
       await updateDoc(doc(db, "expenses", editingId), payload);
 
       setRows((prev) =>
-        prev.map((x) => (x.id === editingId ? { ...x, ...payload } : x))
+        prev.map((x) => (x.id === editingId ? { ...x, ...payload } : x)),
       );
       cancelEdit();
       setMsg("✅ Gasto actualizado");
@@ -279,102 +288,221 @@ export default function ExpensesAdmin() {
       </div>
 
       {/* ===== Formulario ===== */}
-      <form
-        onSubmit={handleCreate}
-        className="bg-white p-4 rounded-2xl shadow-2xl border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
-      >
-        <div>
-          <label className="block text-sm font-semibold">Fecha</label>
-          <input
-            type="date"
-            className="w-full border p-2 rounded"
-            value={dateStr}
-            onChange={(e) => setDateStr(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Categoría</label>
-          <select
-            className="w-full border p-2 rounded"
-            value={category}
-            onChange={(e) => setCategory(e.target.value as Category)}
-          >
-            <option value="">Selecciona</option>
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Descripción</label>
-          <input
-            className="w-full border p-2 rounded"
-            placeholder="Detalle del gasto…"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Monto</label>
-          <input
-            type="number"
-            step="0.01"
-            inputMode="decimal"
-            className="w-full border p-2 rounded text-right"
-            value={amount === 0 ? "" : amount}
-            onChange={(e) => {
-              const raw = String(e.target.value || "").replace(",", ".");
-              const num = parseFloat(raw);
-              setAmount(Number.isFinite(num) ? Math.max(0, num) : 0);
-            }}
-            placeholder="0.00"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-semibold">Estado</label>
-          <select
-            className="w-full border p-2 rounded"
-            value={status}
-            onChange={(e) => setStatus(e.target.value as Status)}
-          >
-            <option value="PENDIENTE">Pendiente</option>
-            <option value="PAGADO">Pagado</option>
-          </select>
-        </div>
-
-        <div className="md:col-span-2">
-          <label className="block text-sm font-semibold">Comentario</label>
-          <textarea
-            className="w-full border p-2 rounded resize-y min-h-24"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            maxLength={500}
-            placeholder="Comentario / nota opcional…"
-          />
-          <div className="text-xs text-gray-500 text-right">
-            {notes.length}/500
+      {/* Mobile: collapsible */}
+      <div className="md:hidden mb-4">
+        <button
+          type="button"
+          onClick={toggleForm}
+          className="w-full text-left px-3 py-3 flex items-center justify-between bg-white border rounded-2xl"
+        >
+          <div>
+            <div className="font-semibold">Crear gasto</div>
+            <div className="text-xs text-gray-600">
+              Fecha: {dateStr} • Monto: {amount === 0 ? "—" : money(amount)}
+            </div>
           </div>
-        </div>
+          <div className="text-gray-500">{formOpen ? "▲" : "▼"}</div>
+        </button>
 
-        <div className="md:col-span-2 flex gap-2">
-          <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Guardar gasto
-          </button>
-          <button
-            type="button"
-            className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
-            onClick={resetForm}
+        {formOpen && (
+          <form
+            onSubmit={handleCreate}
+            className="mt-3 bg-white p-4 rounded-2xl shadow-2xl border grid grid-cols-1 gap-4"
           >
-            Limpiar
-          </button>
-        </div>
-      </form>
+            <div>
+              <label className="block text-sm font-semibold">Fecha</label>
+              <input
+                type="date"
+                className="w-full border p-2 rounded"
+                value={dateStr}
+                onChange={(e) => setDateStr(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold">Categoría</label>
+              <select
+                className="w-full border p-2 rounded"
+                value={category}
+                onChange={(e) => setCategory(e.target.value as Category)}
+              >
+                <option value="">Selecciona</option>
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold">Descripción</label>
+              <input
+                className="w-full border p-2 rounded"
+                placeholder="Detalle del gasto…"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold">Monto</label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                className="w-full border p-2 rounded text-right"
+                value={amount === 0 ? "" : amount}
+                onChange={(e) => {
+                  const raw = String(e.target.value || "").replace(",", ".");
+                  const num = parseFloat(raw);
+                  setAmount(Number.isFinite(num) ? Math.max(0, num) : 0);
+                }}
+                placeholder="0.00"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold">Estado</label>
+              <select
+                className="w-full border p-2 rounded"
+                value={status}
+                onChange={(e) => setStatus(e.target.value as Status)}
+              >
+                <option value="PENDIENTE">Pendiente</option>
+                <option value="PAGADO">Pagado</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold">Comentario</label>
+              <textarea
+                className="w-full border p-2 rounded resize-y min-h-24"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                maxLength={500}
+                placeholder="Comentario / nota opcional…"
+              />
+              <div className="text-xs text-gray-500 text-right">
+                {notes.length}/500
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                Guardar gasto
+              </button>
+              <button
+                type="button"
+                className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+                onClick={resetForm}
+              >
+                Limpiar
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* Desktop: original form (visible md+) */}
+      <div className="hidden md:block">
+        <form
+          onSubmit={handleCreate}
+          className="bg-white p-4 rounded-2xl shadow-2xl border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
+        >
+          <div>
+            <label className="block text-sm font-semibold">Fecha</label>
+            <input
+              type="date"
+              className="w-full border p-2 rounded"
+              value={dateStr}
+              onChange={(e) => setDateStr(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold">Categoría</label>
+            <select
+              className="w-full border p-2 rounded"
+              value={category}
+              onChange={(e) => setCategory(e.target.value as Category)}
+            >
+              <option value="">Selecciona</option>
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm font-semibold">Descripción</label>
+            <input
+              className="w-full border p-2 rounded"
+              placeholder="Detalle del gasto…"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold">Monto</label>
+            <input
+              type="number"
+              step="0.01"
+              inputMode="decimal"
+              className="w-full border p-2 rounded text-right"
+              value={amount === 0 ? "" : amount}
+              onChange={(e) => {
+                const raw = String(e.target.value || "").replace(",", ".");
+                const num = parseFloat(raw);
+                setAmount(Number.isFinite(num) ? Math.max(0, num) : 0);
+              }}
+              placeholder="0.00"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold">Estado</label>
+            <select
+              className="w-full border p-2 rounded"
+              value={status}
+              onChange={(e) => setStatus(e.target.value as Status)}
+            >
+              <option value="PENDIENTE">Pendiente</option>
+              <option value="PAGADO">Pagado</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm font-semibold">Comentario</label>
+            <textarea
+              className="w-full border p-2 rounded resize-y min-h-24"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={500}
+              placeholder="Comentario / nota opcional…"
+            />
+            <div className="text-xs text-gray-500 text-right">
+              {notes.length}/500
+            </div>
+          </div>
+
+          <div className="md:col-span-2 flex gap-2">
+            <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+              Guardar gasto
+            </button>
+            <button
+              type="button"
+              className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
+              onClick={resetForm}
+            >
+              Limpiar
+            </button>
+          </div>
+        </form>
+      </div>
 
       {/* ===== LISTA MOBILE FIRST: cards en móvil ===== */}
       <div className="block md:hidden space-y-3">
@@ -388,15 +516,22 @@ export default function ExpensesAdmin() {
           </div>
         ) : (
           filteredRows.map((r) => {
+            const expanded = expandedExpenseId === r.id;
             const isEditing = editingId === r.id;
             return (
               <div
                 key={r.id}
-                className="bg-white border rounded-2xl shadow p-3"
+                className="bg-white border rounded-2xl overflow-hidden"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="text-sm">
-                    <div className="font-semibold">{r.description}</div>
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-3 flex items-start justify-between bg-white"
+                  onClick={() => toggleMobileExpense(r.id)}
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold truncate">
+                      {r.description}
+                    </div>
                     <div className="text-xs text-gray-500">
                       {r.category || "—"} • {r.date}
                     </div>
@@ -404,107 +539,113 @@ export default function ExpensesAdmin() {
                   <div className="text-right">
                     <div className="font-bold">{money(r.amount)}</div>
                     <span
-                      className={`px-2 py-0.5 rounded text-xs ${badge(
-                        r.status
-                      )}`}
+                      className={`px-2 py-0.5 rounded text-xs ${badge(r.status)}`}
                     >
                       {r.status}
                     </span>
                   </div>
-                </div>
+                </button>
 
-                <div className="mt-2 text-xs text-gray-600">
-                  {r.notes ? r.notes : "—"}
-                </div>
-
-                {isEditing ? (
-                  <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
-                    <input
-                      type="date"
-                      className="w-full border p-2 rounded"
-                      value={eDate}
-                      onChange={(e) => setEDate(e.target.value)}
-                    />
-                    <select
-                      className="w-full border p-2 rounded"
-                      value={eCategory}
-                      onChange={(e) => setECategory(e.target.value as Category)}
-                    >
-                      <option value="">Selecciona</option>
-                      {CATEGORIES.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      className="w-full border p-2 rounded"
-                      value={eDescription}
-                      onChange={(e) => setEDescription(e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      step="0.01"
-                      inputMode="decimal"
-                      className="w-full border p-2 rounded text-right"
-                      value={Number.isNaN(eAmount) ? "" : eAmount}
-                      onChange={(e) => {
-                        const raw = String(e.target.value || "").replace(
-                          ",",
-                          "."
-                        );
-                        const num = parseFloat(raw);
-                        setEAmount(Number.isFinite(num) ? Math.max(0, num) : 0);
-                      }}
-                    />
-                    <select
-                      className="w-full border p-2 rounded"
-                      value={eStatus}
-                      onChange={(e) => setEStatus(e.target.value as Status)}
-                    >
-                      <option value="PENDIENTE">Pendiente</option>
-                      <option value="PAGADO">Pagado</option>
-                    </select>
-                    <textarea
-                      className="w-full border p-2 rounded resize-y min-h-20"
-                      value={eNotes}
-                      onChange={(e) => setENotes(e.target.value)}
-                      maxLength={500}
-                    />
-
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        className="flex-1 px-3 py-2 rounded text-white bg-blue-600 hover:bg-blue-700"
-                        onClick={saveEdit}
-                      >
-                        Guardar
-                      </button>
-                      <button
-                        type="button"
-                        className="flex-1 px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                        onClick={cancelEdit}
-                      >
-                        Cancelar
-                      </button>
+                {expanded && (
+                  <div className="p-3">
+                    <div className="mt-2 text-xs text-gray-600">
+                      {r.notes ? r.notes : "—"}
                     </div>
-                  </div>
-                ) : (
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      type="button"
-                      className="flex-1 px-3 py-2 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                      onClick={() => startEdit(r)}
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      className="flex-1 px-3 py-2 rounded text-white bg-red-600 hover:bg-red-700"
-                      onClick={() => handleDelete(r)}
-                    >
-                      Borrar
-                    </button>
+
+                    {isEditing ? (
+                      <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+                        <input
+                          type="date"
+                          className="w-full border p-2 rounded"
+                          value={eDate}
+                          onChange={(e) => setEDate(e.target.value)}
+                        />
+                        <select
+                          className="w-full border p-2 rounded"
+                          value={eCategory}
+                          onChange={(e) =>
+                            setECategory(e.target.value as Category)
+                          }
+                        >
+                          <option value="">Selecciona</option>
+                          {CATEGORIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          className="w-full border p-2 rounded"
+                          value={eDescription}
+                          onChange={(e) => setEDescription(e.target.value)}
+                        />
+                        <input
+                          type="number"
+                          step="0.01"
+                          inputMode="decimal"
+                          className="w-full border p-2 rounded text-right"
+                          value={Number.isNaN(eAmount) ? "" : eAmount}
+                          onChange={(e) => {
+                            const raw = String(e.target.value || "").replace(
+                              ",",
+                              ".",
+                            );
+                            const num = parseFloat(raw);
+                            setEAmount(
+                              Number.isFinite(num) ? Math.max(0, num) : 0,
+                            );
+                          }}
+                        />
+                        <select
+                          className="w-full border p-2 rounded"
+                          value={eStatus}
+                          onChange={(e) => setEStatus(e.target.value as Status)}
+                        >
+                          <option value="PENDIENTE">Pendiente</option>
+                          <option value="PAGADO">Pagado</option>
+                        </select>
+                        <textarea
+                          className="w-full border p-2 rounded resize-y min-h-20"
+                          value={eNotes}
+                          onChange={(e) => setENotes(e.target.value)}
+                          maxLength={500}
+                        />
+
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="flex-1 px-3 py-2 rounded text-white bg-blue-600 hover:bg-blue-700"
+                            onClick={saveEdit}
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            type="button"
+                            className="flex-1 px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                            onClick={cancelEdit}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          className="flex-1 px-3 py-2 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                          onClick={() => startEdit(r)}
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          className="flex-1 px-3 py-2 rounded text-white bg-red-600 hover:bg-red-700"
+                          onClick={() => handleDelete(r)}
+                        >
+                          Borrar
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -606,11 +747,11 @@ export default function ExpensesAdmin() {
                           onChange={(e) => {
                             const raw = String(e.target.value || "").replace(
                               ",",
-                              "."
+                              ".",
                             );
                             const num = parseFloat(raw);
                             setEAmount(
-                              Number.isFinite(num) ? Math.max(0, num) : 0
+                              Number.isFinite(num) ? Math.max(0, num) : 0,
                             );
                           }}
                         />
@@ -632,7 +773,7 @@ export default function ExpensesAdmin() {
                       ) : (
                         <span
                           className={`px-2 py-0.5 rounded text-xs ${badge(
-                            r.status
+                            r.status,
                           )}`}
                         >
                           {r.status}

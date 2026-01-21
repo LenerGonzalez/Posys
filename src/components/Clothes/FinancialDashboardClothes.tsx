@@ -3,11 +3,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
-import RefreshButton from "../common/RefreshButton"; 
+import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
-
 
 type SaleType = "CONTADO" | "CREDITO";
 
@@ -159,7 +158,7 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
         qty: Number(it.qty || 0),
         unitPrice: Number(
           it.unitPrice ??
-            (Number(it.total || 0) / Math.max(1, Number(it.qty || 0)) || 0)
+            (Number(it.total || 0) / Math.max(1, Number(it.qty || 0)) || 0),
         ),
         discount: Number(it.discount || 0),
       })),
@@ -184,7 +183,7 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
         sku: single.sku || raw.sku || "",
         qty,
         unitPrice: Number(
-          single.unitPrice ?? (lineTotal && qty ? lineTotal / qty : 0)
+          single.unitPrice ?? (lineTotal && qty ? lineTotal / qty : 0),
         ),
         discount: Number(single.discount || 0),
       },
@@ -199,7 +198,7 @@ function computeFifoCogs(
   batches: BatchRow[],
   salesUpToToDate: SaleDoc[],
   fromDate: string,
-  toDate: string
+  toDate: string,
 ) {
   const byProd: Record<
     string,
@@ -225,7 +224,7 @@ function computeFifoCogs(
   }
 
   const orderedSales = [...salesUpToToDate].sort((a, b) =>
-    a.date.localeCompare(b.date)
+    a.date.localeCompare(b.date),
   );
 
   let cogsPeriod = 0;
@@ -258,10 +257,10 @@ export default function FinancialDashboardClothes() {
   const { refreshKey, refresh } = useManualRefresh();
 
   const [fromDate, setFromDate] = useState(
-    format(startOfMonth(new Date()), "yyyy-MM-dd")
+    format(startOfMonth(new Date()), "yyyy-MM-dd"),
   );
   const [toDate, setToDate] = useState(
-    format(endOfMonth(new Date()), "yyyy-MM-dd")
+    format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
 
   const [salesRange, setSalesRange] = useState<SaleDoc[]>([]);
@@ -309,7 +308,7 @@ export default function FinancialDashboardClothes() {
 
         // Lotes
         const bSnap = await getDocs(
-          collection(db, "inventory_clothes_batches")
+          collection(db, "inventory_clothes_batches"),
         );
         const allBatches: BatchRow[] = [];
         bSnap.forEach((d) => {
@@ -399,7 +398,7 @@ export default function FinancialDashboardClothes() {
         batchesUpToToDate,
         salesUpToToDate,
         fromDate,
-        toDate
+        toDate,
       );
     } catch (e) {
       console.error(e);
@@ -416,13 +415,13 @@ export default function FinancialDashboardClothes() {
 
     const abonosRecibidos = abonos.reduce(
       (a, m) => a + Math.abs(m.amount || 0),
-      0
+      0,
     );
 
     const clientesConSaldo = customers.filter((c) => (c.balance || 0) > 0);
     const saldosPendientes = clientesConSaldo.reduce(
       (a, c) => a + (c.balance || 0),
-      0
+      0,
     );
 
     let prendasCash = 0;
@@ -430,7 +429,7 @@ export default function FinancialDashboardClothes() {
     for (const s of salesRange) {
       const qty = (s.items || []).reduce(
         (a, it) => a + (Number(it.qty) || 0),
-        0
+        0,
       );
       if (s.type === "CONTADO") prendasCash += qty;
       else prendasCredito += qty;
@@ -457,7 +456,7 @@ export default function FinancialDashboardClothes() {
       if (s.type !== "CREDITO" || !s.customerId) continue;
       const count = (s.items || []).reduce(
         (a, it) => a + (Number(it.qty) || 0),
-        0
+        0,
       );
       countByCust[s.customerId] = (countByCust[s.customerId] || 0) + count;
     }
@@ -481,33 +480,32 @@ export default function FinancialDashboardClothes() {
   }, [customers]);
 
   // === Ventas del periodo como filas para tabla (orden desc) ===
-const salesRows = useMemo(() => {
-  return [...salesRange]
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map((s) => {
-      const piezas = (s.items || []).reduce(
-        (acc, it) => acc + (Number(it.qty) || 0),
-        0
-      );
+  const salesRows = useMemo(() => {
+    return [...salesRange]
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map((s) => {
+        const piezas = (s.items || []).reduce(
+          (acc, it) => acc + (Number(it.qty) || 0),
+          0,
+        );
 
-      let cliente = "Cash";
-      if (s.type === "CREDITO" && s.customerId) {
-        cliente = customersById[s.customerId] || "—";
-      } else if (s.type === "CONTADO") {
-        cliente = s.customerName?.trim() || "Cash";
-      }
+        let cliente = "Cash";
+        if (s.type === "CREDITO" && s.customerId) {
+          cliente = customersById[s.customerId] || "—";
+        } else if (s.type === "CONTADO") {
+          cliente = s.customerName?.trim() || "Cash";
+        }
 
-      return {
-        id: s.id,
-        date: s.date,
-        type: s.type === "CREDITO" ? "Crédito" : "Cash",
-        customer: cliente,
-        piezas,
-        total: Number(s.total || 0),
-      };
-    });
-}, [salesRange, customersById]);
-
+        return {
+          id: s.id,
+          date: s.date,
+          type: s.type === "CREDITO" ? "Crédito" : "Cash",
+          customer: cliente,
+          piezas,
+          total: Number(s.total || 0),
+        };
+      });
+  }, [salesRange, customersById]);
 
   // ===== Modal detalle cliente =====
   const openCustomerModal = async (row: {

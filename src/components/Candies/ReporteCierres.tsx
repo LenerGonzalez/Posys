@@ -10,6 +10,7 @@ import {
   getDoc,
 } from "firebase/firestore";
 import { format, subDays } from "date-fns";
+import { hasRole } from "../../utils/roles";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
@@ -18,7 +19,9 @@ type RoleCandies =
   | "admin"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "supervisor_pollo"
+  | "contador";
 
 type SaleType = "CONTADO" | "CREDITO";
 
@@ -125,7 +128,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
 
   const saleTotalRoot =
     Number(
-      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0
+      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0,
     ) || 0;
 
   const saleCommissionRoot = Number(raw.vendorCommissionAmount ?? 0) || 0;
@@ -139,7 +142,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         Math.max(
           0,
           Number(it?.unitPricePackage || it?.unitPrice || 0) * qtyPacks -
-            Number(it?.discount || 0)
+            Number(it?.discount || 0),
         );
 
       // comisión prorrateada por línea (si viene commission en root)
@@ -150,7 +153,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         Number(lineFinal || 0) > 0
       ) {
         lineCommission = round2(
-          (saleCommissionRoot * Number(lineFinal || 0)) / saleTotalRoot
+          (saleCommissionRoot * Number(lineFinal || 0)) / saleTotalRoot,
         );
       }
 
@@ -174,13 +177,13 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
     Number(raw.amount ?? raw.amountCharged ?? raw.total ?? 0) || 0;
 
   const commissionFallback = round2(
-    Number(raw.vendorCommissionAmount ?? 0) || 0
+    Number(raw.vendorCommissionAmount ?? 0) || 0,
   );
 
   return [
     {
       id,
-      productName: String(raw as any)?.productName ?? "(sin nombre)",
+      productName: String((raw as any)?.productName ?? "(sin nombre)"),
       quantity: qtyPacksFallback,
       amount: round2(amountFallback),
       date,
@@ -194,11 +197,17 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
 
 export default function Liquidaciones({
   role,
+  roles,
+  currentUserEmail,
+  sellerCandyId,
 }: {
-  role?: RoleCandies;
+  role?: string;
+  roles?: string[];
+  currentUserEmail?: string;
+  sellerCandyId?: string;
 }): React.ReactElement {
-  // ✅ Admin-only (igual patrón del resto)
-  const isAdmin = !role || role === "admin";
+  const subject = roles && roles.length ? roles : role;
+  const isAdmin = !subject || hasRole(subject, "admin");
 
   // ✅ colecciones reales
   const CLOSURES_COL = "daily_closures_candies";
@@ -206,10 +215,10 @@ export default function Liquidaciones({
   const SELLERS_COL = "sellers_candies";
 
   const [startDate, setStartDate] = useState<string>(
-    format(subDays(new Date(), 14), "yyyy-MM-dd")
+    format(subDays(new Date(), 14), "yyyy-MM-dd"),
   );
   const [endDate, setEndDate] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
+    format(new Date(), "yyyy-MM-dd"),
   );
 
   const [loading, setLoading] = useState<boolean>(true);
@@ -261,7 +270,7 @@ export default function Liquidaciones({
       const qy = query(
         collection(db, CLOSURES_COL),
         where("date", ">=", startDate),
-        where("date", "<=", endDate)
+        where("date", "<=", endDate),
       );
 
       const snap = await getDocs(qy);
@@ -275,7 +284,7 @@ export default function Liquidaciones({
         "🧠 parse+set ms:",
         (t2 - t1).toFixed(1),
         "rows:",
-        rows.length
+        rows.length,
       );
       rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
       setClosures(rows);

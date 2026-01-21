@@ -13,6 +13,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import { hasRole } from "../../utils/roles";
 
 type ClientType = "CONTADO" | "CREDITO";
 type Status = "ACTIVO" | "BLOQUEADO";
@@ -56,12 +57,12 @@ interface SelectedItem {
 
 // Helpers
 async function getLatestSalePriceForClothes(
-  productId: string
+  productId: string,
 ): Promise<number> {
   if (!productId) return 0;
   const qRef = query(
     collection(db, "inventory_clothes_batches"),
-    where("productId", "==", productId)
+    where("productId", "==", productId),
   );
   const snap = await getDocs(qRef);
 
@@ -94,7 +95,7 @@ async function getAvailableUnitsForClothes(productId: string): Promise<number> {
   if (!productId) return 0;
   const qRef = query(
     collection(db, "inventory_clothes_batches"),
-    where("productId", "==", productId)
+    where("productId", "==", productId),
   );
   const snap = await getDocs(qRef);
   let available = 0;
@@ -112,14 +113,19 @@ function normalizePhone(input: string): string {
   return prefix + rest.slice(0, 8);
 }
 
-export default function SalesClothesPOS() {
+export default function SalesClothesPOS(
+  { role = "", roles }: { role?: string; roles?: string[] } = { role: "" },
+) {
+  const subject = roles && roles.length ? roles : role;
+  const isAdmin = hasRole(subject, "admin");
+  const isVendRopa = hasRole(subject, "vendedor_ropa");
   // Catálogos
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
   // 🔵 Stock por producto (para mostrar/en gris en el selector)
   const [stockByProduct, setStockByProduct] = useState<Record<string, number>>(
-    {}
+    {},
   );
 
   // Generales
@@ -127,7 +133,7 @@ export default function SalesClothesPOS() {
   const [customerId, setCustomerId] = useState<string>("");
   const [customerNameCash, setCustomerNameCash] = useState<string>("");
   const [saleDate, setSaleDate] = useState<string>(
-    new Date().toISOString().slice(0, 10)
+    new Date().toISOString().slice(0, 10),
   );
 
   // Selección de productos (múltiple)
@@ -137,13 +143,14 @@ export default function SalesClothesPOS() {
   // Totales
   const totalPieces = useMemo(
     () => items.reduce((acc, it) => acc + (it.qty || 0), 0),
-    [items]
+    [items],
   );
   const totalAmount = useMemo(() => {
     const sum = items.reduce((acc, it) => {
       const line = Math.max(
         0,
-        (Number(it.unitPrice) || 0) * (it.qty || 0) - (Number(it.discount) || 0)
+        (Number(it.unitPrice) || 0) * (it.qty || 0) -
+          (Number(it.discount) || 0),
       );
       return acc + line;
     }, 0);
@@ -177,7 +184,7 @@ export default function SalesClothesPOS() {
       // clientes
       const qC = query(
         collection(db, "customers_clothes"),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
       );
       const cSnap = await getDocs(qC);
       const listC: Customer[] = [];
@@ -198,7 +205,7 @@ export default function SalesClothesPOS() {
         try {
           const qMov = query(
             collection(db, "ar_movements"),
-            where("customerId", "==", c.id)
+            where("customerId", "==", c.id),
           );
           const mSnap = await getDocs(qMov);
           let sum = 0;
@@ -213,7 +220,7 @@ export default function SalesClothesPOS() {
       // productos
       const qP = query(
         collection(db, "products_clothes"),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
       );
       const pSnap = await getDocs(qP);
       const listP: Product[] = [];
@@ -230,7 +237,7 @@ export default function SalesClothesPOS() {
       // 🔵 cargar stock disponible por productId (solo remaining > 0)
       const qStock = query(
         collection(db, "inventory_clothes_batches"),
-        where("remaining", ">", 0)
+        where("remaining", ">", 0),
       );
       const sSnap = await getDocs(qStock);
       const map: Record<string, number> = {};
@@ -247,7 +254,7 @@ export default function SalesClothesPOS() {
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId),
-    [customers, customerId]
+    [customers, customerId],
   );
   const currentBalance = selectedCustomer?.balance || 0;
   const projectedBalance =
@@ -295,7 +302,7 @@ export default function SalesClothesPOS() {
         if (qtyRaw === "") return { ...it, qty: 0 };
         const n = Math.max(0, Math.floor(Number(qtyRaw)));
         return { ...it, qty: n };
-      })
+      }),
     );
   };
 
@@ -308,7 +315,7 @@ export default function SalesClothesPOS() {
         // Solo enteros >= 0
         const n = Math.max(0, Math.floor(Number(discRaw)));
         return { ...it, discount: n };
-      })
+      }),
     );
   };
 
@@ -469,8 +476,8 @@ export default function SalesClothesPOS() {
                     (Number(totalAmount) || 0) -
                     (Number(downPayment) || 0),
                 }
-              : c
-          )
+              : c,
+          ),
         );
       }
 
@@ -480,7 +487,7 @@ export default function SalesClothesPOS() {
       (async () => {
         const qStock = query(
           collection(db, "inventory_clothes_batches"),
-          where("remaining", ">", 0)
+          where("remaining", ">", 0),
         );
         const sSnap = await getDocs(qStock);
         const map: Record<string, number> = {};
@@ -671,12 +678,12 @@ export default function SalesClothesPOS() {
               items.map((it) => {
                 const visualStock = Math.max(
                   0,
-                  (it.available || 0) - (it.qty || 0)
+                  (it.available || 0) - (it.qty || 0),
                 );
                 const lineGross = (Number(it.unitPrice) || 0) * (it.qty || 0);
                 const lineNet = Math.max(
                   0,
-                  lineGross - (Number(it.discount) || 0)
+                  lineGross - (Number(it.discount) || 0),
                 );
 
                 return (
@@ -894,7 +901,7 @@ export default function SalesClothesPOS() {
                         status: mStatus,
                         creditLimit: Number(mCreditLimit || 0),
                         createdAt: Timestamp.now(),
-                      }
+                      },
                     );
                     const newC: Customer = {
                       id: ref.id,

@@ -7,13 +7,16 @@ import {
   setPersistence,
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
+import { hasRole } from "../utils/roles";
 import { useNavigate } from "react-router-dom";
 
 type AllowedRole =
   | "admin"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "supervisor_pollo"
+  | "contador";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -23,14 +26,27 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const goByRole = (role: AllowedRole) => {
-    // Guarda el rol (y opcionalmente el nombre) para AdminLayout
+  const goByRole = (subject: string | string[]) => {
+    // subject puede ser un string (rol) o un array de roles
+    if (Array.isArray(subject)) {
+      if (subject.length !== 1) {
+        // multi-rol -> panel central
+        localStorage.setItem("role", subject[0] || "");
+        return navigate("/admin");
+      }
+      subject = subject[0] || "";
+    }
+
+    const role = String(subject || "");
     localStorage.setItem("role", role);
-    // Redirecciones por rol
-    if (role === "admin") return navigate("/admin");
-    if (role === "vendedor_pollo") return navigate("/admin/salesV2");
-    if (role === "vendedor_ropa") return navigate("/admin/salesClothes");
-    if (role === "vendedor_dulces") return navigate("/admin/salesCandies");
+
+    if (hasRole(role, "admin")) return navigate("/admin");
+    if (hasRole(role, "vendedor_pollo")) return navigate("/admin/salesV2");
+    if (hasRole(role, "vendedor_ropa")) return navigate("/admin/salesClothes");
+    if (hasRole(role, "vendedor_dulces"))
+      return navigate("/admin/salesCandies");
+    if (hasRole(role, "supervisor_pollo")) return navigate("/admin/batches");
+    if (hasRole(role, "contador")) return navigate("/admin/batches");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -49,11 +65,17 @@ export default function Login() {
 
     try {
       setLoading(true);
+      console.info && console.info("[Login] attempting signIn", { email });
 
       // ✅ Mantener la sesión (persistencia en el dispositivo)
       await setPersistence(auth, browserLocalPersistence);
 
       const cred = await signInWithEmailAndPassword(auth, email, password);
+      console.info &&
+        console.info("[Login] signInWithEmailAndPassword success", {
+          uid: cred.user.uid,
+          email: cred.user.email,
+        });
       const uid = cred.user.uid;
 
       // ✅ Marca inicio de sesión para expiración 15 días
@@ -61,13 +83,25 @@ export default function Login() {
 
       // Leer perfil en Firestore
       const snap = await getDoc(doc(db, "users", uid));
+      console.info &&
+        console.info(
+          "[Login] firestore users doc snap: exists=",
+          snap.exists(),
+        );
       if (!snap.exists()) {
+        console.warn && console.warn("[Login] user doc missing for uid", uid);
         setMsg("Tu usuario no tiene perfil en la base de datos.");
         return;
       }
 
       const data = snap.data() as any;
-      const role: string = data.role || "";
+      console.info && console.info("[Login] user profile:", data);
+      const roles: string[] = Array.isArray(data.roles)
+        ? data.roles
+        : data.role
+          ? [data.role]
+          : [];
+      const role: string = roles[0] || "";
       const name: string = data.name || ""; // si lo guardas en users
 
       // Aceptar nuevos roles
@@ -76,8 +110,10 @@ export default function Login() {
         "vendedor_pollo",
         "vendedor_ropa",
         "vendedor_dulces",
+        "supervisor_pollo",
+        "contador",
       ];
-      if (!allowed.includes(role as AllowedRole)) {
+      if (!roles.some((r) => allowed.includes(r as AllowedRole))) {
         setMsg("Rol no válido. Consulta al administrador.");
         return;
       }
@@ -85,22 +121,30 @@ export default function Login() {
       // Persistir info mínima para el layout / header
       localStorage.setItem("user_email", cred.user.email || "");
       if (name) localStorage.setItem("user_name", name);
+      // Guardamos roles también para compatibilidad futura
+      localStorage.setItem("roles", JSON.stringify(roles));
 
-      goByRole(role as AllowedRole);
+      // Si tiene solo un rol sencillo, redirigimos directo; si tiene múltiples, vamos a /admin
+      if (roles.length === 1) goByRole(role as AllowedRole);
+      else navigate("/admin");
     } catch (err: any) {
+      console.error && console.error("[Login] sign-in error:", err);
       // Errores comunes de Firebase Auth
       const code = String(err?.code || "");
       if (
         code === "auth/invalid-credential" ||
         code === "auth/wrong-password"
       ) {
-        setMsg("Credenciales incorrectas.");
+        setMsg("Credenciales incorrectas. (" + code + ")");
       } else if (code === "auth/user-not-found") {
-        setMsg("Usuario no encontrado.");
+        setMsg("Usuario no encontrado. (" + code + ")");
       } else if (code === "auth/too-many-requests") {
-        setMsg("Demasiados intentos. Intenta más tarde.");
+        setMsg("Demasiados intentos. Intenta más tarde. (" + code + ")");
       } else {
-        setMsg(err?.message || "Error al iniciar sesión.");
+        setMsg(
+          (err?.message || "Error al iniciar sesión.") +
+            (code ? ` (${code})` : ""),
+        );
       }
     } finally {
       setLoading(false);

@@ -60,6 +60,20 @@ export default function FinancialDashboard(): React.ReactElement {
   // UI: estado de expansión en mobile
   const [openProducts, setOpenProducts] = useState<Record<string, boolean>>({});
   const [openExpenses, setOpenExpenses] = useState<Record<string, boolean>>({});
+  // accordion mobile for Consolidado por producto
+  const [consolidatedOpen, setConsolidatedOpen] = useState<boolean>(false);
+  const toggleConsolidated = () => setConsolidatedOpen((v) => !v);
+  // accordion mobile for Gastos
+  const [consolidatedExpensesOpen, setConsolidatedExpensesOpen] =
+    useState<boolean>(false);
+  const toggleConsolidatedExpenses = () =>
+    setConsolidatedExpensesOpen((v) => !v);
+
+  // accordion mobile for KPIs (collapsed by default)
+  const [kpisOpen, setKpisOpen] = useState<boolean>(false);
+  const toggleKpis = () => setKpisOpen((v) => !v);
+  // product filter for KPIs
+  const [productFilter, setProductFilter] = useState<string>("");
 
   useEffect(() => {
     const load = async () => {
@@ -69,7 +83,7 @@ export default function FinancialDashboard(): React.ReactElement {
       const qs = query(
         collection(db, "salesV2"),
         where("date", ">=", from),
-        where("date", "<=", to)
+        where("date", "<=", to),
       );
       const sSnap = await getDocs(qs);
       const sRows: SaleDoc[] = [];
@@ -87,7 +101,7 @@ export default function FinancialDashboard(): React.ReactElement {
               Number(it.lineFinal ?? 0) ||
               Math.max(
                 0,
-                Number(it.unitPrice || 0) * qty - Number(it.discount || 0)
+                Number(it.unitPrice || 0) * qty - Number(it.discount || 0),
               );
             sRows.push({
               id: `${d.id}#${idx}`,
@@ -124,7 +138,7 @@ export default function FinancialDashboard(): React.ReactElement {
       const qg = query(
         collection(db, "expenses"),
         where("date", ">=", from),
-        where("date", "<=", to)
+        where("date", "<=", to),
       );
       const eSnap = await getDocs(qg);
       const eRows: ExpenseDoc[] = [];
@@ -156,7 +170,7 @@ export default function FinancialDashboard(): React.ReactElement {
       if (s.allocations?.length) {
         cogsReal += s.allocations.reduce(
           (x, a) => x + Number(a.lineCost || 0),
-          0
+          0,
         );
       } else if (s.avgUnitCost && s.quantity) {
         cogsReal += Number(s.avgUnitCost) * Number(s.quantity);
@@ -169,6 +183,35 @@ export default function FinancialDashboard(): React.ReactElement {
 
     return { revenue, cogsReal, grossProfit, expensesSum, netProfit };
   }, [sales, expenses]);
+
+  // Visible sales depending on selected product filter
+  const visibleSales = useMemo(() => {
+    if (!productFilter) return sales;
+    return sales.filter((s) => (s.productName || "") === productFilter);
+  }, [sales, productFilter]);
+
+  // KPIs for the visible sales (product-filtered)
+  const kpisVisible = useMemo(() => {
+    const revenue = visibleSales.reduce((a, s) => a + (s.amount || 0), 0);
+
+    let cogsReal = 0;
+    visibleSales.forEach((s) => {
+      if (s.allocations?.length) {
+        cogsReal += s.allocations.reduce(
+          (x, a) => x + Number(a.lineCost || 0),
+          0,
+        );
+      } else if (s.avgUnitCost && s.quantity) {
+        cogsReal += Number(s.avgUnitCost) * Number(s.quantity);
+      }
+    });
+
+    const grossProfit = revenue - cogsReal;
+    const expensesSum = expenses.reduce((a, g) => a + (g.amount || 0), 0);
+    const netProfit = grossProfit - expensesSum;
+
+    return { revenue, cogsReal, grossProfit, expensesSum, netProfit };
+  }, [visibleSales, expenses]);
 
   // Helpers para cantidades vendidas
   const mStr = (v: unknown) =>
@@ -189,7 +232,16 @@ export default function FinancialDashboard(): React.ReactElement {
   const totalLbs = useMemo(
     () =>
       sales.reduce((a, s: any) => (isLb(s.measurement) ? a + getQty(s) : a), 0),
-    [sales]
+    [sales],
+  );
+
+  const totalLbsVisible = useMemo(
+    () =>
+      visibleSales.reduce(
+        (a, s: any) => (isLb(s.measurement) ? a + getQty(s) : a),
+        0,
+      ),
+    [visibleSales],
   );
 
   // KPI: Unidades vendidas
@@ -197,10 +249,26 @@ export default function FinancialDashboard(): React.ReactElement {
     () =>
       sales.reduce(
         (a, s: any) => (isUnit(s.measurement) ? a + getQty(s) : a),
-        0
+        0,
       ),
-    [sales]
+    [sales],
   );
+
+  const totalUnitsVisible = useMemo(
+    () =>
+      visibleSales.reduce(
+        (a, s: any) => (isUnit(s.measurement) ? a + getQty(s) : a),
+        0,
+      ),
+    [visibleSales],
+  );
+
+  // list of products present in the selected date range
+  const productsInRange = useMemo(() => {
+    return Array.from(
+      new Set(sales.map((s) => s.productName || "(sin nombre)")),
+    ).sort();
+  }, [sales]);
 
   // Consolidado por producto (con fechas)
   const byProduct = useMemo(() => {
@@ -215,7 +283,7 @@ export default function FinancialDashboard(): React.ReactElement {
     };
     const map = new Map<string, Row>();
 
-    for (const s of sales) {
+    for (const s of visibleSales) {
       const key = s.productName || "(sin nombre)";
       if (!map.has(key))
         map.set(key, {
@@ -248,9 +316,9 @@ export default function FinancialDashboard(): React.ReactElement {
     }
 
     return Array.from(map.values()).sort((a, b) =>
-      a.productName.localeCompare(b.productName)
+      a.productName.localeCompare(b.productName),
     );
-  }, [sales]);
+  }, [visibleSales]);
 
   // KPI: Top 3 productos por libras/unidades vendidas
   const topProducts = useMemo(() => {
@@ -298,23 +366,107 @@ export default function FinancialDashboard(): React.ReactElement {
         <p>Cargando…</p>
       ) : (
         <>
+          {/* Product filter above KPIs (select-only) */}
+          <div className="mb-3">
+            <div className="flex gap-2 mb-2 items-center">
+              <select
+                className="w-full border rounded px-2 py-2 text-sm"
+                value={productFilter}
+                onChange={(e) => setProductFilter(e.target.value)}
+              >
+                <option value="">Todos los productos</option>
+                {productsInRange.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Mobile: KPIs accordion (collapsed by default) */}
+            <div className="md:hidden">
+              <button
+                type="button"
+                onClick={toggleKpis}
+                className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+              >
+                <div>
+                  <div className="font-semibold">KPIs</div>
+                  <div className="text-xs text-gray-600">
+                    Ventas: <b>{money(kpisVisible.revenue)}</b> • Utilidad Neta:{" "}
+                    <b>{money(kpisVisible.netProfit)}</b>
+                  </div>
+                </div>
+                <div className="text-gray-500">{kpisOpen ? "▲" : "▼"}</div>
+              </button>
+
+              {kpisOpen && (
+                <div className="mt-3 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+                    <Kpi title="Ventas" value={money(kpisVisible.revenue)} />
+                    <Kpi title="Costo" value={money(kpisVisible.cogsReal)} />
+                    <Kpi
+                      title="Ganancia Bruta"
+                      value={money(kpisVisible.grossProfit)}
+                      positive
+                    />
+                    <Kpi
+                      title="Gastos"
+                      value={money(kpisVisible.expensesSum)}
+                    />
+                    <Kpi
+                      title="Ganancia Neta"
+                      value={money(kpisVisible.netProfit)}
+                      positive
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
+                    <KpiCompact
+                      title="Libras Vendidas"
+                      value={qty3(totalLbsVisible)}
+                    />
+                    <KpiCompact
+                      title="Unidades Vendidas"
+                      value={qty3(totalUnitsVisible)}
+                    />
+                    <KpiList
+                      title="Productos más vendidos"
+                      items={topProducts.map((t) => ({
+                        key: `${t.idx}`,
+                        label: `${t.idx}. ${t.name}`,
+                        value: `(${qty3(t.units)})`,
+                      }))}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
           {/* KPIs principales */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-            <Kpi title="Ventas" value={money(kpis.revenue)} />
-            <Kpi title="Costo" value={money(kpis.cogsReal)} />
+          <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+            <Kpi title="Ventas" value={money(kpisVisible.revenue)} />
+            <Kpi title="Costo" value={money(kpisVisible.cogsReal)} />
             <Kpi
               title="Ganancia Bruta"
-              value={money(kpis.grossProfit)}
+              value={money(kpisVisible.grossProfit)}
               positive
             />
-            <Kpi title="Gastos" value={money(kpis.expensesSum)} />
-            <Kpi title="Ganancia Neta" value={money(kpis.netProfit)} positive />
+            <Kpi title="Gastos" value={money(kpisVisible.expensesSum)} />
+            <Kpi
+              title="Ganancia Neta"
+              value={money(kpisVisible.netProfit)}
+              positive
+            />
           </div>
 
           {/* KPIs secundarios */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
-            <KpiCompact title="Libras Vendidas" value={qty3(totalLbs)} />
-            <KpiCompact title="Unidades Vendidas" value={qty3(totalUnits)} />
+          <div className="hidden md:grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
+            <KpiCompact title="Libras Vendidas" value={qty3(totalLbsVisible)} />
+            <KpiCompact
+              title="Unidades Vendidas"
+              value={qty3(totalUnitsVisible)}
+            />
             <KpiList
               title="Productos más vendidos"
               items={topProducts.map((t) => ({
@@ -375,74 +527,96 @@ export default function FinancialDashboard(): React.ReactElement {
             </table>
           </div>
 
-          {/* Mobile: cards expandibles */}
-          <div className="md:hidden space-y-2 mb-6">
-            {byProduct.length === 0 ? (
-              <div className="border rounded-xl p-3 text-sm text-gray-500 bg-gray-50">
-                Sin datos en el rango seleccionado.
+          {/* Mobile: consolidated accordion (collapsed by default) */}
+          <div className="md:hidden mb-6">
+            <button
+              type="button"
+              onClick={toggleConsolidated}
+              className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+            >
+              <div>
+                <div className="font-semibold">Consolidado por producto</div>
+                <div className="text-xs text-gray-600">
+                  {byProduct.length} productos
+                </div>
               </div>
-            ) : (
-              byProduct.map((r) => {
-                const open = !!openProducts[r.productName];
-                const fechas =
-                  r.firstDate && r.lastDate
-                    ? r.firstDate === r.lastDate
-                      ? r.firstDate
-                      : `${r.firstDate} – ${r.lastDate}`
-                    : "—";
+              <div className="text-gray-500">
+                {consolidatedOpen ? "▲" : "▼"}
+              </div>
+            </button>
 
-                return (
-                  <div
-                    key={r.productName}
-                    className="border rounded-2xl bg-white shadow-sm overflow-hidden"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => toggleProduct(r.productName)}
-                      className="w-full text-left px-3 py-3 flex items-start gap-3"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold truncate">
-                          {r.productName}
-                        </div>
-                        <div className="text-xs text-gray-600 mt-1">
-                          Total: <b>{qty3(r.units)}</b> • Utilidad:{" "}
-                          <b
-                            className={
-                              r.profit >= 0 ? "text-green-700" : "text-red-700"
-                            }
-                          >
-                            {money(r.profit)}
-                          </b>
-                        </div>
-                      </div>
-                      <div className="text-gray-500 text-sm pt-0.5">
-                        {open ? "▲" : "▼"}
-                      </div>
-                    </button>
-
-                    {open && (
-                      <div className="px-3 pb-3 text-sm">
-                        <div className="grid grid-cols-2 gap-2">
-                          <Info label="Fechas" value={fechas} />
-                          <Info label="Total" value={qty3(r.units)} />
-                          <Info label="Ingreso" value={money(r.revenue)} />
-                          <Info label="Costo" value={money(r.cogs)} />
-                          <Info
-                            label="Utilidad"
-                            value={money(r.profit)}
-                            valueClass={
-                              r.profit >= 0
-                                ? "text-green-700 font-semibold"
-                                : "text-red-700 font-semibold"
-                            }
-                          />
-                        </div>
-                      </div>
-                    )}
+            {consolidatedOpen && (
+              <div className="space-y-2 mt-3">
+                {byProduct.length === 0 ? (
+                  <div className="border rounded-xl p-3 text-sm text-gray-500 bg-gray-50">
+                    Sin datos en el rango seleccionado.
                   </div>
-                );
-              })
+                ) : (
+                  byProduct.map((r) => {
+                    const open = !!openProducts[r.productName];
+                    const fechas =
+                      r.firstDate && r.lastDate
+                        ? r.firstDate === r.lastDate
+                          ? r.firstDate
+                          : `${r.firstDate} – ${r.lastDate}`
+                        : "—";
+
+                    return (
+                      <div
+                        key={r.productName}
+                        className="border rounded-2xl bg-white shadow-sm overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleProduct(r.productName)}
+                          className="w-full text-left px-3 py-3 flex items-start gap-3"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold truncate">
+                              {r.productName}
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              Total: <b>{qty3(r.units)}</b> • Utilidad:{" "}
+                              <b
+                                className={
+                                  r.profit >= 0
+                                    ? "text-green-700"
+                                    : "text-red-700"
+                                }
+                              >
+                                {money(r.profit)}
+                              </b>
+                            </div>
+                          </div>
+                          <div className="text-gray-500 text-sm pt-0.5">
+                            {open ? "▲" : "▼"}
+                          </div>
+                        </button>
+
+                        {open && (
+                          <div className="px-3 pb-3 text-sm">
+                            <div className="grid grid-cols-2 gap-2">
+                              <Info label="Fechas" value={fechas} />
+                              <Info label="Total" value={qty3(r.units)} />
+                              <Info label="Ingreso" value={money(r.revenue)} />
+                              <Info label="Costo" value={money(r.cogs)} />
+                              <Info
+                                label="Utilidad"
+                                value={money(r.profit)}
+                                valueClass={
+                                  r.profit >= 0
+                                    ? "text-green-700 font-semibold"
+                                    : "text-red-700 font-semibold"
+                                }
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             )}
           </div>
 
@@ -492,67 +666,87 @@ export default function FinancialDashboard(): React.ReactElement {
             </table>
           </div>
 
-          {/* Mobile: cards expandibles */}
-          <div className="md:hidden space-y-2">
-            {expenses.length === 0 ? (
-              <div className="border rounded-xl p-3 text-sm text-gray-500 bg-gray-50">
-                Sin gastos en el rango seleccionado.
+          {/* Mobile: gastos accordion (collapsed by default) */}
+          <div className="md:hidden mb-6">
+            <button
+              type="button"
+              onClick={toggleConsolidatedExpenses}
+              className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+            >
+              <div>
+                <div className="font-semibold">Gastos del periodo</div>
+                <div className="text-xs text-gray-600">
+                  {expenses.length} registros
+                </div>
               </div>
-            ) : (
-              expenses.map((g) => {
-                const open = !!openExpenses[g.id];
-                const badge =
-                  g.status === "PAGADO"
-                    ? "bg-green-100 text-green-700"
-                    : "bg-yellow-100 text-yellow-700";
+              <div className="text-gray-500">
+                {consolidatedExpensesOpen ? "▲" : "▼"}
+              </div>
+            </button>
 
-                return (
-                  <div
-                    key={g.id}
-                    className="border rounded-2xl bg-white shadow-sm overflow-hidden"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => toggleExpense(g.id)}
-                      className="w-full text-left px-3 py-3 flex items-start gap-3"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <div className="font-semibold truncate">
-                            {g.category}
-                          </div>
-                          <span
-                            className={`px-2 py-0.5 rounded text-[11px] ${badge}`}
-                          >
-                            {g.status}
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-600 mt-1">
-                          {g.date} • <b>{money(g.amount)}</b>
-                        </div>
-                      </div>
-                      <div className="text-gray-500 text-sm pt-0.5">
-                        {open ? "▲" : "▼"}
-                      </div>
-                    </button>
-
-                    {open && (
-                      <div className="px-3 pb-3 text-sm">
-                        <div className="grid grid-cols-1 gap-2">
-                          <Info label="Fecha" value={g.date} />
-                          <Info label="Categoría" value={g.category} />
-                          <Info
-                            label="Descripción"
-                            value={g.description || "—"}
-                          />
-                          <Info label="Monto" value={money(g.amount)} />
-                          <Info label="Estado" value={g.status || "—"} />
-                        </div>
-                      </div>
-                    )}
+            {consolidatedExpensesOpen && (
+              <div className="space-y-2 mt-3">
+                {expenses.length === 0 ? (
+                  <div className="border rounded-xl p-3 text-sm text-gray-500 bg-gray-50">
+                    Sin gastos en el rango seleccionado.
                   </div>
-                );
-              })
+                ) : (
+                  expenses.map((g) => {
+                    const open = !!openExpenses[g.id];
+                    const badge =
+                      g.status === "PAGADO"
+                        ? "bg-green-100 text-green-700"
+                        : "bg-yellow-100 text-yellow-700";
+
+                    return (
+                      <div
+                        key={g.id}
+                        className="border rounded-2xl bg-white shadow-sm overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleExpense(g.id)}
+                          className="w-full text-left px-3 py-3 flex items-start gap-3"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <div className="font-semibold truncate">
+                                {g.category}
+                              </div>
+                              <span
+                                className={`px-2 py-0.5 rounded text-[11px] ${badge}`}
+                              >
+                                {g.status}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              {g.date} • <b>{money(g.amount)}</b>
+                            </div>
+                          </div>
+                          <div className="text-gray-500 text-sm pt-0.5">
+                            {open ? "▲" : "▼"}
+                          </div>
+                        </button>
+
+                        {open && (
+                          <div className="px-3 pb-3 text-sm">
+                            <div className="grid grid-cols-1 gap-2">
+                              <Info label="Fecha" value={g.date} />
+                              <Info label="Categoría" value={g.category} />
+                              <Info
+                                label="Descripción"
+                                value={g.description || "—"}
+                              />
+                              <Info label="Monto" value={money(g.amount)} />
+                              <Info label="Estado" value={g.status || "—"} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             )}
           </div>
         </>

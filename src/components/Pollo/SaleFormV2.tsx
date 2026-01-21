@@ -14,6 +14,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { format } from "date-fns";
 import { Role } from "../../apis/apis";
+import { hasRole } from "../../utils/roles";
 import allocateFIFOAndUpdateBatches from "../../Services/allocateFIFO";
 import { roundQty, addQty, gteQty } from "../../Services/decimal";
 
@@ -64,7 +65,16 @@ type CartItem = {
   discount: number; // entero C$ por línea
 };
 
-export default function SaleForm({ user }: { user: any }) {
+export default function SaleForm({
+  user,
+  role,
+  roles,
+}: {
+  user: any;
+  role?: string;
+  roles?: string[];
+}) {
+  const subject = roles && roles.length ? roles : role;
   // ===== Catálogos =====
   const [products, setProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<Users[]>([]);
@@ -251,7 +261,18 @@ export default function SaleForm({ user }: { user: any }) {
         if (it.productId !== productId) return it;
         const isUnit = (it.measurement || "").toLowerCase() !== "lb";
         const num = raw === "" ? 0 : Number(raw);
-        const qty = isUnit ? Math.max(0, Math.round(num)) : roundQty(num);
+        let qty = isUnit ? Math.max(0, Math.round(num)) : roundQty(num);
+
+        // Limitar qty a las existencias conocidas (stock)
+        const stockAvailable = isUnit
+          ? Math.max(0, Math.floor(Number(it.stock || 0)))
+          : roundQty(Number(it.stock || 0));
+
+        if (qty > stockAvailable) {
+          qty = stockAvailable;
+          setMessage(`⚠️ Cantidad limitada a existencias (${stockAvailable})`);
+        }
+
         return { ...it, qty };
       }),
     );
@@ -605,7 +626,7 @@ export default function SaleForm({ user }: { user: any }) {
           </div>
 
           <div className="space-y-2">
-            <div className="text-sm font-semibold">💵 Monto total</div>
+            <div className="text-sm font-semibold">Monto total</div>
             <div className="text-xl font-bold">
               C$ {amountCharged.toFixed(2)}
             </div>

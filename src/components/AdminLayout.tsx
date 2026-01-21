@@ -4,8 +4,15 @@ import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import { hasRole } from "../utils/roles";
 
-export default function AdminLayout({ role }: { role: string }) {
+export default function AdminLayout({
+  role,
+  roles,
+}: {
+  role: any;
+  roles?: any[];
+}) {
   const base = "/admin";
   const linkCls = ({ isActive }: { isActive: boolean }) =>
     `block rounded px-3 py-2 text-sm ${
@@ -22,6 +29,7 @@ export default function AdminLayout({ role }: { role: string }) {
   const [openPolloInv, setOpenPolloInv] = useState(false);
   const [openPolloFin, setOpenPolloFin] = useState(false);
   const [openPolloProd, setOpenPolloProd] = useState(false);
+  const [openPolloOperaciones, setOpenPolloOperaciones] = useState(false);
 
   // Operaciones Ropa
   const [openRopa, setOpenRopa] = useState(false);
@@ -39,10 +47,29 @@ export default function AdminLayout({ role }: { role: string }) {
 
   // Operaciones Otras
   const [openOtras, setOpenOtras] = useState(false);
+  // (Operaciones global movido dentro de Pollos Bea)
+
+  const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
 
   const handleLogout = async () => {
-    await signOut(auth);
-    navigate("/");
+    setConfirmLogoutOpen(true);
+  };
+
+  const doLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error("signOut error:", err);
+    } finally {
+      try {
+        localStorage.removeItem("user_name");
+        localStorage.removeItem("user_email");
+        localStorage.removeItem("roles");
+        localStorage.removeItem("role");
+      } catch (e) {}
+      setConfirmLogoutOpen(false);
+      navigate("/");
+    }
   };
 
   // Helpers visuales
@@ -85,10 +112,13 @@ export default function AdminLayout({ role }: { role: string }) {
   );
 
   // ===== util de roles =====
-  const isAdmin = role === "admin";
-  const isVendPollo = role === "vendedor_pollo" || role === "vendedor"; // compat: "vendedor" → pollo
-  const isVendRopa = role === "vendedor_ropa";
-  const isVendDulces = role === "vendedor_dulces";
+  const subject = roles && roles.length ? roles : role;
+  const isAdmin = hasRole(subject, "admin");
+  const isVendPollo = hasRole(subject, "vendedor_pollo");
+  const isVendRopa = hasRole(subject, "vendedor_ropa");
+  const isVendDulces = hasRole(subject, "vendedor_dulces");
+  const isSupervisor =
+    hasRole(subject, "supervisor_pollo") || hasRole(subject, "contador");
 
   return (
     <div className="min-h-screen flex">
@@ -128,6 +158,35 @@ export default function AdminLayout({ role }: { role: string }) {
 
                     {openPollo && (
                       <div className="pb-2">
+                        <SubSectionBtn
+                          open={openPolloOperaciones}
+                          onClick={() => setOpenPolloOperaciones((v) => !v)}
+                          title="Operaciones"
+                        />
+                        {openPolloOperaciones && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink to={`${base}/salesV2`} className={linkCls}>
+                              Vender
+                            </NavLink>
+                            <NavLink
+                              to={`${base}/customers`}
+                              className={linkCls}
+                            >
+                              Clientes
+                            </NavLink>
+                            <NavLink
+                              to={`${base}/transactionsPollo`}
+                              className={linkCls}
+                            >
+                              Transacciones
+                            </NavLink>
+                            {role !== "contador" && (
+                              <NavLink to={`${base}/bills`} className={linkCls}>
+                                Cierres
+                              </NavLink>
+                            )}
+                          </div>
+                        )}
                         {/* Inventario (Pollo) */}
                         <SubSectionBtn
                           open={openPolloInv}
@@ -174,9 +233,11 @@ export default function AdminLayout({ role }: { role: string }) {
                             <NavLink to={`${base}/salesV2`} className={linkCls}>
                               Venta
                             </NavLink>
-                            <NavLink to={`${base}/bills`} className={linkCls}>
-                              Cierre
-                            </NavLink>
+                            {role !== "contador" && (
+                              <NavLink to={`${base}/bills`} className={linkCls}>
+                                Cierre
+                              </NavLink>
+                            )}
                             <NavLink
                               to={`${base}/billhistoric`}
                               className={linkCls}
@@ -217,7 +278,11 @@ export default function AdminLayout({ role }: { role: string }) {
 
                     {openRopa && (
                       <div className="pb-2">
-                     
+                        <SubSectionBtn
+                          open={openRopaInv}
+                          onClick={() => setOpenRopaInv((v) => !v)}
+                          title="Inventarios"
+                        />
                         {openRopaInv && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
@@ -554,7 +619,36 @@ export default function AdminLayout({ role }: { role: string }) {
                 </>
               )}
 
+              {/* ================== SUPERVISOR (reduced desktop menu) ================== */}
+              {isSupervisor && (
+                <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
+                  <SectionBtn open={true} onClick={() => {}}>
+                    Pollos Bea
+                  </SectionBtn>
+
+                  <div className="pb-2 ml-4 mt-1 space-y-1">
+                    <NavLink to={`${base}/salesV2`} className={linkCls}>
+                      Vender
+                    </NavLink>
+                    <NavLink
+                      to={`${base}/transactionsPollo`}
+                      className={linkCls}
+                    >
+                      Transacciones
+                    </NavLink>
+                    {role !== "contador" && (
+                      <NavLink to={`${base}/bills`} className={linkCls}>
+                        Cierres
+                      </NavLink>
+                    )}
+                    <NavLink to={`${base}/batches`} className={linkCls}>
+                      Inventario Pollo
+                    </NavLink>
+                  </div>
+                </div>
+              )}
               {/* ================== VENDEDOR POLLO ================== */}
+
               {isVendPollo && (
                 <div className="border rounded">
                   <SectionBtn
@@ -566,10 +660,18 @@ export default function AdminLayout({ role }: { role: string }) {
                   {openPolloFin && (
                     <div className="pb-2 ml-4 mt-1 space-y-1">
                       <NavLink to={`${base}/salesV2`} className={linkCls}>
-                        Venta
+                        Vender
                       </NavLink>
-                      <NavLink to={`${base}/bills`} className={linkCls}>
-                        Cierre
+                      {role !== "contador" && (
+                        <NavLink to={`${base}/bills`} className={linkCls}>
+                          Cierre
+                        </NavLink>
+                      )}
+                      <NavLink
+                        to={`${base}/transactionsPollo`}
+                        className={linkCls}
+                      >
+                        Ventas del dia
                       </NavLink>
                     </div>
                   )}
@@ -701,6 +803,38 @@ export default function AdminLayout({ role }: { role: string }) {
             >
               Cerrar sesión
             </button>
+            <div className="mt-2 text-[20px] text-gray-700">
+              {typeof window !== "undefined" &&
+                (localStorage.getItem("user_name") ||
+                  localStorage.getItem("user_email"))}
+            </div>
+            {confirmLogoutOpen && (
+              <div className="fixed inset-0 z-[120] flex items-center justify-center">
+                <div
+                  className="absolute inset-0 bg-black/20"
+                  onClick={() => setConfirmLogoutOpen(false)}
+                />
+                <div className="bg-white p-4 rounded-xl shadow-lg z-[130] w-[90%] max-w-sm">
+                  <div className="font-semibold mb-3">
+                    ¿Estás seguro de cerrar sesión?
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      onClick={() => setConfirmLogoutOpen(false)}
+                      className="px-3 py-2 rounded bg-gray-200"
+                    >
+                      No
+                    </button>
+                    <button
+                      onClick={doLogout}
+                      className="px-3 py-2 rounded bg-red-500 text-white"
+                    >
+                      SI
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </aside>

@@ -4,10 +4,13 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import InstallApp from "../components/InstallApp";
+import { hasRole } from "../utils/roles";
 
 type Role =
   | ""
   | "admin"
+  | "supervisor_pollo"
+  | "contador"
   | "vendedor_pollo"
   | "vendedor_ropa"
   | "vendedor_dulces";
@@ -17,92 +20,199 @@ function cn(...cls: Array<string | false | null | undefined>) {
   return cls.filter(Boolean).join(" ");
 }
 
-export default function MobileTabsLayout({ role }: { role: Role }) {
+export default function MobileTabsLayout({
+  role,
+  roles,
+}: {
+  role?: Role | string;
+  roles?: Role[] | string[];
+}) {
   const navigate = useNavigate();
   const location = useLocation();
   const base = "/admin";
 
-  const isAdmin = role === "admin";
-  const isVendPollo = role === "vendedor_pollo";
-  const isVendDulces = role === "vendedor_dulces";
+  const subject = roles && roles.length ? roles : role;
+  const isAdmin = hasRole(subject, "admin");
+  const isVendPollo = hasRole(subject, "vendedor_pollo");
+  const isVendDulces = hasRole(subject, "vendedor_dulces");
+  const isSupervisor =
+    hasRole(subject, "supervisor_pollo") || hasRole(subject, "contador");
 
-  // Admin puede ver ambos rubros -> selector
+  // Mostrar selector también cuando el usuario tenga ambos roles (pollo + dulces)
+  const hasBoth = isVendPollo && isVendDulces;
   const [rubro, setRubro] = useState<Rubro>(() => {
-    if (isVendPollo) return "POLLO";
+    try {
+      const saved =
+        typeof window !== "undefined" ? localStorage.getItem("rubro") : null;
+      if (saved === "POLLO" || saved === "DULCES") return saved as Rubro;
+    } catch (e) {}
+    if (isVendPollo || isSupervisor) return "POLLO";
     if (isVendDulces) return "DULCES";
     return "POLLO";
   });
 
   // Drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
 
   // Tabs por rubro/rol
   const tabs = useMemo(() => {
-    // === ADMIN ===
-    if (isAdmin) {
+    // Si el usuario es admin O tiene ambos roles, respetamos `rubro`
+    if (isAdmin || hasBoth) {
       if (rubro === "POLLO") {
-        return [
-          { key: "venta", label: "Venta", to: `${base}/salesV2` },
-          { key: "dash", label: "Dashboard", to: `${base}/financialDashboard` },
-          { key: "inv", label: "Inventario", to: `${base}/batches` },
-          { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
-          { key: "gastos", label: "Gastos", to: `${base}/expenses` },
-        ];
+        // ADMIN - POLLO
+        if (isAdmin) {
+          return [
+            { key: "venta", label: "Venta", to: `${base}/salesV2` },
+            { key: "clientes", label: "Clientes", to: `${base}/customers` },
+            {
+              key: "dash",
+              label: "Dashboard",
+              to: `${base}/financialDashboard`,
+            },
+            { key: "inv", label: "Inventario", to: `${base}/batches` },
+            { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
+            { key: "gastos", label: "Gastos", to: `${base}/expenses` },
+          ];
+        }
+
+        // Usuario con ambos roles mostrando POLLO
+        if (isSupervisor) {
+          const supTabs = [
+            { key: "venta", label: "Venta", to: `${base}/salesV2` },
+            { key: "clientes", label: "Clientes", to: `${base}/customers` },
+            { key: "inv", label: "Inventario", to: `${base}/batches` },
+            {
+              key: "trxs",
+              label: "Transacciones",
+              to: `${base}/transactionsPollo`,
+            },
+            { key: "cierre", label: "Cierre", to: `${base}/bills` },
+          ];
+          if (hasRole(subject, "contador"))
+            return supTabs.filter((t) => t.key !== "cierre");
+          return supTabs;
+        }
+
+        if (isVendPollo) {
+          return [
+            { key: "venta", label: "Venta", to: `${base}/salesV2` },
+            { key: "clientes", label: "Clientes", to: `${base}/customers` },
+            { key: "cierre", label: "Cierre", to: `${base}/bills` },
+            {
+              key: "trxs",
+              label: "Transacciones",
+              to: `${base}/transactionsPollo`,
+            },
+          ];
+        }
       }
-      // DULCES (admin)
-      return [
-        { key: "dc", label: "Data Center Reporte", to: `${base}/datacenter` },
+
+      // DULCES (admin o usuario con ambos roles mostrando DULCES)
+      if (rubro === "DULCES") {
+        if (isAdmin) {
+          return [
+            {
+              key: "dc",
+              label: "Data Center Reporte",
+              to: `${base}/datacenter`,
+            },
+            {
+              key: "maes",
+              label: "Inventario Global",
+              to: `${base}/mainordersCandies`,
+            },
+            {
+              key: "ord",
+              label: "Inventario Vendedor",
+              to: `${base}/productsVendorsCandies`,
+            },
+            {
+              key: "cli",
+              label: "Saldos Pendientes",
+              to: `${base}/customersCandies`,
+            },
+            {
+              key: "trx",
+              label: "Ventas del dia",
+              to: `${base}/transactionCandies`,
+            },
+            {
+              key: "cier",
+              label: "Cierre de ventas",
+              to: `${base}/cierreVentasCandies`,
+            },
+            {
+              key: "cash",
+              label: "Entregas Efectivo ",
+              to: `${base}/cashDeliveries`,
+            },
+            { key: "items", label: "Productos", to: `${base}/productsCandies` },
+            {
+              key: "precios",
+              label: "Precio Ventas",
+              to: `${base}/productsPricesCandies`,
+            },
+            {
+              key: "gonper",
+              label: "Productos Gonper",
+              to: `${base}/notebooksInventory`,
+            },
+          ];
+        }
+
+        if (isVendDulces) {
+          return [
+            { key: "venta", label: "Vender", to: `${base}/salesCandies` },
+            {
+              key: "precios",
+              label: "Precios",
+              to: `${base}/productsPricesCandies`,
+            },
+            {
+              key: "ped",
+              label: "Inventario",
+              to: `${base}/productsVendorsCandies`,
+            },
+            {
+              key: "cli",
+              label: "Saldos Pendientes",
+              to: `${base}/customersCandies`,
+            },
+            { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
+            { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
+          ];
+        }
+      }
+    }
+
+    // === SUPERVISOR POLLO (sin ambos roles) ===
+    if (isSupervisor) {
+      const supTabs = [
+        { key: "venta", label: "Venta", to: `${base}/salesV2` },
+        { key: "inv", label: "Inventario", to: `${base}/batches` },
         {
-          key: "maes",
-          label: "Inventario Global",
-          to: `${base}/mainordersCandies`,
+          key: "trxs",
+          label: "Transacciones",
+          to: `${base}/transactionsPollo`,
         },
-        {
-          key: "ord",
-          label: "Inventario Vendedor",
-          to: `${base}/productsVendorsCandies`,
-        },
-        {
-          key: "cli",
-          label: "Saldos Pendientes",
-          to: `${base}/customersCandies`,
-        },
-        {
-          key: "trx",
-          label: "Ventas del dia",
-          to: `${base}/transactionCandies`,
-        },
-        {
-          key: "cier",
-          label: "Cierre de ventas",
-          to: `${base}/cierreVentasCandies`,
-        },
-        {
-          key: "cash",
-          label: "Entregas Efectivo ",
-          to: `${base}/cashDeliveries`,
-        },
-        { key: "items", label: "Productos", to: `${base}/productsCandies` },
-        //{ key: "venta", label: "Vender", to: `${base}/salesCandies` },
-        {
-          key: "precios",
-          label: "Precio Ventas",
-          to: `${base}/productsPricesCandies`,
-        },
-        {
-          key: "gonper",
-          label: "Productos Gonper",
-          to: `${base}/notebooksInventory`,
-        },
+        { key: "cierre", label: "Cierre", to: `${base}/bills` },
       ];
+      if (hasRole(subject, "contador"))
+        return supTabs.filter((t) => t.key !== "cierre");
+      return supTabs;
     }
 
     // === VENDEDOR POLLO ===
     if (isVendPollo) {
       return [
         { key: "venta", label: "Venta", to: `${base}/salesV2` },
-        { key: "inv", label: "Inventario", to: `${base}/batches` },
         { key: "cierre", label: "Cierre", to: `${base}/bills` },
+        {
+          key: "trxs",
+          label: "Transacciones",
+          to: `${base}/transactionsPollo`,
+        },
       ];
     }
 
@@ -132,12 +242,15 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
 
     // fallback
     return [{ key: "home", label: "Inicio", to: `${base}` }];
-  }, [isAdmin, isVendPollo, isVendDulces, rubro]);
+  }, [isAdmin, isVendPollo, isVendDulces, isSupervisor, hasBoth, rubro]);
 
   useEffect(() => {
-    // cuando cambia rubro, mandalo a la primera tab de ese rubro
-    if (!isAdmin) return;
+    // cuando cambia rubro (admin o usuario con ambos roles), mandalo a la primera tab de ese rubro
+    if (!(isAdmin || hasBoth)) return;
     if (!tabs.length) return;
+    try {
+      localStorage.setItem("rubro", rubro);
+    } catch (e) {}
     navigate(tabs[0].to, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rubro]);
@@ -159,9 +272,26 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
   }, [drawerOpen]);
 
   const handleLogout = async () => {
-    await signOut(auth);
-    setDrawerOpen(false);
-    navigate("/");
+    setConfirmLogoutOpen(true);
+  };
+
+  const doLogout = async () => {
+    // Clear local user state stored in localStorage for safety
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error("signOut error:", err);
+    } finally {
+      try {
+        localStorage.removeItem("user_name");
+        localStorage.removeItem("user_email");
+        localStorage.removeItem("roles");
+        localStorage.removeItem("role");
+      } catch (e) {}
+      setConfirmLogoutOpen(false);
+      setDrawerOpen(false);
+      navigate("/");
+    }
   };
 
   const tabCls = ({ isActive }: { isActive: boolean }) =>
@@ -172,7 +302,7 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
     );
 
   // ✅ Regla: si hay muchos tabs, ocultamos barra de abajo y usamos Drawer
-  const showBottomTabs = tabs.length <= 4;
+  const showBottomTabs = tabs.length <= 2;
 
   const drawerLinkCls = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -187,8 +317,8 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
       {/* Top Bar */}
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
         <div className="px-3 py-3 flex items-center gap-2">
-          {/* Rubro selector solo para admin */}
-          {isAdmin ? (
+          {/* Rubro selector para admin o usuario con ambos roles */}
+          {isAdmin || hasBoth ? (
             <div className="flex gap-2">
               <button
                 type="button"
@@ -256,15 +386,22 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
 
           {/* panel */}
           <aside className="absolute right-0 top-0 h-full w-[86%] max-w-sm bg-white shadow-2xl border-l flex flex-col">
-            <div className="p-4 border-b flex items-center justify-between">
-              <div className="font-bold text-gray-900">Menú</div>
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200"
-              >
-                ✕
-              </button>
+            <div className="p-4 border-b">
+              <div className="flex items-center justify-between">
+                <div className="font-bold text-gray-900">Menú</div>
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen(false)}
+                  className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="mt-2 text-[20px] text-gray-600">
+                {typeof window !== "undefined" &&
+                  (localStorage.getItem("user_name") ||
+                    localStorage.getItem("user_email"))}
+              </div>
             </div>
 
             {/* Lista de opciones */}
@@ -285,6 +422,34 @@ export default function MobileTabsLayout({ role }: { role: Role }) {
               >
                 Cerrar sesión
               </button>
+
+              {confirmLogoutOpen && (
+                <div className="fixed inset-0 z-[120] flex items-center justify-center">
+                  <div
+                    className="absolute inset-0 bg-black/20"
+                    onClick={() => setConfirmLogoutOpen(false)}
+                  />
+                  <div className="bg-white p-4 rounded-xl shadow-lg z-[130] w-[90%] max-w-sm">
+                    <div className="font-semibold mb-3">
+                      ¿Estás seguro de cerrar sesión?
+                    </div>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        onClick={() => setConfirmLogoutOpen(false)}
+                        className="px-3 py-2 rounded bg-gray-200"
+                      >
+                        No
+                      </button>
+                      <button
+                        onClick={doLogout}
+                        className="px-3 py-2 rounded bg-red-500 text-white"
+                      >
+                        SI
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </aside>
         </div>

@@ -10,6 +10,7 @@ import {
   where,
 } from "firebase/firestore";
 import { format } from "date-fns";
+import { hasRole } from "../../utils/roles";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
@@ -375,7 +376,7 @@ const normalizeSalesMany = (raw: SaleDataRaw, docId: string): SaleRow[] => {
   if (!date) return [];
 
   const processedDate = String(
-    raw.processedDate ?? raw.closureDate ?? ""
+    raw.processedDate ?? raw.closureDate ?? "",
   ).trim();
 
   const status: SaleStatus = (raw.status as any) ?? "FLOTANTE";
@@ -397,7 +398,7 @@ const normalizeSalesMany = (raw: SaleDataRaw, docId: string): SaleRow[] => {
 
   const saleTotalRoot =
     Number(
-      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0
+      raw.total ?? raw.itemsTotal ?? raw.amount ?? raw.amountCharged ?? 0,
     ) || 0;
   const saleCommissionRoot = Number(raw.vendorCommissionAmount ?? 0) || 0;
 
@@ -412,7 +413,7 @@ const normalizeSalesMany = (raw: SaleDataRaw, docId: string): SaleRow[] => {
         Math.max(
           0,
           Number(it?.unitPricePackage || 0) * packages -
-            Number(it?.discount || 0)
+            Number(it?.discount || 0),
         );
 
       const branch = normalizeBranch(it?.branch) || rootBranch;
@@ -545,20 +546,23 @@ type ExpenseCandy = {
 
 export default function DataCenterCandies({
   role,
+  roles,
 }: {
-  role?: RoleCandies;
+  role?: string;
+  roles?: string[];
 }): React.ReactElement {
-  const isAdmin = !role || role === "admin";
+  const subject = roles && roles.length ? roles : role;
+  const isAdmin = !subject || hasRole(subject, "admin");
 
   const today = format(new Date(), "yyyy-MM-dd");
   const [startDate, setStartDate] = useState<string>(today);
   const [endDate, setEndDate] = useState<string>(today);
 
   const [statusFilter, setStatusFilter] = useState<"TODAS" | SaleStatus>(
-    "TODAS"
+    "TODAS",
   );
   const [typeFilter, setTypeFilter] = useState<"AMBAS" | "CASH" | "CREDITO">(
-    "AMBAS"
+    "AMBAS",
   );
   const [vendorFilter, setVendorFilter] = useState<string>("ALL");
   const [branchFilter, setBranchFilter] = useState<"ALL" | Branch>("ALL");
@@ -655,7 +659,7 @@ export default function DataCenterCandies({
         const map = new Map<string, SellerCandy>();
         list.forEach((s) => map.set(s.id, s));
         setSellers(
-          Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name))
+          Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name)),
         );
       } catch (e) {
         console.error(e);
@@ -676,7 +680,7 @@ export default function DataCenterCandies({
       collection(db, "sales_candies"),
       where("date", ">=", startDate),
       where("date", "<=", endDate),
-      orderBy("date", "asc")
+      orderBy("date", "asc"),
     );
 
     const unsub = onSnapshot(
@@ -684,7 +688,7 @@ export default function DataCenterCandies({
       (snap) => {
         const rows: SaleRow[] = [];
         snap.forEach((d) =>
-          rows.push(...normalizeSalesMany(d.data() as SaleDataRaw, d.id))
+          rows.push(...normalizeSalesMany(d.data() as SaleDataRaw, d.id)),
         );
         setSalesRows(rows);
         setLoading(false);
@@ -694,9 +698,9 @@ export default function DataCenterCandies({
         setSalesRows([]);
         setLoading(false);
         setMessage(
-          "❌ Error cargando ventas del período (revisá índices si aplica)."
+          "❌ Error cargando ventas del período (revisá índices si aplica).",
         );
-      }
+      },
     );
 
     return () => unsub();
@@ -711,7 +715,7 @@ export default function DataCenterCandies({
         const qy = query(
           collection(db, "candy_main_orders"),
           where("date", ">=", startDate),
-          where("date", "<=", endDate)
+          where("date", "<=", endDate),
         );
         const snap = await getDocs(qy);
         const rows: MainOrderDoc[] = [];
@@ -735,7 +739,7 @@ export default function DataCenterCandies({
         const qy = query(
           collection(db, "inventory_candies_sellers"),
           where("date", ">=", startDate),
-          where("date", "<=", endDate)
+          where("date", "<=", endDate),
         );
         const snap = await getDocs(qy);
         const rows: VendorOrderLineDoc[] = [];
@@ -760,7 +764,7 @@ export default function DataCenterCandies({
           collection(db, "expenses_candies"),
           where("date", ">=", startDate),
           where("date", "<=", endDate),
-          orderBy("date", "asc")
+          orderBy("date", "asc"),
         );
         const snap = await getDocs(qy);
         const rows: ExpenseCandy[] = [];
@@ -777,8 +781,8 @@ export default function DataCenterCandies({
             rows.filter(
               (x) =>
                 String(x.date || "") >= startDate &&
-                String(x.date || "") <= endDate
-            )
+                String(x.date || "") <= endDate,
+            ),
           );
         } catch (e2) {
           console.error(e2);
@@ -842,14 +846,14 @@ export default function DataCenterCandies({
           rows.push({
             id: d.id,
             name: String((d.data() as any)?.name || "").trim(),
-          })
+          }),
         );
         setCustomers(rows);
       },
       (err) => {
         console.error("customers_candies snapshot error:", err);
         setCustomers([]);
-      }
+      },
     );
 
     return () => unsub();
@@ -864,7 +868,7 @@ export default function DataCenterCandies({
         const qy = query(
           collection(db, "ar_movements"),
           where("date", "<=", endDate),
-          orderBy("date", "asc")
+          orderBy("date", "asc"),
         );
         const snap = await getDocs(qy);
         const rows: ARMovement[] = [];
@@ -909,14 +913,14 @@ export default function DataCenterCandies({
     if (productFilter.trim()) {
       const p = productFilter.trim().toLowerCase();
       base = base.filter((r) =>
-        (r.productName || "").toLowerCase().includes(p)
+        (r.productName || "").toLowerCase().includes(p),
       );
     }
 
     if (customerFilter.trim()) {
       const c = customerFilter.trim().toLowerCase();
       base = base.filter((r) =>
-        (displayCustomerName(r) || "").toLowerCase().includes(c)
+        (displayCustomerName(r) || "").toLowerCase().includes(c),
       );
     }
 
@@ -1054,10 +1058,10 @@ export default function DataCenterCandies({
   const diffVsExpected = useMemo(() => {
     return {
       RIVAS: round2(
-        actualByBranch.RIVAS.sales - expectedAndGross.expectedRivas
+        actualByBranch.RIVAS.sales - expectedAndGross.expectedRivas,
       ),
       SAN_JORGE: round2(
-        actualByBranch.SAN_JORGE.sales - expectedAndGross.expectedSanJorge
+        actualByBranch.SAN_JORGE.sales - expectedAndGross.expectedSanJorge,
       ),
       ISLA: round2(actualByBranch.ISLA.sales - expectedAndGross.expectedIsla),
     };
@@ -1161,9 +1165,10 @@ export default function DataCenterCandies({
       mainOrders
         .filter(
           (o) =>
-            String(o.date || "") >= startDate && String(o.date || "") <= endDate
+            String(o.date || "") >= startDate &&
+            String(o.date || "") <= endDate,
         )
-        .map((o) => o.id)
+        .map((o) => o.id),
     );
 
     let remainingPacksMasterPeriod = 0;
@@ -1177,11 +1182,11 @@ export default function DataCenterCandies({
     // Existencia global (todas)
     const globalRemainingMaster = allMasterInventory.reduce(
       (s, x) => s + safeNum(x.remainingPackages),
-      0
+      0,
     );
     const globalRemainingVendor = allVendorInventory.reduce(
       (s, x) => s + safeNum(x.remainingPackages),
-      0
+      0,
     );
 
     return {
@@ -1260,15 +1265,15 @@ export default function DataCenterCandies({
         (b === "ISLA"
           ? safeNum(line.totalIsla)
           : b === "RIVAS"
-          ? safeNum(line.totalRivas)
-          : safeNum(line.totalSanJorge));
+            ? safeNum(line.totalRivas)
+            : safeNum(line.totalSanJorge));
 
       dispersedTotal += totalVenta;
       if (b === "ISLA") dispersedIsla += totalVenta;
     }
 
     const totalExistenteIsla = round2(
-      safeNum(expectedAndGross.expectedIsla) - dispersedIsla
+      safeNum(expectedAndGross.expectedIsla) - dispersedIsla,
     );
 
     return {
@@ -1336,10 +1341,10 @@ export default function DataCenterCandies({
         (b === "ISLA"
           ? safeNum(l.totalIsla)
           : b === "RIVAS"
-          ? safeNum(l.totalRivas)
-          : b === "SAN_JORGE"
-          ? safeNum(l.totalSanJorge)
-          : 0);
+            ? safeNum(l.totalRivas)
+            : b === "SAN_JORGE"
+              ? safeNum(l.totalSanJorge)
+              : 0);
 
       if (direct > 0) return direct;
 
@@ -1389,15 +1394,15 @@ export default function DataCenterCandies({
         unitPrice > 0
           ? unitPrice * soldUnits
           : orderedUnits > 0
-          ? (lineTotal * soldUnits) / orderedUnits
-          : 0;
+            ? (lineTotal * soldUnits) / orderedUnits
+            : 0;
 
       const lineRemainingValue =
         unitPrice > 0
           ? unitPrice * remainingUnits
           : orderedUnits > 0
-          ? (lineTotal * remainingUnits) / orderedUnits
-          : 0;
+            ? (lineTotal * remainingUnits) / orderedUnits
+            : 0;
 
       if (!map.has(orderKey)) {
         map.set(orderKey, {
@@ -1460,7 +1465,7 @@ export default function DataCenterCandies({
         acc.totalEsperado += safeNum(o.totalEsperado);
         return acc;
       },
-      { totalOrden: 0, vendido: 0, restante: 0, comision: 0, totalEsperado: 0 }
+      { totalOrden: 0, vendido: 0, restante: 0, comision: 0, totalEsperado: 0 },
     );
 
     return {
@@ -1478,7 +1483,7 @@ export default function DataCenterCandies({
   const vendorOrderDetail = useMemo(() => {
     if (!vendorOrderKey) return null;
     const o = vendorOrdersKpis.orders.find(
-      (x) => x.orderKey === vendorOrderKey
+      (x) => x.orderKey === vendorOrderKey,
     );
     if (!o) return null;
 
@@ -1523,12 +1528,12 @@ export default function DataCenterCandies({
   const globalStockKpis = useMemo(() => {
     const masterRemainingPackages = allMasterInventory.reduce(
       (s, x) => s + safeNum(x.remainingPackages),
-      0
+      0,
     );
 
     const vendorRemainingPackages = allVendorInventory.reduce(
       (s, x) => s + safeNum(x.remainingPackages),
-      0
+      0,
     );
 
     return {
@@ -1606,7 +1611,7 @@ export default function DataCenterCandies({
     if (groupBy === "DIA") arr.sort((a, b) => (a.key < b.key ? 1 : -1));
     else
       arr.sort(
-        (a, b) => b.salesCash + b.salesCredit - (a.salesCash + a.salesCredit)
+        (a, b) => b.salesCash + b.salesCredit - (a.salesCash + a.salesCredit),
       );
 
     return arr;
@@ -1667,7 +1672,7 @@ export default function DataCenterCandies({
         commCredit: round2(x.commCredit),
       }))
       .sort(
-        (a, b) => b.salesCash + b.salesCredit - (a.salesCash + a.salesCredit)
+        (a, b) => b.salesCash + b.salesCredit - (a.salesCash + a.salesCredit),
       );
   }, [detailRows]);
 
@@ -1838,7 +1843,7 @@ export default function DataCenterCandies({
           money(r.commission),
           r.customerId || "",
           `"${String(displayCustomerName(r) || "").replace(/"/g, '""')}"`,
-        ].join(",")
+        ].join(","),
       ),
     ];
 
@@ -2959,10 +2964,10 @@ export default function DataCenterCandies({
                             {groupBy === "DIA"
                               ? "Día"
                               : groupBy === "VENDEDOR"
-                              ? "Vendedor"
-                              : groupBy === "PRODUCTO"
-                              ? "Producto"
-                              : "Sucursal"}
+                                ? "Vendedor"
+                                : groupBy === "PRODUCTO"
+                                  ? "Producto"
+                                  : "Sucursal"}
                           </th>
                           <th className="border p-2">Paquetes cash</th>
                           <th className="border p-2">Paquetes crédito</th>
@@ -3045,7 +3050,7 @@ export default function DataCenterCandies({
                         {money(
                           detailRows
                             .filter((r) => r.type === "CONTADO")
-                            .reduce((s, r) => s + safeNum(r.amount), 0)
+                            .reduce((s, r) => s + safeNum(r.amount), 0),
                         )}
                       </strong>
                     </div>
@@ -3056,7 +3061,7 @@ export default function DataCenterCandies({
                         {money(
                           detailRows
                             .filter((r) => r.type === "CREDITO")
-                            .reduce((s, r) => s + safeNum(r.amount), 0)
+                            .reduce((s, r) => s + safeNum(r.amount), 0),
                         )}
                       </strong>
                     </div>
@@ -3066,7 +3071,7 @@ export default function DataCenterCandies({
                         {qty3(
                           detailRows
                             .filter((r) => r.type === "CONTADO")
-                            .reduce((s, r) => s + safeNum(r.packages), 0)
+                            .reduce((s, r) => s + safeNum(r.packages), 0),
                         )}
                       </strong>
                     </div>
@@ -3076,7 +3081,7 @@ export default function DataCenterCandies({
                         {qty3(
                           detailRows
                             .filter((r) => r.type === "CREDITO")
-                            .reduce((s, r) => s + safeNum(r.packages), 0)
+                            .reduce((s, r) => s + safeNum(r.packages), 0),
                         )}
                       </strong>
                     </div>

@@ -15,6 +15,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import { hasRole } from "../../utils/roles";
 import jsPDF from "jspdf";
 import { set } from "date-fns";
 
@@ -372,24 +373,32 @@ function normalizePhone(input: string): string {
 }
 
 // ===== NUEVO: Props opcionales para amarrar el vendedor al usuario logueado =====
+
 type RoleProp =
   | ""
   | "admin"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "supervisor_pollo"
+  | "contador";
 
 interface SalesCandiesPOSProps {
   role?: RoleProp;
   sellerCandyId?: string; // id del vendedor de dulces asociado al usuario
   currentUserEmail?: string; // opcional, por si después lo usamos para algo más
+  roles?: RoleProp[] | string[];
 }
 
 export default function SalesCandiesPOS({
   role = "",
+  roles,
   sellerCandyId = "",
   currentUserEmail,
-}: SalesCandiesPOSProps) {
+}: SalesCandiesPOSProps & { roles?: string[] }) {
+  const subject = roles && roles.length ? roles : role;
+  const isAdmin = hasRole(subject, "admin");
+  const isVendDulces = hasRole(subject, "vendedor_dulces");
   // Catálogos
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -515,7 +524,9 @@ export default function SalesCandiesPOS({
         controlsRef.current = null;
         try {
           const stream = videoRef.current?.srcObject as MediaStream | null;
-          stream?.getTracks?.forEach((t: MediaStreamTrack) => t.stop());
+          try {
+            stream?.getTracks?.().forEach((t: MediaStreamTrack) => t.stop());
+          } catch {}
         } catch {}
         try {
           if (videoRef.current) videoRef.current.srcObject = null;
@@ -762,8 +773,13 @@ export default function SalesCandiesPOS({
 
   // leer usuario logueado / vendedor asociado para autoseleccionar vendedor
   useEffect(() => {
+    const subject = roles && roles.length ? roles : role;
     // 1) Si viene atado desde App (usuario vendedor de dulces)
-    if (role === "vendedor_dulces" && sellerCandyId) {
+    if (
+      subject &&
+      (subject as any).includes?.("vendedor_dulces") &&
+      sellerCandyId
+    ) {
       setVendorId(sellerCandyId);
       setLockVendor(true);
 
@@ -776,7 +792,7 @@ export default function SalesCandiesPOS({
       }
       return;
     }
-    if (role === "admin") {
+    if (subject && (subject as any).includes?.("admin")) {
       setLockVendor(false);
       return;
     }

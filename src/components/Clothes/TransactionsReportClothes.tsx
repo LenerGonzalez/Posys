@@ -90,7 +90,7 @@ async function consumeFIFO(productId: string, qty: number) {
   if (qty <= 0) return;
   const qB = query(
     collection(db, "inventory_clothes_batches"),
-    where("productId", "==", productId)
+    where("productId", "==", productId),
   );
   const snap = await getDocs(qB);
   const lots: BatchRow[] = [];
@@ -121,7 +121,7 @@ async function restoreFIFO(productId: string, qty: number) {
   if (qty <= 0) return;
   const qB = query(
     collection(db, "inventory_clothes_batches"),
-    where("productId", "==", productId)
+    where("productId", "==", productId),
   );
   const snap = await getDocs(qB);
   const lots: BatchRow[] = [];
@@ -154,17 +154,17 @@ async function restoreFIFO(productId: string, qty: number) {
 async function deleteARMovesBySaleId(saleId: string) {
   const qMov = query(
     collection(db, "ar_movements"),
-    where("ref.saleId", "==", saleId)
+    where("ref.saleId", "==", saleId),
   );
   const snap = await getDocs(qMov);
   await Promise.all(
-    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id)))
+    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id))),
   );
 }
 async function upsertARMovesOnEdit(
   sale: SaleDoc,
   newTotal: number,
-  newDownPayment?: number
+  newDownPayment?: number,
 ) {
   await deleteARMovesBySaleId(sale.id);
   if (sale.type !== "CREDITO" || !sale.customerId) return;
@@ -212,15 +212,15 @@ export default function TransactionsReportClothes() {
     setItemsModalRows([]);
     try {
       const snap = await getDocs(
-        query(collection(db, "sales_clothes"), where("__name__", "==", saleId))
+        query(collection(db, "sales_clothes"), where("__name__", "==", saleId)),
       );
       const docSnap = snap.docs[0];
       const data = docSnap?.data() as any;
       const arr = Array.isArray(data?.items)
         ? data.items
         : data?.item
-        ? [data.item]
-        : [];
+          ? [data.item]
+          : [];
       const rows = arr.map((it: any) => ({
         productName: String(it.productName || ""),
         qty: Number(it.qty || 0),
@@ -276,13 +276,13 @@ export default function TransactionsReportClothes() {
         const cSnap = await getDocs(collection(db, "customers_clothes"));
         const cList: Customer[] = [];
         cSnap.forEach((d) =>
-          cList.push({ id: d.id, name: (d.data() as any).name || "" })
+          cList.push({ id: d.id, name: (d.data() as any).name || "" }),
         );
         setCustomers(cList);
 
         // ventas
         const sSnap = await getDocs(
-          query(collection(db, "sales_clothes"), orderBy("createdAt", "desc"))
+          query(collection(db, "sales_clothes"), orderBy("createdAt", "desc")),
         );
         const list: SaleDoc[] = [];
         sSnap.forEach((d) => {
@@ -411,8 +411,8 @@ export default function TransactionsReportClothes() {
                 item: { ...x.item, qty: newQty, total: newTotal },
                 downPayment: newDP,
               }
-            : x
-        )
+            : x,
+        ),
       );
       setMsg("✅ Venta actualizada");
       setEditOpen(false);
@@ -537,7 +537,7 @@ export default function TransactionsReportClothes() {
               <span key={idx} className="px-2">
                 …
               </span>
-            )
+            ),
           )}
           <button
             className="px-2 py-1 border rounded disabled:opacity-50"
@@ -777,7 +777,7 @@ export default function TransactionsReportClothes() {
                   value={editQty}
                   onChange={(e) =>
                     setEditQty(
-                      Math.max(1, Math.floor(Number(e.target.value || 0)))
+                      Math.max(1, Math.floor(Number(e.target.value || 0))),
                     )
                   }
                 />
@@ -793,7 +793,7 @@ export default function TransactionsReportClothes() {
                   <div className="text-xs text-gray-600">Nuevo total</div>
                   <div className="text-lg font-semibold">
                     {money(
-                      Number(editing.item.unitPrice) * Number(editQty || 0)
+                      Number(editing.item.unitPrice) * Number(editQty || 0),
                     )}
                   </div>
                 </div>

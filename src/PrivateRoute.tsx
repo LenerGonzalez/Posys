@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { auth, db } from "./firebase";
 import { onAuthStateChanged } from "firebase/auth";
+import { hasRole } from "./utils/roles";
 import { doc, getDoc } from "firebase/firestore";
 
 interface PrivateRouteProps {
@@ -24,8 +25,66 @@ export default function PrivateRoute({
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {
-          const role = docSnap.data().role;
-          setAuthorized(allowedRoles.includes(role));
+          const data = docSnap.data() as any;
+          const rlist: string[] = Array.isArray(data.roles)
+            ? data.roles
+            : data.role
+              ? [data.role]
+              : [];
+          try {
+            const isLocal =
+              typeof window !== "undefined" &&
+              window.location &&
+              (window.location.hostname === "localhost" ||
+                window.location.hostname === "127.0.0.1");
+            if (isLocal) {
+              console.info &&
+                console.info(
+                  "[PrivateRoute] uid:",
+                  user.uid,
+                  "roleFromDoc:",
+                  role,
+                  "allowedRoles:",
+                  allowedRoles,
+                );
+            } else {
+              console.debug &&
+                console.debug(
+                  "[PrivateRoute] uid:",
+                  user.uid,
+                  "roleFromDoc:",
+                  role,
+                  "allowedRoles:",
+                  allowedRoles,
+                );
+            }
+          } catch (e) {
+            /* ignore logging errors */
+          }
+          // Autorizar si alguno de los allowedRoles coincide con los roles del usuario
+          let ok = false;
+          for (const ar of allowedRoles) {
+            if (hasRole(rlist, ar)) {
+              ok = true;
+              break;
+            }
+          }
+          setAuthorized(ok);
+        } else {
+          try {
+            const isLocal =
+              typeof window !== "undefined" &&
+              window.location &&
+              (window.location.hostname === "localhost" ||
+                window.location.hostname === "127.0.0.1");
+            if (isLocal) {
+              console.info &&
+                console.info("[PrivateRoute] no user doc for uid:", user.uid);
+            } else {
+              console.debug &&
+                console.debug("[PrivateRoute] no user doc for uid:", user.uid);
+            }
+          } catch (e) {}
         }
       }
       setLoading(false);

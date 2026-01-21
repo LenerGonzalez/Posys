@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "../../firebase";
+import { hasRole } from "../../utils/roles";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
@@ -580,8 +581,15 @@ export default function PrecioVentas() {
       if (!u) return setIsAdmin(false);
       try {
         const snap = await getDoc(doc(db, "users", u.uid));
-        const role = snap.exists() ? String(snap.data().role || "") : "";
-        setIsAdmin(role === "admin");
+        const data = snap.exists() ? (snap.data() as any) : null;
+        const subject = data
+          ? Array.isArray(data.roles)
+            ? data.roles
+            : data.role
+              ? [data.role]
+              : []
+          : [];
+        setIsAdmin(hasRole(subject, "admin"));
       } catch (e) {
         console.error(e);
         setIsAdmin(false);

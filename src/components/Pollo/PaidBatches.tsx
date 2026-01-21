@@ -50,16 +50,23 @@ export default function PaidBatches() {
   const [fromDate, setFromDate] = useState<string>(
     format(
       new Date(new Date().getFullYear(), new Date().getMonth(), 1),
-      "yyyy-MM-dd"
-    )
+      "yyyy-MM-dd",
+    ),
   );
   const [toDate, setToDate] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
+    format(new Date(), "yyyy-MM-dd"),
   );
   const [product, setProduct] = useState<string>("");
 
   const [openInvoice, setOpenInvoice] = useState(false);
   const { refreshKey, refresh } = useManualRefresh();
+  // mobile collapse for totals
+  const [totalsOpen, setTotalsOpen] = useState<boolean>(false);
+  const toggleTotals = () => setTotalsOpen((v) => !v);
+  // mobile: single-open accordion (id of expanded batch or null)
+  const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
+  const toggleBatch = (id: string) =>
+    setExpandedBatchId((prev) => (prev === id ? null : id));
 
   useEffect(() => {
     (async () => {
@@ -67,7 +74,7 @@ export default function PaidBatches() {
       const qy = query(
         collection(db, "inventory_batches"),
         where("status", "==", "PAGADO"),
-        orderBy("date", "desc")
+        orderBy("date", "desc"),
       );
       const snap = await getDocs(qy);
       const out: Batch[] = [];
@@ -164,14 +171,14 @@ export default function PaidBatches() {
 
       const salesRef = collection(db, "salesV2");
       const salesSnap1 = await getDocs(
-        query(salesRef, where("batchId", "==", selectedBatch.id))
+        query(salesRef, where("batchId", "==", selectedBatch.id)),
       );
       const salesSnap2 = await getDocs(
         query(
           salesRef,
           where("productName", "==", selectedBatch.productName),
-          where("date", "==", selectedBatch.date)
-        )
+          where("date", "==", selectedBatch.date),
+        ),
       );
 
       const allSales = [...salesSnap1.docs, ...salesSnap2.docs];
@@ -190,7 +197,7 @@ export default function PaidBatches() {
   const productOptions = useMemo(() => {
     const m = new Map<string, { id: string; name: string }>();
     rows.forEach((r) =>
-      m.set(r.productId, { id: r.productId, name: r.productName })
+      m.set(r.productId, { id: r.productId, name: r.productName }),
     );
     return Array.from(m.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [rows]);
@@ -262,39 +269,101 @@ export default function PaidBatches() {
       </div>
 
       {/* Totales */}
-      <div className="bg-gray-50 p-3 rounded-2xl shadow-2xl border mb-3 text-base">
-        <div className="grid grid-cols-2 gap-y-2 gap-x-8">
-          <div>
-            <span className="font-semibold">Libras ingresadas:</span>{" "}
-            {qty3(totals.lbsIng)}
-          </div>
-          <div>
-            <span className="font-semibold">Unidades ingresadas:</span>{" "}
-            {qty3(totals.udsIng)}
-          </div>
-          <div>
-            <span className="font-semibold">Total esperado en ventas:</span>{" "}
-            {money(totals.totalEsperado)}
-          </div>
-          <div>
-            <span className="font-semibold">Libras restantes:</span>{" "}
-            {qty3(totals.lbsRem)}
-          </div>
-          <div>
-            <span className="font-semibold">Unidades restantes:</span>{" "}
-            {qty3(totals.udsRem)}
-          </div>
-          <div>
-            <span className="font-semibold">Total facturado:</span>{" "}
-            {money(totals.totalFact)}
-          </div>
-          <div className="col-span-2">
-            <span className="font-semibold">Ganancia sin gastos:</span>{" "}
-            {money(totals.gross)}
-          </div>
-          <div>
-            <span className="font-semibold">Cantidad de Lotes:</span>{" "}
-            {filtered.length.toLocaleString()}
+      <div className="mb-3">
+        {/* Mobile: collapsible summary */}
+        <div className="md:hidden">
+          <button
+            type="button"
+            onClick={toggleTotals}
+            className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+          >
+            <div>
+              <div className="font-semibold">Totales</div>
+              <div className="text-xs text-gray-600">
+                Libras: <b>{qty3(totals.lbsIng)}</b> • Restantes:{" "}
+                <b>{qty3(totals.lbsRem)}</b>
+              </div>
+            </div>
+            <div className="text-gray-500">{totalsOpen ? "▲" : "▼"}</div>
+          </button>
+
+          {totalsOpen && (
+            <div className="mt-3 bg-gray-50 p-3 rounded-2xl shadow-2xl border text-base">
+              <div className="grid grid-cols-2 gap-y-2 gap-x-8">
+                <div>
+                  <span className="font-semibold">Libras ingresadas:</span>{" "}
+                  {qty3(totals.lbsIng)}
+                </div>
+                <div>
+                  <span className="font-semibold">Unidades ingresadas:</span>{" "}
+                  {qty3(totals.udsIng)}
+                </div>
+                <div>
+                  <span className="font-semibold">
+                    Total esperado en ventas:
+                  </span>{" "}
+                  {money(totals.totalEsperado)}
+                </div>
+                <div>
+                  <span className="font-semibold">Libras restantes:</span>{" "}
+                  {qty3(totals.lbsRem)}
+                </div>
+                <div>
+                  <span className="font-semibold">Unidades restantes:</span>{" "}
+                  {qty3(totals.udsRem)}
+                </div>
+                <div>
+                  <span className="font-semibold">Total facturado:</span>{" "}
+                  {money(totals.totalFact)}
+                </div>
+                <div className="col-span-2">
+                  <span className="font-semibold">Ganancia sin gastos:</span>{" "}
+                  {money(totals.gross)}
+                </div>
+                <div>
+                  <span className="font-semibold">Cantidad de Lotes:</span>{" "}
+                  {filtered.length.toLocaleString()}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Desktop: always visible totals */}
+        <div className="hidden md:block bg-gray-50 p-3 rounded-2xl shadow-2xl border mb-3 text-base">
+          <div className="grid grid-cols-2 gap-y-2 gap-x-8">
+            <div>
+              <span className="font-semibold">Libras ingresadas:</span>{" "}
+              {qty3(totals.lbsIng)}
+            </div>
+            <div>
+              <span className="font-semibold">Unidades ingresadas:</span>{" "}
+              {qty3(totals.udsIng)}
+            </div>
+            <div>
+              <span className="font-semibold">Total esperado en ventas:</span>{" "}
+              {money(totals.totalEsperado)}
+            </div>
+            <div>
+              <span className="font-semibold">Libras restantes:</span>{" "}
+              {qty3(totals.lbsRem)}
+            </div>
+            <div>
+              <span className="font-semibold">Unidades restantes:</span>{" "}
+              {qty3(totals.udsRem)}
+            </div>
+            <div>
+              <span className="font-semibold">Total facturado:</span>{" "}
+              {money(totals.totalFact)}
+            </div>
+            <div className="col-span-2">
+              <span className="font-semibold">Ganancia sin gastos:</span>{" "}
+              {money(totals.gross)}
+            </div>
+            <div>
+              <span className="font-semibold">Cantidad de Lotes:</span>{" "}
+              {filtered.length.toLocaleString()}
+            </div>
           </div>
         </div>
       </div>
@@ -310,60 +379,79 @@ export default function PaidBatches() {
             Sin lotes pagados
           </div>
         ) : (
-          filtered.map((b) => (
-            <div key={b.id} className="bg-white border rounded-2xl shadow p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="font-semibold">{b.productName}</div>
-                  <div className="text-xs text-gray-500">
-                    {(b.category || "").toUpperCase()} • {b.date} •{" "}
-                    {(b.unit || "").toUpperCase()}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-bold">
-                    {money(b.expectedTotal || 0)}
-                  </div>
-                  <div className="text-[11px] text-gray-500">Esperado</div>
-                </div>
-              </div>
-
-              <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                <div className="bg-gray-50 border rounded-xl p-2">
-                  <div className="text-xs text-gray-500">Ingresado</div>
-                  <div className="font-semibold">{qty3(b.quantity)}</div>
-                </div>
-                <div className="bg-gray-50 border rounded-xl p-2">
-                  <div className="text-xs text-gray-500">Restantes</div>
-                  <div className="font-semibold">{qty3(b.remaining)}</div>
-                </div>
-                <div className="bg-gray-50 border rounded-xl p-2">
-                  <div className="text-xs text-gray-500">Costo</div>
-                  <div className="font-semibold">
-                    {money(b.invoiceTotal || 0)}
-                  </div>
-                </div>
-                <div className="bg-gray-50 border rounded-xl p-2">
-                  <div className="text-xs text-gray-500">Fecha pago</div>
-                  <div className="font-semibold">
-                    {b.paidAt?.toDate
-                      ? format(b.paidAt.toDate(), "yyyy-MM-dd")
-                      : "—"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-3">
+          filtered.map((b) => {
+            const expanded = expandedBatchId === b.id;
+            return (
+              <div
+                key={b.id}
+                className="bg-white border rounded-2xl overflow-hidden"
+              >
                 <button
                   type="button"
-                  className="w-full px-3 py-2 rounded-xl text-white bg-yellow-600 hover:bg-yellow-700"
-                  onClick={() => askMarkPending(b)}
+                  onClick={() => toggleBatch(b.id)}
+                  className="w-full text-left px-3 py-3 flex items-center justify-between bg-white"
                 >
-                  Marcar PENDIENTE
+                  <div className="min-w-0">
+                    <div className="font-semibold truncate">
+                      {b.productName}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {(b.category || "").toUpperCase()} • {b.date} •{" "}
+                      {(b.unit || "").toUpperCase()}
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <div className="text-sm font-bold">
+                      {money(b.expectedTotal || 0)}
+                    </div>
+                    <div className="text-[11px] text-gray-500">
+                      {expanded ? "Detalles" : "Esperado"}
+                    </div>
+                  </div>
                 </button>
+
+                {expanded && (
+                  <div className="p-3">
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                      <div className="bg-gray-50 border rounded-xl p-2">
+                        <div className="text-xs text-gray-500">Ingresado</div>
+                        <div className="font-semibold">{qty3(b.quantity)}</div>
+                      </div>
+                      <div className="bg-gray-50 border rounded-xl p-2">
+                        <div className="text-xs text-gray-500">Restantes</div>
+                        <div className="font-semibold">{qty3(b.remaining)}</div>
+                      </div>
+                      <div className="bg-gray-50 border rounded-xl p-2">
+                        <div className="text-xs text-gray-500">Costo</div>
+                        <div className="font-semibold">
+                          {money(b.invoiceTotal || 0)}
+                        </div>
+                      </div>
+                      <div className="bg-gray-50 border rounded-xl p-2">
+                        <div className="text-xs text-gray-500">Fecha pago</div>
+                        <div className="font-semibold">
+                          {b.paidAt?.toDate
+                            ? format(b.paidAt.toDate(), "yyyy-MM-dd")
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        className="w-full px-3 py-2 rounded-xl text-white bg-yellow-600 hover:bg-yellow-700"
+                        onClick={() => askMarkPending(b)}
+                      >
+                        Marcar PENDIENTE
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

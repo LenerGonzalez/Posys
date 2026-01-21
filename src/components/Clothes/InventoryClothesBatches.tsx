@@ -114,10 +114,10 @@ export default function InventoryClothesBatches() {
 
   // 🔎 Filtro por fecha
   const [fromDate, setFromDate] = useState<string>(
-    format(startOfMonth(new Date()), "yyyy-MM-dd")
+    format(startOfMonth(new Date()), "yyyy-MM-dd"),
   );
   const [toDate, setToDate] = useState<string>(
-    format(endOfMonth(new Date()), "yyyy-MM-dd")
+    format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
 
   // 🔵 Filtro por producto
@@ -126,7 +126,7 @@ export default function InventoryClothesBatches() {
   // ===== Form crear lote (Ropa) =====
   const [productId, setProductId] = useState("");
   const [dateStr, setDateStr] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
+    format(new Date(), "yyyy-MM-dd"),
   );
   const [quantity, setQuantity] = useState<number>(0);
   const [purchasePrice, setPurchasePrice] = useState<number>(0);
@@ -269,7 +269,7 @@ export default function InventoryClothesBatches() {
       // Lotes de ropa
       const qB = query(
         collection(db, "inventory_clothes_batches"),
-        orderBy("date", "desc")
+        orderBy("date", "desc"),
       );
       const bsnap = await getDocs(qB);
       const rows: Batch[] = [];
@@ -287,11 +287,11 @@ export default function InventoryClothesBatches() {
           salePrice: Number(b.salePrice || 0),
           invoiceTotal: Number(
             b.invoiceTotal ??
-              Number(b.quantity || 0) * Number(b.purchasePrice || 0)
+              Number(b.quantity || 0) * Number(b.purchasePrice || 0),
           ),
           expectedTotal: Number(
             b.expectedTotal ??
-              Number(b.quantity || 0) * Number(b.salePrice || 0)
+              Number(b.quantity || 0) * Number(b.salePrice || 0),
           ),
           date: b.date,
           createdAt: b.createdAt,
@@ -385,11 +385,11 @@ export default function InventoryClothesBatches() {
   const totals = useMemo(() => {
     const totalFacturado = filteredBatches.reduce(
       (a, b) => a + (b.invoiceTotal || 0),
-      0
+      0,
     );
     const totalEsperado = filteredBatches.reduce(
       (a, b) => a + (b.expectedTotal || 0),
-      0
+      0,
     );
     const udsIng = filteredBatches.reduce((a, b) => a + b.quantity, 0);
     const udsRem = filteredBatches.reduce((a, b) => a + b.remaining, 0);
@@ -505,14 +505,14 @@ export default function InventoryClothesBatches() {
   // ===== Pagar lote =====
   const payBatch = async (b: Batch) => {
     const ok = confirm(
-      `Marcar PAGADO el lote del ${b.date} (${b.productName})?`
+      `Marcar PAGADO el lote del ${b.date} (${b.productName})?`,
     );
     if (!ok) return;
     await updateDoc(doc(db, "inventory_clothes_batches", b.id), {
       status: "PAGADO",
     });
     setBatches((prev) =>
-      prev.map((x) => (x.id === b.id ? { ...x, status: "PAGADO" } : x))
+      prev.map((x) => (x.id === b.id ? { ...x, status: "PAGADO" } : x)),
     );
   };
 
@@ -612,8 +612,8 @@ export default function InventoryClothesBatches() {
               brand: editBrand || "",
               clientCode: editClientCode || "",
             }
-          : x
-      )
+          : x,
+      ),
     );
     cancelEdit();
     setMsg("✅ Lote actualizado");
@@ -661,7 +661,7 @@ export default function InventoryClothesBatches() {
         <td style="text-align:right">${money(b.expectedTotal || 0)}</td>
         <td>${esc((b.notes || "").slice(0, 120))}</td>
         <td>${b.status}</td>
-      </tr>`
+      </tr>`,
       )
       .join("");
 
@@ -688,19 +688,19 @@ export default function InventoryClothesBatches() {
   <div class="muted">${titleRange}</div>
   <div class="totals">
     <span><strong>Unidades ingresadas:</strong> ${totals.udsIng.toFixed(
-      0
+      0,
     )}</span>
     <span><strong>Unidades restantes:</strong> ${totals.udsRem.toFixed(
-      0
+      0,
     )}</span>
     <span><strong>Total esperado a ganar:</strong> ${money(
-      totals.totalEsperado
+      totals.totalEsperado,
     )}</span>
     <span><strong>Total facturado:</strong> ${money(
-      totals.totalFacturado
+      totals.totalFacturado,
     )}</span>
     <span><strong>Ganancia sin gastos:</strong> ${money(
-      Number((totals.totalEsperado - totals.totalFacturado).toFixed(2))
+      Number((totals.totalEsperado - totals.totalFacturado).toFixed(2)),
     )}</span>
   </div>
   <table>
@@ -830,7 +830,7 @@ export default function InventoryClothesBatches() {
           <div>
             <span className="font-semibold">Ganancia sin gastos:</span>{" "}
             {money(
-              Number((totals.totalEsperado - totals.totalFacturado).toFixed(2))
+              Number((totals.totalEsperado - totals.totalFacturado).toFixed(2)),
             )}
           </div>
         </div>
@@ -1036,7 +1036,10 @@ export default function InventoryClothesBatches() {
                             value={Number.isNaN(editQty) ? "" : editQty}
                             onChange={(e) =>
                               setEditQty(
-                                Math.max(0, parseInt(e.target.value || "0", 10))
+                                Math.max(
+                                  0,
+                                  parseInt(e.target.value || "0", 10),
+                                ),
                               )
                             }
                           />
@@ -1063,7 +1066,7 @@ export default function InventoryClothesBatches() {
                             }
                             onChange={(e) =>
                               setEditPurchase(
-                                Math.max(0, parseFloat(e.target.value || "0"))
+                                Math.max(0, parseFloat(e.target.value || "0")),
                               )
                             }
                           />
@@ -1083,7 +1086,7 @@ export default function InventoryClothesBatches() {
                             value={Number.isNaN(editSale) ? "" : editSale}
                             onChange={(e) =>
                               setEditSale(
-                                Math.max(0, parseFloat(e.target.value || "0"))
+                                Math.max(0, parseFloat(e.target.value || "0")),
                               )
                             }
                           />
@@ -1244,7 +1247,7 @@ export default function InventoryClothesBatches() {
               </div>
             </div>
           </>,
-          document.body
+          document.body,
         )}
 
       {/* Modal Crear Inventario (form original movido aquí) */}
@@ -1315,7 +1318,7 @@ export default function InventoryClothesBatches() {
                     value={quantity === 0 ? "" : quantity}
                     onChange={(e) =>
                       setQuantity(
-                        Math.max(0, parseInt(e.target.value || "0", 10))
+                        Math.max(0, parseInt(e.target.value || "0", 10)),
                       )
                     }
                     placeholder=""
@@ -1334,7 +1337,7 @@ export default function InventoryClothesBatches() {
                     value={purchasePrice === 0 ? "" : purchasePrice}
                     onChange={(e) =>
                       setPurchasePrice(
-                        Math.max(0, parseFloat(e.target.value || "0"))
+                        Math.max(0, parseFloat(e.target.value || "0")),
                       )
                     }
                   />
@@ -1352,7 +1355,7 @@ export default function InventoryClothesBatches() {
                     value={salePrice === 0 ? "" : salePrice}
                     onChange={(e) =>
                       setSalePrice(
-                        Math.max(0, parseFloat(e.target.value || "0"))
+                        Math.max(0, parseFloat(e.target.value || "0")),
                       )
                     }
                   />
@@ -1492,7 +1495,7 @@ export default function InventoryClothesBatches() {
               </form>
             </div>
           </div>,
-          document.body
+          document.body,
         )}
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}

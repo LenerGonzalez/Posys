@@ -13,7 +13,7 @@ import {
 import { db } from "../../firebase";
 
 // REFRESH
-import RefreshButton from "../../components/common/RefreshButton";
+import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
 // ====== Catálogos ======
@@ -160,7 +160,7 @@ export default function ProductsClothes() {
       setLoading(true);
       const qP = query(
         collection(db, "products_clothes"),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
       );
       const snap = await getDocs(qP);
       const list: ProductRow[] = [];
@@ -294,7 +294,7 @@ export default function ProductsClothes() {
       setMsg(
         quantityNum > 0
           ? "✅ Producto creado y lote de inventario registrado"
-          : "✅ Producto de ropa creado"
+          : "✅ Producto de ropa creado",
       );
       // [ADD] no cierro el modal si quieres seguir creando; si prefieres cerrarlo, descomenta:
       // setOpenForm(false);

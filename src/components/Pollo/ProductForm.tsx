@@ -21,6 +21,7 @@ interface Product {
   price: number;
   category: string;
   measurement: string;
+  providerPrice?: number;
   active?: boolean; // <-- nuevo (soft delete)
 }
 
@@ -28,6 +29,7 @@ export default function ProductForm() {
   // formulario crear
   const [name, setName] = useState("");
   const [price, setPrice] = useState<number>(0);
+  const [providerPrice, setProviderPrice] = useState<number>(0);
   const [message, setMessage] = useState("");
   const [category, setCategory] = useState("");
   const [measurement, setMeasurement] = useState("");
@@ -43,6 +45,7 @@ export default function ProductForm() {
   const [editCategory, setEditCategory] = useState("");
   const [editMeasurement, setEditMeasurement] = useState("");
   const [editPrice, setEditPrice] = useState<number>(0);
+  const [editProviderPrice, setEditProviderPrice] = useState<number>(0);
 
   // modal crear
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -57,6 +60,7 @@ export default function ProductForm() {
         id: d.id,
         name: it.name ?? "",
         price: Number(it.price ?? 0),
+        providerPrice: Number(it.providerPrice ?? 0),
         category: it.category ?? "",
         measurement: it.measurement ?? "",
         active: it.active !== false, // default true si no existe
@@ -83,6 +87,7 @@ export default function ProductForm() {
       const payload = {
         name,
         price: parseFloat(price.toFixed(2)),
+        providerPrice: parseFloat((providerPrice || 0).toFixed(2)),
         category,
         measurement,
         active: true, // <-- por defecto activos
@@ -95,6 +100,7 @@ export default function ProductForm() {
       setMessage("✅ Producto registrado con exito.");
       setName("");
       setPrice(0);
+      setProviderPrice(0);
       setMeasurement("");
       setCategory("");
 
@@ -111,6 +117,7 @@ export default function ProductForm() {
     setEditCategory(p.category);
     setEditMeasurement(p.measurement);
     setEditPrice(p.price);
+    setEditProviderPrice(p.providerPrice || 0);
   };
 
   const cancelEdit = () => {
@@ -129,6 +136,7 @@ export default function ProductForm() {
       category: editCategory,
       measurement: editMeasurement,
       price: parseFloat((editPrice || 0).toFixed(2)),
+      providerPrice: parseFloat((editProviderPrice || 0).toFixed(2)),
     });
     setProducts((prev) =>
       prev.map((x) =>
@@ -139,9 +147,10 @@ export default function ProductForm() {
               category: editCategory,
               measurement: editMeasurement,
               price: parseFloat((editPrice || 0).toFixed(2)),
+              providerPrice: parseFloat((editProviderPrice || 0).toFixed(2)),
             }
-          : x
-      )
+          : x,
+      ),
     );
     cancelEdit();
   };
@@ -152,7 +161,7 @@ export default function ProductForm() {
     const newActive = !(p.active !== false); // true -> false, false -> true
     await updateDoc(ref, { active: newActive });
     setProducts((prev) =>
-      prev.map((x) => (x.id === p.id ? { ...x, active: newActive } : x))
+      prev.map((x) => (x.id === p.id ? { ...x, active: newActive } : x)),
     );
   };
 
@@ -162,13 +171,13 @@ export default function ProductForm() {
     const qB = query(
       collection(db, "inventory_batches"),
       where("productId", "==", id),
-      limit(1)
+      limit(1),
     );
     const hasBatches = !(await getDocs(qB)).empty;
     if (hasBatches) {
       alert(
         "No se puede eliminar: hay lotes asociados a este producto.\n" +
-          "Sugerencia: desactívalo para ocultarlo."
+          "Sugerencia: desactívalo para ocultarlo.",
       );
       return;
     }
@@ -303,6 +312,19 @@ export default function ProductForm() {
 
               <div>
                 <label className="block text-sm">
+                  Precio proveedor (ej: 40.00)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="w-full border p-2 rounded"
+                  value={Number.isNaN(providerPrice) ? "" : providerPrice}
+                  onChange={(e) => setProviderPrice(parseFloat(e.target.value))}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm">
                   Precio por unidad (ej: 55.50)
                 </label>
                 <input
@@ -351,6 +373,7 @@ export default function ProductForm() {
               <th className="p-2 border">Nombre</th>
               <th className="p-2 border">Categoría</th>
               <th className="p-2 border">Unidad</th>
+              <th className="p-2 border">Precio proveedor</th>
               <th className="p-2 border">Precio</th>
               <th className="p-2 border">Estado</th>
               <th className="p-2 border">Acciones</th>
@@ -418,6 +441,25 @@ export default function ProductForm() {
                         </select>
                       ) : (
                         p.measurement
+                      )}
+                    </td>
+                    <td className="p-2 border">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="w-full border p-1 rounded text-right"
+                          value={
+                            Number.isNaN(editProviderPrice)
+                              ? ""
+                              : editProviderPrice
+                          }
+                          onChange={(e) =>
+                            setEditProviderPrice(parseFloat(e.target.value))
+                          }
+                        />
+                      ) : (
+                        money(p.providerPrice || 0)
                       )}
                     </td>
                     <td className="p-2 border">

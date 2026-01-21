@@ -1,4 +1,4 @@
-// src/components/Candies/TransactionsReportCandies.tsx
+// TransactionsPollo: Adaptación de Transacciones para Pollo
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -14,7 +14,7 @@ import {
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import { format } from "date-fns";
-import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
+import { restoreSaleAndDelete } from "../../Services/inventory";
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -24,69 +24,41 @@ interface Customer {
   name: string;
 }
 
-// === Nuevo: mismo seller que en consolidado de vendedores (dulces) ===
-interface Seller {
-  id: string;
-  name: string;
-  commissionPercent: number;
-}
-
 interface SaleDoc {
   id: string;
   date: string; // yyyy-MM-dd
+  // en Pollo usamos type para indicar CONTADO/CREDITO
   type: SaleType;
-  total: number;
-
-  // TOTAL de PAQUETES para UI
+  total: number; // ventas
+  // cantidad en libras/unidades
   quantity: number;
-
   customerId?: string;
   customerName?: string;
-  downPayment?: number;
-
-  vendorId?: string;
-  vendorName?: string;
-
-  // ✅ NUEVO: si viene guardado en la venta, lo usamos para histórico
-  vendorCommissionPercent?: number;
-  vendorCommissionAmount?: number;
+  _raw?: any;
 }
 
-// ----------------- Helpers de fecha / normalización -----------------
 function ensureDate(x: any): string {
   if (x?.date) return x.date;
   if (x?.createdAt?.toDate) return format(x.createdAt.toDate(), "yyyy-MM-dd");
   return "";
 }
 
-/**
- * Normaliza una venta de "sales_candies" a SaleDoc
- * - Soporta ventas con items[] o estructura simple
- * - quantity en SaleDoc SIEMPRE serán PAQUETES para la UI
- */
 function normalizeSale(d: any, id: string): SaleDoc | null {
   const date = ensureDate(d);
   if (!date) return null;
-
-  let quantity = 0; // paquetes
+  let quantity = 0;
   let total = 0;
 
-  // Si la venta tiene items[] (multi-producto)
   if (Array.isArray(d.items) && d.items.length > 0) {
-    // 👇 Paquetes: usamos campo packages, si no, qty/quantity (fallback)
     quantity = d.items.reduce(
       (acc: number, it: any) =>
-        acc + (Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0),
+        acc + (Number(it.qty ?? it.quantity ?? it.lbs ?? 0) || 0),
       0,
     );
-    total = Number(d.total ?? d.itemsTotal ?? 0) || 0;
+    total = Number(d.amount ?? d.total ?? 0) || 0;
   } else {
-    // Estructura legacy / simple
-    quantity =
-      Number(
-        d.packagesTotal ?? d.quantity ?? d.item?.packages ?? d.item?.qty ?? 0,
-      ) || 0;
-    total = Number(d.total ?? d.item?.total ?? 0) || 0;
+    quantity = Number(d.quantity ?? d.lbs ?? d.weight ?? 0) || 0;
+    total = Number(d.amount ?? d.total ?? 0) || 0;
   }
 
   return {
@@ -97,13 +69,7 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     quantity,
     customerId: d.customerId || undefined,
     customerName: d.customerName || undefined,
-    downPayment: Number(d.downPayment || 0),
-    vendorId: d.vendorId || undefined,
-    vendorName: d.vendorName || d.vendor || undefined,
-
-    // ✅ HISTÓRICO desde la venta
-    vendorCommissionPercent: Number(d.vendorCommissionPercent || 0) || 0,
-    vendorCommissionAmount: Number(d.vendorCommissionAmount || 0) || 0,
+    _raw: d,
   };
 }
 
@@ -120,7 +86,6 @@ async function deleteARMovesBySaleId(saleId: string) {
 }
 
 // ===== NUEVO: Props para restringir por vendedor / rol =====
-
 type RoleProp =
   | ""
   | "admin"
@@ -130,23 +95,43 @@ type RoleProp =
   | "supervisor_pollo"
   | "contador";
 
-interface TransactionsReportCandiesProps {
+interface TransactionsReportPolloProps {
   role?: RoleProp;
+  roles?: RoleProp[] | string[];
   sellerCandyId?: string;
   currentUserEmail?: string;
 }
 
-export default function TransactionsReportCandies({
+export default function TransactionsPollo({
   role = "",
   sellerCandyId = "",
   roles,
-}: TransactionsReportCandiesProps & { roles?: string[] }) {
-  const subject = roles && roles.length ? roles : role;
-  const isVendor = hasRole(subject, "vendedor_dulces");
+}: TransactionsReportPolloProps) {
+  // para Pollo no manejamos vendedores con comisión en este reporte
+  const subject = (roles && (roles as any).length ? roles : role) as any;
+  const isVendor = hasRole(subject, "vendedor_pollo");
+  // Solo administradores tienen permiso de eliminar/editar
   const canDelete = hasRole(subject, "admin");
 
-  // NUEVO: ahora hay una columna extra (Comisión)
-  const columnsCount = canDelete ? 8 : 7;
+  // acceso: admin, vendedores de pollo y supervisores
+  if (
+    !(
+      hasRole(subject, "admin") ||
+      hasRole(subject, "vendedor_pollo") ||
+      hasRole(subject, "supervisor_pollo") ||
+      hasRole(subject, "contador")
+    )
+  ) {
+    return (
+      <div className="p-6 max-w-4xl mx-auto text-center text-red-600">
+        Acceso restringido — Solo administradores, vendedores y supervisores de
+        pollo.
+      </div>
+    );
+  }
+
+  // columnas: Fecha, Cliente, Producto, Libras, Ventas, (Acciones opcionales)
+  const columnsCount = canDelete ? 7 : 6;
 
   // ===== Modal Detalle de Ítems =====
   const [itemsModalOpen, setItemsModalOpen] = useState(false);
@@ -169,26 +154,224 @@ export default function TransactionsReportCandies({
     setItemsModalRows([]);
 
     try {
-      const docSnap = await getDoc(doc(db, "sales_candies", saleId));
+      const docSnap = await getDoc(doc(db, "salesV2", saleId));
       const data = docSnap.exists() ? (docSnap.data() as any) : null;
       if (!data) {
         setItemsModalRows([]);
         return;
       }
 
-      const arr = Array.isArray(data?.items)
-        ? data.items
-        : data?.item
-          ? [data.item]
-          : [];
+      // Extraer items intentando varias formas que aparecen en distintos documentos
+      let arr: any[] = [];
 
-      const rows = arr.map((it: any) => ({
-        productName: String(it.productName || ""),
-        qty: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
-        unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? 0),
-        discount: Number(it.discount || 0),
-        total: Number(it.total ?? it.lineFinal ?? 0),
-      }));
+      // 1) items como array
+      if (Array.isArray(data.items) && data.items.length > 0) {
+        arr = data.items;
+      }
+
+      // 2) items como objeto map -> convertir a array
+      else if (data.items && typeof data.items === "object") {
+        try {
+          arr = Object.values(data.items);
+        } catch (e) {
+          arr = [];
+        }
+      }
+
+      // 3) item único en `item`
+      else if (data.item) {
+        arr = [data.item];
+      }
+
+      // 4) otros nombres comunes: products, lines, detalles
+      else if (Array.isArray(data.products) && data.products.length > 0) {
+        arr = data.products;
+      } else if (Array.isArray(data.lines) && data.lines.length > 0) {
+        arr = data.lines;
+      } else if (Array.isArray(data.detalles) && data.detalles.length > 0) {
+        arr = data.detalles;
+      }
+
+      // 5) si no hay array, pero hay campos de producto a nivel raíz
+      else if (data.productName || data.product) {
+        arr = [
+          {
+            productName: data.productName || data.product || "",
+            qty: data.qty ?? data.quantity ?? data.lbs ?? 0,
+            unitPrice: data.unitPrice ?? data.price ?? 0,
+            discount: data.discount ?? 0,
+            total: data.total ?? data.amount ?? 0,
+          },
+        ];
+      }
+
+      // Si hay allocations por lote, traer precios desde inventory_batches
+      // Helper: parse numbers tolerantly (strip currency, thousands separators)
+      const parseNum = (v: any) => {
+        if (v === undefined || v === null) return NaN;
+        if (typeof v === "number") return v;
+        let s = String(v).trim();
+        if (!s) return NaN;
+        // remove currency symbols and letters
+        s = s.replace(/[^0-9.,-]/g, "");
+        if (!s) return NaN;
+        // If contains both . and ,, assume commas are thousands separators
+        if (s.indexOf(".") > -1 && s.indexOf(",") > -1) {
+          s = s.replace(/,/g, "");
+        } else if (s.indexOf(",") > -1 && s.indexOf(".") === -1) {
+          s = s.replace(/,/g, ".");
+        }
+        const n = Number(s);
+        return isNaN(n) ? NaN : n;
+      };
+      const batchIds = new Set<string>();
+      // colectar batchIds desde items.allocations y raíz data.allocations
+      for (const it of arr) {
+        if (Array.isArray(it?.allocations)) {
+          for (const a of it.allocations) {
+            const id = String(a?.batchId || "").trim();
+            if (id) batchIds.add(id);
+          }
+        }
+        // allocations como objeto map
+        else if (it?.allocations && typeof it.allocations === "object") {
+          try {
+            for (const a of Object.values(it.allocations)) {
+              const id = String((a as any)?.batchId || "").trim();
+              if (id) batchIds.add(id);
+            }
+          } catch (e) {}
+        }
+      }
+
+      if (Array.isArray(data?.allocations)) {
+        for (const a of data.allocations) {
+          const id = String(a?.batchId || "").trim();
+          if (id) batchIds.add(id);
+        }
+      }
+
+      const batchPriceMap: Record<string, number> = {};
+      if (batchIds.size > 0) {
+        await Promise.all(
+          Array.from(batchIds).map(async (bid) => {
+            try {
+              const bSnap = await getDoc(doc(db, "inventory_batches", bid));
+              if (bSnap.exists()) {
+                const b = bSnap.data() as any;
+                batchPriceMap[bid] = Number(
+                  b.salePrice ?? b.sale_price ?? b.price ?? 0,
+                );
+              }
+            } catch (e) {
+              /* ignore */
+            }
+          }),
+        );
+      }
+
+      // fallback: precio por producto en collection `products`
+      const productIds = new Set<string>();
+      for (const it of arr) {
+        const pid = String(it.productId || it.productId || "").trim();
+        if (pid) productIds.add(pid);
+      }
+      const productPriceMap: Record<string, number> = {};
+      if (productIds.size > 0) {
+        await Promise.all(
+          Array.from(productIds).map(async (pid) => {
+            try {
+              const pSnap = await getDoc(doc(db, "products", pid));
+              if (pSnap.exists()) {
+                const p = pSnap.data() as any;
+                productPriceMap[pid] = Number(p.salePrice ?? p.price ?? 0);
+              }
+            } catch (e) {
+              /* ignore */
+            }
+          }),
+        );
+      }
+
+      const rows = arr.map((it: any) => {
+        const productName = String(
+          it.productName || it.product || it.name || "(sin nombre)",
+        );
+
+        const qty =
+          Number(it.qty ?? it.quantity ?? it.lbs ?? it.weight ?? 0) || 0;
+
+        // intentar leer un total declarado en el item (para derivar precio por unidad)
+        const totalCandidate =
+          parseNum(
+            it.total ?? it.lineFinal ?? it.amount ?? it.monto ?? it.line_total,
+          ) || 0;
+
+        // Preferir precios que vienen directamente en la venta (varias claves posibles)
+        let unitPrice = 0;
+        const priceCandidates = [
+          it.unitPrice,
+          it.unitPricePackage,
+          it.salePrice,
+          it.sale_price,
+          it.price,
+          it.unit_price,
+          it.pricePerUnit,
+          it.price_per_unit,
+        ];
+        for (const p of priceCandidates) {
+          const n = parseNum(p);
+          if (!isNaN(n) && n !== 0) {
+            unitPrice = n;
+            break;
+          }
+        }
+
+        // Si no hay precio en el item, verificar si la venta (data) tiene un precio aplicable
+        if (!unitPrice) {
+          const saleLevelRaw =
+            data?.salePrice ??
+            data?.sale_price ??
+            data?.unitPrice ??
+            data?.unit_price ??
+            data?.price ??
+            data?.pricePerUnit;
+          const saleLevel = parseNum(saleLevelRaw);
+          if (!isNaN(saleLevel) && saleLevel !== 0) unitPrice = saleLevel;
+        }
+
+        // si no hay precio, intentar por allocations -> batch price
+        if (!unitPrice) {
+          const firstAlloc = Array.isArray(it.allocations)
+            ? it.allocations[0]
+            : it.allocations && typeof it.allocations === "object"
+              ? Object.values(it.allocations)[0]
+              : null;
+          const bid = firstAlloc ? String(firstAlloc.batchId || "").trim() : "";
+          if (bid && batchPriceMap[bid]) unitPrice = batchPriceMap[bid] || 0;
+        }
+
+        // fallback por productId
+        if (!unitPrice && it.productId) {
+          unitPrice = productPriceMap[String(it.productId)] || 0;
+        }
+
+        // Si aún no hay unitPrice pero hay total declarado y qty>0, derivar unitPrice = total/qty
+        if ((!unitPrice || unitPrice === 0) && totalCandidate > 0 && qty > 0) {
+          unitPrice = totalCandidate / qty;
+        }
+
+        const discount = parseNum(it.discount ?? it.desc ?? 0) || 0;
+
+        // Calcular total de forma explícita para evitar ambigüedades con operadores
+        let total = totalCandidate;
+        if (!total || total === 0) {
+          total = Number(unitPrice * qty || 0);
+        }
+        total = Number(total) || 0;
+
+        return { productName, qty, unitPrice, discount, total };
+      });
 
       setItemsModalRows(rows);
     } catch (e) {
@@ -201,19 +384,17 @@ export default function TransactionsReportCandies({
   // --------- Estado principal ---------
   const [fromDate, setFromDate] = useState(format(new Date(), "yyyy-MM-01"));
   const [toDate, setToDate] = useState(format(new Date(), "yyyy-MM-dd"));
-
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<SaleDoc[]>([]);
-
-  // NUEVO: vendedores con comisión (mismo esquema que consolidado)
-  const [sellers, setSellers] = useState<Seller[]>([]);
+  const [products, setProducts] = useState<string[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
-  // Filtros: Cliente y Tipo
+  // Filtros: Cliente, Tipo y Producto
   const [filterCustomerId, setFilterCustomerId] = useState<string>("");
   const [filterType, setFilterType] = useState<"" | SaleType>("");
+  const [productFilter, setProductFilter] = useState<string>("ALL");
 
   // kebab menú
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -228,28 +409,7 @@ export default function TransactionsReportCandies({
     return m;
   }, [customers]);
 
-  const sellersById = useMemo(() => {
-    const m: Record<string, Seller> = {};
-    sellers.forEach((v) => {
-      m[v.id] = v;
-    });
-    return m;
-  }, [sellers]);
-
-  // ✅ Comisión HISTÓRICA desde la venta (si existe),
-  // fallback a cálculo por sellers_candies
-  const getCommissionAmount = (s: SaleDoc): number => {
-    const stored = Number((s as any).vendorCommissionAmount || 0);
-    if (stored > 0) return stored;
-
-    if (!s.vendorId) return 0;
-    const v = sellersById[s.vendorId];
-    if (!v || !v.commissionPercent) return 0;
-
-    const calc =
-      ((Number(s.total) || 0) * (Number(v.commissionPercent) || 0)) / 100;
-    return Number(calc.toFixed(2));
-  };
+  // no manejamos comisiones ni vendedores en este reporte Pollo
 
   // Carga inicial y recarga al cambiar rango de fechas
   useEffect(() => {
@@ -257,30 +417,35 @@ export default function TransactionsReportCandies({
       setLoading(true);
       setMsg("");
       try {
-        // clientes (dulces)
-        const cSnap = await getDocs(collection(db, "customers_candies"));
+        // clientes (colección específica para Pollo)
+        // Si el usuario es vendedor, cargar solo sus clientes (vendorId === sellerCandyId)
         const cList: Customer[] = [];
-        cSnap.forEach((d) =>
-          cList.push({ id: d.id, name: (d.data() as any).name || "" }),
-        );
+        if (isVendor && sellerCandyId) {
+          const q = query(
+            collection(db, "customers_pollo"),
+            where("vendorId", "==", sellerCandyId),
+            orderBy("createdAt", "desc"),
+          );
+          const cSnap = await getDocs(q);
+          cSnap.forEach((d) =>
+            cList.push({ id: d.id, name: (d.data() as any).name || "" }),
+          );
+        } else {
+          const cSnap = await getDocs(
+            query(
+              collection(db, "customers_pollo"),
+              orderBy("createdAt", "desc"),
+            ),
+          );
+          cSnap.forEach((d) =>
+            cList.push({ id: d.id, name: (d.data() as any).name || "" }),
+          );
+        }
         setCustomers(cList);
 
-        // vendedores (dulces) con comisión (fallback si no viene en venta)
-        const vSnap = await getDocs(collection(db, "sellers_candies"));
-        const vList: Seller[] = [];
-        vSnap.forEach((d) => {
-          const data = d.data() as any;
-          vList.push({
-            id: d.id,
-            name: data.name || "",
-            commissionPercent: Number(data.commissionPercent || 0),
-          });
-        });
-        setSellers(vList);
-
-        // ventas (dulces)
+        // ventas (salesV2) para Pollo
         const sSnap = await getDocs(
-          query(collection(db, "sales_candies"), orderBy("createdAt", "desc")),
+          query(collection(db, "salesV2"), orderBy("createdAt", "desc")),
         );
         const list: SaleDoc[] = [];
         sSnap.forEach((d) => {
@@ -288,7 +453,20 @@ export default function TransactionsReportCandies({
           if (!x) return;
           if (x.date >= fromDate && x.date <= toDate) list.push(x);
         });
-        setSales(list.sort((a, b) => b.date.localeCompare(a.date)));
+        const sorted = list.sort((a, b) => b.date.localeCompare(a.date));
+        setSales(sorted);
+        setProducts(
+          Array.from(
+            new Set(
+              sorted.map(
+                (s) =>
+                  s._raw?.productName ||
+                  s._raw?.items?.[0]?.productName ||
+                  "(sin producto)",
+              ),
+            ),
+          ).sort(),
+        );
         setPage(1);
       } catch (e) {
         console.error(e);
@@ -302,20 +480,21 @@ export default function TransactionsReportCandies({
   // === Filtros de tabla (cliente / tipo / vendedor) ===
   const filteredSales = useMemo(() => {
     return sales.filter((s) => {
-      // Filtro por vendedor cuando es vendedor de dulces
-      if (isVendor) {
-        if (!sellerCandyId) return false;
-        if (!s.vendorId || s.vendorId !== sellerCandyId) return false;
-      }
+      // no filtramos por vendedor aquí para Pollo (acceso controlado por `role`)
       if (filterCustomerId) {
         if (s.customerId !== filterCustomerId) return false;
       }
       if (filterType) {
         if (s.type !== filterType) return false;
       }
+      if (productFilter && productFilter !== "ALL") {
+        const prod =
+          s._raw?.productName || s._raw?.items?.[0]?.productName || "";
+        if (!prod || prod !== productFilter) return false;
+      }
       return true;
     });
-  }, [sales, filterCustomerId, filterType, isVendor, sellerCandyId]);
+  }, [sales, filterCustomerId, filterType, productFilter]);
 
   // KPIs sobre resultado filtrado (cantidad = paquetes)
   const kpis = useMemo(() => {
@@ -332,7 +511,16 @@ export default function TransactionsReportCandies({
         montoCredito += s.total;
       }
     }
-    return { packsCash, packsCredito, montoCash, montoCredito };
+    const packsTotal = packsCash + packsCredito;
+    const montoTotal = montoCash + montoCredito;
+    return {
+      packsCash,
+      packsCredito,
+      packsTotal,
+      montoCash,
+      montoCredito,
+      montoTotal,
+    };
   }, [filteredSales]);
 
   // page slices
@@ -358,13 +546,13 @@ export default function TransactionsReportCandies({
     setOpenMenuId(null);
     if (
       !window.confirm(
-        "¿Eliminar esta venta de dulces? Se restaurará el inventario asociado.",
+        "¿Eliminar esta venta? Se restaurará el inventario asociado.",
       )
     )
       return;
     try {
       setLoading(true);
-      await restoreSaleAndDeleteCandy(s.id);
+      await restoreSaleAndDelete(s.id);
       await deleteARMovesBySaleId(s.id);
 
       setSales((prev) => prev.filter((x) => x.id !== s.id));
@@ -392,6 +580,10 @@ export default function TransactionsReportCandies({
           s.customerName ||
           (s.customerId ? customersById[s.customerId] : "") ||
           "Nombre cliente";
+        const productName =
+          s._raw?.productName ||
+          s._raw?.items?.[0]?.productName ||
+          "(sin producto)";
         return `<tr>
           <td>${s.date}</td>
           <td>${esc(name)}</td>
@@ -415,13 +607,13 @@ export default function TransactionsReportCandies({
     </style></head><body>
       <h1>${esc(title)}</h1>
       <div class="kpis">
-        <div><b>Paquetes Cash:</b> ${kpis.packsCash}</div>
-        <div><b>Paquetes Crédito:</b> ${kpis.packsCredito}</div>
-        <div><b>Monto Cash:</b> ${money(kpis.montoCash)}</div>
-        <div><b>Monto Crédito:</b> ${money(kpis.montoCredito)}</div>
+        <div><b>Libras Cash:</b> ${kpis.packsCash}</div>
+        <div><b>Libras Crédito:</b> ${kpis.packsCredito}</div>
+        <div><b>Ventas Cash:</b> ${money(kpis.montoCash)}</div>
+        <div><b>Ventas Crédito:</b> ${money(kpis.montoCredito)}</div>
       </div>
       <table><thead><tr>
-        <th>Fecha</th><th>Cliente</th><th>Tipo</th><th>Paquetes</th><th>Monto</th>
+        <th>Fecha</th><th>Cliente</th><th>Tipo</th><th>Libras</th><th>Ventas</th>
       </tr></thead><tbody>
       ${
         rows ||
@@ -584,6 +776,25 @@ export default function TransactionsReportCandies({
           </select>
         </div>
 
+        <div>
+          <label className="block font-semibold">Producto</label>
+          <select
+            className="border rounded px-2 py-1 w-full"
+            value={productFilter}
+            onChange={(e) => {
+              setProductFilter(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="ALL">Todos</option>
+            {products.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <button
           className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
           onClick={handleExportPDF}
@@ -593,24 +804,32 @@ export default function TransactionsReportCandies({
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Paquetes Cash</div>
+          <div className="text-xs text-gray-600">Libras Cash</div>
           <div className="text-xl font-semibold">{kpis.packsCash}</div>
         </div>
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Paquetes Crédito</div>
+          <div className="text-xs text-gray-600">Libras Crédito</div>
           <div className="text-xl font-semibold">{kpis.packsCredito}</div>
         </div>
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Monto Cash</div>
+          <div className="text-xs text-gray-600">Libras Total</div>
+          <div className="text-xl font-semibold">{kpis.packsTotal}</div>
+        </div>
+        <div className="p-3 border rounded bg-gray-50">
+          <div className="text-xs text-gray-600">Ventas Cash</div>
           <div className="text-xl font-semibold">{money(kpis.montoCash)}</div>
         </div>
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Monto Crédito</div>
+          <div className="text-xs text-gray-600">Ventas Crédito</div>
           <div className="text-xl font-semibold">
             {money(kpis.montoCredito)}
           </div>
+        </div>
+        <div className="p-3 border rounded bg-gray-50">
+          <div className="text-xs text-gray-600">Ventas Total</div>
+          <div className="text-xl font-semibold">{money(kpis.montoTotal)}</div>
         </div>
       </div>
 
@@ -628,7 +847,10 @@ export default function TransactionsReportCandies({
               s.customerName ||
               (s.customerId ? customersById[s.customerId] : "") ||
               "Nombre cliente";
-            const commissionAmount = getCommissionAmount(s);
+            const productName =
+              s._raw?.productName ||
+              s._raw?.items?.[0]?.productName ||
+              "(sin producto)";
 
             return (
               <div key={s.id} className="bg-white border rounded-xl shadow">
@@ -654,7 +876,7 @@ export default function TransactionsReportCandies({
                         </span>
 
                         <span className="text-gray-700">
-                          <b>Paquetes:</b>{" "}
+                          <b>Libras:</b>{" "}
                           <button
                             type="button"
                             className="underline text-blue-600"
@@ -690,6 +912,13 @@ export default function TransactionsReportCandies({
                       </div>
 
                       <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Producto</span>
+                        <span className="font-medium text-right">
+                          {productName}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
                         <span className="text-gray-600">Fecha</span>
                         <span className="font-medium">{s.date}</span>
                       </div>
@@ -702,7 +931,7 @@ export default function TransactionsReportCandies({
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Paquetes</span>
+                        <span className="text-gray-600">Libras</span>
                         <span className="font-medium">
                           <button
                             type="button"
@@ -721,43 +950,33 @@ export default function TransactionsReportCandies({
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Comisión</span>
-                        <span className="font-medium">
-                          {commissionAmount > 0 ? money(commissionAmount) : "—"}
-                        </span>
-                      </div>
+                        {/* comisión/vendedor removidos para Pollo */}
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Vendedor</span>
-                        <span className="font-medium">
-                          {s.vendorName || "—"}
-                        </span>
-                      </div>
-
-                      {/* Acciones (solo admin) */}
-                      {canDelete && (
-                        <div className="pt-2 flex items-center justify-end gap-2">
-                          <button
-                            className="px-3 py-2 rounded border hover:bg-gray-50"
-                            onClick={() =>
-                              setOpenMenuId((prev) =>
-                                prev === s.id ? null : s.id,
-                              )
-                            }
-                          >
-                            ⋮ Acciones
-                          </button>
-
-                          {openMenuId === s.id && (
+                        {/* Acciones (solo admin) */}
+                        {canDelete && (
+                          <div className="pt-2 flex items-center justify-end gap-2">
                             <button
-                              className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
-                              onClick={() => confirmDelete(s)}
+                              className="px-3 py-2 rounded border hover:bg-gray-50"
+                              onClick={() =>
+                                setOpenMenuId((prev) =>
+                                  prev === s.id ? null : s.id,
+                                )
+                              }
                             >
-                              Eliminar
+                              ⋮ Acciones
                             </button>
-                          )}
-                        </div>
-                      )}
+
+                            {openMenuId === s.id && (
+                              <button
+                                className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                                onClick={() => confirmDelete(s)}
+                              >
+                                Eliminar
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </details>
@@ -779,11 +998,10 @@ export default function TransactionsReportCandies({
             <tr>
               <th className="p-2 border">Fecha</th>
               <th className="p-2 border">Cliente</th>
+              <th className="p-2 border">Producto</th>
               <th className="p-2 border">Tipo</th>
-              <th className="p-2 border">Paquetes</th>
-              <th className="p-2 border">Monto</th>
-              <th className="p-2 border">Comisión</th>
-              <th className="p-2 border">Vendedor</th>
+              <th className="p-2 border">Libras</th>
+              <th className="p-2 border">Ventas</th>
               {canDelete && <th className="p-2 border">Acciones</th>}
             </tr>
           </thead>
@@ -806,12 +1024,16 @@ export default function TransactionsReportCandies({
                   s.customerName ||
                   (s.customerId ? customersById[s.customerId] : "") ||
                   "Nombre cliente";
-                const commissionAmount = getCommissionAmount(s);
+                const productName =
+                  s._raw?.productName ||
+                  s._raw?.items?.[0]?.productName ||
+                  "(sin producto)";
 
                 return (
                   <tr key={s.id} className="text-center">
                     <td className="p-2 border">{s.date}</td>
                     <td className="p-2 border">{name}</td>
+                    <td className="p-2 border">{productName}</td>
                     <td className="p-2 border">
                       {s.type === "CREDITO" ? "Crédito" : "Cash"}
                     </td>
@@ -826,10 +1048,6 @@ export default function TransactionsReportCandies({
                       </button>
                     </td>
                     <td className="p-2 border">{money(s.total)}</td>
-                    <td className="p-2 border">
-                      {commissionAmount > 0 ? money(commissionAmount) : "—"}
-                    </td>
-                    <td className="p-2 border">{s.vendorName || "—"}</td>
 
                     {canDelete && (
                       <td className="p-2 border relative">
@@ -876,20 +1094,11 @@ export default function TransactionsReportCandies({
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h3 className="text-lg font-bold">
-                  Productos/paquetes vendidos{" "}
+                  Productos vendidos{" "}
                   {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
                 </h3>
 
-                {modalSale && (
-                  <div className="text-sm text-gray-700 mt-1">
-                    Comisión de vendedor:{" "}
-                    <span className="font-semibold">
-                      {getCommissionAmount(modalSale) > 0
-                        ? money(getCommissionAmount(modalSale))
-                        : "—"}
-                    </span>
-                  </div>
-                )}
+                {/* no mostramos comisión en Pollo */}
               </div>
 
               <button
@@ -905,7 +1114,7 @@ export default function TransactionsReportCandies({
                 <thead className="bg-gray-100">
                   <tr>
                     <th className="p-2 border">Producto</th>
-                    <th className="p-2 border text-right">Paquetes</th>
+                    <th className="p-2 border text-right">Libras</th>
                     <th className="p-2 border text-right">Precio</th>
                     <th className="p-2 border text-right">Descuento</th>
                     <th className="p-2 border text-right">Monto</th>

@@ -6,6 +6,7 @@ import {
   Route,
   Navigate,
 } from "react-router-dom";
+import { hasRole } from "./utils/roles";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebase";
 import { doc, getDoc } from "firebase/firestore";
@@ -27,7 +28,7 @@ import Liquidaciones from "../src/components/Pollo/Liquidaciones";
 import FinancialDashboard from "../src/components/Pollo/FinancialDashboard";
 import ExpensesAdmin from "./components/Pollo/ExpensesAdmin";
 import FixBatchesPages from "../src/components/Pollo/FixBatchesPages";
-import Billing from "./components/Pollo/Billing";
+import TransaciontsPollo from "./components/Pollo/TransactionsPollo";
 import PaidBatches from "../src/components/Pollo/PaidBatches";
 
 // Módulos ROPA
@@ -35,9 +36,10 @@ import InventoryClothesBatches from "./components/Clothes/InventoryClothesBatche
 import ProductsClothes from "./components/Clothes/ClothesProducts";
 import CustomersClothes from "./components/Clothes/CustomersClothes";
 import SalesClothesPOS from "./components/Clothes/SalesClothesPOS";
-import FinancialDashboardClothes from "./components/Clothes/FinancialDashboardClothes";
-import ExpensesClothes from "./components/Clothes/ExpensesClothes";
+import FinancialDashboardClothes from "./components//Clothes/FinancialDashboardClothes";
+import ExpensesClothes from "./components//Clothes/ExpensesClothes";
 import TransactionsReportClothes from "./components/Clothes/TransactionsReportClothes";
+import CustomersPollo from "./components/Pollo/CustomersPollo";
 
 // Módulos DULCES
 import CandiesProducts from "./components/Candies/CatalogoProductos";
@@ -60,6 +62,7 @@ import EntregasCash from "./components/Candies/EntregasCash";
 import PreciosVenta from "./components/Candies/PreciosVenta";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
+import TransactionsPollo from "./components/Pollo/TransactionsPollo";
 
 // Definición de roles
 type Role =
@@ -67,7 +70,9 @@ type Role =
   | "admin"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "supervisor_pollo"
+  | "contador";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(false);
@@ -82,10 +87,10 @@ function useIsMobile() {
 
   return isMobile;
 }
-
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [role, setRole] = useState<Role>("");
+  const [roles, setRoles] = useState<Role[] | string[]>([]);
   const [sellerCandyId, setSellerCandyId] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
@@ -94,11 +99,11 @@ export default function App() {
   // ✅ IMPORTANTE: esto debe estar ANTES del "if (loading) return ..."
   const Layout = useMemo(() => {
     return isMobile ? (
-      <MobileTabsLayout role={role} />
+      <MobileTabsLayout role={role} roles={roles} />
     ) : (
-      <AdminLayout role={role} />
+      <AdminLayout role={role} roles={roles} />
     );
-  }, [isMobile, role]);
+  }, [isMobile, role, roles]);
 
   const currentUserEmail = user?.email || "";
 
@@ -106,43 +111,8 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
 
-      // ✅ Expiración de sesión a los 15 días (basado en localStorage)
-      // - Login.tsx guarda: localStorage.setItem("POSYS_LOGIN_AT", Date.now().toString())
-      // - Si no existe, lo creamos en el primer authState detectado (por compatibilidad)
-      try {
-        const KEY = "POSYS_LOGIN_AT";
-        const FIFTEEN_DAYS_MS = 15 * 24 * 60 * 60 * 1000;
-
-        if (firebaseUser) {
-          const raw = localStorage.getItem(KEY);
-          const loginAt = raw ? Number(raw) : NaN;
-
-          // si no hay marca, la ponemos ahora para no romper sesiones viejas
-          if (!Number.isFinite(loginAt)) {
-            localStorage.setItem(KEY, String(Date.now()));
-          } else {
-            const age = Date.now() - loginAt;
-            if (age > FIFTEEN_DAYS_MS) {
-              // expiró: cerramos sesión y limpiamos
-              await signOut(auth);
-              localStorage.removeItem(KEY);
-              localStorage.removeItem("role");
-              localStorage.removeItem("user_email");
-              localStorage.removeItem("user_name");
-
-              setUser(null);
-              setRole("");
-              setSellerCandyId("");
-              setLoading(false);
-              return;
-            }
-          }
-        } else {
-          // si no hay usuario, no hacemos nada aquí
-        }
-      } catch {
-        // si falla cualquier cosa con localStorage, no rompemos el flujo
-      }
+      // Nota: eliminada la expiración automática de 15 días.
+      // La sesión se mantendrá hasta que el usuario cierre sesión manualmente.
 
       if (firebaseUser) {
         setUser(firebaseUser);
@@ -151,12 +121,18 @@ export default function App() {
           const snap = await getDoc(docRef);
           if (snap.exists()) {
             const data = snap.data() as any;
-            const r = (data.role || "") as Role;
+            const rlist: Role[] = Array.isArray(data.roles)
+              ? data.roles
+              : data.role
+                ? [data.role]
+                : [];
             const scId = (data.sellerCandyId || "") as string;
-            setRole(r || "");
+            setRoles(rlist);
+            setRole(rlist[0] || "");
             setSellerCandyId(scId || "");
           } else {
             setRole("");
+            setRoles([]);
             setSellerCandyId("");
           }
         } catch {
@@ -179,10 +155,18 @@ export default function App() {
 
   // Redirección por defecto dentro de /admin según rol
   const AdminIndexRedirect = () => {
-    if (role === "admin") return <Navigate to="financialDashboard" replace />;
-    if (role === "vendedor_pollo") return <Navigate to="salesV2" replace />;
-    if (role === "vendedor_ropa") return <Navigate to="salesClothes" replace />;
-    if (role === "vendedor_dulces")
+    const subject = roles && roles.length ? roles : role;
+    if (hasRole(subject, "admin"))
+      return <Navigate to="financialDashboard" replace />;
+    if (hasRole(subject, "vendedor_pollo"))
+      return <Navigate to="salesV2" replace />;
+    if (hasRole(subject, "supervisor_pollo"))
+      return <Navigate to="batches" replace />;
+    if (hasRole(subject, "contador")) return <Navigate to="batches" replace />;
+    if (hasRole(subject, "vendedor_ropa"))
+      return <Navigate to="salesClothes" replace />;
+
+    if (hasRole(subject, "vendedor_dulces"))
       return <Navigate to="salesCandies" replace />;
     return <Navigate to="/" replace />;
   };
@@ -201,6 +185,8 @@ export default function App() {
                 "vendedor_pollo",
                 "vendedor_ropa",
                 "vendedor_dulces",
+                "supervisor_pollo",
+                "contador",
               ]}
             >
               {Layout}
@@ -213,7 +199,9 @@ export default function App() {
           <Route
             path="bills"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_pollo", "supervisor_pollo"]}
+              >
                 <CierreVentas />
               </PrivateRoute>
             }
@@ -221,7 +209,14 @@ export default function App() {
           <Route
             path="salesV2"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
+              <PrivateRoute
+                allowedRoles={[
+                  "admin",
+                  "vendedor_pollo",
+                  "supervisor_pollo",
+                  "contador",
+                ]}
+              >
                 <SaleFormV2 user={user} />
               </PrivateRoute>
             }
@@ -243,18 +238,32 @@ export default function App() {
             }
           />
           <Route
-            path="billing"
+            path="transactionsPollo"
             element={
-              <PrivateRoute allowedRoles={["admin"]}>
-                <Billing />
+              <PrivateRoute
+                allowedRoles={[
+                  "admin",
+                  "vendedor_pollo",
+                  "supervisor_pollo",
+                  "contador",
+                ]}
+              >
+                <TransactionsPollo role={role} roles={roles} />
               </PrivateRoute>
             }
           />
           <Route
             path="batches"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
-                <InventoryBatches role={role} />
+              <PrivateRoute
+                allowedRoles={[
+                  "admin",
+                  "vendedor_pollo",
+                  "supervisor_pollo",
+                  "contador",
+                ]}
+              >
+                <InventoryBatches role={role} roles={roles} />
               </PrivateRoute>
             }
           />
@@ -303,6 +312,27 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <ProductForm />
+              </PrivateRoute>
+            }
+          />
+
+          <Route
+            path="customers"
+            element={
+              <PrivateRoute
+                allowedRoles={[
+                  "admin",
+                  "vendedor_pollo",
+                  "supervisor_pollo",
+                  "contador",
+                ]}
+              >
+                <CustomersPollo
+                  role={role}
+                  roles={roles}
+                  currentUserEmail={currentUserEmail}
+                  sellerPolloId={sellerCandyId}
+                />
               </PrivateRoute>
             }
           />
@@ -378,6 +408,7 @@ export default function App() {
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <CustomersCandies
                   role={role}
+                  roles={roles}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}
                 />
@@ -390,6 +421,7 @@ export default function App() {
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <SalesCandies
                   role={role}
+                  roles={roles}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}
                 />
@@ -418,6 +450,7 @@ export default function App() {
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <TransactionCandies
                   role={role}
+                  roles={roles}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}
                 />
@@ -438,6 +471,7 @@ export default function App() {
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <OrdenVendedor
                   role={role}
+                  roles={roles}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}
                 />
@@ -450,6 +484,7 @@ export default function App() {
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <CierreVentasDulces
                   role={role}
+                  roles={roles}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}
                 />
@@ -462,6 +497,7 @@ export default function App() {
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <ReporteCierres
                   role={role}
+                  roles={roles}
                   currentUserEmail={currentUserEmail}
                   sellerCandyId={sellerCandyId}
                 />
@@ -547,7 +583,9 @@ export default function App() {
         <Route
           path="/salesV2"
           element={
-            <PrivateRoute allowedRoles={["admin", "vendedor_pollo"]}>
+            <PrivateRoute
+              allowedRoles={["admin", "vendedor_pollo", "contador"]}
+            >
               <SaleFormV2 user={user} />
             </PrivateRoute>
           }

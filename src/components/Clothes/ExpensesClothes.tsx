@@ -42,15 +42,15 @@ const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 export default function ExpensesClothes() {
   // ====== Filtros por fecha ======
   const [fromDate, setFromDate] = useState<string>(
-    format(startOfMonth(new Date()), "yyyy-MM-dd")
+    format(startOfMonth(new Date()), "yyyy-MM-dd"),
   );
   const [toDate, setToDate] = useState<string>(
-    format(endOfMonth(new Date()), "yyyy-MM-dd")
+    format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
 
   // ====== Formulario (crear) ======
   const [dateStr, setDateStr] = useState<string>(
-    format(new Date(), "yyyy-MM-dd")
+    format(new Date(), "yyyy-MM-dd"),
   );
   const [category, setCategory] = useState<Category | "">("");
   const [description, setDescription] = useState("");
@@ -79,7 +79,7 @@ export default function ExpensesClothes() {
       try {
         const qE = query(
           collection(db, "expenses_clothes"),
-          orderBy("date", "desc")
+          orderBy("date", "desc"),
         );
         const snap = await getDocs(qE);
         const list: ExpenseRow[] = [];
@@ -242,8 +242,8 @@ export default function ExpensesClothes() {
                 status: eStatus,
                 notes: eNotes || "",
               }
-            : x
-        )
+            : x,
+        ),
       );
       cancelEdit();
       setMsg("✅ Gasto actualizado");
@@ -474,7 +474,7 @@ export default function ExpensesClothes() {
                             value={Number.isNaN(eAmount) ? "" : eAmount}
                             onChange={(e) =>
                               setEAmount(
-                                Math.max(0, Number(e.target.value || 0))
+                                Math.max(0, Number(e.target.value || 0)),
                               )
                             }
                           />
