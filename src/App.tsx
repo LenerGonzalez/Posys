@@ -200,7 +200,12 @@ export default function App() {
             path="bills"
             element={
               <PrivateRoute
-                allowedRoles={["admin", "vendedor_pollo", "supervisor_pollo"]}
+                allowedRoles={[
+                  "admin",
+                  "vendedor_pollo",
+                  "supervisor_pollo",
+                  "contador",
+                ]}
               >
                 <CierreVentas />
               </PrivateRoute>
@@ -317,7 +322,7 @@ export default function App() {
           />
 
           <Route
-            path="customers"
+            path="customersPollo"
             element={
               <PrivateRoute
                 allowedRoles={[

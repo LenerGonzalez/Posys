@@ -37,6 +37,7 @@ export default function MobileTabsLayout({
   const isVendDulces = hasRole(subject, "vendedor_dulces");
   const isSupervisor =
     hasRole(subject, "supervisor_pollo") || hasRole(subject, "contador");
+  const isContPollo = hasRole(subject, "contador");
 
   // Mostrar selector también cuando el usuario tenga ambos roles (pollo + dulces)
   const hasBoth = isVendPollo && isVendDulces;
@@ -98,6 +99,22 @@ export default function MobileTabsLayout({
           return [
             { key: "venta", label: "Venta", to: `${base}/salesV2` },
             { key: "clientes", label: "Clientes", to: `${base}/customers` },
+            { key: "cierre", label: "Cierre", to: `${base}/bills` },
+            {
+              key: "trxs",
+              label: "Transacciones",
+              to: `${base}/transactionsPollo`,
+            },
+          ];
+        }
+        if (isContPollo) {
+          return [
+            { key: "venta", label: "Venta", to: `${base}/salesV2` },
+            {
+              key: "clientes",
+              label: "Saldos Pendientes",
+              to: `${base}/customersPollo`,
+            },
             { key: "cierre", label: "Cierre", to: `${base}/bills` },
             {
               key: "trxs",
@@ -191,6 +208,11 @@ export default function MobileTabsLayout({
       const supTabs = [
         { key: "venta", label: "Venta", to: `${base}/salesV2` },
         { key: "inv", label: "Inventario", to: `${base}/batches` },
+        {
+          key: "clientes",
+          label: "Saldos Pendientes",
+          to: `${base}/customersPollo`,
+        },
         {
           key: "trxs",
           label: "Transacciones",

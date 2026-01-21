@@ -119,6 +119,7 @@ export default function AdminLayout({
   const isVendDulces = hasRole(subject, "vendedor_dulces");
   const isSupervisor =
     hasRole(subject, "supervisor_pollo") || hasRole(subject, "contador");
+  const isContPollo = hasRole(subject, "contador");
 
   return (
     <div className="min-h-screen flex">
@@ -169,10 +170,10 @@ export default function AdminLayout({
                               Vender
                             </NavLink>
                             <NavLink
-                              to={`${base}/customers`}
+                              to={`${base}/customersPollo`}
                               className={linkCls}
                             >
-                              Clientes
+                              Saldo Pendiente
                             </NavLink>
                             <NavLink
                               to={`${base}/transactionsPollo`}
@@ -619,64 +620,101 @@ export default function AdminLayout({
                 </>
               )}
 
-              {/* ================== SUPERVISOR (reduced desktop menu) ================== */}
-              {isSupervisor && (
+              {/* ================== POLLOS (single menu for supervisor/contador/vendedor) ================== */}
+              {!isAdmin && (isSupervisor || isVendPollo || isContPollo) && (
                 <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
-                  <SectionBtn open={true} onClick={() => {}}>
+                  <SectionBtn
+                    open={openPollo}
+                    onClick={() => setOpenPollo((v) => !v)}
+                  >
                     Pollos Bea
                   </SectionBtn>
 
-                  <div className="pb-2 ml-4 mt-1 space-y-1">
-                    <NavLink to={`${base}/salesV2`} className={linkCls}>
-                      Vender
-                    </NavLink>
-                    <NavLink
-                      to={`${base}/transactionsPollo`}
-                      className={linkCls}
-                    >
-                      Transacciones
-                    </NavLink>
-                    {role !== "contador" && (
-                      <NavLink to={`${base}/bills`} className={linkCls}>
-                        Cierres
-                      </NavLink>
-                    )}
-                    <NavLink to={`${base}/batches`} className={linkCls}>
-                      Inventario Pollo
-                    </NavLink>
-                  </div>
-                </div>
-              )}
-              {/* ================== VENDEDOR POLLO ================== */}
-
-              {isVendPollo && (
-                <div className="border rounded">
-                  <SectionBtn
-                    open={openPolloFin}
-                    onClick={() => setOpenPolloFin((v) => !v)}
-                  >
-                    Finanzas (Pollo)
-                  </SectionBtn>
-                  {openPolloFin && (
+                  {openPollo && (
                     <div className="pb-2 ml-4 mt-1 space-y-1">
-                      <NavLink to={`${base}/salesV2`} className={linkCls}>
-                        Vender
-                      </NavLink>
-                      {role !== "contador" && (
-                        <NavLink to={`${base}/bills`} className={linkCls}>
-                          Cierre
-                        </NavLink>
+                      {/* Priority: contador menu if contador; else vendedor; else supervisor */}
+                      {isContPollo ? (
+                        <>
+                          <NavLink to={`${base}/salesV2`} className={linkCls}>
+                            Vender
+                          </NavLink>
+                          <NavLink to={`${base}/batches`} className={linkCls}>
+                            Inventario Pollo
+                          </NavLink>
+                          <NavLink to={`${base}/bills`} className={linkCls}>
+                            Cierres
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/transactionsPollo`}
+                            className={linkCls}
+                          >
+                            Transacciones
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/customersPollo`}
+                            className={linkCls}
+                          >
+                            Saldos Pendientes
+                          </NavLink>
+                        </>
+                      ) : isVendPollo ? (
+                        <>
+                          <NavLink to={`${base}/salesV2`} className={linkCls}>
+                            Vender
+                          </NavLink>
+                          <NavLink to={`${base}/bills`} className={linkCls}>
+                            Cierres
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/transactionsPollo`}
+                            className={linkCls}
+                          >
+                            Transacciones
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/customersPollo`}
+                            className={linkCls}
+                          >
+                            Saldos Pendientes
+                          </NavLink>
+                        </>
+                      ) : isSupervisor ? (
+                        <>
+                          <NavLink to={`${base}/batches`} className={linkCls}>
+                            Inventario Pollo
+                          </NavLink>
+                          <NavLink to={`${base}/bills`} className={linkCls}>
+                            Cierres
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/transactionsPollo`}
+                            className={linkCls}
+                          >
+                            Transacciones
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/customersPollo`}
+                            className={linkCls}
+                          >
+                            Saldos Pendientes
+                          </NavLink>
+                        </>
+                      ) : (
+                        // fallback: show vender + inventario
+                        <>
+                          <NavLink to={`${base}/salesV2`} className={linkCls}>
+                            Vender
+                          </NavLink>
+                          <NavLink to={`${base}/batches`} className={linkCls}>
+                            Inventario Pollo
+                          </NavLink>
+                        </>
                       )}
-                      <NavLink
-                        to={`${base}/transactionsPollo`}
-                        className={linkCls}
-                      >
-                        Ventas del dia
-                      </NavLink>
                     </div>
                   )}
                 </div>
               )}
+
               {/* ================== VENDEDOR DULCES ================== */}
               {isVendDulces && (
                 <div className="border rounded">
