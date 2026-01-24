@@ -10,28 +10,18 @@ import {
   getDocs,
   orderBy,
   query,
-  Timestamp,
-  updateDoc,
   where,
+  updateDoc,
   writeBatch,
+  Timestamp,
 } from "firebase/firestore";
+import * as XLSX from "xlsx";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
-import * as XLSX from "xlsx";
 
-// =====================
-// Helpers
-// =====================
-function roundToInt(value: number): number {
-  if (!isFinite(value)) return 0;
-  return Math.round(value);
-}
-
-function safeInt(n: any): number {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return 0;
-  return Math.floor(x);
-}
+// Small helpers used in this file
+const safeInt = (v: any) => Math.max(0, Math.floor(Number(v) || 0));
+const roundToInt = (n: number) => Math.round(n || 0);
 
 // Helpers consistentes con inventory_candies.ts / InventoryCandyBatches
 function getBaseUnitsFromInvDoc(data: any): number {
@@ -112,13 +102,9 @@ interface CandyOrderItem {
   remainingPackages?: number;
 
   // ===== NUEVO: utilidades (guardables) =====
-  marginVendor?: number; // 0..1
-  marginInvestor?: number; // 0..1
   grossProfit?: number;
-  vendorProfit?: number;
-  investorProfit?: number;
+  grossProfitIsla?: number;
   logisticAllocated?: number;
-  netProfit?: number;
 }
 
 interface CandyOrderSummaryRow {
@@ -138,8 +124,6 @@ interface CandyOrderSummaryRow {
 
   // NUEVO (orden)
   logisticsCost?: number; // monto total orden
-  pctVendor?: number; // 0..1
-  pctInvestor?: number; // 0..1
 
   // Extras para UI listado (opcionales)
   grossTotal?: number;
@@ -171,8 +155,6 @@ type CandyMainOrderDoc = {
 
   // NUEVO
   logisticsCost?: number;
-  pctVendor?: number; // 0..1
-  pctInvestor?: number; // 0..1
 
   createdAt: Timestamp;
   items: CandyOrderItem[];
@@ -267,20 +249,17 @@ function getGrossProfitBase(it: CandyOrderItem): number {
   return Number(it.gainRivas || 0);
 }
 
+function getGrossProfitIslaBase(it: CandyOrderItem): number {
+  return Number(it.gainIsla || 0);
+}
+
 function applyProfitSplitAndLogistics(
   it: CandyOrderItem,
-  pctVendor01: number,
-  pctInvestor01: number,
   logisticsTotal: number,
   orderSubtotalTotal: number,
 ): CandyOrderItem {
   const gross = getGrossProfitBase(it);
-
-  const vPct = Math.min(Math.max(Number(pctVendor01 || 0), 0), 1);
-  const iPct = Math.min(Math.max(Number(pctInvestor01 || 0), 0), 1);
-
-  const vendorProfit = gross * vPct;
-  const investorProfit = gross * iPct;
+  const grossIsla = getGrossProfitIslaBase(it);
 
   // prorrateo por subtotal (facturado/costo)
   const subtotal = Number(it.subtotal || 0);
@@ -289,18 +268,11 @@ function applyProfitSplitAndLogistics(
       ? (logisticsTotal * subtotal) / orderSubtotalTotal
       : 0;
 
-  // utilidad neta = utilidad inversor – prorrateo logístico
-  const netProfit = investorProfit - logisticAllocated;
-
   return {
     ...it,
-    marginVendor: vPct,
-    marginInvestor: iPct,
     grossProfit: gross,
-    vendorProfit,
-    investorProfit,
+    grossProfitIsla: grossIsla,
     logisticAllocated,
-    netProfit,
   };
 }
 
@@ -335,21 +307,8 @@ export default function CandyMainOrders() {
   const [marginSanJorge, setMarginSanJorge] = useState<string>("15"); // legacy (no UI)
   const [marginIsla, setMarginIsla] = useState<string>("30");
 
-  // ✅ NUEVO: Gastos logísticos + % utilidades
+  // ✅ NUEVO: Gastos logísticos
   const [logisticsCost, setLogisticsCost] = useState<string>("0"); // monto total
-  const [pctVendor, setPctVendor] = useState<string>("30"); // UI % (30)
-  const [pctInvestor, setPctInvestor] = useState<string>("70"); // UI % (70)
-  const clampPct100 = (v: any) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return 0;
-    return Math.min(100, Math.max(0, n));
-  };
-
-  const handleVendorPctChange = (val: string) => {
-    const v = clampPct100(val);
-    setPctVendor(String(v));
-    setPctInvestor(String(100 - v));
-  };
 
   // items de la orden
   const [orderItems, setOrderItems] = useState<CandyOrderItem[]>([]);
@@ -367,6 +326,22 @@ export default function CandyMainOrders() {
   const [mobileTab, setMobileTab] = useState<MobileTab>("DATOS");
 
   const [itemSearch, setItemSearch] = useState("");
+
+  // Paginado tabla (desktop)
+  const [page, setPage] = useState<number>(1);
+  const PAGE_SIZE = 15;
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(orders.length / PAGE_SIZE)),
+    [orders.length],
+  );
+
+  // Resetear página si cambia el número total de órdenes
+  useEffect(() => setPage(1), [orders.length]);
+
+  const pagedOrders = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return orders.slice(start, start + PAGE_SIZE);
+  }, [orders, page]);
 
   // ==== categorías dinámicas desde catálogo ====
   const catalogCategories = useMemo(() => {
@@ -458,8 +433,7 @@ export default function CandyMainOrders() {
     setMarginIsla("30");
 
     setLogisticsCost("0");
-    setPctVendor("30");
-    setPctInvestor("70");
+    // previously set vendor/investor defaults — removed
 
     setMobileTab("DATOS");
     setItemSearch("");
@@ -666,60 +640,31 @@ export default function CandyMainOrders() {
   // =========================
   const computed = useMemo(() => {
     const logisticsTotal = Math.max(0, num(logisticsCost || 0));
-    const vPct01 = Math.min(Math.max(pctTo01(pctVendor || 0), 0), 1);
-    const iPct01 = Math.min(Math.max(pctTo01(pctInvestor || 0), 0), 1);
-
     const orderSubtotalTotal = Number(orderSummaryBase.subtotal || 0);
-
     const items = orderItems.map((it) =>
-      applyProfitSplitAndLogistics(
-        it,
-        vPct01,
-        iPct01,
-        logisticsTotal,
-        orderSubtotalTotal,
-      ),
+      applyProfitSplitAndLogistics(it, logisticsTotal, orderSubtotalTotal),
     );
 
     const grossTotal = items.reduce(
       (acc, it) => acc + Number(it.grossProfit || 0),
       0,
     );
-    const vendorTotal = items.reduce(
-      (acc, it) => acc + Number(it.vendorProfit || 0),
-      0,
-    );
-    const investorTotal = items.reduce(
-      (acc, it) => acc + Number(it.investorProfit || 0),
+    const grossIslaTotal = items.reduce(
+      (acc, it) => acc + Number(it.grossProfitIsla || 0),
       0,
     );
     const logisticAllocatedTotal = items.reduce(
       (acc, it) => acc + Number(it.logisticAllocated || 0),
       0,
     );
-    const netTotal = items.reduce(
-      (acc, it) => acc + Number(it.netProfit || 0),
-      0,
-    );
-
     return {
       items,
       logisticsTotal,
-      vPct01,
-      iPct01,
       grossTotal,
-      vendorTotal,
-      investorTotal,
+      grossIslaTotal,
       logisticAllocatedTotal,
-      netTotal,
     };
-  }, [
-    orderItems,
-    logisticsCost,
-    pctVendor,
-    pctInvestor,
-    orderSummaryBase.subtotal,
-  ]);
+  }, [orderItems, logisticsCost, orderSummaryBase.subtotal]);
   const filteredItems = useMemo(() => {
     const q = String(itemSearch || "")
       .trim()
@@ -733,6 +678,44 @@ export default function CandyMainOrders() {
     });
   }, [computed.items, itemSearch]);
 
+  // Paginado para la tabla de ITEMS (desktop)
+  const [itemPage, setItemPage] = useState<number>(1);
+  const ITEMS_PAGE_SIZE = 15;
+  const totalItemPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredItems.length / ITEMS_PAGE_SIZE)),
+    [filteredItems.length],
+  );
+
+  // Resetear página cuando cambian los filtros/items
+  useEffect(() => setItemPage(1), [filteredItems.length]);
+
+  const pagedFilteredItems = useMemo(() => {
+    const start = (itemPage - 1) * ITEMS_PAGE_SIZE;
+    return filteredItems.slice(start, start + ITEMS_PAGE_SIZE);
+  }, [filteredItems, itemPage]);
+
+  // Mobile: collapsed state for item cards (start collapsed)
+  const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>(
+    {},
+  );
+  useEffect(() => setExpandedItems({}), [filteredItems.length]);
+  const toggleItemExpanded = (id: string) =>
+    setExpandedItems((s) => ({ ...s, [id]: !s[id] }));
+
+  // Mobile: collapsed state for order cards (start collapsed)
+  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>(
+    {},
+  );
+  useEffect(() => {
+    const map: Record<string, boolean> = {};
+    for (const o of orders) {
+      if (o && o.id) map[o.id] = false;
+    }
+    setExpandedOrders(map);
+  }, [orders]);
+  const toggleOrderExpanded = (id: string) =>
+    setExpandedOrders((s) => ({ ...s, [id]: !s[id] }));
+
   // =========================
   // KPIs (pedido)
   // =========================
@@ -743,9 +726,8 @@ export default function CandyMainOrders() {
       esperadoRivas: orderSummaryBase.totalRivas,
       esperadoIsla: orderSummaryBase.totalIsla,
       gastosLogisticos: computed.logisticsTotal,
-      utilidadBrutaTotal: computed.grossTotal,
-      utilidadVendedorTotal: computed.vendorTotal,
-      utilidadNetaTotal: computed.netTotal,
+      utilidadBrutaRivas: computed.grossTotal,
+      utilidadBrutaIsla: computed.grossIslaTotal,
     };
   }, [orderSummaryBase, computed]);
 
@@ -762,9 +744,6 @@ export default function CandyMainOrders() {
     const mR = Number(marginRivas || 0);
     const mI = Number(marginIsla || 0);
 
-    const vPct = Math.round(pctTo01(pctVendor || 0) * 100);
-    const iPct = Math.round(pctTo01(pctInvestor || 0) * 100);
-
     // Sheet Productos (según tu excel)
     const rows = catalog
       .slice()
@@ -772,8 +751,6 @@ export default function CandyMainOrders() {
       .map((p) => ({
         Producto: p.name,
         Paquetes: "",
-        "Margen vendedor": vPct,
-        "Margen inversionista": iPct,
         "Margen rivas": mR,
         "Margen Isla": mI,
         "P. unidad Rivas": "",
@@ -783,8 +760,6 @@ export default function CandyMainOrders() {
     // Sheet Config
     const cfgRows = [
       { Campo: "Gastos logisticos", Valor: num(logisticsCost || 0) },
-      { Campo: "% utilidad vendedor", Valor: vPct },
-      { Campo: "% utilidad inversor", Valor: iPct },
     ];
 
     const wb = XLSX.utils.book_new();
@@ -827,12 +802,10 @@ export default function CandyMainOrders() {
         "MV Rivas": Number(it.marginRivas || 0),
         "MV Isla": Number(it.marginIsla || 0),
         "Utilidad Bruta": Number(it.grossProfit || 0),
-        "Utilidad Vendedor": Number(it.vendorProfit || 0),
-        "Utilidad Inversor": Number(it.investorProfit || 0),
-        "Utilidad Neta": Number(it.netProfit || 0),
+        "Utilidad Bruta Isla": Number(it.grossProfitIsla || 0),
+        "Prorrateo logistico": Number(it.logisticAllocated || 0),
         "Precio Rivas": Number(it.unitPriceRivas || 0),
         "Precio Isla": Number(it.unitPriceIsla || 0),
-        "Prorrateo logistico": Number(it.logisticAllocated || 0),
       }));
 
     const resumen = [
@@ -841,14 +814,8 @@ export default function CandyMainOrders() {
       { KPI: "Esperado Rivas", Valor: orderKPIs.esperadoRivas },
       { KPI: "Esperado Isla", Valor: orderKPIs.esperadoIsla },
       { KPI: "Gastos logísticos", Valor: orderKPIs.gastosLogisticos },
-      { KPI: "Utilidad Bruta total", Valor: orderKPIs.utilidadBrutaTotal },
-      {
-        KPI: "Utilidad Vendedor total",
-        Valor: orderKPIs.utilidadVendedorTotal,
-      },
-      { KPI: "Utilidad Neta total", Valor: orderKPIs.utilidadNetaTotal },
-      { KPI: "% utilidad vendedor", Valor: Math.round(computed.vPct01 * 100) },
-      { KPI: "% utilidad inversor", Valor: Math.round(computed.iPct01 * 100) },
+      { KPI: "Utilidad Bruta Rivas", Valor: orderKPIs.utilidadBrutaRivas },
+      { KPI: "Utilidad Bruta Isla", Valor: orderKPIs.utilidadBrutaIsla },
     ];
 
     const wb = XLSX.utils.book_new();
@@ -920,10 +887,8 @@ export default function CandyMainOrders() {
         return;
       }
 
-      // Leer config si existe
+      // Leer config si existe (solo gastos logísticos)
       let cfgLogistics = 0;
-      let cfgVendorPct = pctTo01(pctVendor || 0);
-      let cfgInvestorPct = pctTo01(pctInvestor || 0);
 
       const wsCfg = wb.Sheets["Config"];
       if (wsCfg) {
@@ -938,10 +903,6 @@ export default function CandyMainOrders() {
 
         if (mapCfg.has("gastos logisticos"))
           cfgLogistics = Math.max(0, num(mapCfg.get("gastos logisticos")));
-        if (mapCfg.has("% utilidad vendedor"))
-          cfgVendorPct = pctTo01(mapCfg.get("% utilidad vendedor"));
-        if (mapCfg.has("% utilidad inversor"))
-          cfgInvestorPct = pctTo01(mapCfg.get("% utilidad inversor"));
       } else {
         // compat: si viene columna gastos en productos
         for (const r of rows) {
@@ -961,8 +922,6 @@ export default function CandyMainOrders() {
 
       // aplicar a UI
       setLogisticsCost(String(cfgLogistics || 0));
-      setPctVendor(String(Math.round(cfgVendorPct * 100)));
-      setPctInvestor(String(Math.round(cfgInvestorPct * 100)));
 
       // index por nombre (catálogo)
       const catalogByName = new Map<string, CatalogCandyProduct>();
@@ -975,8 +934,6 @@ export default function CandyMainOrders() {
         string,
         {
           packages: number;
-          mvVendor01: number;
-          mvInvestor01: number;
           mR: number;
           mI: number;
           puR?: number;
@@ -994,17 +951,6 @@ export default function CandyMainOrders() {
           "Name",
         ]);
         const packagesVal = getRowValue(r, ["Paquetes", "Packages"]);
-
-        const mvVendorVal = getRowValue(r, [
-          "Margen vendedor",
-          "Utilidad vendedor",
-          "% vendedor",
-        ]);
-        const mvInvestorVal = getRowValue(r, [
-          "Margen inversionista",
-          "Utilidad inversor",
-          "% inversor",
-        ]);
 
         const mRVal = getRowValue(r, [
           "Margen rivas",
@@ -1043,15 +989,6 @@ export default function CandyMainOrders() {
           continue;
         }
 
-        const mvVendor01 =
-          String(mvVendorVal ?? "").trim() !== ""
-            ? pctTo01(mvVendorVal)
-            : cfgVendorPct;
-        const mvInvestor01 =
-          String(mvInvestorVal ?? "").trim() !== ""
-            ? pctTo01(mvInvestorVal)
-            : cfgInvestorPct;
-
         const mR =
           String(mRVal ?? "").trim() !== ""
             ? num(mRVal)
@@ -1068,8 +1005,6 @@ export default function CandyMainOrders() {
         if (prev) {
           incomingById.set(catProd.id, {
             packages: prev.packages + packagesNum,
-            mvVendor01,
-            mvInvestor01,
             mR,
             mI,
             puR: puR > 0 ? puR : prev.puR,
@@ -1078,8 +1013,6 @@ export default function CandyMainOrders() {
         } else {
           incomingById.set(catProd.id, {
             packages: packagesNum,
-            mvVendor01,
-            mvInvestor01,
             mR,
             mI,
             puR: puR > 0 ? puR : undefined,
@@ -1179,10 +1112,6 @@ export default function CandyMainOrders() {
           unitPriceIsla: vals.unitPriceIsla,
 
           remainingPackages: packagesNum,
-
-          // guardo split importado (se recalcula igual en computed)
-          marginVendor: x.mvVendor01,
-          marginInvestor: x.mvInvestor01,
         });
       });
 
@@ -1215,8 +1144,6 @@ export default function CandyMainOrders() {
               packages: mergedPackages,
               marginRivas: it.marginRivas,
               marginIsla: it.marginIsla,
-              marginVendor: it.marginVendor ?? existing.marginVendor,
-              marginInvestor: it.marginInvestor ?? existing.marginInvestor,
               remainingPackages:
                 safeInt(existing.remainingPackages ?? existing.packages) +
                 safeInt(it.packages),
@@ -1281,8 +1208,6 @@ export default function CandyMainOrders() {
 
             // NUEVO
             logisticsCost: Number(x.logisticsCost ?? 0),
-            pctVendor: Number(x.pctVendor ?? 0),
-            pctInvestor: Number(x.pctInvestor ?? 0),
 
             createdAt: x.createdAt ?? Timestamp.now(),
           });
@@ -1348,8 +1273,6 @@ export default function CandyMainOrders() {
       const marginI = Number(marginIsla || 0);
 
       const logisticsTotal = Math.max(0, num(logisticsCost || 0));
-      const vPct01 = Math.min(Math.max(pctTo01(pctVendor || 0), 0), 1);
-      const iPct01 = Math.min(Math.max(pctTo01(pctInvestor || 0), 0), 1);
 
       // Validaciones mínimas (NO cambio tu lógica)
       for (const it of orderItems) {
@@ -1378,13 +1301,7 @@ export default function CandyMainOrders() {
       // ✅ guardo items con utilidades ya calculadas (para export / auditoría)
       const subtotalTotal = Number(orderSummaryBase.subtotal || 0);
       const itemsToSave = orderItems.map((it) =>
-        applyProfitSplitAndLogistics(
-          it,
-          vPct01,
-          iPct01,
-          logisticsTotal,
-          subtotalTotal,
-        ),
+        applyProfitSplitAndLogistics(it, logisticsTotal, subtotalTotal),
       );
 
       const summary = {
@@ -1413,8 +1330,6 @@ export default function CandyMainOrders() {
 
         // ✅ NUEVO
         logisticsCost: logisticsTotal,
-        pctVendor: vPct01,
-        pctInvestor: iPct01,
 
         items: itemsToSave,
       };
@@ -1558,8 +1473,6 @@ export default function CandyMainOrders() {
                   marginSanJorge: header.marginSanJorge,
                   marginIsla: header.marginIsla,
                   logisticsCost: header.logisticsCost,
-                  pctVendor: header.pctVendor,
-                  pctInvestor: header.pctInvestor,
                 }
               : o,
           ),
@@ -1659,14 +1572,9 @@ export default function CandyMainOrders() {
       setMarginSanJorge(String(order.marginSanJorge ?? 15));
       setMarginIsla(String(order.marginIsla ?? 30));
 
-      // ✅ NUEVO: logística + % utilidades
+      // ✅ NUEVO: logística
       const lg = Number(order.logisticsCost ?? 0);
-      const pv = Number(order.pctVendor ?? 0);
-      const pi = Number(order.pctInvestor ?? 0);
-
       setLogisticsCost(String(lg || 0));
-      setPctVendor(String(Math.round((pv || 0) * 100)));
-      setPctInvestor(String(Math.round((pi || 0) * 100)));
 
       // tab inicial
       setMobileTab("DATOS");
@@ -1799,39 +1707,41 @@ export default function CandyMainOrders() {
           <h2 className="text-2xl font-bold">Ordenes Maestras</h2>
         </div>
 
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <div className="w-full">
+        <div className="mt-3 flex items-center justify-between">
+          <div />
+
+          <div className="flex items-center gap-2">
             <RefreshButton
               onClick={refresh}
               loading={loading || catalogLoading}
             />
-          </div>
 
-          <button
-            className="items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded-2xl hover:bg-indigo-700"
-            onClick={() => {
-              resetOrderForm();
-              setOpenOrderModal(true);
-            }}
-          >
-            <span className="items-center gap-4 inline-block bg-indigo-700/40 rounded-full p-1">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
-            </span>
-            Nueva Orden
-          </button>
+            <button
+              className="inline-flex items-center gap-2 bg-indigo-600 text-white px-2 md:px-3 py-2 rounded-2xl hover:bg-indigo-700 w-full md:w-auto max-w-[220px] justify-center"
+              onClick={() => {
+                resetOrderForm();
+                setOpenOrderModal(true);
+              }}
+            >
+              <span className="items-center gap-4 inline-block bg-indigo-700/40 rounded-full p-1">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 4v16m8-8H4"
+                  />
+                </svg>
+              </span>
+              Nueva Orden
+            </button>
+          </div>
         </div>
 
         {msg && <p className="mt-2 text-sm">{msg}</p>}
@@ -1894,7 +1804,7 @@ export default function CandyMainOrders() {
               </div>
 
               {/* Config rápida (logística + % utilidades) */}
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-1 gap-2">
                 <div>
                   <label className="block text-xs font-semibold">
                     Gastos logísticos (orden)
@@ -1906,33 +1816,6 @@ export default function CandyMainOrders() {
                     onChange={(e) => setLogisticsCost(e.target.value)}
                     placeholder="0"
                     min={0}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold">
-                    % utilidad vendedor
-                  </label>
-                  <input
-                    type="number"
-                    className="w-full border p-2 rounded"
-                    value={pctVendor}
-                    onChange={(e) => handleVendorPctChange(e.target.value)}
-                    placeholder="30"
-                    min={0}
-                    max={100}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold">
-                    % utilidad inversor
-                  </label>
-                  <input
-                    type="number"
-                    className="w-full border p-2 rounded bg-gray-100"
-                    value={pctInvestor}
-                    readOnly
                   />
                 </div>
               </div>
@@ -2227,7 +2110,7 @@ export default function CandyMainOrders() {
 
                   {/* Desktop: Tabla */}
                   <div className="hidden md:block">
-                    <div className="overflow-x-auto border rounded">
+                    <div className="overflow-x-auto border rounded pb-5">
                       <table className="min-w-[1400px] w-full text-xs">
                         <thead className="bg-gray-100">
                           <tr>
@@ -2246,11 +2129,9 @@ export default function CandyMainOrders() {
                             <th className="text-right p-2">MV Rivas</th>
                             <th className="text-right p-2">MV Isla</th>
 
-                            <th className="text-right p-2">U. Bruta</th>
-                            <th className="text-right p-2">U. Vendedor</th>
-                            <th className="text-right p-2">U. Inversor</th>
+                            <th className="text-right p-2">U. Bruta Rivas</th>
+                            <th className="text-right p-2">U. Bruta Isla</th>
                             <th className="text-right p-2">Prorrateo</th>
-                            <th className="text-right p-2">U. Neta</th>
 
                             <th className="text-right p-2">Precio Rivas</th>
                             <th className="text-right p-2">Precio Isla</th>
@@ -2259,7 +2140,7 @@ export default function CandyMainOrders() {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredItems.map((it) => (
+                          {pagedFilteredItems.map((it) => (
                             <tr key={it.id} className="border-t">
                               <td className="p-2">{it.category}</td>
                               <td className="p-2 font-semibold">{it.name}</td>
@@ -2349,16 +2230,10 @@ export default function CandyMainOrders() {
                                 {Number(it.grossProfit || 0).toFixed(2)}
                               </td>
                               <td className="p-2 text-right">
-                                {Number(it.vendorProfit || 0).toFixed(2)}
-                              </td>
-                              <td className="p-2 text-right">
-                                {Number(it.investorProfit || 0).toFixed(2)}
+                                {Number(it.grossProfitIsla || 0).toFixed(2)}
                               </td>
                               <td className="p-2 text-right">
                                 {Number(it.logisticAllocated || 0).toFixed(2)}
-                              </td>
-                              <td className="p-2 text-right font-semibold">
-                                {Number(it.netProfit || 0).toFixed(2)}
                               </td>
 
                               <td className="p-2 text-right">
@@ -2382,7 +2257,7 @@ export default function CandyMainOrders() {
                           {filteredItems.length === 0 && (
                             <tr>
                               <td
-                                colSpan={19}
+                                colSpan={17}
                                 className="p-4 text-center text-gray-500"
                               >
                                 No hay productos en la orden.
@@ -2391,6 +2266,48 @@ export default function CandyMainOrders() {
                           )}
                         </tbody>
                       </table>
+                    </div>
+                    {/* Paginación items (desktop) */}
+                    <div className="mt-2 flex items-center justify-between">
+                      <div className="text-sm text-gray-600">
+                        Mostrando{" "}
+                        {Math.min(
+                          (itemPage - 1) * ITEMS_PAGE_SIZE + 1,
+                          filteredItems.length,
+                        )}
+                        -
+                        {Math.min(
+                          itemPage * ITEMS_PAGE_SIZE,
+                          filteredItems.length,
+                        )}{" "}
+                        de {filteredItems.length}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={itemPage <= 1}
+                          onClick={() => setItemPage((p) => Math.max(1, p - 1))}
+                          className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+                        >
+                          Anterior
+                        </button>
+
+                        <div className="px-3 py-1 border rounded text-sm">
+                          {itemPage} / {totalItemPages}
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={itemPage >= totalItemPages}
+                          onClick={() =>
+                            setItemPage((p) => Math.min(totalItemPages, p + 1))
+                          }
+                          className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+                        >
+                          Siguiente
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -2561,25 +2478,19 @@ export default function CandyMainOrders() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
+                          <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
                             <div className="p-2 rounded bg-emerald-50 border">
-                              <div className="text-gray-600">U. Bruta</div>
+                              <div className="text-gray-600">
+                                U. Bruta Rivas
+                              </div>
                               <div className="font-semibold">
                                 {Number(it.grossProfit || 0).toFixed(2)}
                               </div>
                             </div>
-
                             <div className="p-2 rounded bg-emerald-50 border">
-                              <div className="text-gray-600">U. Vendedor</div>
+                              <div className="text-gray-600">U. Bruta Isla</div>
                               <div className="font-semibold">
-                                {Number(it.vendorProfit || 0).toFixed(2)}
-                              </div>
-                            </div>
-
-                            <div className="p-2 rounded bg-emerald-50 border">
-                              <div className="text-gray-600">U. Neta</div>
-                              <div className="font-semibold">
-                                {Number(it.netProfit || 0).toFixed(2)}
+                                {Number(it.grossProfitIsla || 0).toFixed(2)}
                               </div>
                             </div>
                           </div>
@@ -2651,49 +2562,29 @@ export default function CandyMainOrders() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-                  <div className="p-3 border rounded bg-emerald-50">
-                    <div className="text-xs text-gray-600">
-                      Utilidad Bruta total
+                <div className="mt-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="p-3 border rounded bg-emerald-50">
+                      <div className="text-xs text-gray-600">
+                        Utilidad Bruta Rivas
+                      </div>
+                      <div className="text-lg font-semibold">
+                        {Number(orderKPIs.utilidadBrutaRivas || 0).toFixed(2)}
+                      </div>
                     </div>
-                    <div className="text-lg font-semibold">
-                      {Number(orderKPIs.utilidadBrutaTotal || 0).toFixed(2)}
+
+                    <div className="p-3 border rounded bg-emerald-50">
+                      <div className="text-xs text-gray-600">
+                        Utilidad Bruta Isla
+                      </div>
+                      <div className="text-lg font-semibold">
+                        {Number(orderKPIs.utilidadBrutaIsla || 0).toFixed(2)}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="p-3 border rounded bg-emerald-50">
-                    <div className="text-xs text-gray-600">
-                      Utilidad Vendedor total
-                    </div>
-                    <div className="text-lg font-semibold">
-                      {Number(orderKPIs.utilidadVendedorTotal || 0).toFixed(2)}
-                    </div>
-                  </div>
-
-                  <div className="p-3 border rounded bg-emerald-50">
-                    <div className="text-xs text-gray-600">
-                      Utilidad Neta total
-                    </div>
-                    <div className="text-lg font-semibold">
-                      {Number(orderKPIs.utilidadNetaTotal || 0).toFixed(2)}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 border rounded p-3 bg-white">
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                    <div className="text-xs text-gray-600">
-                      % utilidad vendedor:{" "}
-                      <span className="font-semibold">
-                        {Math.round(computed.vPct01 * 100)}%
-                      </span>{" "}
-                      · % utilidad inversor:{" "}
-                      <span className="font-semibold">
-                        {Math.round(computed.iPct01 * 100)}%
-                      </span>
-                    </div>
-
-                    <div className="flex gap-2 justify-end">
+                  <div className="mt-3 border rounded p-3 bg-white">
+                    <div className="flex justify-end">
                       <button
                         type="button"
                         className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
@@ -2784,14 +2675,8 @@ export default function CandyMainOrders() {
                   : "0.00";
 
               const logi = Number(o.logisticsCost || 0);
-              const pctV = Number(o.pctVendor || 0);
-              const pctI = Number(o.pctInvestor || 0);
-
               const grossEst =
                 Number(o.totalRivas || 0) - Number(o.subtotal || 0);
-              const vendorEst = grossEst * pctV;
-              const investorEst = grossEst * pctI;
-              const netEst = investorEst - logi;
 
               return (
                 <div
@@ -2861,7 +2746,7 @@ export default function CandyMainOrders() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 mt-2 text-xs">
+                  <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
                     <div className="p-2 rounded bg-emerald-50 border">
                       <div className="text-gray-600">Gastos log.</div>
                       <div className="font-semibold">{logi.toFixed(2)}</div>
@@ -2870,16 +2755,6 @@ export default function CandyMainOrders() {
                       <div className="text-gray-600">U. Bruta (est)</div>
                       <div className="font-semibold">{grossEst.toFixed(2)}</div>
                     </div>
-                    <div className="p-2 rounded bg-emerald-50 border">
-                      <div className="text-gray-600">U. Neta (est)</div>
-                      <div className="font-semibold">{netEst.toFixed(2)}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-2 text-[11px] text-gray-500">
-                    Split: V {Math.round(pctV * 100)}% / I{" "}
-                    {Math.round(pctI * 100)}% · V (est): {vendorEst.toFixed(2)}{" "}
-                    · I (est): {investorEst.toFixed(2)}
                   </div>
                 </div>
               );
@@ -2902,25 +2777,24 @@ export default function CandyMainOrders() {
                 <th className="p-2 border">Esperado Isla</th>
                 <th className="p-2 border">Gastos log.</th>
                 <th className="p-2 border">U. Bruta (est)</th>
-                <th className="p-2 border">U. Neta (est)</th>
                 <th className="p-2 border">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={12} className="p-4 text-center">
+                  <td colSpan={11} className="p-4 text-center">
                     Cargando…
                   </td>
                 </tr>
               ) : orders.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="p-4 text-center">
+                  <td colSpan={11} className="p-4 text-center">
                     Sin ordenes maestras.
                   </td>
                 </tr>
               ) : (
-                orders.map((o) => {
+                pagedOrders.map((o) => {
                   const agg = orderInventoryAgg[o.id];
                   const fecha = getOrderListDate(o);
 
@@ -2930,12 +2804,8 @@ export default function CandyMainOrders() {
                       : "0.00";
 
                   const logi = Number(o.logisticsCost || 0);
-                  const pctI = Number(o.pctInvestor || 0);
-
                   const grossEst =
                     Number(o.totalRivas || 0) - Number(o.subtotal || 0);
-                  const investorEst = grossEst * pctI;
-                  const netEst = investorEst - logi;
 
                   return (
                     <tr key={o.id} className="text-center whitespace-nowrap">
@@ -2957,7 +2827,6 @@ export default function CandyMainOrders() {
                       </td>
                       <td className="p-2 border">{logi.toFixed(2)}</td>
                       <td className="p-2 border">{grossEst.toFixed(2)}</td>
-                      <td className="p-2 border">{netEst.toFixed(2)}</td>
                       <td className="p-2 border">
                         <div className="flex gap-1 justify-center">
                           <button
@@ -2980,6 +2849,37 @@ export default function CandyMainOrders() {
               )}
             </tbody>
           </table>
+          {/* Paginación (desktop) */}
+          <div className="mt-2 flex items-center justify-between">
+            <div className="text-sm text-gray-600">
+              Mostrando {Math.min((page - 1) * PAGE_SIZE + 1, orders.length)}-
+              {Math.min(page * PAGE_SIZE, orders.length)} de {orders.length}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+              >
+                Anterior
+              </button>
+
+              <div className="px-3 py-1 border rounded text-sm">
+                {page} / {totalPages}
+              </div>
+
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+              >
+                Siguiente
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -3,8 +3,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
-import InstallApp from "../components/InstallApp";
 import { hasRole } from "../utils/roles";
+import { canPath, PathKey } from "../utils/access";
 
 type Role =
   | ""
@@ -14,6 +14,7 @@ type Role =
   | "vendedor_pollo"
   | "vendedor_ropa"
   | "vendedor_dulces";
+
 type Rubro = "POLLO" | "DULCES";
 
 function cn(...cls: Array<string | false | null | undefined>) {
@@ -32,6 +33,7 @@ export default function MobileTabsLayout({
   const base = "/admin";
 
   const subject = roles && roles.length ? roles : role;
+
   const isAdmin = hasRole(subject, "admin");
   const isVendPollo = hasRole(subject, "vendedor_pollo");
   const isVendDulces = hasRole(subject, "vendedor_dulces");
@@ -39,16 +41,34 @@ export default function MobileTabsLayout({
     hasRole(subject, "supervisor_pollo") || hasRole(subject, "contador");
   const isContPollo = hasRole(subject, "contador");
 
-  // Mostrar selector también cuando el usuario tenga ambos roles (pollo + dulces)
-  const hasBoth = isVendPollo && isVendDulces;
+  // ✅ Detectar acceso real por permisos (multi-rol)
+  const hasPollo =
+    canPath(subject, "salesV2", "view") ||
+    canPath(subject, "batches", "view") ||
+    canPath(subject, "bills", "view") ||
+    canPath(subject, "transactionsPollo", "view") ||
+    canPath(subject, "customersPollo", "view");
+
+  const hasDulces =
+    canPath(subject, "salesCandies", "view") ||
+    canPath(subject, "productsVendorsCandies", "view") ||
+    canPath(subject, "customersCandies", "view") ||
+    canPath(subject, "productsPricesCandies", "view") ||
+    canPath(subject, "transactionCandies", "view") ||
+    canPath(subject, "cierreVentasCandies", "view");
+
+  // Mostrar selector cuando el usuario tenga acceso a ambos rubros
+  const hasBoth = hasPollo && hasDulces;
+
   const [rubro, setRubro] = useState<Rubro>(() => {
     try {
       const saved =
         typeof window !== "undefined" ? localStorage.getItem("rubro") : null;
       if (saved === "POLLO" || saved === "DULCES") return saved as Rubro;
     } catch (e) {}
-    if (isVendPollo || isSupervisor) return "POLLO";
-    if (isVendDulces) return "DULCES";
+
+    if (hasPollo) return "POLLO";
+    if (hasDulces) return "DULCES";
     return "POLLO";
   });
 
@@ -58,77 +78,91 @@ export default function MobileTabsLayout({
 
   // Tabs por rubro/rol
   const tabs = useMemo(() => {
-    // Si el usuario es admin O tiene ambos roles, respetamos `rubro`
+    let built: Array<{ key: string; label: string; to: string }> = [];
+
+    // Si el usuario es admin O tiene ambos rubros, respetamos rubro
     if (isAdmin || hasBoth) {
       if (rubro === "POLLO") {
         // ADMIN - POLLO
         if (isAdmin) {
-          return [
-            { key: "venta", label: "Venta", to: `${base}/salesV2` },
-            { key: "clientes", label: "Clientes", to: `${base}/customers` },
+          built = [
+            { key: "venta", label: "Vender", to: `${base}/salesV2` },
+            {
+              key: "clientes",
+              label: "Saldos pendientes",
+              to: `${base}/customersPollo`,
+            },
             {
               key: "dash",
               label: "Dashboard",
               to: `${base}/financialDashboard`,
             },
+            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
+            { key: "trxs", label: "Transacciones", to: `${base}/transactionsPollo` },
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
             { key: "gastos", label: "Gastos", to: `${base}/expenses` },
           ];
         }
-
-        // Usuario con ambos roles mostrando POLLO
-        if (isSupervisor) {
+        // Usuario con ambos rubros mostrando POLLO
+        else if (isSupervisor) {
           const supTabs = [
-            { key: "venta", label: "Venta", to: `${base}/salesV2` },
-            { key: "clientes", label: "Clientes", to: `${base}/customers` },
+            { key: "venta", label: "Vender", to: `${base}/salesV2` },
+            {
+              key: "clientes",
+              label: "Saldos pendientes",
+              to: `${base}/customersPollo`,
+            },
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             {
               key: "trxs",
               label: "Transacciones",
               to: `${base}/transactionsPollo`,
             },
-            { key: "cierre", label: "Cierre", to: `${base}/bills` },
+            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
           ];
-          if (hasRole(subject, "contador"))
-            return supTabs.filter((t) => t.key !== "cierre");
-          return supTabs;
-        }
 
-        if (isVendPollo) {
-          return [
-            { key: "venta", label: "Venta", to: `${base}/salesV2` },
-            { key: "clientes", label: "Clientes", to: `${base}/customers` },
-            { key: "cierre", label: "Cierre", to: `${base}/bills` },
-            {
-              key: "trxs",
-              label: "Transacciones",
-              to: `${base}/transactionsPollo`,
-            },
-          ];
-        }
-        if (isContPollo) {
-          return [
-            { key: "venta", label: "Venta", to: `${base}/salesV2` },
+          // contador no ve cierre (como tu lógica actual)
+          if (hasRole(subject, "contador")) built = supTabs;
+        } else if (isVendPollo) {
+          built = [
+            { key: "venta", label: "Vender", to: `${base}/salesV2` },
             {
               key: "clientes",
               label: "Saldos Pendientes",
               to: `${base}/customersPollo`,
             },
-            { key: "cierre", label: "Cierre", to: `${base}/bills` },
+            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
             {
               key: "trxs",
               label: "Transacciones",
               to: `${base}/transactionsPollo`,
             },
           ];
+        } else if (isContPollo) {
+          built = [
+            { key: "venta", label: "Vender", to: `${base}/salesV2` },
+            {
+              key: "clientes",
+              label: "Saldos Pendientes",
+              to: `${base}/customersPollo`,
+            },
+            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
+            {
+              key: "trxs",
+              label: "Transacciones",
+              to: `${base}/transactionsPollo`,
+            },
+          ];
+        } else {
+          built = [{ key: "home", label: "Inicio", to: `${base}` }];
         }
       }
 
-      // DULCES (admin o usuario con ambos roles mostrando DULCES)
+      // DULCES (admin o usuario con ambos rubros mostrando DULCES)
       if (rubro === "DULCES") {
         if (isAdmin) {
-          return [
+          built = [
             {
               key: "dc",
               label: "Data Center Reporte",
@@ -136,7 +170,7 @@ export default function MobileTabsLayout({
             },
             {
               key: "maes",
-              label: "Inventario Global",
+              label: "Inventario Maestro",
               to: `${base}/mainordersCandies`,
             },
             {
@@ -176,10 +210,8 @@ export default function MobileTabsLayout({
               to: `${base}/notebooksInventory`,
             },
           ];
-        }
-
-        if (isVendDulces) {
-          return [
+        } else if (isVendDulces) {
+          built = [
             { key: "venta", label: "Vender", to: `${base}/salesCandies` },
             {
               key: "precios",
@@ -199,80 +231,117 @@ export default function MobileTabsLayout({
             { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
             { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
           ];
+        } else {
+          built = [{ key: "home", label: "Inicio", to: `${base}` }];
         }
+      }
+    } else {
+      // === SUPERVISOR POLLO (sin ambos rubros) ===
+      if (isSupervisor) {
+        const supTabs = [
+          { key: "venta", label: "Venta", to: `${base}/salesV2` },
+          { key: "inv", label: "Inventario", to: `${base}/batches` },
+          {
+            key: "clientes",
+            label: "Saldos Pendientes",
+            to: `${base}/customersPollo`,
+          },
+          {
+            key: "trxs",
+            label: "Transacciones",
+            to: `${base}/transactionsPollo`,
+          },
+          { key: "cierre", label: "Cierre", to: `${base}/bills` },
+        ];
+        if (hasRole(subject, "contador")) built = supTabs;
+        else built = supTabs;
+      }
+      // === VENDEDOR POLLO ===
+      else if (isVendPollo) {
+        built = [
+          { key: "venta", label: "Venta", to: `${base}/salesV2` },
+          { key: "cierre", label: "Cierre", to: `${base}/bills` },
+          {
+            key: "trxs",
+            label: "Transacciones",
+            to: `${base}/transactionsPollo`,
+          },
+        ];
+      }
+      // === VENDEDOR DULCES ===
+      else if (isVendDulces) {
+        built = [
+          { key: "venta", label: "Vender", to: `${base}/salesCandies` },
+          {
+            key: "precios",
+            label: "Precios",
+            to: `${base}/productsPricesCandies`,
+          },
+          {
+            key: "ped",
+            label: "Inventario",
+            to: `${base}/productsVendorsCandies`,
+          },
+          {
+            key: "cli",
+            label: "Saldos Pendientes",
+            to: `${base}/customersCandies`,
+          },
+          { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
+          { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
+        ];
+      } else {
+        built = [{ key: "home", label: "Inicio", to: `${base}` }];
       }
     }
 
-    // === SUPERVISOR POLLO (sin ambos roles) ===
-    if (isSupervisor) {
-      const supTabs = [
-        { key: "venta", label: "Venta", to: `${base}/salesV2` },
-        { key: "inv", label: "Inventario", to: `${base}/batches` },
-        {
-          key: "clientes",
-          label: "Saldos Pendientes",
-          to: `${base}/customersPollo`,
-        },
-        {
-          key: "trxs",
-          label: "Transacciones",
-          to: `${base}/transactionsPollo`,
-        },
-        { key: "cierre", label: "Cierre", to: `${base}/bills` },
-      ];
-      if (hasRole(subject, "contador"))
-        return supTabs.filter((t) => t.key !== "cierre");
-      return supTabs;
-    }
+    // ✅ Filtrar tabs por permisos de matriz (multi-rol)
+    // Solo filtramos para los paths controlados en access.ts
+    const controlled = new Set<PathKey>([
+      // POLLO
+      "bills",
+      "customersPollo",
+      "transactionsPollo",
+      "batches",
+      "salesV2",
+      // DULCES
+      "salesCandies",
+      "productsVendorsCandies",
+      "productsPricesCandies",
+      "transactionCandies",
+      "cierreVentasCandies",
+      "customersCandies",
+    ]);
 
-    // === VENDEDOR POLLO ===
-    if (isVendPollo) {
-      return [
-        { key: "venta", label: "Venta", to: `${base}/salesV2` },
-        { key: "cierre", label: "Cierre", to: `${base}/bills` },
-        {
-          key: "trxs",
-          label: "Transacciones",
-          to: `${base}/transactionsPollo`,
-        },
-      ];
-    }
+    const filtered = built.filter((t) => {
+      const raw = t.to.replace(`${base}/`, "");
+      const key = raw as PathKey;
+      if (controlled.has(key)) return canPath(subject, key, "view");
+      return true; // rutas no incluidas en matriz: no tocar (admin ya igual las ve)
+    });
 
-    // === VENDEDOR DULCES ===
-    if (isVendDulces) {
-      return [
-        { key: "venta", label: "Vender", to: `${base}/salesCandies` },
-        {
-          key: "precios",
-          label: "Precios",
-          to: `${base}/productsPricesCandies`,
-        },
-        {
-          key: "ped",
-          label: "Inventario",
-          to: `${base}/productsVendorsCandies`,
-        },
-        {
-          key: "cli",
-          label: "Saldos Pendientes",
-          to: `${base}/customersCandies`,
-        },
-        { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
-        { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
-      ];
-    }
-
-    // fallback
-    return [{ key: "home", label: "Inicio", to: `${base}` }];
-  }, [isAdmin, isVendPollo, isVendDulces, isSupervisor, hasBoth, rubro]);
+    return filtered;
+  }, [
+    base,
+    rubro,
+    isAdmin,
+    hasBoth,
+    isSupervisor,
+    isVendPollo,
+    isVendDulces,
+    isContPollo,
+    subject,
+  ]);
 
   useEffect(() => {
-    // cuando cambia rubro (admin o usuario con ambos roles), mandalo a la primera tab de ese rubro
+    // cuando cambia rubro (admin o usuario con ambos rubros), mandalo a la primera tab de ese rubro
     if (!(isAdmin || hasBoth)) return;
     if (!tabs.length) return;
+
     try {
       localStorage.setItem("rubro", rubro);
     } catch (e) {}
+
     navigate(tabs[0].to, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rubro]);
@@ -298,7 +367,6 @@ export default function MobileTabsLayout({
   };
 
   const doLogout = async () => {
-    // Clear local user state stored in localStorage for safety
     try {
       await signOut(auth);
     } catch (err) {
@@ -339,7 +407,7 @@ export default function MobileTabsLayout({
       {/* Top Bar */}
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
         <div className="px-3 py-3 flex items-center gap-2">
-          {/* Rubro selector para admin o usuario con ambos roles */}
+          {/* Rubro selector para admin o usuario con ambos rubros */}
           {isAdmin || hasBoth ? (
             <div className="flex gap-2">
               <button
@@ -378,8 +446,7 @@ export default function MobileTabsLayout({
           )}
 
           <div className="ml-auto flex items-center gap-2">
-            {/* Si querés mantener InstallApp visible, descomentá */}
-            {/* <InstallApp /> */}
+            {/* Si querés mantener InstallApp visible, lo agregas acá */}
 
             {/* ✅ Botón 3 puntos (Drawer) */}
             <button
@@ -477,8 +544,7 @@ export default function MobileTabsLayout({
         </div>
       )}
 
-      {/* Content (solo esto scrollea)
-          ✅ Ajuste PWA: padding-bottom con safe-area para que no lo tape el tabbar */}
+      {/* Content (solo esto scrollea) */}
       <main
         className={cn(
           "flex-1 overflow-y-auto px-3 pt-3",

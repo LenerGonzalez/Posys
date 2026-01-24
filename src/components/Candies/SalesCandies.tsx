@@ -667,6 +667,20 @@ export default function SalesCandiesPOS({
         Math.max(0, Number(downPayment || 0))
       : 0;
 
+  // ✅ Tope real del abono: no puede exceder la deuda total (saldo actual + venta)
+  const maxDownPaymentAllowed = useMemo(() => {
+    if (clientType !== "CREDITO") return 0;
+    const debtBeforePayment =
+      Math.max(0, Number(currentBalance || 0)) +
+      Math.max(0, Number(totalAmount || 0));
+    return Math.floor(debtBeforePayment * 100) / 100; // 2 decimales, sin redondeos raros
+  }, [clientType, currentBalance, totalAmount]);
+
+  const clampDownPayment = (raw: any) => {
+    const n = Math.max(0, Number(raw || 0));
+    return Math.min(n, maxDownPaymentAllowed);
+  };
+
   const selectedVendor = useMemo(
     () => vendors.find((v) => v.id === vendorId) || null,
     [vendors, vendorId],
@@ -1078,8 +1092,9 @@ export default function SalesCandiesPOS({
     } else {
       if (!customerId) return "Selecciona un cliente (crédito).";
       if (downPayment < 0) return "El pago inicial no puede ser negativo.";
-      if (downPayment > totalAmount)
-        return "El pago inicial no puede superar el total.";
+      if (downPayment > maxDownPaymentAllowed)
+        return "El pago inicial no puede superar el saldo a deber (saldo actual + venta).";
+
       if (selectedCustomer?.status === "BLOQUEADO")
         return "El cliente está BLOQUEADO. No se puede facturar a crédito.";
     }
@@ -1469,11 +1484,13 @@ export default function SalesCandiesPOS({
                     type="number"
                     step="0.01"
                     inputMode="decimal"
+                    max={maxDownPaymentAllowed}
                     className="w-full border p-2 rounded"
                     value={downPayment === 0 ? "" : downPayment}
-                    onChange={(e) =>
-                      setDownPayment(Math.max(0, Number(e.target.value || 0)))
-                    }
+                    onChange={(e) => {
+                      const v = clampDownPayment(e.target.value);
+                      setDownPayment(v);
+                    }}
                     placeholder="0.00"
                   />
                 </div>
@@ -1922,13 +1939,13 @@ export default function SalesCandiesPOS({
                         type="number"
                         step="0.01"
                         inputMode="decimal"
+                        max={maxDownPaymentAllowed}
                         className="w-full border p-2 rounded"
                         value={downPayment === 0 ? "" : downPayment}
-                        onChange={(e) =>
-                          setDownPayment(
-                            Math.max(0, Number(e.target.value || 0)),
-                          )
-                        }
+                        onChange={(e) => {
+                          const v = clampDownPayment(e.target.value);
+                          setDownPayment(v);
+                        }}
                         placeholder="0.00"
                       />
                     </div>

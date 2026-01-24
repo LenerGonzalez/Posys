@@ -1,10 +1,10 @@
 // src/components/AdminLayout.tsx
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
-import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { hasRole } from "../utils/roles";
+import { canPath } from "../utils/access";
 
 export default function AdminLayout({
   role,
@@ -47,7 +47,6 @@ export default function AdminLayout({
 
   // Operaciones Otras
   const [openOtras, setOpenOtras] = useState(false);
-  // (Operaciones global movido dentro de Pollos Bea)
 
   const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
 
@@ -113,6 +112,7 @@ export default function AdminLayout({
 
   // ===== util de roles =====
   const subject = roles && roles.length ? roles : role;
+
   const isAdmin = hasRole(subject, "admin");
   const isVendPollo = hasRole(subject, "vendedor_pollo");
   const isVendRopa = hasRole(subject, "vendedor_ropa");
@@ -120,6 +120,22 @@ export default function AdminLayout({
   const isSupervisor =
     hasRole(subject, "supervisor_pollo") || hasRole(subject, "contador");
   const isContPollo = hasRole(subject, "contador");
+
+  // permisos por rubro (para mostrar secciones aunque tenga 2 roles)
+  const hasPolloAccess =
+    canPath(subject, "salesV2", "view") ||
+    canPath(subject, "customersPollo", "view") ||
+    canPath(subject, "transactionsPollo", "view") ||
+    canPath(subject, "bills", "view") ||
+    canPath(subject, "batches", "view");
+
+  const hasDulcesAccess =
+    canPath(subject, "salesCandies", "view") ||
+    canPath(subject, "productsVendorsCandies", "view") ||
+    canPath(subject, "customersCandies", "view") ||
+    canPath(subject, "productsPricesCandies", "view") ||
+    canPath(subject, "transactionCandies", "view") ||
+    canPath(subject, "cierreVentasCandies", "view");
 
   return (
     <div className="min-h-screen flex">
@@ -173,7 +189,7 @@ export default function AdminLayout({
                               to={`${base}/customersPollo`}
                               className={linkCls}
                             >
-                              Saldo Pendiente
+                              Saldo Pendientes
                             </NavLink>
                             <NavLink
                               to={`${base}/transactionsPollo`}
@@ -181,13 +197,12 @@ export default function AdminLayout({
                             >
                               Transacciones
                             </NavLink>
-                            {role !== "contador" && (
-                              <NavLink to={`${base}/bills`} className={linkCls}>
-                                Cierres
-                              </NavLink>
-                            )}
+                            <NavLink to={`${base}/bills`} className={linkCls}>
+                              Cierre Ventas
+                            </NavLink>
                           </div>
                         )}
+
                         {/* Inventario (Pollo) */}
                         <SubSectionBtn
                           open={openPolloInv}
@@ -234,11 +249,9 @@ export default function AdminLayout({
                             <NavLink to={`${base}/salesV2`} className={linkCls}>
                               Venta
                             </NavLink>
-                            {role !== "contador" && (
-                              <NavLink to={`${base}/bills`} className={linkCls}>
-                                Cierre
-                              </NavLink>
-                            )}
+                            <NavLink to={`${base}/bills`} className={linkCls}>
+                              Cierre Ventas
+                            </NavLink>
                             <NavLink
                               to={`${base}/billhistoric`}
                               className={linkCls}
@@ -294,85 +307,6 @@ export default function AdminLayout({
                             </NavLink>
                           </div>
                         )}
-                        {/* Productos (Ropa) */}
-                        {/* <SubSectionBtn
-                          open={openRopaProd}
-                          onClick={() => setOpenRopaProd((v) => !v)}
-                          title="Productos"
-                        />
-                        {openRopaProd && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/productsClothes`}
-                              className={linkCls}
-                            >
-                              Agregar Productos
-                            </NavLink>
-                          </div>
-                        )}
-                        Clientes (Ropa)
-                        <SubSectionBtn
-                          open={openClients}
-                          onClick={() => setOpenClients((v) => !v)}
-                          title="Clientes"
-                        /> */}
-                        {/* {openClients && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/CustomersClothes`}
-                              className={linkCls}
-                            >
-                              Listado de Clientes
-                            </NavLink>
-                          </div>
-                        )} */}
-                        {/* Finanzas (Ropa) */}
-                        {/* <SubSectionBtn
-                          open={openRopaFin}
-                          onClick={() => setOpenRopaFin((v) => !v)}
-                          title="Finanzas"
-                        />
-                        {openRopaFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/salesClothes`}
-                              className={linkCls}
-                            >
-                              Venta Ropa
-                            </NavLink>
-                          </div>
-                        )}
-                        {openRopaFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/financialDashboardClothes`}
-                              className={linkCls}
-                            >
-                              Dashboard Financiero
-                            </NavLink>
-                          </div>
-                        )}
-                        {openRopaFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/TransactionsReportClothes`}
-                              className={linkCls}
-                            >
-                              Transacciones
-                            </NavLink>
-                          </div>
-                        )}
-
-                        {openRopaFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/ExpensesClothes`}
-                              className={linkCls}
-                            >
-                              Gastos Ropa
-                            </NavLink>
-                          </div>
-                        )} */}
                       </div>
                     )}
                   </div>
@@ -388,7 +322,6 @@ export default function AdminLayout({
 
                     {openDulces && (
                       <div className="pb-2">
-                        {/* Inventario (Dulces) */}
                         <SubSectionBtn
                           open={openDulcesVendors}
                           onClick={() => setOpenDulcesVendors((v) => !v)}
@@ -470,7 +403,7 @@ export default function AdminLayout({
                             </NavLink>
                           </div>
                         )}
-                        {/* Finanzas (Dulces) */}
+
                         <SubSectionBtn
                           open={openDulcesFin}
                           onClick={() => setOpenDulcesFin((v) => !v)}
@@ -496,7 +429,6 @@ export default function AdminLayout({
                             </NavLink>
                           </div>
                         )}
-
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
@@ -620,8 +552,8 @@ export default function AdminLayout({
                 </>
               )}
 
-              {/* ================== POLLOS (single menu for supervisor/contador/vendedor) ================== */}
-              {!isAdmin && (isSupervisor || isVendPollo || isContPollo) && (
+              {/* ================== POLLO (supervisor/contador/vendedor o multi-rol) ================== */}
+              {!isAdmin && hasPolloAccess && (
                 <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
                   <SectionBtn
                     open={openPollo}
@@ -632,131 +564,106 @@ export default function AdminLayout({
 
                   {openPollo && (
                     <div className="pb-2 ml-4 mt-1 space-y-1">
-                      {/* Priority: contador menu if contador; else vendedor; else supervisor */}
-                      {isContPollo ? (
-                        <>
-                          <NavLink to={`${base}/salesV2`} className={linkCls}>
-                            Vender
-                          </NavLink>
-                          <NavLink to={`${base}/batches`} className={linkCls}>
-                            Inventario Pollo
-                          </NavLink>
-                          <NavLink to={`${base}/bills`} className={linkCls}>
-                            Cierres
-                          </NavLink>
-                          <NavLink
-                            to={`${base}/transactionsPollo`}
-                            className={linkCls}
-                          >
-                            Transacciones
-                          </NavLink>
-                          <NavLink
-                            to={`${base}/customersPollo`}
-                            className={linkCls}
-                          >
-                            Saldos Pendientes
-                          </NavLink>
-                        </>
-                      ) : isVendPollo ? (
-                        <>
-                          <NavLink to={`${base}/salesV2`} className={linkCls}>
-                            Vender
-                          </NavLink>
-                          <NavLink to={`${base}/bills`} className={linkCls}>
-                            Cierres
-                          </NavLink>
-                          <NavLink
-                            to={`${base}/transactionsPollo`}
-                            className={linkCls}
-                          >
-                            Transacciones
-                          </NavLink>
-                          <NavLink
-                            to={`${base}/customersPollo`}
-                            className={linkCls}
-                          >
-                            Saldos Pendientes
-                          </NavLink>
-                        </>
-                      ) : isSupervisor ? (
-                        <>
-                          <NavLink to={`${base}/batches`} className={linkCls}>
-                            Inventario Pollo
-                          </NavLink>
-                          <NavLink to={`${base}/bills`} className={linkCls}>
-                            Cierres
-                          </NavLink>
-                          <NavLink
-                            to={`${base}/transactionsPollo`}
-                            className={linkCls}
-                          >
-                            Transacciones
-                          </NavLink>
-                          <NavLink
-                            to={`${base}/customersPollo`}
-                            className={linkCls}
-                          >
-                            Saldos Pendientes
-                          </NavLink>
-                        </>
-                      ) : (
-                        // fallback: show vender + inventario
-                        <>
-                          <NavLink to={`${base}/salesV2`} className={linkCls}>
-                            Vender
-                          </NavLink>
-                          <NavLink to={`${base}/batches`} className={linkCls}>
-                            Inventario Pollo
-                          </NavLink>
-                        </>
+                      {canPath(subject, "salesV2") && (
+                        <NavLink to={`${base}/salesV2`} className={linkCls}>
+                          Vender
+                        </NavLink>
+                      )}
+                      {canPath(subject, "batches") && (
+                        <NavLink to={`${base}/batches`} className={linkCls}>
+                          Inventario Pollo
+                        </NavLink>
+                      )}
+                      {canPath(subject, "bills") && (
+                        <NavLink to={`${base}/bills`} className={linkCls}>
+                          Cierre Ventas
+                        </NavLink>
+                      )}
+                      {canPath(subject, "transactionsPollo") && (
+                        <NavLink
+                          to={`${base}/transactionsPollo`}
+                          className={linkCls}
+                        >
+                          Transacciones
+                        </NavLink>
+                      )}
+                      {canPath(subject, "customersPollo") && (
+                        <NavLink
+                          to={`${base}/customersPollo`}
+                          className={linkCls}
+                        >
+                          Saldos Pendientes
+                        </NavLink>
                       )}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* ================== VENDEDOR DULCES ================== */}
-              {isVendDulces && (
+              {/* ================== DULCES (vendedor_dulces o multi-rol) ================== */}
+              {!isAdmin && hasDulcesAccess && (
                 <div className="border rounded">
                   <div className="pb-2 ml-4 mt-1 space-y-1">
-                    <NavLink to={`${base}/salesCandies`} className={linkCls}>
-                      Venta
-                    </NavLink>
+                    {canPath(subject, "salesCandies") && (
+                      <NavLink to={`${base}/salesCandies`} className={linkCls}>
+                        Venta
+                      </NavLink>
+                    )}
                   </div>
 
                   <div className="pb-2 ml-4 mt-1 space-y-1">
-                    <NavLink
-                      to={`${base}/transactionCandies`}
-                      className={linkCls}
-                    >
-                      Ventas del dia
-                    </NavLink>
+                    {canPath(subject, "transactionCandies") && (
+                      <NavLink
+                        to={`${base}/transactionCandies`}
+                        className={linkCls}
+                      >
+                        Ventas del dia
+                      </NavLink>
+                    )}
                   </div>
 
                   <div className="pb-2 ml-4 mt-1 space-y-1">
-                    <NavLink
-                      to={`${base}/cierreVentasCandies`}
-                      className={linkCls}
-                    >
-                      Cierre de Ventas
-                    </NavLink>
+                    {canPath(subject, "cierreVentasCandies") && (
+                      <NavLink
+                        to={`${base}/cierreVentasCandies`}
+                        className={linkCls}
+                      >
+                        Cierre de Ventas
+                      </NavLink>
+                    )}
                   </div>
 
                   <div className="ml-4 mt-1 space-y-1">
-                    <NavLink
-                      to={`${base}/productsVendorsCandies`}
-                      className={linkCls}
-                    >
-                      Pedidos
-                    </NavLink>
+                    {canPath(subject, "productsVendorsCandies") && (
+                      <NavLink
+                        to={`${base}/productsVendorsCandies`}
+                        className={linkCls}
+                      >
+                        Pedidos
+                      </NavLink>
+                    )}
                   </div>
+
                   <div className="ml-4 mt-1 space-y-1">
-                    <NavLink
-                      to={`${base}/customersCandies`}
-                      className={linkCls}
-                    >
-                      Clientes
-                    </NavLink>
+                    {canPath(subject, "customersCandies") && (
+                      <NavLink
+                        to={`${base}/customersCandies`}
+                        className={linkCls}
+                      >
+                        Clientes
+                      </NavLink>
+                    )}
+                  </div>
+
+                  <div className="ml-4 mt-1 space-y-1">
+                    {canPath(subject, "productsPricesCandies") && (
+                      <NavLink
+                        to={`${base}/productsPricesCandies`}
+                        className={linkCls}
+                      >
+                        Precios Venta
+                      </NavLink>
+                    )}
                   </div>
                 </div>
               )}
@@ -773,7 +680,6 @@ export default function AdminLayout({
 
                   {openRopa && (
                     <div className="pb-2">
-                      {/* Venta (Ropa) */}
                       <SubSectionBtn
                         open={openRopaFin}
                         onClick={() => setOpenRopaFin((v) => !v)}
@@ -796,7 +702,6 @@ export default function AdminLayout({
                         </div>
                       )}
 
-                      {/* Productos (Ropa) */}
                       <SubSectionBtn
                         open={openRopaProd}
                         onClick={() => setOpenRopaProd((v) => !v)}
@@ -813,7 +718,6 @@ export default function AdminLayout({
                         </div>
                       )}
 
-                      {/* Clientes (Ropa) */}
                       <SubSectionBtn
                         open={openClients}
                         onClick={() => setOpenClients((v) => !v)}
@@ -841,11 +745,13 @@ export default function AdminLayout({
             >
               Cerrar sesión
             </button>
+
             <div className="mt-2 text-[20px] text-gray-700">
               {typeof window !== "undefined" &&
                 (localStorage.getItem("user_name") ||
                   localStorage.getItem("user_email"))}
             </div>
+
             {confirmLogoutOpen && (
               <div className="fixed inset-0 z-[120] flex items-center justify-center">
                 <div

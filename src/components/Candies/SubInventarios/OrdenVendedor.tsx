@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDocs,
   getDoc,
@@ -130,6 +131,7 @@ interface OrderSummaryRow {
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
 // ===== Roles =====
+
 type RoleProp =
   | ""
   | "admin"
@@ -251,12 +253,6 @@ export default function VendorCandyOrders({
   // Bloqueo de boton de guardar
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
-  
-
-  // ===== Paginación =====
-  const PAGE_SIZE = 20;
-  const [page, setPage] = useState(1);
-
   // Helpers memorizados
   const selectedSeller = useMemo(
     () => sellers.find((s) => s.id === sellerId) || null,
@@ -266,6 +262,8 @@ export default function VendorCandyOrders({
   const [productSearch, setProductSearch] = useState("");
 
   const sellerBranch: Branch | undefined = selectedSeller?.branch;
+
+  const [orderItemsSearch, setOrderItemsSearch] = useState("");
 
   // Producto seleccionado viene del catálogo completo
   const selectedProduct = useMemo(
@@ -387,45 +385,6 @@ export default function VendorCandyOrders({
       setTransferAgg({});
     }
   };
-
-     {
-       useEffect(() => {
-         if (!orderItems.length) return;
-
-         setOrderItems((prev) =>
-           prev.map((it) => {
-             const {
-               subtotal,
-               totalVendor,
-               gainVendor,
-               pricePerPackage,
-               totalRivas,
-               totalSanJorge,
-               totalIsla,
-             } = recalcItemFinancials({
-               providerPrice: it.providerPrice,
-               unitPriceRivas: it.unitPriceRivas,
-               unitPriceSanJorge: it.unitPriceSanJorge,
-               unitPriceIsla: it.unitPriceIsla,
-               packages: it.packages,
-               sellerBranch,
-             });
-
-             return {
-               ...it,
-               subtotal,
-               totalVendor,
-               gainVendor,
-               pricePerPackage,
-               totalRivas,
-               totalSanJorge,
-               totalIsla,
-             };
-           }),
-         );
-         // eslint-disable-next-line react-hooks/exhaustive-deps
-       }, [sellerBranch]);
-     }
 
   // ===== Carga de datos =====
   useEffect(() => {
@@ -641,7 +600,6 @@ export default function VendorCandyOrders({
         setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey, role, sellerCandyId]);
 
   // ===== Filtrado por rol (solo sus pedidos si es vendedor de dulces) =====
@@ -650,7 +608,7 @@ export default function VendorCandyOrders({
       return rows.filter((r) => r.sellerId === currentSeller.id);
     }
     return rows;
-  }, [rows, isVendor, currentSeller]);
+  }, [rows, isVendor, currentSeller, sellerId]);
 
   const getOrderDetailRows = (orderKey: string) => {
     return rowsByRole.filter((r) => (r.orderId || r.id) === orderKey);
@@ -693,6 +651,8 @@ export default function VendorCandyOrders({
         existing.subtotal += r.subtotal;
         existing.totalVendor += r.totalVendor;
         if (dateStr > existing.date) existing.date = dateStr;
+
+        // ❗ NO sumés transferredOut/In aquí, porque ya está por pedido (orderKey)
       }
     }
 
@@ -708,20 +668,6 @@ export default function VendorCandyOrders({
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [rowsByRole, transferAgg]);
 
-  // Reset page si cambia la data (para no quedar en página vacía)
-  useEffect(() => {
-    setPage(1);
-  }, [orders.length]);
-
-  const totalPages = useMemo(() => {
-    return Math.max(1, Math.ceil(orders.length / PAGE_SIZE));
-  }, [orders.length]);
-
-  const pagedOrders = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return orders.slice(start, start + PAGE_SIZE);
-  }, [orders, page]);
-
   const ordersByKey = useMemo(() => {
     const m: Record<string, OrderSummaryRow> = {};
     orders.forEach((o) => (m[o.orderKey] = o));
@@ -729,65 +675,24 @@ export default function VendorCandyOrders({
   }, [orders]);
 
   // ===== Resumen del pedido actual (para el modal) =====
-  // KPI nuevos:
-  // 1) Paquetes totales
-  // 2) Total esperado (antes totalVendor)
-  // 3) Utilidad bruta (antes "comisión posible", aquí: totalEsperado - costo)
-  // 4) Utilidad vendedor (comisión del vendedor)
-//   const orderSummary = useMemo(() => {
-//     const totalPackages = orderItems.reduce((acc, it) => acc + it.packages, 0);
-//     const subtotal = orderItems.reduce((acc, it) => acc + it.subtotal, 0);
-//     const totalExpected = orderItems.reduce(
-//       (acc, it) => acc + it.totalVendor,
-//       0,
-//     );
-//     const grossProfit = totalExpected - subtotal;
-// 
-//     const commissionPercent = Number(selectedSeller?.commissionPercent || 0);
-//     const vendorProfit = (totalExpected * commissionPercent) / 100;
-// 
-//     return {
-//       totalPackages,
-//       subtotal,
-//       totalExpected,
-//       grossProfit,
-//       commissionPercent,
-//       vendorProfit,
-//     };
-//   }, [orderItems, selectedSeller]);
-const orderSummary = useMemo(() => {
-  const totalPackages = orderItems.reduce(
-    (acc, it) => acc + Number(it.packages || 0),
-    0,
-  );
+  const orderSummary = useMemo(() => {
+    const totalPackages = orderItems.reduce((acc, it) => acc + it.packages, 0);
+    const subtotal = orderItems.reduce((acc, it) => acc + it.subtotal, 0);
+    const totalVendor = orderItems.reduce((acc, it) => acc + it.totalVendor, 0);
+    const gainVendor = orderItems.reduce((acc, it) => acc + it.gainVendor, 0);
 
-  // Total esperado = suma de ventas (precio de venta por sucursal del vendedor)
-  const totalExpected = orderItems.reduce(
-    (acc, it) => acc + Number(it.totalVendor || 0),
-    0,
-  );
+    const commissionPercent = Number(selectedSeller?.commissionPercent || 0);
+    const commissionAmount = (totalVendor * commissionPercent) / 100;
 
-  // Utilidad bruta = Total esperado - Costo proveedor
-  const totalCost = orderItems.reduce(
-    (acc, it) => acc + Number(it.subtotal || 0),
-    0,
-  );
-  const grossProfit = totalExpected - totalCost;
-
-  // Utilidad vendedor = suma de utilidades por producto (gainVendor) del pedido
-  const vendorProfit = orderItems.reduce(
-    (acc, it) => acc + Number(it.gainVendor || 0),
-    0,
-  );
-
-  return {
-    totalPackages,
-    totalExpected,
-    grossProfit,
-    vendorProfit,
-  };
-}, [orderItems]);
-
+    return {
+      totalPackages,
+      subtotal,
+      totalVendor,
+      gainVendor,
+      commissionPercent,
+      commissionAmount,
+    };
+  }, [orderItems, selectedSeller]);
 
   // ===== Helpers =====
   const resetOrder = () => {
@@ -1341,24 +1246,20 @@ const orderSummary = useMemo(() => {
 
     const title = "Pedido de dulces para vendedor";
 
-    const commissionPercent = Number(selectedSeller?.commissionPercent || 0);
-
     const rowsHtml = orderItems
-      .map((it) => {
-       const uBruta = Number(it.totalVendor || 0) - Number(it.subtotal || 0);
-       const uVendedor = Number(it.gainVendor || 0);
-
-
-        return `
+      .map(
+        (it) => `
       <tr>
         <td>${esc(it.productName)}</td>
         <td class="right">${esc(it.category || "")}</td>
         <td class="right">${it.packages}</td>
+
+        <td class="right">${money(it.providerPrice)}</td>
+        <td class="right">${money(it.subtotal)}</td>
+        <td class="right">${money(it.pricePerPackage)}</td>
         <td class="right">${money(it.totalVendor)}</td>
-        <td class="right">${money(uBruta)}</td>
-        <td class="right">${money(uVendedor)}</td>
-      </tr>`;
-      })
+      </tr>`,
+      )
       .join("");
 
     const html = `<!doctype html>
@@ -1403,28 +1304,24 @@ const orderSummary = useMemo(() => {
     }
   </div>
 
- <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Paquetes totales asociados</div>
-    <div className="text-lg font-bold">{orderSummary.totalPackages}</div>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Paquetes totales del pedido</div>
+      <div class="value">${orderSummary.totalPackages}</div>
+    </div>
+    <div class="card">
+      <div class="label">Subtotal costo (proveedor)</div>
+      <div class="value">${money(orderSummary.subtotal)}</div>
+    </div>
+    <div class="card">
+      <div class="label">Total vendedor (precio venta)</div>
+      <div class="value">${money(orderSummary.totalVendor)}</div>
+    </div>
+    <div class="card">
+      <div class="label">Comisión posible del vendedor</div>
+      <div class="value">${money(orderSummary.commissionAmount)}</div>
+    </div>
   </div>
-
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Total esperado</div>
-    <div className="text-lg font-bold">{money(orderSummary.totalExpected)}</div>
-  </div>
-
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Utilidad bruta</div>
-    <div className="text-lg font-bold">{money(orderSummary.grossProfit)}</div>
-  </div>
-
-  <div className="border rounded p-2 bg-white">
-    <div className="text-xs text-gray-600">Utilidad vendedor</div>
-    <div className="text-lg font-bold">{money(orderSummary.vendorProfit)}</div>
-  </div>
-</div>
-
 
   <h2>Detalle del pedido</h2>
   <table>
@@ -1433,9 +1330,10 @@ const orderSummary = useMemo(() => {
         <th>Producto</th>
         <th class="right">Categoría</th>
         <th class="right">Paquetes</th>
-        <th class="right">Total esperado</th>
-        <th class="right">U. Bruta</th>
-        <th class="right">U. Vendedor</th>
+        <th class="right">P. Proveedor (paq)</th>
+        <th class="right">Subtotal</th>
+        <th class="right">P. Paquete vendedor</th>
+        <th class="right">Total vendedor</th>
       </tr>
     </thead>
     <tbody>
@@ -1573,6 +1471,8 @@ const orderSummary = useMemo(() => {
   const [trSaving, setTrSaving] = useState(false);
 
   const orderKeysForTransfer = useMemo(() => {
+    // Para admin: todos los pedidos existentes (según listado actual)
+    // Para vendedor: sus pedidos (ya filtrados por rowsByRole/ orders)
     return orders.map((o) => o.orderKey);
   }, [orders]);
 
@@ -1887,15 +1787,15 @@ const orderSummary = useMemo(() => {
         const next = { ...prev };
         const fromKey = trFromOrderKey;
         const toKey = trToOrderKey;
-        const packs2 = Number(trPackages || 0);
+        const packs = Number(trPackages || 0);
 
         if (fromKey) {
           next[fromKey] = next[fromKey] || { out: 0, in: 0 };
-          next[fromKey].out += packs2;
+          next[fromKey].out += packs;
         }
         if (toKey) {
           next[toKey] = next[toKey] || { out: 0, in: 0 };
-          next[toKey].in += packs2;
+          next[toKey].in += packs;
         }
         return next;
       });
@@ -1909,281 +1809,6 @@ const orderSummary = useMemo(() => {
       setTrSaving(false);
       setLoading(false);
     }
-  };
-
-  // =========================================================
-  // ===== NUEVO: IMPORTACIÓN (Excel/CSV) + PLANTILLA =========
-  // =========================================================
-  const [importing, setImporting] = useState(false);
-
-  const escapeCsv = (v: any) => {
-    const s = String(v ?? "");
-    if (/[,"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-
-  const downloadTemplate = () => {
-    // Requisito: plantilla con productos existentes en orden maestra (aquí: catálogo completo)
-    // Cols: productId, categoria, producto, existentes, paquetes
-    const header = [
-      "productId",
-      "categoria",
-      "producto",
-      "existentes",
-      "paquetes",
-    ];
-    const lines: string[] = [header.join(",")];
-
-    const list = [...productsAll].sort((a, b) =>
-      `${a.category} ${a.name}`.localeCompare(`${b.category} ${b.name}`),
-    );
-
-    for (const p of list) {
-      const existentes = Number(availablePacks[p.id] ?? 0);
-      // “productos con paquetes sí” => existentes > 0
-      if (existentes <= 0) continue;
-
-      lines.push(
-        [
-          escapeCsv(p.id),
-          escapeCsv(p.category || ""),
-          escapeCsv(p.name || ""),
-          escapeCsv(existentes),
-          escapeCsv(""),
-        ].join(","),
-      );
-    }
-
-    const csv = lines.join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "plantilla_orden_vendedor_dulces.csv";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-
-  const parseCsv = (text: string) => {
-    // CSV simple con comillas (dobles) básico
-    const rowsParsed: string[][] = [];
-    let cur: string[] = [];
-    let field = "";
-    let inQuotes = false;
-
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-
-      if (inQuotes) {
-        if (ch === '"') {
-          const next = text[i + 1];
-          if (next === '"') {
-            field += '"';
-            i++;
-          } else {
-            inQuotes = false;
-          }
-        } else {
-          field += ch;
-        }
-        continue;
-      }
-
-      if (ch === '"') {
-        inQuotes = true;
-        continue;
-      }
-
-      if (ch === ",") {
-        cur.push(field);
-        field = "";
-        continue;
-      }
-
-      if (ch === "\n") {
-        cur.push(field);
-        field = "";
-        // evitar filas vacías al final
-        if (cur.some((x) => String(x ?? "").trim() !== ""))
-          rowsParsed.push(cur);
-        cur = [];
-        continue;
-      }
-
-      if (ch === "\r") continue;
-
-      field += ch;
-    }
-
-    cur.push(field);
-    if (cur.some((x) => String(x ?? "").trim() !== "")) rowsParsed.push(cur);
-
-    return rowsParsed;
-  };
-
-  const handleImportFile = async (file: File | null) => {
-    if (!file) return;
-    if (isReadOnly) return;
-    if (editingOrderKey) {
-      setMsg(
-        "La importación se usa en el modal de NUEVA orden (no en edición).",
-      );
-      return;
-    }
-
-    try {
-      setImporting(true);
-      setMsg("");
-
-      const text = await file.text();
-      const parsed = parseCsv(text);
-      if (!parsed.length) {
-        setMsg("Archivo vacío.");
-        return;
-      }
-
-      const header = parsed[0].map((h) =>
-        String(h || "")
-          .trim()
-          .toLowerCase(),
-      );
-      const idxProductId = header.indexOf("productid");
-      const idxPackages = header.indexOf("paquetes");
-
-      if (idxProductId === -1 || idxPackages === -1) {
-        setMsg(
-          'El archivo debe tener columnas "productId" y "paquetes". Descargá la plantilla.',
-        );
-        return;
-      }
-
-      const nextItems: OrderItem[] = [];
-      const seen = new Set<string>();
-
-      const commissionOk = !!selectedSeller; // solo para cálculos (igual se recalcula al seleccionar vendedor)
-
-      for (let r = 1; r < parsed.length; r++) {
-        const row = parsed[r];
-        const productId = String(row[idxProductId] ?? "").trim();
-        const packs = Number(String(row[idxPackages] ?? "").trim() || 0);
-
-        if (!productId) continue;
-        if (!(packs > 0)) continue;
-        if (seen.has(productId)) continue;
-
-        const p = productsAll.find((x) => x.id === productId);
-        if (!p) continue;
-
-        const disponibles = Number(availablePacks[p.id] ?? 0);
-        if (packs > disponibles) {
-          // no rompemos: solo skip y avisamos al final
-          continue;
-        }
-
-        // construir item
-        const it = buildOrderItem(p, packs);
-        // si todavía no hay vendedor seleccionado, igual lo armamos con branch undefined (cae a Rivas)
-        // luego al seleccionar vendedor, el usuario puede tocar paquetes y recalculará,
-        // pero NO cambiamos tu lógica: si querés forzar recálculo al seleccionar vendedor, se hace aparte.
-        nextItems.push(it);
-        seen.add(productId);
-      }
-
-      if (nextItems.length === 0) {
-        setMsg(
-          "No se importó nada. Asegurate de que los paquetes sean > 0 y no excedan existencias.",
-        );
-        return;
-      }
-
-      // merge con lo que ya tenías en el pedido (sin duplicar)
-      setOrderItems((prev) => {
-        const prevSet = new Set(prev.map((x) => x.productId));
-        const merged = [...prev];
-        for (const it of nextItems) {
-          if (!prevSet.has(it.productId)) merged.push(it);
-        }
-        return merged;
-      });
-
-      // limpiar input de producto manual (solo UX)
-      setSelectedProductId("");
-      setPackagesToAdd("0");
-      setMsg(
-        commissionOk
-          ? `✅ Importados ${nextItems.length} productos (CSV).`
-          : `✅ Importados ${nextItems.length} productos (CSV). Seleccioná el vendedor para que el total esperado quede en su sucursal.`,
-      );
-    } catch (e) {
-      console.error(e);
-      setMsg("❌ Error importando archivo.");
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  // ===== Render Helpers (UI) =====
-  const PaginationBar = () => {
-    if (orders.length <= PAGE_SIZE) return null;
-
-    const canPrev = page > 1;
-    const canNext = page < totalPages;
-
-    return (
-      <div className="flex items-center justify-between mt-3">
-        <div className="text-xs text-gray-600">
-          Mostrando{" "}
-          <b>
-            {(page - 1) * PAGE_SIZE + 1}-
-            {Math.min(page * PAGE_SIZE, orders.length)}
-          </b>{" "}
-          de <b>{orders.length}</b>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
-            onClick={() => setPage(1)}
-            disabled={!canPrev}
-            type="button"
-          >
-            «
-          </button>
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={!canPrev}
-            type="button"
-          >
-            Anterior
-          </button>
-
-          <div className="text-xs">
-            Página <b>{page}</b> / <b>{totalPages}</b>
-          </div>
-
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={!canNext}
-            type="button"
-          >
-            Siguiente
-          </button>
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
-            onClick={() => setPage(totalPages)}
-            disabled={!canNext}
-            type="button"
-          >
-            »
-          </button>
-        </div>
-      </div>
-    );
   };
 
   // ===== Render =====
@@ -2288,7 +1913,7 @@ const orderSummary = useMemo(() => {
                       const o = ordersByKey[k];
                       return (
                         <option key={k} value={k}>
-                          Vendedor: {o?.sellerName || "—"} — Existencias:{" "}
+                          Vendedor: {o?.sellerName || "—"} — Existencias: {""}
                           {o?.totalRemainingPackages || "0"} Paquetes - Fecha
                           Orden: {o?.date || "—"}
                         </option>
@@ -2343,7 +1968,7 @@ const orderSummary = useMemo(() => {
                         const o = ordersByKey[k];
                         return (
                           <option key={k} value={k}>
-                            Vendedor: {o?.sellerName || "—"} — Existencias:{" "}
+                            Vendedor: {o?.sellerName || "—"} — Existencias: {""}
                             {o?.totalRemainingPackages || "0"} - Fecha Orden:{" "}
                             {o?.date || "—"}
                           </option>
@@ -2374,6 +1999,7 @@ const orderSummary = useMemo(() => {
                     ))}
                   </select>
 
+                  {/* Nota: no cambiamos lógica, solo mostramos un hint si no existe */}
                   {trToOrderKey &&
                     selectedFromVendorRow &&
                     possibleToRowsForSelectedProduct.length === 0 && (
@@ -2617,102 +2243,71 @@ const orderSummary = useMemo(() => {
                 </div>
               </div>
 
-              {/* Importación por CSV */}
-              {!editingOrderKey && (
-                <div className="border rounded p-3 bg-gray-50">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="font-semibold text-sm">
-                      Importación por Excel (plantilla CSV)
-                    </div>
-
-                    <div className="flex gap-2 items-center">
-                      <button
-                        type="button"
-                        className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
-                        onClick={downloadTemplate}
-                        disabled={importing || isReadOnly}
-                      >
-                        Descargar plantilla
-                      </button>
-
-                      <label className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 cursor-pointer disabled:opacity-60">
-                        {importing ? "Importando..." : "Importar CSV"}
-                        <input
-                          type="file"
-                          accept=".csv,text/csv"
-                          className="hidden"
-                          onChange={(e) =>
-                            handleImportFile(e.target.files?.[0] || null)
-                          }
-                          disabled={importing || isReadOnly}
-                        />
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="text-xs text-gray-600 mt-2">
-                    * Abrí la plantilla en Excel/Sheets, llená la columna
-                    <b> paquetes</b>, y exportá a <b>CSV</b> para importarla.
-                  </div>
-                </div>
-              )}
-
-              {/* ✅ Recalcular totales si cambia el vendedor (sucursal) */}
-              {/* (Mantiene consistencia de "total esperado" por sucursal) */}
-              {/* Nota: no rompe nada, solo recalcula usando precios ya guardados en el item */}
-              {/* */}
-              {/* eslint-disable-next-line react-hooks/rules-of-hooks */}
-
-              {/* Selector de producto + cantidad */}
+              {/* Sección para agregar productos */}
               <div className="border rounded p-3 bg-gray-50">
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                  <div className="md:col-span-5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                  <div className="md:col-span-2">
                     <label className="block text-sm font-semibold">
-                      Buscar producto
+                      Producto
                     </label>
+
                     <input
-                      className="w-full border p-2 rounded"
-                      placeholder="Escribe para filtrar…"
+                      type="text"
+                      className="w-full border p-2 rounded mb-2"
+                      placeholder="Buscar producto (nombre o categoría)..."
                       value={productSearch}
                       onChange={(e) => setProductSearch(e.target.value)}
                       disabled={isReadOnly}
                     />
-                  </div>
 
-                  <div className="md:col-span-5">
-                    <label className="block text-sm font-semibold">
-                      Producto
-                    </label>
                     <select
                       className="w-full border p-2 rounded"
                       value={selectedProductId}
                       onChange={(e) => setSelectedProductId(e.target.value)}
                       disabled={isReadOnly}
                     >
-                      <option value="">Selecciona…</option>
+                      <option value="">
+                        {productSearch.trim()
+                          ? `Resultados: ${filteredProductsForPicker.length}`
+                          : "Selecciona un producto…"}
+                      </option>
+
                       {filteredProductsForPicker.map((p) => {
-                        const avail = Number(availablePacks[p.id] ?? 0);
-                        const already = inOrderSet.has(p.id);
+                        const avail = availablePacks[p.id] ?? 0;
+                        const labelParts: string[] = [];
+
+                        labelParts.push(
+                          p.category ? `${p.category} - ${p.name}` : p.name,
+                        );
+
+                        const precios: string[] = [];
+                        if (p.unitPriceRivas > 0)
+                          precios.push(`R: ${money(p.unitPriceRivas)}`);
+                        if (p.unitPriceSanJorge > 0)
+                          precios.push(`SJ: ${money(p.unitPriceSanJorge)}`);
+                        if (p.unitPriceIsla > 0)
+                          precios.push(`I: ${money(p.unitPriceIsla)}`);
+                        if (precios.length)
+                          labelParts.push(precios.join(" | "));
+
+                        labelParts.push(`Disp: ${avail} paq`);
+
+                        const disabled = inOrderSet.has(p.id);
+
                         return (
-                          <option key={p.id} value={p.id}>
-                            {p.category} - {p.name}{" "}
-                            {already ? "(ya agregado)" : ""}
-                            {avail > 0 ? ` — disp: ${avail}` : " — disp: 0"}
+                          <option key={p.id} value={p.id} disabled={disabled}>
+                            {disabled
+                              ? `✅ (Agregado) ${labelParts.join(" — ")}`
+                              : labelParts.join(" — ")}
                           </option>
                         );
                       })}
                     </select>
-
-                    <div className="text-xs text-gray-600 mt-1">
-                      * Solo aparecen productos con existencia (&gt; 0). En
-                      edición también aparecen los del pedido aunque hoy estén
-                      en 0.
-                    </div>
                   </div>
 
-                  <div className="md:col-span-2">
+                  <div>
                     <label className="block text-sm font-semibold">
-                      Paquetes
+                      Paquetes / bolsas
                     </label>
                     <input
                       type="number"
@@ -2728,409 +2323,470 @@ const orderSummary = useMemo(() => {
                 <div className="flex justify-end mt-3">
                   <button
                     type="button"
-                    className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
                     onClick={handleAddItem}
+                    className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
                     disabled={
                       isReadOnly ||
                       !selectedProductId ||
-                      Number(packagesToAdd || 0) <= 0
+                      inOrderSet.has(selectedProductId)
+                    }
+                    title={
+                      inOrderSet.has(selectedProductId)
+                        ? "Ese producto ya está en el pedido"
+                        : ""
                     }
                   >
-                    Agregar al pedido
+                    Agregar producto al pedido
                   </button>
                 </div>
               </div>
 
-              {/* KPIs del pedido */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <div className="border rounded p-2 bg-white">
-                  <div className="text-xs text-gray-600">
-                    Paquetes totales asociados
-                  </div>
-                  <div className="text-lg font-bold">
-                    {orderSummary.totalPackages}
-                  </div>
-                </div>
-
-                <div className="border rounded p-2 bg-white">
-                  <div className="text-xs text-gray-600">Total esperado</div>
-                  <div className="text-lg font-bold">
-                    {money(orderSummary.totalExpected)}
-                  </div>
-                </div>
-
-                <div className="border rounded p-2 bg-white">
-                  <div className="text-xs text-gray-600">Utilidad bruta</div>
-                  <div className="text-lg font-bold">
-                    {money(orderSummary.grossProfit)}
-                  </div>
-                </div>
-
-                <div className="border rounded p-2 bg-white">
-                  <div className="text-xs text-gray-600">Utilidad vendedor</div>
-                  <div className="text-lg font-bold">
-                    {money(orderSummary.vendorProfit)}
-                  </div>
-                </div>
-              </div>
-
-              {/* Tabla detalle del pedido */}
+              {/* Tabla de productos del pedido */}
               <div className="bg-white rounded border overflow-x-auto">
-                <table className="min-w-[1050px] text-xs md:text-sm">
+                <table className="min-w-[1100px] text-xs md:text-sm">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
-                      <th className="p-2 border text-left">Producto</th>
-                      <th className="p-2 border">Tipo</th>
+                      <th className="p-2 border">Producto</th>
+                      <th className="p-2 border">Categoría</th>
                       <th className="p-2 border">Paquetes</th>
-                      <th className="p-2 border">Costo</th>
-                      <th className="p-2 border">Total esperado</th>
-                      <th className="p-2 border">U. Bruta</th>
-                      <th className="p-2 border">U. Vendedor</th>
-                      <th className="p-2 border">Precio/paquete</th>
+                      <th className="p-2 border">Paquetes restantes</th>
+                      <th className="p-2 border">Paq x Und (ref)</th>
+                      <th className="p-2 border">P. proveedor (paq)</th>
+                      <th className="p-2 border">Subtotal</th>
+                      <th className="p-2 border">Total Rivas</th>
+                      <th className="p-2 border">Total San Jorge</th>
+                      <th className="p-2 border">Total Isla</th>
+                      <th className="p-2 border">P. unidad Rivas</th>
+                      <th className="p-2 border">P. unidad San Jorge</th>
+                      <th className="p-2 border">P. unidad Isla</th>
+                      <th className="p-2 border">P. paquete vendedor</th>
+                      <th className="p-2 border">Total vendedor</th>
                       <th className="p-2 border">Acciones</th>
                     </tr>
                   </thead>
-
                   <tbody>
                     {orderItems.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="p-4 text-center">
-                          No hay productos en el pedido.
+                        <td
+                          colSpan={16}
+                          className="p-4 text-center text-gray-500"
+                        >
+                          No hay productos en este pedido. Agrega al menos uno.
                         </td>
                       </tr>
                     ) : (
-                      orderItems.map((it) => {
-                        const commissionPercent = Number(
-                          selectedSeller?.commissionPercent || 0,
-                        );
-                      const uBruta =
-                        Number(it.totalVendor || 0) - Number(it.subtotal || 0);
-                      const uVendedor = Number(it.gainVendor || 0);
+                      orderItems.map((it) => (
+                        <tr
+                          key={it.id}
+                          className="text-center whitespace-nowrap"
+                        >
+                          <td className="p-2 border">{it.productName}</td>
+                          <td className="p-2 border">{it.category}</td>
 
+                          <td className="p-2 border">
+                            <input
+                              type="number"
+                              min={0}
+                              className="border p-1 rounded text-right text-xs w-20"
+                              value={it.packages}
+                              onChange={(e) =>
+                                handleItemFieldChange(it.id, e.target.value)
+                              }
+                              disabled={isReadOnly}
+                            />
+                          </td>
 
-                        return (
-                          <tr key={it.id} className="text-center">
-                            <td className="p-2 border text-left">
-                              <div className="font-semibold">
-                                {it.productName}
-                              </div>
-                              <div className="text-xs text-gray-600">
-                                ID: {it.productId}
-                              </div>
-                            </td>
-                            <td className="p-2 border">{it.category}</td>
+                          <td className="p-2 border">
+                            {it.remainingPackages ?? it.packages}
+                          </td>
 
-                            <td className="p-2 border">
-                              <input
-                                type="number"
-                                min={0}
-                                className="w-24 border p-1 rounded text-center"
-                                value={it.packages}
-                                onChange={(e) =>
-                                  handleItemFieldChange(it.id, e.target.value)
-                                }
-                                disabled={isReadOnly}
-                              />
-                            </td>
-
-                            <td className="p-2 border">{money(it.subtotal)}</td>
-                            <td className="p-2 border">
-                              {money(it.totalVendor)}
-                            </td>
-                            <td className="p-2 border">{money(uBruta)}</td>
-                            <td className="p-2 border">{money(uVendedor)}</td>
-                            <td className="p-2 border">
-                              {money(it.pricePerPackage)}
-                            </td>
-
-                            <td className="p-2 border">
-                              <button
-                                type="button"
-                                className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
-                                onClick={() => handleRemoveItem(it.id)}
-                                disabled={isReadOnly}
-                              >
-                                Quitar
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })
+                          <td className="p-2 border">
+                            {it.unitsPerPackage || "—"}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.providerPrice)}
+                          </td>
+                          <td className="p-2 border">{money(it.subtotal)}</td>
+                          <td className="p-2 border">{money(it.totalRivas)}</td>
+                          <td className="p-2 border">
+                            {money(it.totalSanJorge)}
+                          </td>
+                          <td className="p-2 border">{money(it.totalIsla)}</td>
+                          <td className="p-2 border">
+                            {money(it.unitPriceRivas)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.unitPriceSanJorge)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.unitPriceIsla)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.pricePerPackage)}
+                          </td>
+                          <td className="p-2 border">
+                            {money(it.totalVendor)}
+                          </td>
+                          <td className="p-2 border">
+                            <button
+                              type="button"
+                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs disabled:opacity-50"
+                              onClick={() => handleRemoveItem(it.id)}
+                              disabled={isReadOnly}
+                            >
+                              Quitar
+                            </button>
+                          </td>
+                        </tr>
+                      ))
                     )}
                   </tbody>
                 </table>
               </div>
 
-              {/* Acciones modal */}
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                    onClick={() => {
-                      setOpenForm(false);
-                      resetOrder();
-                    }}
-                  >
-                    Cancelar
-                  </button>
-
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-                    onClick={handlePrintOrder}
-                    disabled={!orderItems.length}
-                  >
-                    Imprimir
-                  </button>
+              {/* KPIs del pedido */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Paquetes totales del pedido
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {orderSummary.totalPackages}
+                  </div>
                 </div>
-
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
-                  disabled={
-                    isReadOnly ||
-                    isSaving ||
-                    !selectedSeller ||
-                    !orderItems.length
-                  }
-                >
-                  {editingOrderKey ? "Guardar cambios" : "Guardar pedido"}
-                </button>
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Subtotal costo (proveedor)
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {money(orderSummary.subtotal)}
+                  </div>
+                </div>
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Total vendedor (precio venta)
+                  </div>
+                  <div className="text-lg font-semibold text-green-600">
+                    {money(orderSummary.totalVendor)}
+                  </div>
+                </div>
+                <div className="p-3 border rounded bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Comisión posible vendedor
+                  </div>
+                  <div className="text-lg font-semibold">
+                    {money(orderSummary.commissionAmount)}
+                  </div>
+                </div>
               </div>
 
-              {msg && (
-                <div className="text-sm mt-2">
-                  <span className="px-2 py-1 rounded bg-yellow-100 border border-yellow-200 inline-block">
-                    {msg}
-                  </span>
-                </div>
-              )}
+              {/* Botones */}
+              <div className="flex justify-end gap-2 mt-4">
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={resetOrder}
+                    className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
+                    disabled={isSaving}
+                  >
+                    Limpiar pedido
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetOrder();
+                    setOpenForm(false);
+                  }}
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
+                  disabled={isSaving}
+                >
+                  Cerrar
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintOrder}
+                  className="px-3 py-1 rounded bg-purple-600 text-white hover:bg-purple-700"
+                  disabled={!selectedSeller || orderItems.length === 0}
+                >
+                  Imprimir pedido
+                </button>
+                {isAdmin && (
+                  <button
+                    type="submit"
+                    className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    disabled={
+                      isSaving || !selectedSeller || orderItems.length === 0
+                    }
+                  >
+                    {isSaving ? "Guardando..." : "Guardar pedido"}
+                  </button>
+                )}
+              </div>
             </form>
           </div>
         </div>
       )}
+      {/* ================= MOBILE: Cards ================= */}
+      {/* ================= MOBILE: Cards (expandibles) ================= */}
+      <div className="block md:hidden space-y-3 mt-4">
+        {orders.map((o) => {
+          const seller = sellersById[o.sellerId];
+          const commissionPercent = Number(seller?.commissionPercent || 0);
+          const commissionAmount = (o.totalVendor * commissionPercent) / 100;
 
-      {/* Mensajes */}
-      {msg && !openForm && (
-        <div className="mb-3 text-sm">
-          <span className="px-2 py-1 rounded bg-yellow-100 border border-yellow-200 inline-block">
-            {msg}
-          </span>
-        </div>
-      )}
+          const isExpanded = expandedOrderKey === o.orderKey;
+          const detailRows = isExpanded ? getOrderDetailRows(o.orderKey) : [];
 
-      {/* ===== LISTADO DE PEDIDOS ===== */}
-      <div className="bg-white rounded border overflow-hidden">
-        {/* DESKTOP TABLE */}
-        <div className="hidden md:block overflow-x-auto">
-          <table className="min-w-[1200px] text-sm">
-            <thead className="bg-gray-100">
-              <tr className="whitespace-nowrap">
-                <th className="p-2 border text-left">Fecha</th>
-                <th className="p-2 border text-left">Vendedor</th>
-                <th className="p-2 border">Paquetes</th>
-                <th className="p-2 border">Existencias</th>
-                <th className="p-2 border">Costo</th>
-                <th className="p-2 border">Total esperado</th>
-                <th className="p-2 border">Traslados salida</th>
-                <th className="p-2 border">Traslados entrada</th>
-                <th className="p-2 border">Acciones</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={9} className="p-4 text-center">
-                    Cargando…
-                  </td>
-                </tr>
-              ) : pagedOrders.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="p-4 text-center">
-                    No hay pedidos.
-                  </td>
-                </tr>
-              ) : (
-                pagedOrders.map((o) => {
-                  const canEdit = isAdmin;
-                  const remaining = Number(o.totalRemainingPackages || 0);
-
-                  return (
-                    <tr key={o.orderKey} className="text-center">
-                      <td className="p-2 border text-left">{o.date}</td>
-                      <td className="p-2 border text-left">{o.sellerName}</td>
-                      <td className="p-2 border">{o.totalPackages}</td>
-                      <td className="p-2 border font-semibold">{remaining}</td>
-                      <td className="p-2 border">{money(o.subtotal)}</td>
-                      <td className="p-2 border font-semibold">
-                        {money(o.totalVendor)}
-                      </td>
-                      <td className="p-2 border">
-                        {Number(o.transferredOut || 0)}
-                      </td>
-                      <td className="p-2 border">
-                        {Number(o.transferredIn || 0)}
-                      </td>
-                      <td className="p-2 border">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-                            onClick={() => openOrderForEdit(o.orderKey)}
-                            disabled={!canEdit && isVendor}
-                            type="button"
-                            title={canEdit ? "Editar" : "Ver"}
-                          >
-                            {canEdit ? "Editar" : "Ver"}
-                          </button>
-
-                          {isAdmin && (
-                            <button
-                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
-                              onClick={() => handleDeleteOrder(o.orderKey)}
-                              type="button"
-                              disabled={loading}
-                            >
-                              Eliminar
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* MOBILE CARDS (colapsadas por defecto) */}
-        <div className="md:hidden">
-          {loading ? (
-            <div className="p-4 text-center text-sm">Cargando…</div>
-          ) : pagedOrders.length === 0 ? (
-            <div className="p-4 text-center text-sm">No hay pedidos.</div>
-          ) : (
-            <div className="divide-y">
-              {pagedOrders.map((o) => {
-                const isExpanded = expandedOrderKey === o.orderKey;
-                const remaining = Number(o.totalRemainingPackages || 0);
-
-                return (
-                  <div key={o.orderKey} className="p-3">
-                    {/* Colapsado: SOLO 3 cosas (compacto / bajo) */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-xs text-gray-600">
-                          Tipo:{" "}
-                          <span className="font-semibold">{o.sellerName}</span>
-                        </div>
-                        <div className="text-xs text-gray-600">
-                          Código:{" "}
-                          <span className="font-mono font-semibold">
-                            {o.orderKey}
-                          </span>
-                        </div>
-                        <div className="text-sm font-bold">
-                          Precio venta: {money(o.totalVendor)}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="shrink-0 w-9 h-9 rounded bg-gray-200 hover:bg-gray-300 flex items-center justify-center text-lg font-bold"
-                        onClick={() =>
-                          setExpandedOrderKey(isExpanded ? null : o.orderKey)
-                        }
-                        aria-label={isExpanded ? "Colapsar" : "Expandir"}
-                      >
-                        {isExpanded ? "−" : "+"}
-                      </button>
-                    </div>
-
-                    {/* Expandido */}
-                    {isExpanded && (
-                      <div className="mt-3 border-t pt-3">
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="border rounded p-2 bg-gray-50">
-                            <div className="text-gray-600">Fecha</div>
-                            <div className="font-semibold">{o.date}</div>
-                          </div>
-                          <div className="border rounded p-2 bg-gray-50">
-                            <div className="text-gray-600">Existencias</div>
-                            <div className="font-semibold">{remaining}</div>
-                          </div>
-
-                          <div className="border rounded p-2 bg-gray-50">
-                            <div className="text-gray-600">Paquetes</div>
-                            <div className="font-semibold">
-                              {o.totalPackages}
-                            </div>
-                          </div>
-                          <div className="border rounded p-2 bg-gray-50">
-                            <div className="text-gray-600">Costo</div>
-                            <div className="font-semibold">
-                              {money(o.subtotal)}
-                            </div>
-                          </div>
-
-                          <div className="border rounded p-2 bg-gray-50">
-                            <div className="text-gray-600">
-                              Traslados salida
-                            </div>
-                            <div className="font-semibold">
-                              {Number(o.transferredOut || 0)}
-                            </div>
-                          </div>
-                          <div className="border rounded p-2 bg-gray-50">
-                            <div className="text-gray-600">
-                              Traslados entrada
-                            </div>
-                            <div className="font-semibold">
-                              {Number(o.transferredIn || 0)}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex justify-end gap-2 mt-3">
-                          <button
-                            className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-                            onClick={() => openOrderForEdit(o.orderKey)}
-                            disabled={!isAdmin && isVendor}
-                            type="button"
-                          >
-                            {isAdmin ? "Editar" : "Ver"}
-                          </button>
-
-                          {isAdmin && (
-                            <button
-                              className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
-                              onClick={() => handleDeleteOrder(o.orderKey)}
-                              type="button"
-                              disabled={loading}
-                            >
-                              Eliminar
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )}
+          return (
+            <div
+              key={o.orderKey}
+              className="border rounded-lg p-3 bg-white shadow-sm"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <div className="font-semibold text-sm">{o.sellerName}</div>
+                  <div className="text-xs text-gray-500">
+                    {seller?.branchLabel || "—"}
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+                </div>
 
-        {/* Paginación */}
-        <div className="p-3">
-          <PaginationBar />
-        </div>
+                <div className="text-xs text-gray-500 text-right">
+                  <div>{o.date || "—"}</div>
+                  <div className="truncate max-w-[140px]">{o.orderKey}</div>
+                </div>
+              </div>
+
+              {/* KPIs */}
+              <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                <div>
+                  <span className="text-gray-500">Paquetes:</span>{" "}
+                  <b>{o.totalPackages}</b>
+                </div>
+                <div>
+                  <span className="text-gray-500">Restantes:</span>{" "}
+                  <b>{o.totalRemainingPackages}</b>
+                </div>
+                <div>
+                  <span className="text-gray-500">Trasl. OUT:</span>{" "}
+                  <b>{transferAgg[o.orderKey]?.out || 0}</b>
+                </div>
+                <div>
+                  <span className="text-gray-500">Trasl. IN:</span>{" "}
+                  <b>{transferAgg[o.orderKey]?.in || 0}</b>
+                </div>
+              </div>
+
+              {/* Totales */}
+              <div className="text-sm border-t pt-2 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Subtotal:</span>
+                  <span>{money(o.subtotal)}</span>
+                </div>
+                <div className="flex justify-between font-semibold">
+                  <span>Total:</span>
+                  <span>{money(o.totalVendor)}</span>
+                </div>
+                <div className="flex justify-between text-xs text-gray-600">
+                  <span>Comisión:</span>
+                  <span>{money(commissionAmount)}</span>
+                </div>
+              </div>
+
+              {/* Acciones principales */}
+              <div className="flex gap-2 mt-3">
+                {/* Ver/Editar solo lo dejamos como está (admin) */}
+                <button
+                  className="flex-1 bg-blue-600 text-white py-2 rounded text-xs"
+                  onClick={() => openOrderForEdit(o.orderKey)}
+                >
+                  Ver / Editar
+                </button>
+
+                {isAdmin && (
+                  <button
+                    className="flex-1 bg-red-600 text-white py-2 rounded text-xs"
+                    onClick={() => handleDeleteOrder(o.orderKey)}
+                  >
+                    Borrar
+                  </button>
+                )}
+              </div>
+
+              {/* Toggle detalle (para TODOS, pero solo lectura) */}
+              <button
+                type="button"
+                className="w-full mt-2 border rounded py-2 text-xs bg-gray-50 hover:bg-gray-100"
+                onClick={() => {
+                  setExpandedOrderKey((prev) =>
+                    prev === o.orderKey ? null : o.orderKey,
+                  );
+                }}
+              >
+                {isExpanded ? "Ocultar detalle" : "Ver detalle del pedido"}
+              </button>
+
+              {/* Detalle expandible */}
+              {isExpanded && (
+                <div className="mt-2 border rounded bg-white overflow-hidden">
+                  <div className="px-3 py-2 text-xs font-semibold bg-gray-100">
+                    Detalle del pedido
+                  </div>
+
+                  {detailRows.length === 0 ? (
+                    <div className="p-3 text-xs text-gray-500">Sin detalle</div>
+                  ) : (
+                    <div className="divide-y">
+                      {detailRows.map((r) => (
+                        <div key={r.id} className="p-3 text-xs">
+                          <div className="flex justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-semibold truncate">
+                                {r.productName}
+                              </div>
+                              <div className="text-gray-500 truncate">
+                                {r.category || "—"}
+                              </div>
+                            </div>
+
+                            <div className="text-right">
+                              <div>
+                                <span className="text-gray-500">Paq:</span>{" "}
+                                <b>{Number(r.packages || 0)}</b>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Rem:</span>{" "}
+                                <b>{Number(r.remainingPackages || 0)}</b>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">Costo:</span>
+                              <span>{money(Number(r.providerPrice || 0))}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">Total:</span>
+                              <span className="font-semibold">
+                                {money(Number(r.totalVendor || 0))}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Opcional: mostrar precios por sucursal si querés */}
+                          <div className="grid grid-cols-3 gap-2 mt-2 text-[11px] text-gray-600">
+                            <div className="text-center border rounded py-1">
+                              R {money(Number(r.unitPriceRivas || 0))}
+                            </div>
+                            <div className="text-center border rounded py-1">
+                              SJ {money(Number(r.unitPriceSanJorge || 0))}
+                            </div>
+                            <div className="text-center border rounded py-1">
+                              I {money(Number(r.unitPriceIsla || 0))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {/* ===== DETALLE SIMPLE (opcional) ===== */}
-      {/* Si querés un “ver detalle rápido” inline, se puede agregar luego sin romper nada. */}
+      {/* LISTADO: POR PEDIDO DESKTOP */}
+      <div className="hidden md:block bg-white p-2 rounded shadow border w-full overflow-x-auto mt-4">
+        <h3 className="text-lg font-semibold mb-2">Listado de pedidos</h3>
+        <table className="min-w-[1000px] text-xs md:text-sm">
+          <thead className="bg-gray-100">
+            <tr className="whitespace-nowrap">
+              <th className="p-2 border">Fecha</th>
+              <th className="p-2 border">Vendedor</th>
+              <th className="p-2 border">Paquetes totales</th>
+              <th className="p-2 border">Paquetes restantes</th>
+              <th className="p-2 border">Paquetes Trasladados</th>
+              <th className="p-2 border">Paquetes Adicionales</th>
+              <th className="p-2 border">Subtotal costo</th>
+              <th className="p-2 border">Total vendedor</th>
+              <th className="p-2 border">Comisión posible</th>
+              <th className="p-2 border">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td className="p-4 text-center" colSpan={8}>
+                  Cargando…
+                </td>
+              </tr>
+            ) : orders.length === 0 ? (
+              <tr>
+                <td className="p-4 text-center" colSpan={8}>
+                  Sin pedidos asignados a vendedores.
+                </td>
+              </tr>
+            ) : (
+              orders.map((o) => {
+                const seller = sellersById[o.sellerId];
+                const commissionPercent = Number(
+                  seller?.commissionPercent || 0,
+                );
+                const commissionAmount =
+                  (o.totalVendor * commissionPercent) / 100;
+
+                return (
+                  <tr
+                    key={o.orderKey}
+                    className="text-center whitespace-nowrap"
+                  >
+                    <td className="p-2 border">{o.date || "—"}</td>
+                    <td className="p-2 border">
+                      {o.sellerName}
+                      {seller?.branchLabel ? ` - ${seller.branchLabel}` : ""}
+                    </td>
+                    <td className="p-2 border">{o.totalPackages}</td>
+                    <td className="p-2 border">{o.totalRemainingPackages}</td>
+                    <td className="p-2 border">
+                      {transferAgg[o.orderKey]?.out || 0}
+                    </td>
+                    <td className="p-2 border">
+                      {transferAgg[o.orderKey]?.in || 0}
+                    </td>
+
+                    <td className="p-2 border">{money(o.subtotal)}</td>
+                    <td className="p-2 border">{money(o.totalVendor)}</td>
+                    <td className="p-2 border">{money(commissionAmount)}</td>
+                    <td className="p-2 border">
+                      <div className="flex gap-1 justify-center">
+                        <button
+                          className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                          onClick={() => openOrderForEdit(o.orderKey)}
+                        >
+                          Ver / Editar
+                        </button>
+                        {isAdmin && (
+                          <button
+                            className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                            onClick={() => handleDeleteOrder(o.orderKey)}
+                          >
+                            Borrar
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {msg && <p className="mt-2 text-sm">{msg}</p>}
     </div>
   );
 }

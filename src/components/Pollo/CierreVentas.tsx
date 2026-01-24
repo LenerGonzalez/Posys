@@ -20,6 +20,7 @@ import jsPDF from "jspdf";
 import { restoreSaleAndDelete } from "../../Services/inventory";
 import RefreshButton from "../../components/common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import { canAction } from "../../utils/access";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -191,7 +192,10 @@ export default function CierreVentas({
   const pdfRef = useRef<HTMLDivElement>(null);
   const { refreshKey, refresh } = useManualRefresh();
 
+  //calcular roles
   const subject = roles && roles.length ? roles : role;
+  const cierreVentas = canAction(subject, "bills", "cerrarVentas");
+
   const isAdmin = hasRole(subject, "admin");
 
   const SectionHeader = ({
@@ -953,14 +957,15 @@ export default function CierreVentas({
       )}
 
       <div className="flex flex-wrap gap-2 mt-4">
-        {isAdmin && (
+        
           <button
+            disabled={!cierreVentas}
             onClick={handleSaveClosure}
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           >
             Cerrar ventas del día
           </button>
-        )}
+        
         <button
           onClick={handleDownloadPDF}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"

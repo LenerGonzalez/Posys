@@ -39,7 +39,6 @@ interface CustomerRow {
   creditLimit?: number;
   createdAt: Timestamp;
   balance?: number; // calculado (incluye initialDebt)
-  sellerId?: string;
 
   vendorId?: string;
   vendorName?: string;
@@ -81,12 +80,12 @@ function normalizePhone(input: string): string {
 // Eliminar movimientos de CxC ligados a una venta específica
 async function deleteARMovesBySaleId(saleId: string) {
   const qMov = query(
-    collection(db, "ar_movements"),
+    collection(db, "ar_movements_pollo"),
     where("ref.saleId", "==", saleId),
   );
   const snap = await getDocs(qMov);
   await Promise.all(
-    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id))),
+    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements_pollo", d.id))),
   );
 }
 
@@ -147,14 +146,14 @@ export default function CustomersPollo({
     setItemsModalRows([]);
 
     try {
-      const byId = await getDoc(doc(db, "sales_pollo", saleId));
+      const byId = await getDoc(doc(db, "salesV2", saleId));
       let data: any = null;
 
       if (byId.exists()) {
         data = byId.data();
       } else {
         const snap = await getDocs(
-          query(collection(db, "sales_pollo"), where("name", "==", saleId)),
+          query(collection(db, "salesV2"), where("name", "==", saleId)),
         );
         data = snap.docs[0]?.data();
       }
@@ -255,7 +254,6 @@ export default function CustomersPollo({
         }
 
         // vendedores activos
-        // Ahora usamos la colección de vendedores compartida (`sellers_candies`)
         // porque los vendedores reciben múltiples roles y esa pantalla
         // es la fuente de verdad para los vendedores.
         const vSnap = await getDocs(collection(db, "sellers_candies"));
@@ -293,7 +291,6 @@ export default function CustomersPollo({
             creditLimit: Number(x.creditLimit ?? 0),
             createdAt: x.createdAt ?? Timestamp.now(),
             balance: 0,
-            sellerId: x.sellerId || "",
 
             vendorId: x.vendorId || "",
             vendorName: x.vendorName || "",
@@ -308,7 +305,7 @@ export default function CustomersPollo({
         for (const c of list) {
           try {
             const qMov = query(
-              collection(db, "ar_movements"),
+              collection(db, "ar_movements_pollo"),
               where("customerId", "==", c.id),
             );
             const mSnap = await getDocs(qMov);
@@ -560,7 +557,7 @@ export default function CustomersPollo({
       setLoading(true);
 
       const qSales = query(
-        collection(db, "sales_pollo"),
+        collection(db, "salesV2"),
         where("customerId", "==", row.id),
       );
       const sSnap = await getDocs(qSales);
@@ -568,7 +565,7 @@ export default function CustomersPollo({
       for (const d of sSnap.docs) {
         const saleId = d.id;
         try {
-          await deleteDoc(doc(db, "sales_pollo", saleId));
+          await deleteDoc(doc(db, "salesV2", saleId));
         } catch (e) {
           console.warn("delete sale error", e);
         }
@@ -576,12 +573,12 @@ export default function CustomersPollo({
       }
 
       const qMov = query(
-        collection(db, "ar_movements"),
+        collection(db, "ar_movements_pollo"),
         where("customerId", "==", row.id),
       );
       const mSnap = await getDocs(qMov);
       await Promise.all(
-        mSnap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id))),
+        mSnap.docs.map((d) => deleteDoc(doc(db, "ar_movements_pollo", d.id))),
       );
 
       await deleteDoc(doc(db, "customers_pollo", row.id));
@@ -641,7 +638,7 @@ export default function CustomersPollo({
     setStLoading(true);
     try {
       const qMov = query(
-        collection(db, "ar_movements"),
+        collection(db, "ar_movements_pollo"),
         where("customerId", "==", customer.id),
       );
       const snap = await getDocs(qMov);
@@ -720,7 +717,7 @@ export default function CustomersPollo({
         comment: abonoComment || "",
         createdAt: Timestamp.now(),
       };
-      const ref = await addDoc(collection(db, "ar_movements"), payload);
+      const ref = await addDoc(collection(db, "ar_movements_pollo"), payload);
 
       const newRow: MovementRow = {
         id: ref.id,
@@ -809,7 +806,7 @@ export default function CustomersPollo({
         : +parseFloat(entered.toFixed(2));
 
     try {
-      await updateDoc(doc(db, "ar_movements", editMovId), {
+      await updateDoc(doc(db, "ar_movements_pollo", editMovId), {
         date: eMovDate,
         amount: signed,
         comment: eMovComment || "",
@@ -888,7 +885,7 @@ export default function CustomersPollo({
 
       if (m.type === "CARGO" && m.ref?.saleId) {
         try {
-          await deleteDoc(doc(db, "sales_pollo", m.ref.saleId));
+          await deleteDoc(doc(db, "salesV2", m.ref.saleId));
         } catch (e) {
           console.warn("delete sale error", e);
           setLoading(false);
@@ -897,7 +894,7 @@ export default function CustomersPollo({
         }
         await deleteARMovesBySaleId(m.ref.saleId);
       } else {
-        await deleteDoc(doc(db, "ar_movements", m.id));
+        await deleteDoc(doc(db, "ar_movements_pollo", m.id));
       }
 
       const newList = stRows.filter((x) => {
@@ -1219,6 +1216,105 @@ export default function CustomersPollo({
             </tbody>
           </table>
         </div>
+        {/* ===== MOBILE LIST (ANTES NO EXISTÍA, POR ESO EN CEL SE VE VACÍO) ===== */}
+        <div className="md:hidden space-y-2">
+          {loading ? (
+            <div className="p-4 text-center text-sm text-gray-600">
+              Cargando…
+            </div>
+          ) : filteredRows.length === 0 ? (
+            <div className="p-4 text-center text-sm text-gray-600">
+              Sin clientes
+            </div>
+          ) : (
+            filteredRows.map((c) => (
+              <div
+                key={c.id}
+                className="border rounded-lg bg-white p-3 shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="font-semibold text-base">{c.name}</div>
+                    <div className="text-xs text-gray-600">
+                      {c.phone || "—"}
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      Vendedor:{" "}
+                      <span className="font-medium">{c.vendorName || "—"}</span>
+                    </div>
+                  </div>
+
+                  <span
+                    className={`px-2 py-0.5 rounded text-xs ${badgeStatus(c.status)}`}
+                  >
+                    {c.status}
+                  </span>
+                </div>
+
+                <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-[11px] text-gray-600">Saldo</div>
+                    <div className="font-semibold">{money(c.balance || 0)}</div>
+                  </div>
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-[11px] text-gray-600">Límite</div>
+                    <div className="font-semibold">
+                      {money(c.creditLimit || 0)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-2 text-xs text-gray-600">
+                  Último abono:{" "}
+                  <span className="font-medium">
+                    {c.lastAbonoDate
+                      ? `${c.lastAbonoDate} (${money(c.lastAbonoAmount || 0)})`
+                      : "—"}
+                  </span>
+                </div>
+
+                {c.notes ? (
+                  <div className="mt-2 text-xs text-gray-700">
+                    <span className="font-semibold">Nota:</span>{" "}
+                    {(c.notes || "").length > 80
+                      ? (c.notes || "").slice(0, 80) + "…"
+                      : c.notes}
+                  </div>
+                ) : null}
+
+                <div className="mt-3 flex gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded bg-indigo-600 text-white text-sm"
+                    onClick={() => openStatement(c)}
+                  >
+                    Estado de cuenta
+                  </button>
+
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded bg-yellow-600 text-white text-sm"
+                    onClick={() => startEdit(c)}
+                    disabled={isVendor}
+                    title={isVendor ? "Vendedor no edita" : "Editar"}
+                  >
+                    Editar
+                  </button>
+
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded bg-red-600 text-white text-sm disabled:opacity-50"
+                    onClick={() => handleDelete(c)}
+                    disabled={!isAdmin}
+                    title={!isAdmin ? "Solo admin" : "Borrar"}
+                  >
+                    Borrar
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
@@ -1381,217 +1477,236 @@ export default function CustomersPollo({
         )}
 
       {/* modal estado de cuenta y demás modales reutilizan la misma lógica que en Candies pero apuntando a las collections de Pollo */}
-      {showStatement && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-5xl p-4 max-h-[92vh] overflow-auto">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">
-                Estado de cuenta — {stCustomer?.name || ""}
-              </h3>
-              <div className="flex gap-2">
-                <button
-                  className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-                  onClick={() => {
-                    setAbonoAmount(0);
-                    setAbonoDate(new Date().toISOString().slice(0, 10));
-                    setAbonoComment("");
-                    setShowAbono(true);
-                  }}
-                >
-                  Abonar
-                </button>
-                <button
-                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                  onClick={() => setShowStatement(false)}
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
+      {showStatement &&
+        createPortal(
+          <div className="fixed inset-0 z-[80]">
+            {/* overlay */}
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setShowStatement(false)}
+            />
 
-            {/* KPIs y tabla de movimientos (igual estructura que en Candy) */}
-            <div className="hidden md:block">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Deuda inicial</div>
-                  <div className="text-xl font-semibold">
-                    {money(Number(stCustomer?.initialDebt || 0))}
-                  </div>
-                </div>
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Saldo actual</div>
-                  <div className="text-xl font-semibold">
-                    {money(stKpis.saldoActual)}
-                  </div>
-                </div>
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Total abonado</div>
-                  <div className="text-xl font-semibold">
-                    {money(stKpis.totalAbonado)}
-                  </div>
-                </div>
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Saldo restante</div>
-                  <div className="text-xl font-semibold">
-                    {money(stKpis.saldoRestante)}
-                  </div>
-                </div>
-              </div>
+            {/* modal */}
+            <div className="absolute inset-0 flex items-center justify-center p-4">
+              <div className="bg-white rounded-lg shadow-xl border w-full max-w-5xl max-h-[92vh] overflow-auto p-4">
+                <div className="flex items-center justify-between mb-3 gap-3">
+                  <h3 className="text-lg font-bold">
+                    Estado de cuenta — {stCustomer?.name || ""}
+                  </h3>
 
-              <div className="bg-white rounded border overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="p-2 border">Fecha</th>
-                      <th className="p-2 border">Tipo</th>
-                      <th className="p-2 border">Referencia</th>
-                      <th className="p-2 border">Comentario</th>
-                      <th className="p-2 border">Monto</th>
-                      <th className="p-2 border">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stLoading ? (
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      type="button"
+                      className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
+                      onClick={() => {
+                        setAbonoAmount(0);
+                        setAbonoDate(new Date().toISOString().slice(0, 10));
+                        setAbonoComment("");
+                        setShowAbono(true);
+                      }}
+                    >
+                      Abonar
+                    </button>
+
+                    <button
+                      type="button"
+                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                      onClick={() => setShowStatement(false)}
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+                </div>
+
+                {/* KPIs (VISIBLE SIEMPRE) */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+                  <div className="p-3 border rounded bg-gray-50">
+                    <div className="text-xs text-gray-600">Deuda inicial</div>
+                    <div className="text-xl font-semibold">
+                      {money(Number(stCustomer?.initialDebt || 0))}
+                    </div>
+                  </div>
+                  <div className="p-3 border rounded bg-gray-50">
+                    <div className="text-xs text-gray-600">Saldo actual</div>
+                    <div className="text-xl font-semibold">
+                      {money(stKpis.saldoActual)}
+                    </div>
+                  </div>
+                  <div className="p-3 border rounded bg-gray-50">
+                    <div className="text-xs text-gray-600">Total abonado</div>
+                    <div className="text-xl font-semibold">
+                      {money(stKpis.totalAbonado)}
+                    </div>
+                  </div>
+                  <div className="p-3 border rounded bg-gray-50">
+                    <div className="text-xs text-gray-600">Saldo restante</div>
+                    <div className="text-xl font-semibold">
+                      {money(stKpis.saldoRestante)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tabla */}
+                <div className="bg-white rounded border overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-100">
                       <tr>
-                        <td colSpan={6} className="p-4 text-center">
-                          Cargando…
-                        </td>
+                        <th className="p-2 border">Fecha</th>
+                        <th className="p-2 border">Tipo</th>
+                        <th className="p-2 border">Referencia</th>
+                        <th className="p-2 border">Comentario</th>
+                        <th className="p-2 border">Monto</th>
+                        <th className="p-2 border">Acciones</th>
                       </tr>
-                    ) : stRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="p-4 text-center">
-                          Sin movimientos
-                        </td>
-                      </tr>
-                    ) : (
-                      stRows.map((m) => {
-                        const isEditing = editMovId === m.id;
-                        return (
-                          <tr key={m.id} className="text-center">
-                            <td className="p-2 border">
-                              {isEditing ? (
-                                <input
-                                  type="date"
-                                  className="w-full border p-1 rounded"
-                                  value={eMovDate}
-                                  onChange={(e) => setEMovDate(e.target.value)}
-                                />
-                              ) : (
-                                m.date || "—"
-                              )}
-                            </td>
-                            <td className="p-2 border">
-                              {m.amount >= 0 ? (
-                                m.ref?.saleId ? (
-                                  <button
-                                    type="button"
-                                    className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700 underline"
-                                    title="Ver productos de esta venta"
-                                    onClick={() =>
-                                      openItemsModal(m.ref!.saleId!)
+                    </thead>
+
+                    <tbody>
+                      {stLoading ? (
+                        <tr>
+                          <td colSpan={6} className="p-4 text-center">
+                            Cargando…
+                          </td>
+                        </tr>
+                      ) : stRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-4 text-center">
+                            Sin movimientos
+                          </td>
+                        </tr>
+                      ) : (
+                        stRows.map((m) => {
+                          const isEditing = editMovId === m.id;
+                          return (
+                            <tr key={m.id} className="text-center">
+                              <td className="p-2 border">
+                                {isEditing ? (
+                                  <input
+                                    type="date"
+                                    className="w-full border p-1 rounded"
+                                    value={eMovDate}
+                                    onChange={(e) =>
+                                      setEMovDate(e.target.value)
                                     }
-                                  >
-                                    COMPRA (CARGO)
-                                  </button>
+                                  />
                                 ) : (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">
-                                    COMPRA (CARGO)
+                                  m.date || "—"
+                                )}
+                              </td>
+
+                              <td className="p-2 border">
+                                {m.amount >= 0 ? (
+                                  m.ref?.saleId ? (
+                                    <button
+                                      type="button"
+                                      className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700 underline"
+                                      onClick={() =>
+                                        openItemsModal(m.ref!.saleId!)
+                                      }
+                                    >
+                                      COMPRA (CARGO)
+                                    </button>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">
+                                      COMPRA (CARGO)
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
+                                    ABONO
                                   </span>
-                                )
-                              ) : (
-                                <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
-                                  ABONO
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-2 border">
-                              {m.ref?.saleId ? `Venta #${m.ref.saleId}` : "—"}
-                            </td>
-                            <td className="p-2 border">
-                              {isEditing ? (
-                                <input
-                                  className="w-full border p-1 rounded"
-                                  value={eMovComment}
-                                  onChange={(e) =>
-                                    setEMovComment(e.target.value)
-                                  }
-                                  placeholder="Comentario"
-                                />
-                              ) : (
-                                <span title={m.comment || ""}>
-                                  {(m.comment || "").length > 40
-                                    ? (m.comment || "").slice(0, 40) + "…"
-                                    : m.comment || "—"}
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-2 border font-semibold">
-                              {isEditing ? (
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  inputMode="decimal"
-                                  className="w-full border p-1 rounded text-right"
-                                  value={
-                                    Number.isNaN(eMovAmount) ? "" : eMovAmount
-                                  }
-                                  onChange={(e) => {
-                                    const num = Number(e.target.value || 0);
-                                    const safe = Number.isFinite(num)
-                                      ? Math.max(0, parseFloat(num.toFixed(2)))
-                                      : 0;
-                                    setEMovAmount(safe);
-                                  }}
-                                  placeholder="0.00"
-                                />
-                              ) : (
-                                money(m.amount)
-                              )}
-                            </td>
-                            <td className="p-2 border">
-                              {isEditing ? (
-                                <div className="flex gap-2 justify-center">
-                                  <button
-                                    className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                                    onClick={saveEditMovement}
-                                  >
-                                    Guardar
-                                  </button>
-                                  <button
-                                    className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                                    onClick={cancelEditMovement}
-                                  >
-                                    Cancelar
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="flex gap-2 justify-center">
-                                  <button
-                                    className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                                    onClick={() => startEditMovement(m)}
-                                  >
-                                    Editar
-                                  </button>
-                                  <button
-                                    className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                                    onClick={() => deleteMovement(m)}
-                                  >
-                                    Borrar
-                                  </button>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
+                                )}
+                              </td>
+
+                              <td className="p-2 border">
+                                {m.ref?.saleId ? `Venta #${m.ref.saleId}` : "—"}
+                              </td>
+
+                              <td className="p-2 border">
+                                {isEditing ? (
+                                  <input
+                                    className="w-full border p-1 rounded"
+                                    value={eMovComment}
+                                    onChange={(e) =>
+                                      setEMovComment(e.target.value)
+                                    }
+                                  />
+                                ) : (
+                                  <span title={m.comment || ""}>
+                                    {(m.comment || "").length > 40
+                                      ? (m.comment || "").slice(0, 40) + "…"
+                                      : m.comment || "—"}
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="p-2 border font-semibold">
+                                {isEditing ? (
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    inputMode="decimal"
+                                    className="w-full border p-1 rounded text-right"
+                                    value={
+                                      Number.isNaN(eMovAmount) ? "" : eMovAmount
+                                    }
+                                    onChange={(e) =>
+                                      setEMovAmount(Number(e.target.value || 0))
+                                    }
+                                  />
+                                ) : (
+                                  money(m.amount)
+                                )}
+                              </td>
+
+                              <td className="p-2 border">
+                                {isEditing ? (
+                                  <div className="flex gap-2 justify-center">
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                                      onClick={saveEditMovement}
+                                    >
+                                      Guardar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                                      onClick={cancelEditMovement}
+                                    >
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-2 justify-center">
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                                      onClick={() => startEditMovement(m)}
+                                    >
+                                      Editar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                                      onClick={() => deleteMovement(m)}
+                                    >
+                                      Borrar
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
 
       {/* items modal */}
       {itemsModalOpen && (

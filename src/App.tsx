@@ -207,7 +207,7 @@ export default function App() {
                   "contador",
                 ]}
               >
-                <CierreVentas />
+                <CierreVentas role={role} roles={roles} />
               </PrivateRoute>
             }
           />

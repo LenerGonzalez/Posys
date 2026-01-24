@@ -65,6 +65,23 @@ type CartItem = {
   discount: number; // entero C$ por línea
 };
 
+// ===== Crédito / Clientes (Pollo) =====
+type ClientType = "CONTADO" | "CREDITO";
+type Status = "ACTIVO" | "BLOQUEADO";
+
+interface CustomerPollo {
+  id: string;
+  name: string;
+  phone?: string;
+  status: Status;
+  creditLimit?: number;
+  balance?: number;
+  vendorId?: string; // si después querés filtrar por vendedor
+  vendorName?: string;
+}
+
+const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
 export default function SaleForm({
   user,
   role,
@@ -107,6 +124,29 @@ export default function SaleForm({
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
   const qty3 = (n: number) => roundQty(n).toFixed(3);
+
+  // ===== Tipo de cliente (CONTADO/CRÉDITO) =====
+  const [clientType, setClientType] = useState<ClientType>("CONTADO");
+
+  // ===== Clientes crédito =====
+  const [customers, setCustomers] = useState<CustomerPollo[]>([]);
+  const [customerId, setCustomerId] = useState<string>("");
+  const [downPayment, setDownPayment] = useState<number>(0);
+
+  const handleClientTypeChange = (v: ClientType) => {
+    setClientType(v);
+
+    if (v === "CREDITO") {
+      // En crédito: no usamos recibido/cambio, y contado no aplica
+      setClientName("");
+      setAmountReceived(0);
+      setChange("0.00");
+    } else {
+      // En contado: no usamos customer/downPayment
+      setCustomerId("");
+      setDownPayment(0);
+    }
+  };
 
   // ✅ precio aplicado por línea (si specialPrice > 0 usa ese; si no, usa price normal)
   const getAppliedUnitPrice = (
@@ -344,6 +384,93 @@ export default function SaleForm({
     return () => mq.removeEventListener?.("change", update);
   }, []);
 
+  // ===== Cargar clientes (Pollo) + saldo desde CxC =====
+  useEffect(() => {
+    (async () => {
+      try {
+        // clientes pollo
+        const cSnap = await getDocs(collection(db, "customers_pollo"));
+        const list: CustomerPollo[] = [];
+        cSnap.forEach((d) => {
+          const x = d.data() as any;
+          list.push({
+            id: d.id,
+            name: x.name ?? "",
+            phone: x.phone ?? "",
+            status: (x.status as Status) ?? "ACTIVO",
+            creditLimit: Number(x.creditLimit ?? 0),
+            vendorId: x.vendorId ?? "",
+            vendorName: x.vendorName ?? "",
+            balance: 0,
+          });
+        });
+
+        // saldos por cliente (ar_movements_pollo)
+        for (const c of list) {
+          try {
+            const qMov = query(
+              collection(db, "ar_movements_pollo"),
+              where("customerId", "==", c.id),
+            );
+            const mSnap = await getDocs(qMov);
+            let sum = 0;
+            mSnap.forEach((m) => {
+              sum += Number((m.data() as any).amount || 0);
+            });
+
+            const initialDebt = Number((c as any).initialDebt || 0);
+            c.balance = sum + initialDebt;
+          } catch {
+            c.balance = 0;
+          }
+        }
+
+        // orden alfabético
+        list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+        setCustomers(list);
+      } catch (e) {
+        console.error("Error cargando customers_pollo:", e);
+        setCustomers([]);
+      }
+    })();
+  }, []);
+
+  const selectedCustomer = useMemo(
+    () => customers.find((c) => c.id === customerId) || null,
+    [customers, customerId],
+  );
+
+  const currentBalance = Number(selectedCustomer?.balance || 0);
+
+  const maxDownPayment =
+    clientType === "CREDITO"
+      ? Math.max(
+          0,
+          Number(currentBalance || 0) + Math.max(0, Number(amountCharged || 0)),
+        )
+      : 0;
+
+  useEffect(() => {
+    if (clientType !== "CREDITO") return;
+    setDownPayment((prev) =>
+      Math.min(Math.max(0, Number(prev || 0)), maxDownPayment),
+    );
+  }, [clientType, maxDownPayment]);
+
+  useEffect(() => {
+    if (clientType === "CREDITO") {
+      setAmountReceived(Number(downPayment || 0));
+      setChange("0.00");
+    }
+  }, [clientType, downPayment]);
+
+  const projectedBalance =
+    clientType === "CREDITO"
+      ? currentBalance +
+        Math.max(0, Number(amountCharged || 0)) -
+        Math.max(0, Number(downPayment || 0))
+      : 0;
+
   // Validación rápida
   const validate = async (): Promise<string | null> => {
     if (items.length === 0) return "Agrega al menos un producto.";
@@ -387,6 +514,19 @@ export default function SaleForm({
 
       // 1) Asignar FIFO y descontar por ítem
       const enriched = [];
+
+      if (clientType === "CONTADO") {
+        if (!clientName.trim())
+          return "Ingresa el nombre del cliente (contado).";
+      } else {
+        if (!customerId) return "Selecciona un cliente (crédito).";
+        if (downPayment < 0) return "El pago inicial no puede ser negativo.";
+        if (downPayment > amountCharged)
+          return "El pago inicial no puede superar el total.";
+        if (selectedCustomer?.status === "BLOQUEADO")
+          return "El cliente está BLOQUEADO. No se puede fiar.";
+      }
+
       for (const it of items) {
         const qty = it.qty;
         const { allocations, avgUnitCost, cogsAmount } =
@@ -425,25 +565,115 @@ export default function SaleForm({
       const itemsTotal = enriched.reduce((a, x) => a + x.lineFinal, 0);
       const qtyTotal = enriched.reduce((a, x) => a + Number(x.qty || 0), 0);
 
+      const received =
+        clientType === "CREDITO"
+          ? Number(downPayment || 0)
+          : Number(amountReceived || 0);
+
+      const changeValue = clientType === "CREDITO" ? "0.00" : amountChange;
+
       // 3) Registrar venta en salesV2
-      await addDoc(collection(db, "salesV2"), {
+      // 3) Registrar venta en colección correcta (POLLO)
+      const salePayload: any = {
         id: uuidv4(),
         quantity: qtyTotal,
         amount: itemsTotal,
         amountCharged: itemsTotal,
-        amountReceived: Number(amountReceived) || 0,
-        change: amountChange,
-        clientName: clientName.trim(),
 
         timestamp: Timestamp.now(),
         date: saleDate,
-        userEmail: users[0]?.email ?? "sin usuario",
-        vendor: users[0]?.role ?? "sin usuario",
+
+        // ⚠️ tu código actual usa users[0], eso es peligroso.
+        // Mejor: usa el user actual si existe:
+        userEmail: user?.email ?? users[0]?.email ?? "sin usuario",
+        vendor: role ?? users[0]?.role ?? "sin usuario",
         status: "FLOTANTE",
 
         items: enriched,
         itemsTotal: itemsTotal,
-      });
+
+        // ✅ crédito/contado
+        type: clientType,
+        amountReceived: received,
+        change: changeValue,
+      };
+
+      // ✅ Validaciones según tipo de cliente (NO usar return "string")
+      if (clientType === "CONTADO") {
+        if (!clientName.trim()) {
+          setMessage("❌ Ingresa el nombre del cliente (contado).");
+          return;
+        }
+      } else {
+        if (!customerId) {
+          setMessage("❌ Selecciona un cliente (crédito).");
+          return;
+        }
+        if (downPayment < 0) {
+          setMessage("❌ El pago inicial no puede ser negativo.");
+          return;
+        }
+        if (downPayment > amountCharged) {
+          setMessage("❌ El pago inicial no puede superar el total.");
+          return;
+        }
+        if (selectedCustomer?.status === "BLOQUEADO") {
+          setMessage("❌ El cliente está BLOQUEADO. No se puede fiar.");
+          return;
+        }
+
+        // (opcional pero recomendado) límite de crédito
+        const limit = Number(selectedCustomer?.creditLimit || 0);
+        if (limit > 0 && projectedBalance > limit) {
+          setMessage(
+            `❌ Supera el límite de crédito (C$ ${limit.toFixed(2)}).`,
+          );
+          return;
+        }
+      }
+
+      const saleRef = await addDoc(collection(db, "salesV2"), salePayload);
+
+      // 4) CxC crédito (ar_movements_pollo)
+      if (clientType === "CREDITO" && customerId) {
+        const base = {
+          customerId,
+          date: saleDate,
+          createdAt: Timestamp.now(),
+          ref: { saleId: saleRef.id },
+        };
+
+        // CARGO (deuda)
+        await addDoc(collection(db, "ar_movements_pollo"), {
+          ...base,
+          type: "CARGO",
+          amount: Number(itemsTotal) || 0,
+        });
+
+        // ABONO (pago inicial)
+        if (Number(downPayment) > 0) {
+          await addDoc(collection(db, "ar_movements_pollo"), {
+            ...base,
+            type: "ABONO",
+            amount: -Number(downPayment),
+          });
+        }
+
+        // ✅ actualizar saldo local en UI (igual que dulces)
+        setCustomers((prev) =>
+          prev.map((c) =>
+            c.id === customerId
+              ? {
+                  ...c,
+                  balance:
+                    Number(c.balance || 0) +
+                    Number(itemsTotal || 0) -
+                    Number(downPayment || 0),
+                }
+              : c,
+          ),
+        );
+      }
 
       setMessage("✅ Venta registrada y asignada a inventario (FIFO).");
       setItems([]);
@@ -453,6 +683,9 @@ export default function SaleForm({
       setChange("0");
       setClientName("");
       setSaleDate(format(new Date(), "yyyy-MM-dd"));
+      setCustomerId("");
+      setDownPayment(0);
+      setClientType("CONTADO");
     } catch (err: any) {
       console.error(err);
       setMessage(`❌ ${err?.message || "Error al registrar la venta."}`);
@@ -499,16 +732,88 @@ export default function SaleForm({
               aria-label="Fecha de la venta"
             />
           </div>
-
           <div className="space-y-2">
-            <label className="text-sm font-semibold">Cliente</label>
-            <input
+            <label className="text-sm font-semibold">Tipo de cliente</label>
+            <select
               className="w-full border rounded px-2 py-2"
-              value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
-              placeholder="Opcional"
-            />
+              value={clientType}
+              onChange={(e) =>
+                handleClientTypeChange(e.target.value as ClientType)
+              }
+            >
+              <option value="CONTADO">Contado</option>
+              <option value="CREDITO">Crédito</option>
+            </select>
           </div>
+
+          {clientType === "CONTADO" ? (
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">Cliente (Contado)</label>
+              <input
+                className="w-full border rounded px-2 py-2"
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                placeholder="Ej: Cliente Mostrador"
+              />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">Cliente (Crédito)</label>
+              <select
+                className="w-full border rounded px-2 py-2"
+                value={customerId}
+                onChange={(e) => setCustomerId(e.target.value)}
+              >
+                <option value="">Selecciona un cliente</option>
+                {customers.map((c) => (
+                  <option
+                    key={c.id}
+                    value={c.status === "ACTIVO" ? c.id : ""}
+                    disabled={c.status === "BLOQUEADO"}
+                  >
+                    {c.name} — Saldo: {money(c.balance || 0)}
+                  </option>
+                ))}
+              </select>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="p-2 rounded bg-gray-50 border">
+                  <div className="text-xs text-gray-600">Saldo actual</div>
+                  <div className="text-base font-semibold">
+                    {money(currentBalance)}
+                  </div>
+                </div>
+                <div className="p-2 rounded bg-gray-50 border">
+                  <div className="text-xs text-gray-600">Saldo proyectado</div>
+                  <div className="text-base font-semibold">
+                    {money(projectedBalance)}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold">Pago inicial</label>
+                <input
+                  className="w-full border rounded px-2 py-2"
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  max={maxDownPayment}
+                  value={downPayment === 0 ? "" : downPayment}
+                  onChange={(e) => {
+                    const v = Math.max(0, Number(e.target.value || 0));
+                    const capped = Math.min(v, maxDownPayment);
+                    setDownPayment(capped);
+                  }}
+                  placeholder="0.00"
+                />
+                <div className="text-xs text-gray-500 mt-1">
+                  Máximo: {money(maxDownPayment)}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             <label className="text-sm font-semibold">Producto</label>
             <input
@@ -632,18 +937,20 @@ export default function SaleForm({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              className="border rounded px-2 py-2"
-              inputMode="decimal"
-              value={amountReceived === 0 ? "" : amountReceived}
-              onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
-              placeholder="Monto recibido"
-            />
-            <div className="border rounded px-2 py-2 bg-gray-100">
-              Cambio: C$ {amountChange}
+          {clientType === "CONTADO" && (
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className="border rounded px-2 py-2"
+                inputMode="decimal"
+                value={amountReceived === 0 ? "" : amountReceived}
+                onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
+                placeholder="Monto recibido"
+              />
+              <div className="border rounded px-2 py-2 bg-gray-100">
+                Cambio: C$ {amountChange}
+              </div>
             </div>
-          </div>
+          )}
 
           <button
             onClick={handleSubmit as any}
@@ -721,6 +1028,7 @@ export default function SaleForm({
         </div>
 
         {/* Fecha / Cliente */}
+        {/* Fecha / Cliente */}
         <div className="grid md:grid-cols-2 gap-3">
           <div className="space-y-1">
             <label className="block text-sm font-semibold text-gray-700">
@@ -736,15 +1044,95 @@ export default function SaleForm({
 
           <div className="space-y-1">
             <label className="block text-sm font-semibold text-gray-700">
-              Cliente
+              Tipo de cliente
             </label>
-            <input
+            <select
               className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
-              value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
-              placeholder="Opcional"
-            />
+              value={clientType}
+              onChange={(e) =>
+                handleClientTypeChange(e.target.value as ClientType)
+              }
+            >
+              <option value="CONTADO">Contado</option>
+              <option value="CREDITO">Crédito</option>
+            </select>
           </div>
+
+          {clientType === "CONTADO" ? (
+            <div className="md:col-span-2 space-y-1">
+              <label className="block text-sm font-semibold text-gray-700">
+                Cliente (Contado)
+              </label>
+              <input
+                className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                placeholder="Ej: Cliente Mostrador"
+              />
+            </div>
+          ) : (
+            <div className="md:col-span-2 space-y-2">
+              <label className="block text-sm font-semibold text-gray-700">
+                Cliente (Crédito)
+              </label>
+
+              <select
+                className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+                value={customerId}
+                onChange={(e) => setCustomerId(e.target.value)}
+              >
+                <option value="">Selecciona un cliente</option>
+                {customers.map((c) => (
+                  <option
+                    key={c.id}
+                    value={c.status === "ACTIVO" ? c.id : ""}
+                    disabled={c.status === "BLOQUEADO"}
+                  >
+                    {c.name} — Saldo: {money(c.balance || 0)}
+                  </option>
+                ))}
+              </select>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="p-2 rounded bg-gray-50 border">
+                  <div className="text-xs text-gray-600">Saldo actual</div>
+                  <div className="text-lg font-semibold">
+                    {money(currentBalance)}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700">
+                    Pago inicial
+                  </label>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Máximo: {money(maxDownPayment)}
+                  </div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    max={maxDownPayment}
+                    className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+                    value={downPayment === 0 ? "" : downPayment}
+                    onChange={(e) => {
+                      const v = Math.max(0, Number(e.target.value || 0));
+                      const capped = Math.min(v, maxDownPayment);
+                      setDownPayment(capped);
+                    }}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div className="p-2 rounded bg-gray-50 border">
+                  <div className="text-xs text-gray-600">Saldo proyectado</div>
+                  <div className="text-lg font-semibold">
+                    {money(projectedBalance)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Lista de ítems */}
@@ -892,32 +1280,39 @@ export default function SaleForm({
         </div>
 
         {/* Pago recibido / Cambio */}
-        <div className="grid grid-cols-2 gap-x-3">
-          <div className="space-y-1">
-            <label className="block text-sm font-semibold text-gray-700">
-              Monto recibido
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              inputMode="decimal"
-              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
-              value={amountReceived === 0 ? "" : amountReceived}
-              onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-semibold text-gray-700">
-              Cambio
-            </label>
-            <input
-              type="text"
-              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl bg-gray-100"
-              value={`C$ ${amountChange}`}
-              readOnly
-            />
-          </div>
-        </div>
+        {clientType === "CONTADO" && (
+          <>
+            {/* Pago recibido / Cambio */}
+            <div className="grid grid-cols-2 gap-x-3">
+              <div className="space-y-1">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Monto recibido
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+                  value={amountReceived === 0 ? "" : amountReceived}
+                  onChange={(e) =>
+                    setAmountReceived(Number(e.target.value || 0))
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Cambio
+                </label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl bg-gray-100"
+                  value={`C$ ${amountChange}`}
+                  readOnly
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Guardar */}
         <button

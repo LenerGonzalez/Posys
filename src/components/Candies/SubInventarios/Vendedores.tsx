@@ -20,7 +20,7 @@ type Branch = "Rivas" | "Isla Ometepe" | "San Jorge";
 interface SellerRow {
   id: string;
   name: string; // nombre y apellido
-  commissionPercent: number; // comisión % sobre la venta
+  commissionPercent: number; // ✅ ahora es margen % sobre U Aproximada (se mantiene el nombre por compatibilidad)
   branch: Branch; // sucursal a la que pertenece
   createdAt: Timestamp;
 }
@@ -54,7 +54,7 @@ export default function SellersCandies() {
       try {
         const qS = query(
           collection(db, "sellers_candies"),
-          orderBy("name", "asc")
+          orderBy("name", "asc"),
         );
         const snap = await getDocs(qS);
         const list: SellerRow[] = [];
@@ -97,14 +97,14 @@ export default function SellersCandies() {
 
     const commissionNum = Number(commission || 0);
     if (commissionNum < 0) {
-      setMsg("La comisión no puede ser negativa.");
+      setMsg("El margen no puede ser negativo.");
       return;
     }
 
     try {
       const docData = {
         name: nameTrim,
-        commissionPercent: commissionNum,
+        commissionPercent: commissionNum, // ✅ se mantiene el campo en Firestore por compatibilidad
         branch,
         createdAt: Timestamp.now(),
       };
@@ -114,7 +114,7 @@ export default function SellersCandies() {
       setRows((prev) => [
         {
           id: ref.id,
-          ...docData,
+          ...(docData as any),
         },
         ...prev,
       ]);
@@ -156,14 +156,14 @@ export default function SellersCandies() {
 
     const commissionNum = Number(editCommission || 0);
     if (commissionNum < 0) {
-      setMsg("La comisión no puede ser negativa.");
+      setMsg("El margen no puede ser negativo.");
       return;
     }
 
     try {
       await updateDoc(doc(db, "sellers_candies", editingId), {
         name: nameTrim,
-        commissionPercent: commissionNum,
+        commissionPercent: commissionNum, // ✅ margen vendedor sobre U Aproximada
         branch: editBranch,
       });
 
@@ -176,8 +176,8 @@ export default function SellersCandies() {
                 commissionPercent: commissionNum,
                 branch: editBranch,
               }
-            : r
-        )
+            : r,
+        ),
       );
 
       setMsg("✅ Vendedor actualizado.");
@@ -191,7 +191,7 @@ export default function SellersCandies() {
   // ====== Eliminar ======
   const handleDelete = async (row: SellerRow) => {
     const ok = window.confirm(
-      `¿Eliminar al vendedor "${row.name}"? Esta acción no se puede deshacer.`
+      `¿Eliminar al vendedor "${row.name}"? Esta acción no se puede deshacer.`,
     );
     if (!ok) return;
 
@@ -255,10 +255,10 @@ export default function SellersCandies() {
                 />
               </div>
 
-              {/* Comisión */}
+              {/* Margen */}
               <div>
                 <label className="block text-sm font-semibold">
-                  Comisión (% sobre venta total)
+                  Margen del vendedor (% sobre U Aproximada)
                 </label>
                 <input
                   type="number"
@@ -267,11 +267,12 @@ export default function SellersCandies() {
                   className="w-full border p-2 rounded"
                   value={commission}
                   onChange={(e) => setCommission(e.target.value)}
-                  placeholder="Ej: 10"
+                  placeholder="Ej: 30"
                 />
                 <p className="text-[11px] text-gray-500 mt-1">
-                  Este porcentaje se usa para calcular la comisión del vendedor
-                  sobre el total de la venta (no es el margen del producto).
+                  Este porcentaje YA NO es comisión sobre venta. Se aplica así:
+                  U. Vendedor = U. Aproximada × (margen/100). U. Inversionista =
+                  U. Aproximada − U. Vendedor.
                 </p>
               </div>
 
@@ -321,7 +322,7 @@ export default function SellersCandies() {
           <thead className="bg-gray-100">
             <tr className="whitespace-nowrap">
               <th className="p-2 border">Nombre y apellido</th>
-              <th className="p-2 border">Comisión (%)</th>
+              <th className="p-2 border">Margen (% U Aproximada)</th>
               <th className="p-2 border">Sucursal</th>
               <th className="p-2 border">Acciones</th>
             </tr>
@@ -357,7 +358,7 @@ export default function SellersCandies() {
                       )}
                     </td>
 
-                    {/* Comisión */}
+                    {/* Margen */}
                     <td className="p-2 border">
                       {isEditing ? (
                         <input
