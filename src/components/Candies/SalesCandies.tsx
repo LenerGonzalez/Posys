@@ -72,6 +72,8 @@ interface Product {
   priceSanJorge: number;
   priceIsla: number;
   barcode?: string;
+  providerPrice?: number; // precio costo por paquete (catálogo)
+  providerPricePerUnit?: number; // precio costo por unidad (catálogo)
 }
 
 // Catálogo de vendedores
@@ -102,6 +104,7 @@ interface SelectedItem {
   discount: number; // entero (C$) aplicado a este ítem
   providerPricePerPackage?: number; // precio proveedor por paquete (referencia)
   margenVendedor?: number; // comisión calculada sobre la ganancia bruta
+  uBruta?: number; // utilidad bruta por ítem
 }
 
 interface VoucherItem {
@@ -688,12 +691,12 @@ export default function SalesCandiesPOS({
 
   const vendorCommissionPercent = selectedVendor?.commissionPercent || 0;
   const vendorCommissionAmount = useMemo(() => {
-    const total = Number(totalAmount || 0);
-    const percent = Number(vendorCommissionPercent || 0);
-    const result = (total * percent) / 100;
-
-    return Number(result.toFixed(2)); // siempre con 2 decimales
-  }, [totalAmount, vendorCommissionPercent]);
+    const total = items.reduce(
+      (acc, it) => acc + Number(it.margenVendedor || 0),
+      0,
+    );
+    return Number(total.toFixed(2));
+  }, [items]);
 
   // Cargar catálogos
   useEffect(() => {
@@ -755,6 +758,8 @@ export default function SalesCandiesPOS({
           priceRivas: Number(x.unitPriceRivas ?? 0),
           priceSanJorge: Number(x.unitPriceSanJorge ?? 0),
           priceIsla: Number(x.unitPriceIsla ?? 0),
+          providerPrice: Number(x.providerPrice ?? 0),
+          providerPricePerUnit: Number(x.providerPricePerUnit ?? 0),
         });
       });
       setProducts(listP);
@@ -937,6 +942,12 @@ export default function SalesCandiesPOS({
     return Number(p || 0);
   }
 
+  const calcVendorMarginFromUBruta = (uBruta: number) => {
+    const percent = Number(vendorCommissionPercent || 0);
+    const result = (Number(uBruta || 0) * percent) / 100;
+    return Math.max(0, Number(result.toFixed(2)));
+  };
+
   // Añadir producto (bloquea duplicados, usa stock del PEDIDO DEL VENDEDOR)
   const addProductToList = async (pid: string) => {
     if (!pid) return;
@@ -994,11 +1005,24 @@ export default function SalesCandiesPOS({
       }
     };
 
-    const providerPricePerPackage =
+    const providerPriceFromOrder =
       await getProviderPricePerPackageFromVendorOrder({
         productId: pid,
         vendorId,
       });
+
+    const providerPriceFromCatalog = (() => {
+      const perPackage = Number(prod.providerPrice || 0);
+      if (perPackage > 0) return perPackage;
+      const perUnit = Number(prod.providerPricePerUnit || 0);
+      if (perUnit > 0) return perUnit * Number(prod.unitsPerPackage || 1);
+      return 0;
+    })();
+
+    const providerPricePerPackage =
+      Number(providerPriceFromOrder || 0) > 0
+        ? Number(providerPriceFromOrder || 0)
+        : Number(providerPriceFromCatalog || 0);
 
     const newItem: SelectedItem = {
       productId: pid,
@@ -1011,6 +1035,7 @@ export default function SalesCandiesPOS({
       discount: 0,
       providerPricePerPackage: Number(providerPricePerPackage) || 0,
       margenVendedor: 0,
+      uBruta: 0,
     };
     setItems((prev) => [...prev, newItem]);
     setProductId("");
@@ -1035,18 +1060,18 @@ export default function SalesCandiesPOS({
           setTimeout(() => setMsg(""), 2500);
         }
 
-        // recalcular margen vendedor para este item (usar venta neta = venta - descuento)
-        const grossSale = Number(it.pricePerPackage || 0) * finalQty;
-        const saleNet = Math.max(0, grossSale - Number(it.discount || 0));
-        const costoFacturado =
+        const monto = Number(it.pricePerPackage || 0) * finalQty;
+        const facturadoCosto =
           Number(it.providerPricePerPackage || 0) * finalQty;
-        const gananciaBruta = saleNet - costoFacturado;
-        const margenVendedor = Math.max(
-          0,
-          Number((gananciaBruta * 0.25).toFixed(2)),
-        );
+        const uBruta = monto - facturadoCosto;
+        const margenVendedor = calcVendorMarginFromUBruta(uBruta);
 
-        return { ...it, qtyPackages: finalQty, margenVendedor };
+        return {
+          ...it,
+          qtyPackages: finalQty,
+          margenVendedor,
+          uBruta,
+        };
       }),
     );
   };
@@ -1058,17 +1083,18 @@ export default function SalesCandiesPOS({
         if (it.productId !== pid) return it;
         if (discRaw === "") return { ...it, discount: 0 };
         const n = Math.max(0, Math.floor(Number(discRaw)));
-        // recalcular margen vendedor considerando descuento (reduce la venta neta)
         const qty = it.qtyPackages || 0;
-        const saleTotal = Number(it.pricePerPackage || 0) * qty;
-        const costoFacturado = Number(it.providerPricePerPackage || 0) * qty;
-        const gananciaBruta = saleTotal - costoFacturado - Number(n || 0);
-        const margenVendedor = Math.max(
-          0,
-          Number((gananciaBruta * 0.25).toFixed(2)),
-        );
+        const monto = Number(it.pricePerPackage || 0) * qty;
+        const facturadoCosto = Number(it.providerPricePerPackage || 0) * qty;
+        const uBruta = monto - facturadoCosto;
+        const margenVendedor = calcVendorMarginFromUBruta(uBruta);
 
-        return { ...it, discount: n, margenVendedor };
+        return {
+          ...it,
+          discount: n,
+          margenVendedor,
+          uBruta,
+        };
       }),
     );
   };
@@ -1153,11 +1179,8 @@ export default function SalesCandiesPOS({
             it.providerPricePerPackage || 0,
           );
           const facturadoCosto = providerPricePerPackage * qtyPaq;
-          const gananciaBruta = lineNet - facturadoCosto;
-          const margenVendedor = Math.max(
-            0,
-            Number((gananciaBruta * 0.25).toFixed(2)),
-          );
+          const uBruta = lineGross - facturadoCosto;
+          const margenVendedor = calcVendorMarginFromUBruta(uBruta);
 
           return {
             productId: it.productId,
@@ -1172,6 +1195,7 @@ export default function SalesCandiesPOS({
             total: Math.floor(lineNet * 100) / 100,
             providerPricePerPackage,
             margenVendedor,
+            uBruta,
           };
         });
 

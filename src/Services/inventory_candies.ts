@@ -28,7 +28,7 @@ export interface CandyAllocation {
 function getBaseUnitsFromDoc(data: any): number {
   const unitsPerPackage = Math.max(
     1,
-    Math.floor(Number(data.unitsPerPackage || 1))
+    Math.floor(Number(data.unitsPerPackage || 1)),
   );
   const totalUnits = Number(data.totalUnits || 0);
   const quantity = Number(data.quantity || 0);
@@ -60,33 +60,58 @@ function getRemainingUnitsFromDoc(data: any): number {
   return getBaseUnitsFromDoc(data);
 }
 
-/** Packs iniciales “reales” del lote */
-function getInitialPacksFromDoc(data: any): number {
-  const unitsPerPackage = Math.max(
-    1,
-    Math.floor(Number(data.unitsPerPackage || 1))
+const toInt = (v: any) => Math.max(0, Math.floor(Number(v ?? 0)));
+export function getInitialPacksFromDoc(x: any) {
+  // ✅ en inventory_candies el “inicial” es packages
+  return toInt(
+    x.packages ??
+      x.totalPackages ??
+      x.packs ??
+      x.packagesInitial ??
+      x.initialPackages ??
+      0,
   );
-  const totalUnits = getBaseUnitsFromDoc(data);
-  if (totalUnits > 0 && unitsPerPackage > 0) {
-    return Math.floor(totalUnits / unitsPerPackage);
-  }
-  return Math.max(0, Math.floor(Number(data.packages || 0)));
 }
 
+/** Packs iniciales “reales” del lote */
+// function getInitialPacksFromDoc(data: any): number {
+//   const unitsPerPackage = Math.max(
+//     1,
+//     Math.floor(Number(data.unitsPerPackage || 1))
+//   );
+//   const totalUnits = getBaseUnitsFromDoc(data);
+//   if (totalUnits > 0 && unitsPerPackage > 0) {
+//     return Math.floor(totalUnits / unitsPerPackage);
+//   }
+//   return Math.max(0, Math.floor(Number(data.packages || 0)));
+// }
+
 /** Packs restantes “reales” del lote */
-function getRemainingPacksFromDoc(data: any): number {
-  if (
-    typeof data.remainingPackages === "number" &&
-    isFinite(data.remainingPackages)
-  ) {
-    return Math.max(0, Math.floor(Number(data.remainingPackages)));
-  }
-  const unitsPerPackage = Math.max(
-    1,
-    Math.floor(Number(data.unitsPerPackage || 1))
+// function getRemainingPacksFromDoc(data: any): number {
+//   if (
+//     typeof data.remainingPackages === "number" &&
+//     isFinite(data.remainingPackages)
+//   ) {
+//     return Math.max(0, Math.floor(Number(data.remainingPackages)));
+//   }
+//   const unitsPerPackage = Math.max(
+//     1,
+//     Math.floor(Number(data.unitsPerPackage || 1))
+//   );
+//   const remUnits = getRemainingUnitsFromDoc(data);
+//   return Math.max(0, Math.floor(remUnits / unitsPerPackage));
+// }
+
+export function getRemainingPacksFromDoc(x: any) {
+  // ✅ en inventory_candies el restante correcto es remainingPackages
+  return toInt(
+    x.remainingPackages ??
+      x.remainingPacks ??
+      x.packsRemaining ??
+      x.packagesRemaining ??
+      x.remaining_packages ??
+      0,
   );
-  const remUnits = getRemainingUnitsFromDoc(data);
-  return Math.max(0, Math.floor(remUnits / unitsPerPackage));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -105,7 +130,7 @@ async function resolveCandyMainOrderRef(orderId: string) {
 
   const q = query(
     collection(db, "candy_main_orders"),
-    where("orderId", "==", orderId)
+    where("orderId", "==", orderId),
   );
   const s = await getDocs(q);
   if (!s.empty) return doc(db, "candy_main_orders", s.docs[0].id);
@@ -129,7 +154,7 @@ export async function syncCandyMainOrderFromInventory(orderId: string) {
   // Traer TODOS los lotes de esa orden
   const qB = query(
     collection(db, "inventory_candies"),
-    where("orderId", "==", orderId)
+    where("orderId", "==", orderId),
   );
   const snap = await getDocs(qB);
 
@@ -175,7 +200,7 @@ export async function syncCandyMainOrderFromInventory(orderId: string) {
 
     const unitsPerPackage = Math.max(
       1,
-      Math.floor(Number(x.unitsPerPackage || 1))
+      Math.floor(Number(x.unitsPerPackage || 1)),
     );
 
     const providerPrice = Number(x.providerPrice || 0);
@@ -283,7 +308,7 @@ export async function syncCandyMainOrderFromInventory(orderId: string) {
 
   const totalPackages = items.reduce(
     (a, it: any) => a + Number(it.packages || 0),
-    0
+    0,
   );
 
   await updateDoc(orderRef, {
@@ -319,7 +344,7 @@ export async function getCandyStockByProduct(productId: string) {
   const q = query(
     collection(db, "inventory_candies"),
     where("productId", "==", productId),
-    where("remaining", ">", 0)
+    where("remaining", ">", 0),
   );
   const snap = await getDocs(q);
   let total = 0;
@@ -366,13 +391,13 @@ export async function allocateSaleFIFOCandy(params: {
 
   if (!productId) {
     throw new Error(
-      "Parámetros inválidos para allocateSaleFIFOCandy (sin producto)"
+      "Parámetros inválidos para allocateSaleFIFOCandy (sin producto)",
     );
   }
 
   const qB = query(
     collection(db, "inventory_candies"),
-    where("productId", "==", productId)
+    where("productId", "==", productId),
   );
   const snap = await getDocs(qB);
 
@@ -453,7 +478,7 @@ export async function allocateSaleFIFOCandy(params: {
 
       const unitsPerPackageLocal = Math.max(
         1,
-        Math.floor(Number(data.unitsPerPackage || 1))
+        Math.floor(Number(data.unitsPerPackage || 1)),
       );
       const newRemainingPackages = Math.floor(newRem / unitsPerPackageLocal);
 
@@ -477,7 +502,7 @@ export async function allocateSaleFIFOCandy(params: {
     if (need > 0) {
       const missingPacks = Math.ceil(need / unitsPerPackage);
       throw new Error(
-        `Inventario insuficiente. Faltan aproximadamente ${missingPacks} paquetes.`
+        `Inventario insuficiente. Faltan aproximadamente ${missingPacks} paquetes.`,
       );
     }
 
@@ -523,7 +548,7 @@ function extractSellerAllocationsFromSale(sale: any): {
         const invId = String(a.inventorySellerId || "");
         const units = Math.max(
           0,
-          Math.floor(Number(a.units ?? a.qty ?? a.quantity ?? 0))
+          Math.floor(Number(a.units ?? a.qty ?? a.quantity ?? 0)),
         );
         if (!invId || units <= 0) continue;
         result.push({ inventorySellerId: invId, units });
@@ -537,7 +562,7 @@ function extractSellerAllocationsFromSale(sale: any): {
         const invId = String(a.inventorySellerId || "");
         const units = Math.max(
           0,
-          Math.floor(Number(a.units ?? a.qty ?? a.quantity ?? 0))
+          Math.floor(Number(a.units ?? a.qty ?? a.quantity ?? 0)),
         );
         if (!invId || units <= 0) continue;
         result.push({ inventorySellerId: invId, units });
@@ -585,13 +610,13 @@ export async function restoreSaleAndDeleteCandy(saleId: string) {
         const currentUnits = Number(data.remainingUnits ?? data.remaining ?? 0);
         const addBack = Math.max(
           0,
-          Math.floor(Number(grouped[refs[i].id] || 0))
+          Math.floor(Number(grouped[refs[i].id] || 0)),
         );
         const newUnits = currentUnits + addBack;
 
         const unitsPerPackage = Math.max(
           1,
-          Math.floor(Number(data.unitsPerPackage || 1))
+          Math.floor(Number(data.unitsPerPackage || 1)),
         );
         const newRemainingPackages = Math.floor(newUnits / unitsPerPackage);
 
@@ -667,7 +692,7 @@ export async function restoreSaleAndDeleteCandy(saleId: string) {
     const productId: string = String(item.productId || sale.productId || "");
     const qtyTotal: number = Math.max(
       0,
-      Math.floor(Number(item.qty ?? sale.quantity ?? 0))
+      Math.floor(Number(item.qty ?? sale.quantity ?? 0)),
     );
     const allocationsInSale: CandyAllocation[] = Array.isArray(sale.allocations)
       ? sale.allocations.map((a: any) => ({
@@ -694,7 +719,7 @@ export async function restoreSaleAndDeleteCandy(saleId: string) {
   }
 
   const allHaveAllocations = items.every(
-    (it) => Array.isArray(it.allocations) && it.allocations.length > 0
+    (it) => Array.isArray(it.allocations) && it.allocations.length > 0,
   );
 
   if (allHaveAllocations) {
@@ -722,13 +747,13 @@ export async function restoreSaleAndDeleteCandy(saleId: string) {
         const rem = getRemainingUnitsFromDoc(data);
         const addBack = Math.max(
           0,
-          Math.floor(Number(refsToUpdate[i].addBack || 0))
+          Math.floor(Number(refsToUpdate[i].addBack || 0)),
         );
 
         const newRem = rem + addBack;
         const unitsPerPackage = Math.max(
           1,
-          Math.floor(Number(data.unitsPerPackage || 1))
+          Math.floor(Number(data.unitsPerPackage || 1)),
         );
         const newRemainingPackages = Math.floor(newRem / unitsPerPackage);
 
@@ -758,7 +783,7 @@ export async function restoreSaleAndDeleteCandy(saleId: string) {
 
       const qB = query(
         collection(db, "inventory_candies"),
-        where("productId", "==", it.productId)
+        where("productId", "==", it.productId),
       );
       const snap = await getDocs(qB);
       const lots = snap.docs
@@ -815,7 +840,7 @@ export async function restoreSaleAndDeleteCandy(saleId: string) {
     }
 
     const refs = Object.keys(grouped).map((id) =>
-      doc(db, "inventory_candies", id)
+      doc(db, "inventory_candies", id),
     );
     const snaps = await Promise.all(refs.map((r) => tx.get(r)));
 
@@ -829,7 +854,7 @@ export async function restoreSaleAndDeleteCandy(saleId: string) {
       const newRem = rem + addBack;
       const unitsPerPackage = Math.max(
         1,
-        Math.floor(Number(data.unitsPerPackage || 1))
+        Math.floor(Number(data.unitsPerPackage || 1)),
       );
       const newRemainingPackages = Math.floor(newRem / unitsPerPackage);
 

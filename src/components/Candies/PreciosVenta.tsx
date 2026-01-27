@@ -225,6 +225,9 @@ export default function PrecioVentas() {
 
   // UI móvil
   const [filtersOpenMobile, setFiltersOpenMobile] = useState(false);
+  const [openCategoryMap, setOpenCategoryMap] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     (async () => {
@@ -534,6 +537,26 @@ export default function PrecioVentas() {
     packagingFilter,
     packagingMap,
   ]);
+
+  const filteredByCategory = useMemo(() => {
+    const map = new Map<string, PriceRow[]>();
+    for (const r of filtered) {
+      const key = (r.category || "Sin categoría").trim() || "Sin categoría";
+      const list = map.get(key) || [];
+      list.push(r);
+      map.set(key, list);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) =>
+      a.localeCompare(b, "es"),
+    );
+  }, [filtered]);
+
+  const toggleCategory = (cat: string) => {
+    setOpenCategoryMap((prev) => ({
+      ...prev,
+      [cat]: !prev[cat],
+    }));
+  };
 
   const clearFilters = () => {
     setSearchProduct("");
@@ -860,240 +883,288 @@ export default function PrecioVentas() {
           </div>
         ) : (
           <div className="space-y-2">
-            {filtered.map((r) => {
-              const expanded = openCardId === r.productId;
-              const isEditing = editingId === r.productId;
-              const providerPrice = providerPriceMap[r.productId] || 0;
-              const utilidad = r.priceIsla - providerPrice;
-              const comision = utilidad * 0.25;
+            {filteredByCategory.map(([cat, items]) => {
+              const expandedCategory = !!openCategoryMap[cat];
               return (
                 <div
-                  key={r.productId}
+                  key={cat}
                   className="bg-white border rounded-2xl shadow-sm overflow-hidden"
                 >
                   <button
                     type="button"
                     className="w-full px-3 py-3 flex items-center justify-between text-left"
-                    onClick={() =>
-                      setOpenCardId((cur) =>
-                        cur === r.productId ? null : r.productId,
-                      )
-                    }
+                    onClick={() => toggleCategory(cat)}
                   >
                     <div className="min-w-0">
                       <div className="text-[13px] font-semibold truncate">
-                        {r.productName}
+                        {cat}
                       </div>
                       <div className="text-[10px] text-gray-600 truncate">
-                        {r.category}
+                        {items.length}{" "}
+                        {items.length === 1 ? "producto" : "productos"}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-[10px] text-gray-600">
-                        P. Paquete
-                      </div>
-                      <div className="text-sm font-semibold tabular-nums">
-                        {money(r.priceIsla)}
-                      </div>
+                    <div className="text-sm font-semibold">
+                      {expandedCategory ? "−" : "+"}
                     </div>
                   </button>
 
-                  {expanded && (
-                    <div className="px-3 pb-3 border-t">
-                      <div className="pt-3 space-y-2 text-sm">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <div className="text-[10px] text-gray-600">
-                              Categoría
-                            </div>
-                            <div className="text-sm">{r.category}</div>
-
-                            <div className="mt-2">
-                              <div className="text-[10px] text-gray-600">
-                                Unidades x paquete
+                  {expandedCategory && (
+                    <div className="px-3 pb-3 border-t space-y-2">
+                      {items.map((r) => {
+                        const expanded = openCardId === r.productId;
+                        const isEditing = editingId === r.productId;
+                        const providerPrice =
+                          providerPriceMap[r.productId] || 0;
+                        const utilidad = r.priceIsla - providerPrice;
+                        const comision = utilidad * 0.25;
+                        return (
+                          <div
+                            key={r.productId}
+                            className="bg-white border rounded-xl overflow-hidden"
+                          >
+                            <button
+                              type="button"
+                              className="w-full px-3 py-3 flex items-center justify-between text-left"
+                              onClick={() =>
+                                setOpenCardId((cur) =>
+                                  cur === r.productId ? null : r.productId,
+                                )
+                              }
+                            >
+                              <div className="min-w-0">
+                                <div className="text-[13px] font-semibold truncate">
+                                  {r.productName}
+                                </div>
+                                <div className="text-[10px] text-gray-600 truncate">
+                                  {r.category}
+                                </div>
                               </div>
-                              <div className="text-sm">
-                                {String(r.unitsPerPackage || 1)}
-                              </div>
-                            </div>
-
-                            <div className="mt-2">
-                              <div className="text-[10px] text-gray-600">
-                                Precio Unidad
-                              </div>
-                              <div className="text-sm tabular-nums">
-                                {money(r.priceIsla / (r.unitsPerPackage || 1))}
-                              </div>
-                            </div>
-
-                            <div className="mt-2">
-                              <div className="text-[10px] text-gray-600">
-                                Precio Paquete
-                              </div>
-                              {isEditing ? (
-                                <input
-                                  className="w-full border rounded px-2 py-2 text-right"
-                                  inputMode="decimal"
-                                  value={String(editPriceIsla)}
-                                  onChange={(e) =>
-                                    setEditPriceIsla(
-                                      Number(e.target.value || 0),
-                                    )
-                                  }
-                                />
-                              ) : (
+                              <div className="text-right">
+                                <div className="text-[10px] text-gray-600">
+                                  P. Paquete
+                                </div>
                                 <div className="text-sm font-semibold tabular-nums">
                                   {money(r.priceIsla)}
                                 </div>
-                              )}
-                            </div>
-                          </div>
+                              </div>
+                            </button>
 
-                          <div>
-                            <div>
-                              <div className="text-[10px] text-gray-600">
-                                Utilidad Bruta
-                              </div>
-                              <div className="text-sm tabular-nums">
-                                {money(utilidad)}
-                              </div>
-                            </div>
+                            {expanded && (
+                              <div className="px-3 pb-3 border-t">
+                                <div className="pt-3 space-y-2 text-sm">
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <div className="text-[10px] text-gray-600">
+                                        Categoría
+                                      </div>
+                                      <div className="text-sm">
+                                        {r.category}
+                                      </div>
 
-                            <div className="mt-1">
-                              <div className="text-[10px] text-gray-600">
-                                Comisión
-                              </div>
-                              <div className="text-sm tabular-nums">
-                                {money(comision)}
-                              </div>
-                            </div>
+                                      <div className="mt-2">
+                                        <div className="text-[10px] text-gray-600">
+                                          Unidades x paquete
+                                        </div>
+                                        <div className="text-sm">
+                                          {String(r.unitsPerPackage || 1)}
+                                        </div>
+                                      </div>
 
-                            <div className="mt-2">
-                              <div className="text-[10px] text-gray-600">
-                                Código EAN
-                              </div>
-                              {isEditing ? (
-                                <div className="flex gap-2">
-                                  <input
-                                    className="flex-1 border rounded px-2 py-2"
-                                    value={editBarcode}
-                                    readOnly
-                                  />
-                                  <button
-                                    className="px-3 py-2 rounded bg-blue-600 text-white"
-                                    onClick={() => {
-                                      setScanTarget("edit");
-                                      setScanOpen(true);
-                                    }}
-                                    type="button"
-                                  >
-                                    Escanear
-                                  </button>
+                                      <div className="mt-2">
+                                        <div className="text-[10px] text-gray-600">
+                                          Precio Unidad
+                                        </div>
+                                        <div className="text-sm tabular-nums">
+                                          {money(
+                                            r.priceIsla /
+                                              (r.unitsPerPackage || 1),
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="mt-2">
+                                        <div className="text-[10px] text-gray-600">
+                                          Precio Paquete
+                                        </div>
+                                        {isEditing ? (
+                                          <input
+                                            className="w-full border rounded px-2 py-2 text-right"
+                                            inputMode="decimal"
+                                            value={String(editPriceIsla)}
+                                            onChange={(e) =>
+                                              setEditPriceIsla(
+                                                Number(e.target.value || 0),
+                                              )
+                                            }
+                                          />
+                                        ) : (
+                                          <div className="text-sm font-semibold tabular-nums">
+                                            {money(r.priceIsla)}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div>
+                                      <div>
+                                        <div className="text-[10px] text-gray-600">
+                                          Utilidad Bruta
+                                        </div>
+                                        <div className="text-sm tabular-nums">
+                                          {money(utilidad)}
+                                        </div>
+                                      </div>
+
+                                      <div className="mt-1">
+                                        <div className="text-[10px] text-gray-600">
+                                          Comisión
+                                        </div>
+                                        <div className="text-sm tabular-nums">
+                                          {money(comision)}
+                                        </div>
+                                      </div>
+
+                                      <div className="mt-2">
+                                        <div className="text-[10px] text-gray-600">
+                                          Código EAN
+                                        </div>
+                                        {isEditing ? (
+                                          <div className="flex gap-2">
+                                            <input
+                                              className="flex-1 border rounded px-2 py-2"
+                                              value={editBarcode}
+                                              readOnly
+                                            />
+                                            <button
+                                              className="px-3 py-2 rounded bg-blue-600 text-white"
+                                              onClick={() => {
+                                                setScanTarget("edit");
+                                                setScanOpen(true);
+                                              }}
+                                              type="button"
+                                            >
+                                              Escanear
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <div>
+                                            {barcodeMap[r.productId] || "—"}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      <div className="mt-2">
+                                        <div className="text-[10px] text-gray-600">
+                                          Tipo Empaque
+                                        </div>
+                                        {isEditing ? (
+                                          <select
+                                            className="w-full border rounded px-2 py-2"
+                                            value={editPackaging}
+                                            onChange={(e) =>
+                                              setEditPackaging(e.target.value)
+                                            }
+                                          >
+                                            <option value="">—</option>
+                                            <option value="Tarro">Tarro</option>
+                                            <option value="Bolsa">Bolsa</option>
+                                            <option value="Ristra">
+                                              Ristra
+                                            </option>
+                                            <option value="Caja">Caja</option>
+                                            <option value="Vaso">Vaso</option>
+                                            <option value="Pana">Pana</option>
+                                          </select>
+                                        ) : (
+                                          <div className="text-sm">
+                                            {packagingMap[r.productId] || "—"}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* actions */}
+                                  <div className="flex gap-2">
+                                    {isEditing ? (
+                                      <>
+                                        <button
+                                          className="px-3 py-2 rounded bg-green-600 text-white"
+                                          onClick={() => {
+                                            saveEditedPrices(r.productId);
+                                            setOpenCardId(null);
+                                          }}
+                                          type="button"
+                                        >
+                                          Guardar
+                                        </button>
+                                        <button
+                                          className="px-3 py-2 rounded bg-gray-800 text-white"
+                                          onClick={() => {
+                                            setScanTarget("edit");
+                                            setScanOpen(true);
+                                          }}
+                                          type="button"
+                                        >
+                                          Escanear
+                                        </button>
+                                        <button
+                                          className="px-3 py-2 rounded bg-gray-200"
+                                          onClick={() => setEditingId(null)}
+                                          type="button"
+                                        >
+                                          Cancelar
+                                        </button>
+                                      </>
+                                    ) : (
+                                      isAdmin && (
+                                        <>
+                                          <button
+                                            className="px-3 py-2 rounded bg-yellow-400"
+                                            onClick={() => {
+                                              setEditingId(r.productId);
+                                              setEditPriceIsla(
+                                                r.priceIsla || 0,
+                                              );
+                                              setEditPriceRivas(
+                                                r.priceRivas || 0,
+                                              );
+                                              setEditBarcode(
+                                                barcodeMap[r.productId] || "",
+                                              );
+                                              setEditPackaging(
+                                                packagingMap[r.productId] || "",
+                                              );
+                                            }}
+                                            type="button"
+                                          >
+                                            Editar
+                                          </button>
+                                          <button
+                                            className="px-3 py-2 rounded bg-red-600 text-white"
+                                            onClick={() =>
+                                              setRows((prev) =>
+                                                prev.filter(
+                                                  (x) =>
+                                                    x.productId !== r.productId,
+                                                ),
+                                              )
+                                            }
+                                            type="button"
+                                          >
+                                            Borrar
+                                          </button>
+                                        </>
+                                      )
+                                    )}
+                                  </div>
                                 </div>
-                              ) : (
-                                <div>{barcodeMap[r.productId] || "—"}</div>
-                              )}
-                            </div>
-
-                            <div className="mt-2">
-                              <div className="text-[10px] text-gray-600">
-                                Tipo Empaque
                               </div>
-                              {isEditing ? (
-                                <select
-                                  className="w-full border rounded px-2 py-2"
-                                  value={editPackaging}
-                                  onChange={(e) =>
-                                    setEditPackaging(e.target.value)
-                                  }
-                                >
-                                  <option value="">—</option>
-                                  <option value="Tarro">Tarro</option>
-                                  <option value="Bolsa">Bolsa</option>
-                                  <option value="Ristra">Ristra</option>
-                                  <option value="Caja">Caja</option>
-                                  <option value="Vaso">Vaso</option>
-                                  <option value="Pana">Pana</option>
-                                </select>
-                              ) : (
-                                <div className="text-sm">
-                                  {packagingMap[r.productId] || "—"}
-                                </div>
-                              )}
-                            </div>
+                            )}
                           </div>
-                        </div>
-
-                        {/* actions */}
-                        <div className="flex gap-2">
-                          {isEditing ? (
-                            <>
-                              <button
-                                className="px-3 py-2 rounded bg-green-600 text-white"
-                                onClick={() => {
-                                  saveEditedPrices(r.productId);
-                                  setOpenCardId(null);
-                                }}
-                                type="button"
-                              >
-                                Guardar
-                              </button>
-                              <button
-                                className="px-3 py-2 rounded bg-gray-800 text-white"
-                                onClick={() => {
-                                  setScanTarget("edit");
-                                  setScanOpen(true);
-                                }}
-                                type="button"
-                              >
-                                Escanear
-                              </button>
-                              <button
-                                className="px-3 py-2 rounded bg-gray-200"
-                                onClick={() => setEditingId(null)}
-                                type="button"
-                              >
-                                Cancelar
-                              </button>
-                            </>
-                          ) : (
-                            isAdmin && (
-                              <>
-                                <button
-                                  className="px-3 py-2 rounded bg-yellow-400"
-                                  onClick={() => {
-                                    setEditingId(r.productId);
-                                    setEditPriceIsla(r.priceIsla || 0);
-                                    setEditPriceRivas(r.priceRivas || 0);
-                                    setEditBarcode(
-                                      barcodeMap[r.productId] || "",
-                                    );
-                                    setEditPackaging(
-                                      packagingMap[r.productId] || "",
-                                    );
-                                  }}
-                                  type="button"
-                                >
-                                  Editar
-                                </button>
-                                <button
-                                  className="px-3 py-2 rounded bg-red-600 text-white"
-                                  onClick={() =>
-                                    setRows((prev) =>
-                                      prev.filter(
-                                        (x) => x.productId !== r.productId,
-                                      ),
-                                    )
-                                  }
-                                  type="button"
-                                >
-                                  Borrar
-                                </button>
-                              </>
-                            )
-                          )}
-                        </div>
-                      </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

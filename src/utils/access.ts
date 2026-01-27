@@ -59,9 +59,9 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     salesCandies: { view: true, edit: true },
     productsVendorsCandies: { view: true, edit: false },
     // En tu matriz: VER = NO para estos 3
-    productsPricesCandies: { view: false, edit: false },
-    transactionCandies: { view: false, edit: false },
-    cierreVentasCandies: { view: false, edit: false },
+    productsPricesCandies: { view: true, edit: false },
+    transactionCandies: { view: true, edit: false },
+    cierreVentasCandies: { view: true, edit: false },
     customersCandies: { view: true, edit: true },
   },
 

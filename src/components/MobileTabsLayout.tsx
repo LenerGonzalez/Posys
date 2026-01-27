@@ -138,6 +138,7 @@ export default function MobileTabsLayout({
               label: "Transacciones",
               to: `${base}/transactionsPollo`,
             },
+            
           ];
         } else if (isContPollo) {
           built = [

@@ -370,7 +370,10 @@ export default function App() {
           <Route
             path="productsPricesCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                roles={roles}
+                allowedRoles={["admin", "vendedor_dulces"]}
+              >
                 <PreciosVenta />
               </PrivateRoute>
             }

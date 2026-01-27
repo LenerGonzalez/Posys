@@ -3,6 +3,8 @@ import { db } from "../../firebase";
 import {
   collection,
   getDocs,
+  getDoc,
+  doc,
   query,
   where,
   Timestamp,
@@ -31,6 +33,7 @@ type SaleDoc = {
   allocations?: Allocation[];
   avgUnitCost?: number;
   measurement?: string; // "lb" o "unidad"
+  type?: "CREDITO" | "CONTADO";
 };
 
 type ExpenseDoc = {
@@ -41,6 +44,24 @@ type ExpenseDoc = {
   amount: number;
   status?: "PAGADO" | "PENDIENTE";
   createdAt?: Timestamp;
+};
+
+type PendingProductRow = {
+  productName: string;
+  qty: number;
+  amount: number;
+  measurement?: string;
+};
+
+type PendingCustomerRow = {
+  customerId: string;
+  name: string;
+  balance: number;
+  lbs: number;
+  units: number;
+  lastPaymentAmount: number;
+  lastPaymentDate?: string;
+  products: PendingProductRow[];
 };
 
 export default function FinancialDashboard(): React.ReactElement {
@@ -54,6 +75,14 @@ export default function FinancialDashboard(): React.ReactElement {
 
   const [sales, setSales] = useState<SaleDoc[]>([]);
   const [expenses, setExpenses] = useState<ExpenseDoc[]>([]);
+  const [pendingCustomers, setPendingCustomers] = useState<
+    PendingCustomerRow[]
+  >([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [pendingOpen, setPendingOpen] = useState<PendingCustomerRow | null>(
+    null,
+  );
+  const [totalAbonos, setTotalAbonos] = useState(0);
 
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -114,6 +143,7 @@ export default function FinancialDashboard(): React.ReactElement {
                 : x.allocations,
               avgUnitCost: Number(it.avgUnitCost ?? x.avgUnitCost ?? 0),
               measurement: it.measurement ?? x.measurement ?? "",
+              type: x.type ?? "CONTADO",
             });
           });
           return;
@@ -129,6 +159,7 @@ export default function FinancialDashboard(): React.ReactElement {
           allocations: Array.isArray(x.allocations) ? x.allocations : [],
           avgUnitCost: Number(x.avgUnitCost ?? 0),
           measurement: x.measurement ?? "",
+          type: x.type ?? "CONTADO",
         });
       });
 
@@ -213,6 +244,50 @@ export default function FinancialDashboard(): React.ReactElement {
     return { revenue, cogsReal, grossProfit, expensesSum, netProfit };
   }, [visibleSales, expenses]);
 
+  const kpisCashVisible = useMemo(() => {
+    const cashOnly = visibleSales.filter((s) => s.type === "CONTADO");
+    const revenue = cashOnly.reduce((a, s) => a + (s.amount || 0), 0);
+
+    let cogsReal = 0;
+    cashOnly.forEach((s) => {
+      if (s.allocations?.length) {
+        cogsReal += s.allocations.reduce(
+          (x, a) => x + Number(a.lineCost || 0),
+          0,
+        );
+      } else if (s.avgUnitCost && s.quantity) {
+        cogsReal += Number(s.avgUnitCost) * Number(s.quantity);
+      }
+    });
+
+    const grossProfit = revenue - cogsReal;
+    const expensesSum = expenses.reduce((a, g) => a + (g.amount || 0), 0);
+    const netProfit = grossProfit - expensesSum;
+
+    return { revenue, cogsReal, grossProfit, expensesSum, netProfit };
+  }, [visibleSales, expenses]);
+
+  const kpisCreditVisible = useMemo(() => {
+    const creditOnly = visibleSales.filter((s) => s.type === "CREDITO");
+    const revenue = creditOnly.reduce((a, s) => a + (s.amount || 0), 0);
+
+    let cogsReal = 0;
+    creditOnly.forEach((s) => {
+      if (s.allocations?.length) {
+        cogsReal += s.allocations.reduce(
+          (x, a) => x + Number(a.lineCost || 0),
+          0,
+        );
+      } else if (s.avgUnitCost && s.quantity) {
+        cogsReal += Number(s.avgUnitCost) * Number(s.quantity);
+      }
+    });
+
+    const grossProfit = revenue - cogsReal;
+
+    return { revenue, cogsReal, grossProfit };
+  }, [visibleSales]);
+
   // Helpers para cantidades vendidas
   const mStr = (v: unknown) =>
     String(v ?? "")
@@ -228,6 +303,173 @@ export default function FinancialDashboard(): React.ReactElement {
   const isUnit = (m: unknown) =>
     ["unidad", "unidades", "ud", "uds", "pieza", "piezas"].includes(mStr(m));
 
+  const formatDateShort = (v: any) => {
+    if (!v) return "—";
+    if (typeof v === "string") return v;
+    if (v?.toDate) return format(v.toDate(), "yyyy-MM-dd");
+    return "—";
+  };
+
+  useEffect(() => {
+    const loadPending = async () => {
+      setPendingLoading(true);
+      try {
+        const customersSnap = await getDocs(collection(db, "customers_pollo"));
+        const customerNameById: Record<string, string> = {};
+        customersSnap.forEach((d) => {
+          const x = d.data() as any;
+          customerNameById[d.id] = String(x.name ?? "(sin nombre)");
+        });
+
+        const movementsSnap = await getDocs(
+          collection(db, "ar_movements_pollo"),
+        );
+
+        const balanceByCustomer: Record<string, number> = {};
+        const lastPaymentByCustomer: Record<
+          string,
+          { amount: number; date?: string; ts?: any }
+        > = {};
+        const salesByCustomer: Record<string, Set<string>> = {};
+        const saleIds = new Set<string>();
+        let abonosSum = 0;
+
+        movementsSnap.forEach((d) => {
+          const m = d.data() as any;
+          const customerId = String(m.customerId ?? "").trim();
+          if (!customerId) return;
+
+          const amount = Number(m.amount ?? 0);
+          balanceByCustomer[customerId] =
+            (balanceByCustomer[customerId] || 0) + amount;
+
+          const type = String(m.type ?? "").toUpperCase();
+          const createdAt = m.createdAt ?? null;
+          if (type === "ABONO") {
+            abonosSum += Math.abs(amount);
+            const prev = lastPaymentByCustomer[customerId];
+            const isNewer =
+              !prev?.ts ||
+              (createdAt?.toDate && prev.ts?.toDate
+                ? createdAt.toDate() > prev.ts.toDate()
+                : false);
+            if (!prev || isNewer) {
+              lastPaymentByCustomer[customerId] = {
+                amount: Math.abs(amount),
+                date: m.date ?? "",
+                ts: createdAt,
+              };
+            }
+          }
+
+          if (type === "CARGO") {
+            const saleId = m?.ref?.saleId ? String(m.ref.saleId) : "";
+            if (saleId) {
+              if (!salesByCustomer[customerId])
+                salesByCustomer[customerId] = new Set();
+              salesByCustomer[customerId].add(saleId);
+              saleIds.add(saleId);
+            }
+          }
+        });
+
+        const saleCache = new Map<string, any>();
+        await Promise.all(
+          Array.from(saleIds).map(async (saleId) => {
+            const snap = await getDoc(doc(db, "salesV2", saleId));
+            if (snap.exists()) saleCache.set(saleId, snap.data());
+          }),
+        );
+
+        const pendingRows: PendingCustomerRow[] = [];
+        Object.keys(balanceByCustomer).forEach((customerId) => {
+          const balance = Number(balanceByCustomer[customerId] || 0);
+          if (balance <= 0) return;
+
+          const productMap = new Map<string, PendingProductRow>();
+          let lbs = 0;
+          let units = 0;
+
+          const salesSet = salesByCustomer[customerId] || new Set<string>();
+          salesSet.forEach((saleId) => {
+            const sale = saleCache.get(saleId);
+            if (!sale) return;
+
+            const items =
+              Array.isArray(sale.items) && sale.items.length > 0
+                ? sale.items
+                : [
+                    {
+                      productName: sale.productName,
+                      qty: sale.quantity,
+                      unitPrice: sale.unitPrice,
+                      discount: sale.discount,
+                      lineFinal: sale.amount ?? sale.amountCharged,
+                      measurement: sale.measurement,
+                    },
+                  ];
+
+            items.forEach((it: any) => {
+              const productName = String(it.productName ?? "(sin nombre)");
+              const qty = Number(it.qty ?? it.quantity ?? 0);
+              const measurement = String(it.measurement ?? "");
+              const lineFinal =
+                Number(it.lineFinal ?? 0) ||
+                Math.max(
+                  0,
+                  Number(it.unitPrice || 0) * qty - Number(it.discount || 0),
+                );
+
+              if (isLb(measurement)) lbs += qty;
+              else units += qty;
+
+              const key = `${productName}||${measurement}`;
+              const row = productMap.get(key) || {
+                productName,
+                qty: 0,
+                amount: 0,
+                measurement,
+              };
+              row.qty += qty;
+              row.amount += lineFinal;
+              productMap.set(key, row);
+            });
+          });
+
+          const lastPayment = lastPaymentByCustomer[customerId];
+
+          pendingRows.push({
+            customerId,
+            name: customerNameById[customerId] || "(sin nombre)",
+            balance,
+            lbs,
+            units,
+            lastPaymentAmount: Number(lastPayment?.amount || 0),
+            lastPaymentDate: formatDateShort(
+              lastPayment?.ts || lastPayment?.date,
+            ),
+            products: Array.from(productMap.values()).sort((a, b) =>
+              a.productName.localeCompare(b.productName),
+            ),
+          });
+        });
+
+        const withProducts = pendingRows.filter((row) => row.products.length);
+        withProducts.sort((a, b) => b.balance - a.balance);
+        setPendingCustomers(withProducts);
+        setTotalAbonos(abonosSum);
+      } catch (e) {
+        console.error("Error cargando saldos pendientes:", e);
+        setPendingCustomers([]);
+        setTotalAbonos(0);
+      } finally {
+        setPendingLoading(false);
+      }
+    };
+
+    loadPending();
+  }, [refreshKey]);
+
   // KPI: Libras vendidas
   const totalLbs = useMemo(
     () =>
@@ -242,6 +484,56 @@ export default function FinancialDashboard(): React.ReactElement {
         0,
       ),
     [visibleSales],
+  );
+
+  const cashSales = useMemo(
+    () => visibleSales.filter((s) => s.type === "CONTADO"),
+    [visibleSales],
+  );
+  const creditSales = useMemo(
+    () => visibleSales.filter((s) => s.type === "CREDITO"),
+    [visibleSales],
+  );
+
+  const totalSalesCash = useMemo(
+    () => cashSales.reduce((a, s) => a + (s.amount || 0), 0),
+    [cashSales],
+  );
+  const totalSalesCredit = useMemo(
+    () => creditSales.reduce((a, s) => a + (s.amount || 0), 0),
+    [creditSales],
+  );
+
+  const totalPendingBalance = useMemo(
+    () => pendingCustomers.reduce((a, c) => a + Number(c.balance || 0), 0),
+    [pendingCustomers],
+  );
+
+  const cashRevenueWithAbonos = useMemo(
+    () => kpisCashVisible.revenue + totalAbonos,
+    [kpisCashVisible.revenue, totalAbonos],
+  );
+
+  const totalSalesCashWithAbonos = useMemo(
+    () => totalSalesCash + totalAbonos,
+    [totalSalesCash, totalAbonos],
+  );
+
+  const totalLbsCash = useMemo(
+    () =>
+      cashSales.reduce(
+        (a, s: any) => (isLb(s.measurement) ? a + getQty(s) : a),
+        0,
+      ),
+    [cashSales],
+  );
+  const totalLbsCredit = useMemo(
+    () =>
+      creditSales.reduce(
+        (a, s: any) => (isLb(s.measurement) ? a + getQty(s) : a),
+        0,
+      ),
+    [creditSales],
   );
 
   // KPI: Unidades vendidas
@@ -261,6 +553,23 @@ export default function FinancialDashboard(): React.ReactElement {
         0,
       ),
     [visibleSales],
+  );
+
+  const totalUnitsCash = useMemo(
+    () =>
+      cashSales.reduce(
+        (a, s: any) => (isUnit(s.measurement) ? a + getQty(s) : a),
+        0,
+      ),
+    [cashSales],
+  );
+  const totalUnitsCredit = useMemo(
+    () =>
+      creditSales.reduce(
+        (a, s: any) => (isUnit(s.measurement) ? a + getQty(s) : a),
+        0,
+      ),
+    [creditSales],
   );
 
   // list of products present in the selected date range
@@ -403,32 +712,90 @@ export default function FinancialDashboard(): React.ReactElement {
               {kpisOpen && (
                 <div className="mt-3 space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                    <Kpi title="Ventas" value={money(kpisVisible.revenue)} />
-                    <Kpi title="Costo" value={money(kpisVisible.cogsReal)} />
+                    <Kpi
+                      title="Ventas"
+                      subtitle="Ventas cash"
+                      value={money(cashRevenueWithAbonos)}
+                    />
+                    <Kpi
+                      title="Costo"
+                      value={money(kpisCashVisible.cogsReal)}
+                    />
                     <Kpi
                       title="Ganancia Bruta"
-                      value={money(kpisVisible.grossProfit)}
+                      value={money(kpisCashVisible.grossProfit)}
                       positive
                     />
                     <Kpi
                       title="Gastos"
-                      value={money(kpisVisible.expensesSum)}
+                      value={money(kpisCashVisible.expensesSum)}
                     />
                     <Kpi
                       title="Ganancia Neta"
-                      value={money(kpisVisible.netProfit)}
+                      value={money(kpisCashVisible.netProfit)}
                       positive
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+                    <Kpi
+                      title="Ventas Crédito"
+                      value={money(kpisCreditVisible.revenue)}
+                    />
+                    <Kpi
+                      title="Costo"
+                      value={money(kpisCreditVisible.cogsReal)}
+                    />
+                    <Kpi
+                      title="Ganancia Bruta (Aproximado)"
+                      value={money(kpisCreditVisible.grossProfit)}
+                      positive
+                    />
+                    <Kpi
+                      title="CxC"
+                      value={money(totalPendingBalance)}
+                    />
+                    <Kpi
+                      title="Recaudación (Abonos)"
+                      value={money(totalAbonos)}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+                    <KpiCompact
+                      title="Ventas Cash"
+                      value={money(totalSalesCashWithAbonos)}
+                    />
+                    <KpiCompact
+                      title="Ventas Crédito"
+                      value={money(totalSalesCredit)}
+                    />
+                    <KpiCompact
+                      title="Libras Cash"
+                      value={qty3(totalLbsCash)}
+                    />
+                    <KpiCompact
+                      title="Libras Crédito"
+                      value={qty3(totalLbsCredit)}
+                    />
+                    <KpiCompact
+                      title="Unidades Cash"
+                      value={qty3(totalUnitsCash)}
+                    />
+                    <KpiCompact
+                      title="Unidades Crédito"
+                      value={qty3(totalUnitsCredit)}
                     />
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
                     <KpiCompact
-                      title="Libras Vendidas"
-                      value={qty3(totalLbsVisible)}
+                      title="Libras Cash + Credito"
+                      value={qty3(totalLbsCash + totalLbsCredit)}
                     />
                     <KpiCompact
-                      title="Unidades Vendidas"
-                      value={qty3(totalUnitsVisible)}
+                      title="Unidades Cash + Credito"
+                      value={qty3(totalUnitsCash + totalUnitsCredit)}
                     />
                     <KpiList
                       title="Productos más vendidos"
@@ -445,27 +812,69 @@ export default function FinancialDashboard(): React.ReactElement {
           </div>
           {/* KPIs principales */}
           <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-            <Kpi title="Ventas" value={money(kpisVisible.revenue)} />
-            <Kpi title="Costo" value={money(kpisVisible.cogsReal)} />
+            <Kpi title="Ventas Cash" value={money(cashRevenueWithAbonos)} />
+            <Kpi title="Costo" value={money(kpisCashVisible.cogsReal)} />
             <Kpi
               title="Ganancia Bruta"
-              value={money(kpisVisible.grossProfit)}
+              value={money(kpisCashVisible.grossProfit)}
               positive
             />
-            <Kpi title="Gastos" value={money(kpisVisible.expensesSum)} />
+            <Kpi title="Gastos" value={money(kpisCashVisible.expensesSum)} />
             <Kpi
               title="Ganancia Neta"
-              value={money(kpisVisible.netProfit)}
+              value={money(kpisCashVisible.netProfit)}
               positive
+            />
+          </div>
+
+          <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+            <Kpi
+              title="Ventas Crédito"
+              value={money(kpisCreditVisible.revenue)}
+            />
+            <Kpi title="Costo" value={money(kpisCreditVisible.cogsReal)} />
+            <Kpi
+              title="Ganancia Bruta (Aproximado)"
+              value={money(kpisCreditVisible.grossProfit)}
+              positive
+            />
+            <Kpi
+              title="CxC"
+              value={money(totalPendingBalance)}
+            />
+            <Kpi
+              title="Recaudación (Abonos)"
+              value={money(totalAbonos)}
+            />
+          </div>
+
+          <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+            <KpiCompact
+              title="Ventas Cash"
+              value={money(totalSalesCashWithAbonos)}
+            />
+            <KpiCompact
+              title="Ventas Crédito"
+              value={money(totalSalesCredit)}
+            />
+            <KpiCompact title="Libras Cash" value={qty3(totalLbsCash)} />
+            <KpiCompact title="Libras Crédito" value={qty3(totalLbsCredit)} />
+            <KpiCompact title="Unidades Cash" value={qty3(totalUnitsCash)} />
+            <KpiCompact
+              title="Unidades Crédito"
+              value={qty3(totalUnitsCredit)}
             />
           </div>
 
           {/* KPIs secundarios */}
           <div className="hidden md:grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
-            <KpiCompact title="Libras Vendidas" value={qty3(totalLbsVisible)} />
             <KpiCompact
-              title="Unidades Vendidas"
-              value={qty3(totalUnitsVisible)}
+              title="Libras Cash + Credito"
+              value={qty3(totalLbsCash + totalLbsCredit)}
+            />
+            <KpiCompact
+              title="Unidades Cash + Credito"
+              value={qty3(totalUnitsCash + totalUnitsCredit)}
             />
             <KpiList
               title="Productos más vendidos"
@@ -478,6 +887,58 @@ export default function FinancialDashboard(): React.ReactElement {
           </div>
 
           {/* ===================== CONSOLIDADO POR PRODUCTO ===================== */}
+          <h3 className="font-semibold mb-2">Saldos pendientes</h3>
+          <div className="border rounded-2xl p-3 sm:p-4 bg-gray-50 mb-6">
+            {pendingLoading ? (
+              <div className="text-sm text-gray-600">Cargando saldos…</div>
+            ) : pendingCustomers.length === 0 ? (
+              <div className="text-sm text-gray-600">
+                Sin saldos pendientes.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full border text-sm">
+                  <thead className="bg-white">
+                    <tr>
+                      <th className="border p-2">Cliente</th>
+                      <th className="border p-2">Libras asociadas</th>
+                      <th className="border p-2">Unidades asociadas</th>
+                      <th className="border p-2">Saldo pendiente</th>
+                      <th className="border p-2">Último abono</th>
+                      <th className="border p-2">Fecha ult. abono</th>
+                      <th className="border p-2">Ver</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingCustomers.map((c) => (
+                      <tr key={c.customerId} className="text-center">
+                        <td className="border p-1 text-left">{c.name}</td>
+                        <td className="border p-1">{qty3(c.lbs)}</td>
+                        <td className="border p-1">{qty3(c.units)}</td>
+                        <td className="border p-1">{money(c.balance)}</td>
+                        <td className="border p-1">
+                          {money(c.lastPaymentAmount)}
+                        </td>
+                        <td className="border p-1">
+                          {c.lastPaymentDate || "—"}
+                        </td>
+                        <td className="border p-1">
+                          <button
+                            type="button"
+                            onClick={() => setPendingOpen(c)}
+                            className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                          >
+                            Ver
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           <h3 className="font-semibold mb-2">Consolidado por producto</h3>
 
           {/* Desktop: tabla */}
@@ -751,6 +1212,59 @@ export default function FinancialDashboard(): React.ReactElement {
           </div>
         </>
       )}
+
+      {pendingOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-semibold text-lg">{pendingOpen.name}</h4>
+              <button
+                type="button"
+                onClick={() => setPendingOpen(null)}
+                className="text-sm text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full border text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="border p-2">Producto</th>
+                    <th className="border p-2">Libras/Unidades</th>
+                    <th className="border p-2">Monto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingOpen.products.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="border p-2 text-center text-gray-500"
+                      >
+                        Sin productos asociados.
+                      </td>
+                    </tr>
+                  ) : (
+                    pendingOpen.products.map((p) => (
+                      <tr key={`${p.productName}-${p.measurement}`}>
+                        <td className="border p-1">{p.productName}</td>
+                        <td className="border p-1 text-center">
+                          {qty3(p.qty)}
+                        </td>
+                        <td className="border p-1 text-center">
+                          {money(p.amount)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -761,14 +1275,21 @@ function Kpi({
   title,
   value,
   positive,
+  subtitle,
 }: {
   title: string;
   value: string;
   positive?: boolean;
+  subtitle?: string;
 }) {
   return (
     <div className="border rounded-2xl p-3 bg-white">
       <div className="text-[13px] sm:text-[17px] text-gray-500">{title}</div>
+      {subtitle ? (
+        <div className="text-[11px] sm:text-[12px] text-gray-400">
+          {subtitle}
+        </div>
+      ) : null}
       <div
         className={`text-[26px] sm:text-[30px] font-bold ${
           positive ? "text-green-700" : ""

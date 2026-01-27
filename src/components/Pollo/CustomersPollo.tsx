@@ -1708,6 +1708,84 @@ export default function CustomersPollo({
           document.body,
         )}
 
+      {/* ===== Modal Abonar ===== */}
+      {showAbono && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[90]">
+          <div className="bg-white rounded-lg shadow-2xl border w-[95%] max-w-md p-4">
+            <h3 className="text-lg font-bold">
+              Registrar abono — {stCustomer?.name || ""}
+            </h3>
+
+            <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="block text-sm font-semibold">Fecha</label>
+                <input
+                  type="date"
+                  className="w-full border p-2 rounded"
+                  value={abonoDate}
+                  onChange={(e) => setAbonoDate(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold">Monto</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  className="w-full border p-2 rounded"
+                  value={abonoAmount === 0 ? "" : abonoAmount}
+                  onChange={(e) => {
+                    const num = Number(e.target.value || 0);
+                    const safe = Number.isFinite(num)
+                      ? Math.max(0, parseFloat(num.toFixed(2)))
+                      : 0;
+                    setAbonoAmount(safe);
+                  }}
+                  placeholder="0.00"
+                />
+                <div className="text-xs text-gray-500 mt-1">
+                  Se registrará como ABONO (negativo) con 2 decimales.
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold">
+                  Comentario (opcional)
+                </label>
+                <textarea
+                  className="w-full border p-2 rounded resize-y min-h-20"
+                  value={abonoComment}
+                  onChange={(e) => setAbonoComment(e.target.value)}
+                  maxLength={250}
+                  placeholder="Ej: Abono en efectivo"
+                />
+                <div className="text-xs text-gray-500 text-right">
+                  {abonoComment.length}/250
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => setShowAbono(false)}
+                disabled={savingAbono}
+              >
+                Cancelar
+              </button>
+              <button
+                className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+                onClick={saveAbono}
+                disabled={savingAbono}
+              >
+                {savingAbono ? "Guardando..." : "Guardar abono"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* items modal */}
       {itemsModalOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[65]">

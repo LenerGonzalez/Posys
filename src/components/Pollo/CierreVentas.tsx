@@ -31,6 +31,8 @@ interface SaleDataRaw {
   amount?: number;
   amountCharged?: number;
   amountSuggested?: number;
+  measurement?: string;
+  type?: "CREDITO" | "CONTADO";
   date?: string;
   userEmail?: string;
   vendor?: string;
@@ -62,6 +64,8 @@ interface SaleData {
   amountReceived: number;
   change: string;
   status: "FLOTANTE" | "PROCESADA";
+  type: "CREDITO" | "CONTADO";
+  measurement?: string;
   allocations?: {
     batchId: string;
     qty: number;
@@ -106,6 +110,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       : "");
   if (!date) return [];
 
+  const saleType: "CREDITO" | "CONTADO" = raw.type ?? "CONTADO";
+
   if (Array.isArray(raw.items) && raw.items.length > 0) {
     return raw.items.map((it, idx) => {
       const qty = Number(it?.qty ?? 0);
@@ -127,6 +133,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         amountReceived: Number(raw.amountReceived ?? 0),
         change: String(raw.change ?? "0"),
         status: (raw.status as any) ?? "FLOTANTE",
+        type: saleType,
+        measurement: String(it?.measurement ?? raw.measurement ?? ""),
         allocations: Array.isArray(it?.allocations)
           ? it.allocations
           : raw.allocations,
@@ -149,6 +157,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       amountReceived: Number(raw.amountReceived ?? 0),
       change: String(raw.change ?? "0"),
       status: (raw.status as any) ?? "FLOTANTE",
+      type: saleType,
+      measurement: String(raw.measurement ?? ""),
       allocations: raw.allocations,
       avgUnitCost: raw.avgUnitCost,
       cogsAmount: raw.cogsAmount,
@@ -169,6 +179,12 @@ export default function CierreVentas({
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState<"ALL" | "FLOTANTE" | "PROCESADA">("ALL");
+  const [operationFilter, setOperationFilter] = useState<
+    "ALL" | "CREDITO" | "CONTADO"
+  >("ALL");
+  const [userNameByEmail, setUserNameByEmail] = useState<
+    Record<string, string>
+  >({});
 
   const [editing, setEditing] = useState<null | SaleData>(null);
   const [editQty, setEditQty] = useState<number>(0);
@@ -284,6 +300,35 @@ export default function CierreVentas({
     return () => unsub();
   }, [startDate, endDate, refreshKey]);
 
+  // Cargar usuarios para mostrar nombre del vendedor
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "users"));
+        const map: Record<string, string> = {};
+        snap.forEach((d) => {
+          const u = d.data() as any;
+          const email = String(u.email || "")
+            .trim()
+            .toLowerCase();
+          const name = String(u.name || "").trim();
+          if (email) map[email] = name || u.email || "";
+        });
+        setUserNameByEmail(map);
+      } catch (e) {
+        console.error("Error cargando usuarios:", e);
+        setUserNameByEmail({});
+      }
+    })();
+  }, []);
+
+  const displaySeller = (email?: string) => {
+    const key = String(email || "")
+      .trim()
+      .toLowerCase();
+    return userNameByEmail[key] || email || "—";
+  };
+
   // Cierre guardado (informativo)
   useEffect(() => {
     const fetchClosure = async () => {
@@ -320,6 +365,10 @@ export default function CierreVentas({
       base = salesV2.filter((s) => s.status === "PROCESADA");
     }
 
+    if (operationFilter !== "ALL") {
+      base = base.filter((s) => s.type === operationFilter);
+    }
+
     const pf = productFilter.trim().toLowerCase();
     if (pf) {
       const norm = (x: string) =>
@@ -333,22 +382,66 @@ export default function CierreVentas({
     }
 
     return base;
-  }, [filter, salesV2, floatersExtra, productFilter]);
+  }, [filter, salesV2, floatersExtra, productFilter, operationFilter]);
 
   // Totales visibles
-  const totalSuggested = round2(
-    visibleSales.reduce((sum, s) => sum + (s.amountSuggested || 0), 0),
-  );
   const totalCharged = round2(
     visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0),
-  );
-  const totalUnits = round3(
-    visibleSales.reduce((sum, s) => sum + (s.quantity || 0), 0),
   );
   const totalCOGSVisible = round2(
     visibleSales.reduce((sum, s) => sum + Number(s.cogsAmount ?? 0), 0),
   );
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
+
+  const isUnitMeasure = (m?: string) =>
+    String(m || "")
+      .trim()
+      .toLowerCase() !== "lb";
+
+  const cashSales = visibleSales.filter((s) => s.type === "CONTADO");
+  const creditSales = visibleSales.filter((s) => s.type === "CREDITO");
+
+  const totalUnitsCash = round3(
+    cashSales
+      .filter((s) => isUnitMeasure(s.measurement))
+      .reduce((sum, s) => sum + (s.quantity || 0), 0),
+  );
+  const totalLbsCash = round3(
+    cashSales
+      .filter((s) => !isUnitMeasure(s.measurement))
+      .reduce((sum, s) => sum + (s.quantity || 0), 0),
+  );
+  const totalUnitsCredit = round3(
+    creditSales
+      .filter((s) => isUnitMeasure(s.measurement))
+      .reduce((sum, s) => sum + (s.quantity || 0), 0),
+  );
+  const totalLbsCredit = round3(
+    creditSales
+      .filter((s) => !isUnitMeasure(s.measurement))
+      .reduce((sum, s) => sum + (s.quantity || 0), 0),
+  );
+
+  const totalSalesCash = round2(
+    cashSales.reduce((sum, s) => sum + (s.amount || 0), 0),
+  );
+  const totalSalesCredit = round2(
+    creditSales.reduce((sum, s) => sum + (s.amount || 0), 0),
+  );
+
+  const totalCOGSCash = round2(
+    cashSales.reduce((sum, s) => sum + Number(s.cogsAmount ?? 0), 0),
+  );
+  const totalCOGSCredit = round2(
+    creditSales.reduce((sum, s) => sum + Number(s.cogsAmount ?? 0), 0),
+  );
+
+  const grossProfitCash = round2(totalSalesCash - totalCOGSCash);
+  const grossProfitCredit = round2(totalSalesCredit - totalCOGSCredit);
+
+  const totalUnitsAll = round3(totalUnitsCash + totalUnitsCredit);
+  const totalLbsAll = round3(totalLbsCash + totalLbsCredit);
+  const totalSalesAll = round2(totalSalesCash + totalSalesCredit);
 
   // Consolidado por producto
   const productMap: Record<
@@ -613,6 +706,9 @@ export default function CierreVentas({
             <span className="ml-1">
               {startDate} → {endDate}
               {filter !== "ALL" ? ` • ${filter}` : ""}
+              {operationFilter !== "ALL"
+                ? ` • ${operationFilter === "CREDITO" ? "Crédito" : "Cash"}`
+                : ""}
               {productFilter.trim() ? ` • "${productFilter.trim()}"` : ""}
             </span>
           }
@@ -620,7 +716,7 @@ export default function CierreVentas({
 
         {filtersOpen && (
           <div className="mt-3 border rounded-xl p-3 bg-white">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-gray-600">Periodo desde</label>
                 <input
@@ -655,6 +751,19 @@ export default function CierreVentas({
               </div>
 
               <div className="flex flex-col gap-1">
+                <label className="text-xs text-gray-600">Tipo Operación</label>
+                <select
+                  className="border rounded px-2 py-2 w-full"
+                  value={operationFilter}
+                  onChange={(e) => setOperationFilter(e.target.value as any)}
+                >
+                  <option value="ALL">Todos</option>
+                  <option value="CREDITO">Crédito</option>
+                  <option value="CONTADO">Cash</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1">
                 <label className="text-xs text-gray-600">Producto</label>
                 <input
                   type="text"
@@ -681,6 +790,7 @@ export default function CierreVentas({
               <thead className="bg-gray-100">
                 <tr>
                   <th className="border p-2">Estado</th>
+                  <th className="border p-2">Tipo</th>
                   <th className="border p-2">Producto</th>
                   <th className="border p-2">Libras - Unidad</th>
                   <th className="border p-2">Monto</th>
@@ -703,11 +813,14 @@ export default function CierreVentas({
                         {s.status}
                       </span>
                     </td>
+                    <td className="border p-1">
+                      {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                    </td>
                     <td className="border p-1">{s.productName}</td>
                     <td className="border p-1">{qty3(s.quantity)}</td>
                     <td className="border p-1">C${money(s.amount)}</td>
                     <td className="border p-1">{s.date}</td>
-                    <td className="border p-1">{s.userEmail}</td>
+                    <td className="border p-1">{displaySeller(s.userEmail)}</td>
                     <td className="border p-1">
                       {s.status === "FLOTANTE" ? (
                         <div className="flex gap-2 justify-center">
@@ -753,7 +866,7 @@ export default function CierreVentas({
                 ))}
                 {visibleSales.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-3 text-center text-gray-500">
+                    <td colSpan={8} className="p-3 text-center text-gray-500">
                       Sin ventas para mostrar.
                     </td>
                   </tr>
@@ -813,9 +926,16 @@ export default function CierreVentas({
                       </div>
 
                       <div className="flex justify-between gap-3">
+                        <span className="text-gray-600">Tipo</span>
+                        <strong>
+                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                        </strong>
+                      </div>
+
+                      <div className="flex justify-between gap-3">
                         <span className="text-gray-600">Vendedor</span>
                         <strong className="text-right break-all">
-                          {s.userEmail}
+                          {displaySeller(s.userEmail)}
                         </strong>
                       </div>
 
@@ -884,28 +1004,56 @@ export default function CierreVentas({
             )}
           </div>
 
-          {/* Totales */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-2">
+          {/* KPIs */}
+          <div className="grid grid-cols-2 gap-2 text-sm mb-6">
             <div>
-              Total Libras/Unidades: <strong>{qty3(totalUnits)}</strong>
+              Total libras Cash: <strong>{qty3(totalLbsCash)}</strong>
             </div>
             <div>
-              Total cobrado: <strong>C${money(totalCharged)}</strong>
+              Total Unidades cash: <strong>{qty3(totalUnitsCash)}</strong>
+            </div>
+            <div>
+              Total libras credito: <strong>{qty3(totalLbsCredit)}</strong>
+            </div>
+            <div>
+              Total Unidades credito: <strong>{qty3(totalUnitsCredit)}</strong>
+            </div>
+            <div>
+              Total facturado Cash: <strong>C${money(totalCOGSCash)}</strong>
+            </div>
+            <div>
+              Total facturado credito:{" "}
+              <strong>C${money(totalCOGSCredit)}</strong>
+            </div>
+            <div>
+              Total venta Cash: <strong>C${money(totalSalesCash)}</strong>
+            </div>
+            <div>
+              Total venta Credito: <strong>C${money(totalSalesCredit)}</strong>
+            </div>
+            <div>
+              Utilidad bruta Cash: <strong>C${money(grossProfitCash)}</strong>
+            </div>
+            <div>
+              Utilidad bruta credito:{" "}
+              <strong>C${money(grossProfitCredit)}</strong>
+            </div>
+            <div>
+              Total libras cash y credito: <strong>{qty3(totalLbsAll)}</strong>
+            </div>
+            <div>
+              Total unidades cash y credito:{" "}
+              <strong>{qty3(totalUnitsAll)}</strong>
+            </div>
+            <div>
+              Total ventas Cash y credito:{" "}
+              <strong>C${money(totalSalesAll)}</strong>
+            </div>
+            <div>
+              Total facturado a precio compra:{" "}
+              <strong>C${money(totalCOGSVisible)}</strong>
             </div>
           </div>
-
-          {(totalCOGSVisible > 0 || grossProfitVisible !== totalCharged) && (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm mb-6">
-              <div>
-                Calculo a Precio compra:{" "}
-                <strong>C${money(totalCOGSVisible)}</strong>
-              </div>
-              <div>
-                Ganancia antes de gasto:{" "}
-                <strong>C${money(grossProfitVisible)}</strong>
-              </div>
-            </div>
-          )}
 
           {/* ✅ CONSOLIDADO COLAPSABLE */}
           <div className="mt-4">
@@ -957,15 +1105,14 @@ export default function CierreVentas({
       )}
 
       <div className="flex flex-wrap gap-2 mt-4">
-        
-          <button
-            disabled={!cierreVentas}
-            onClick={handleSaveClosure}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-          >
-            Cerrar ventas del día
-          </button>
-        
+        <button
+          disabled={!cierreVentas}
+          onClick={handleSaveClosure}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          Cerrar ventas del día
+        </button>
+
         <button
           onClick={handleDownloadPDF}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
@@ -982,7 +1129,7 @@ export default function CierreVentas({
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4 space-y-3">
             <h4 className="font-semibold text-lg">Editar venta</h4>
             <div className="text-sm text-gray-500">
-              {editing.productName} • {editing.userEmail}
+              {editing.productName} • {displaySeller(editing.userEmail)}
             </div>
 
             <label className="text-sm">Cantidad</label>

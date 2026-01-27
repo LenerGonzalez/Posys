@@ -13,7 +13,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
-import { format } from "date-fns";
+import { format, isValid, parse } from "date-fns";
 import { restoreSaleAndDelete } from "../../Services/inventory";
 
 type SaleType = "CONTADO" | "CREDITO";
@@ -37,9 +37,108 @@ interface SaleDoc {
   _raw?: any;
 }
 
+const getSaleCustomerName = (
+  s: SaleDoc,
+  customersById: Record<string, string>,
+) =>
+  s._raw?.clientName ||
+  s.customerName ||
+  (s.customerId ? customersById[s.customerId] : "") ||
+  "Nombre cliente";
+
+const getSaleDateTs = (s: SaleDoc) => {
+  const direct = toDateNumber(s.date);
+  if (isFinite(direct)) return direct;
+  const raw = s._raw || {};
+  const candidates = [
+    raw.date,
+    raw.closureDate,
+    raw.processedDate,
+    raw.createdAt,
+    raw.timestamp,
+  ];
+  for (const c of candidates) {
+    const ts = toDateNumber(c);
+    if (isFinite(ts)) return ts;
+  }
+  return NaN;
+};
+
+function normalizeDateString(raw: any): string {
+  if (!raw) return "";
+  if (raw?.toDate) return format(raw.toDate(), "yyyy-MM-dd");
+  const s = String(raw).trim();
+  if (!s) return "";
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  const tryFormats = [
+    "dd/MM/yyyy",
+    "d/M/yyyy",
+    "MM/dd/yyyy",
+    "M/d/yyyy",
+    "yyyy/MM/dd",
+    "yyyy-M-d",
+    "yyyy/M/d",
+    "yyyy-MM-dd'T'HH:mm:ss",
+    "yyyy-MM-dd'T'HH:mm:ss.SSSX",
+  ];
+
+  for (const f of tryFormats) {
+    const parsed = parse(s, f, new Date());
+    if (isValid(parsed)) return format(parsed, "yyyy-MM-dd");
+  }
+
+  const asDate = new Date(s);
+  if (!isNaN(asDate.getTime())) return format(asDate, "yyyy-MM-dd");
+  return "";
+}
+
+function toDateNumber(raw: any): number {
+  const normalized = normalizeDateString(raw);
+  if (!normalized) return NaN;
+  const parsed = parse(normalized, "yyyy-MM-dd", new Date());
+  return isValid(parsed) ? parsed.getTime() : NaN;
+}
+
 function ensureDate(x: any): string {
-  if (x?.date) return x.date;
-  if (x?.createdAt?.toDate) return format(x.createdAt.toDate(), "yyyy-MM-dd");
+  const status = String(x?.status || "").toUpperCase();
+
+  if (status === "PROCESADA") {
+    const fromClosure = normalizeDateString(x?.closureDate);
+    if (fromClosure) return fromClosure;
+    const fromProcessed = normalizeDateString(x?.processedDate);
+    if (fromProcessed) return fromProcessed;
+  }
+
+  const fromDateField = normalizeDateString(x?.date);
+  const createdAt = x?.createdAt?.toDate ? x.createdAt.toDate() : null;
+
+  // Si existe date pero es inconsistente con createdAt, usar createdAt
+  if (fromDateField && createdAt) {
+    const dateTs = toDateNumber(fromDateField);
+    const createdTs = createdAt.getTime();
+
+    const diffDays = Math.abs(createdTs - dateTs) / (1000 * 60 * 60 * 24);
+
+    // si difiere más de 30 días, date está mal guardado
+    if (diffDays > 30) {
+      return format(createdAt, "yyyy-MM-dd");
+    }
+  }
+
+  // si date es válido y coherente, usarlo
+  if (fromDateField) return fromDateField;
+
+  // fallback real
+  if (x?.timestamp?.toDate) return format(x.timestamp.toDate(), "yyyy-MM-dd");
+
+  if (createdAt) return format(createdAt, "yyyy-MM-dd");
+
+  const fromClosureFallback = normalizeDateString(x?.closureDate);
+  if (fromClosureFallback) return fromClosureFallback;
+  const fromProcessedFallback = normalizeDateString(x?.processedDate);
+  if (fromProcessedFallback) return fromProcessedFallback;
   return "";
 }
 
@@ -409,6 +508,12 @@ export default function TransactionsPollo({
     return m;
   }, [customers]);
 
+  useEffect(() => {
+    if (productFilter !== "ALL" && !products.includes(productFilter)) {
+      setProductFilter("ALL");
+    }
+  }, [products, productFilter]);
+
   // no manejamos comisiones ni vendedores en este reporte Pollo
 
   // Carga inicial y recarga al cambiar rango de fechas
@@ -451,19 +556,29 @@ export default function TransactionsPollo({
         sSnap.forEach((d) => {
           const x = normalizeSale(d.data(), d.id);
           if (!x) return;
-          if (x.date >= fromDate && x.date <= toDate) list.push(x);
+          list.push(x);
         });
         const sorted = list.sort((a, b) => b.date.localeCompare(a.date));
         setSales(sorted);
+        const startTs = toDateNumber(fromDate);
+        const endTs = toDateNumber(toDate);
         setProducts(
           Array.from(
             new Set(
-              sorted.map(
-                (s) =>
-                  s._raw?.productName ||
-                  s._raw?.items?.[0]?.productName ||
-                  "(sin producto)",
-              ),
+              sorted
+                .filter((s) => {
+                  const saleTs = getSaleDateTs(s);
+                  if (!isFinite(saleTs)) return false;
+                  if (isFinite(startTs) && saleTs < startTs) return false;
+                  if (isFinite(endTs) && saleTs > endTs) return false;
+                  return true;
+                })
+                .map(
+                  (s) =>
+                    s._raw?.productName ||
+                    s._raw?.items?.[0]?.productName ||
+                    "(sin producto)",
+                ),
             ),
           ).sort(),
         );
@@ -477,9 +592,22 @@ export default function TransactionsPollo({
     })();
   }, [fromDate, toDate]);
 
-  // === Filtros de tabla (cliente / tipo / vendedor) ===
-  const filteredSales = useMemo(() => {
+  // === Filtros por rango de fecha (para KPIs) ===
+  const dateFilteredSales = useMemo(() => {
+    const startTs = toDateNumber(fromDate);
+    const endTs = toDateNumber(toDate);
     return sales.filter((s) => {
+      const saleTs = getSaleDateTs(s);
+      if (!isFinite(saleTs)) return false;
+      if (isFinite(startTs) && saleTs < startTs) return false;
+      if (isFinite(endTs) && saleTs > endTs) return false;
+      return true;
+    });
+  }, [sales, fromDate, toDate]);
+
+  // === Filtros de tabla (cliente / tipo / producto) ===
+  const filteredSales = useMemo(() => {
+    return dateFilteredSales.filter((s) => {
       // no filtramos por vendedor aquí para Pollo (acceso controlado por `role`)
       if (filterCustomerId) {
         if (s.customerId !== filterCustomerId) return false;
@@ -494,15 +622,15 @@ export default function TransactionsPollo({
       }
       return true;
     });
-  }, [sales, filterCustomerId, filterType, productFilter]);
+  }, [dateFilteredSales, filterCustomerId, filterType, productFilter]);
 
-  // KPIs sobre resultado filtrado (cantidad = paquetes)
+  // KPIs sobre rango de fechas (cantidad = paquetes)
   const kpis = useMemo(() => {
     let packsCash = 0,
       packsCredito = 0,
       montoCash = 0,
       montoCredito = 0;
-    for (const s of filteredSales) {
+    for (const s of dateFilteredSales) {
       if (s.type === "CONTADO") {
         packsCash += s.quantity;
         montoCash += s.total;
@@ -521,7 +649,7 @@ export default function TransactionsPollo({
       montoCredito,
       montoTotal,
     };
-  }, [filteredSales]);
+  }, [dateFilteredSales]);
 
   // page slices
   const totalPages = Math.max(1, Math.ceil(filteredSales.length / PAGE_SIZE));
@@ -576,10 +704,7 @@ export default function TransactionsPollo({
 
     const rows = filteredSales
       .map((s) => {
-        const name =
-          s.customerName ||
-          (s.customerId ? customersById[s.customerId] : "") ||
-          "Nombre cliente";
+        const name = getSaleCustomerName(s, customersById);
         const productName =
           s._raw?.productName ||
           s._raw?.items?.[0]?.productName ||
@@ -843,10 +968,7 @@ export default function TransactionsPollo({
           </div>
         ) : (
           paged.map((s) => {
-            const name =
-              s.customerName ||
-              (s.customerId ? customersById[s.customerId] : "") ||
-              "Nombre cliente";
+            const name = getSaleCustomerName(s, customersById);
             const productName =
               s._raw?.productName ||
               s._raw?.items?.[0]?.productName ||
@@ -1020,10 +1142,7 @@ export default function TransactionsPollo({
               </tr>
             ) : (
               paged.map((s) => {
-                const name =
-                  s.customerName ||
-                  (s.customerId ? customersById[s.customerId] : "") ||
-                  "Nombre cliente";
+                const name = getSaleCustomerName(s, customersById);
                 const productName =
                   s._raw?.productName ||
                   s._raw?.items?.[0]?.productName ||
