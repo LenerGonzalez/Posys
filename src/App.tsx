@@ -229,7 +229,9 @@ export default function App() {
           <Route
             path="financialDashboard"
             element={
-              <PrivateRoute allowedRoles={["admin"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "contador", "supervisor_pollo"]}
+              >
                 <FinancialDashboard />
               </PrivateRoute>
             }

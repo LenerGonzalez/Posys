@@ -18,6 +18,7 @@ export type PathKey =
   | "transactionsPollo"
   | "batches"
   | "salesV2"
+  | "financialDashboard"
   // DULCES
   | "salesCandies"
   | "productsVendorsCandies"
@@ -45,6 +46,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     batches: { view: true, edit: true }, // (nota: "solo crear lote" lo resolvemos en pantalla luego)
     transactionsPollo: { view: true, edit: false },
     bills: { view: true, edit: false },
+    financialDashboard: { view: true, edit: false },
   },
 
   vendedor_pollo: {
@@ -145,7 +147,6 @@ export function canAction(
     return !!perm?.[action];
   });
 }
-
 
 // Helpers opcionales (por si te sirven en layouts)
 export function hasAnyRole(subject: any, role: Role) {

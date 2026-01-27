@@ -62,7 +62,10 @@ type CartItem = {
   specialPrice: number; // ✅ NUEVO: precio especial digitado (0 = no aplica)
   stock: number; // existencias calculadas
   qty: number; // cantidad elegida
+  qtyInput?: string; // texto temporal para permitir decimales
+  specialPriceInput?: string; // texto temporal para precio sugerido
   discount: number; // entero C$ por línea
+  discountInput?: string; // texto temporal para descuento
 };
 
 // ===== Crédito / Clientes (Pollo) =====
@@ -260,7 +263,10 @@ export default function SaleForm({
         specialPrice: 0, // ✅ NUEVO
         stock,
         qty: 0,
+        qtyInput: "",
+        specialPriceInput: "",
         discount: 0,
+        discountInput: "",
       },
     ]);
     setSelectedProductId("");
@@ -283,7 +289,10 @@ export default function SaleForm({
         specialPrice: 0,
         stock,
         qty: 0,
+        qtyInput: "",
+        specialPriceInput: "",
         discount: 0,
+        discountInput: "",
       },
     ]);
     setSelectedProductId("");
@@ -294,13 +303,32 @@ export default function SaleForm({
     setItems((prev) => prev.filter((it) => it.productId !== productId));
   };
 
+  const normalizeDecimalInput = (raw: string) => {
+    const cleaned = String(raw || "").replace(",", ".");
+    if (cleaned === "") return "";
+    const parts = cleaned.split(".");
+    if (parts.length === 1) return cleaned;
+    return `${parts[0]}.${parts.slice(1).join("")}`;
+  };
+
   // Actualizar cantidad (solo cambia qty; existencias visibles = stock - qty)
   const setItemQty = async (productId: string, raw: string) => {
     setItems((prev) =>
       prev.map((it) => {
         if (it.productId !== productId) return it;
         const isUnit = (it.measurement || "").toLowerCase() !== "lb";
-        const num = raw === "" ? 0 : Number(raw);
+        const txt = normalizeDecimalInput(raw);
+
+        if (txt.trim() === "") {
+          return { ...it, qty: 0, qtyInput: "" };
+        }
+
+        if (!isUnit && txt === ".") {
+          return { ...it, qty: 0, qtyInput: "0." };
+        }
+
+        const parsed = Number(txt);
+        const num = Number.isFinite(parsed) ? parsed : 0;
         let qty = isUnit ? Math.max(0, Math.round(num)) : roundQty(num);
 
         // Limitar qty a las existencias conocidas (stock)
@@ -311,9 +339,21 @@ export default function SaleForm({
         if (qty > stockAvailable) {
           qty = stockAvailable;
           setMessage(`⚠️ Cantidad limitada a existencias (${stockAvailable})`);
+          const limitedInput = isUnit
+            ? String(qty)
+            : qty === 0
+              ? ""
+              : String(qty);
+          return { ...it, qty, qtyInput: limitedInput };
         }
 
-        return { ...it, qty };
+        const nextInput = isUnit
+          ? String(qty)
+          : txt.endsWith(".")
+            ? txt
+            : String(qty);
+
+        return { ...it, qty, qtyInput: nextInput };
       }),
     );
   };
@@ -323,10 +363,20 @@ export default function SaleForm({
     setItems((prev) =>
       prev.map((it) => {
         if (it.productId !== productId) return it;
-        const txt = (raw || "").replace(",", ".");
-        const num = txt.trim() === "" ? 0 : Number(txt);
+        const txt = normalizeDecimalInput(raw);
+
+        if (txt.trim() === "") {
+          return { ...it, specialPrice: 0, specialPriceInput: "" };
+        }
+
+        if (txt === ".") {
+          return { ...it, specialPrice: 0, specialPriceInput: "0." };
+        }
+
+        const num = Number(txt);
         const safe = Number.isFinite(num) ? Math.max(0, round2(num)) : 0;
-        return { ...it, specialPrice: safe };
+        const nextInput = txt.endsWith(".") ? txt : String(safe);
+        return { ...it, specialPrice: safe, specialPriceInput: nextInput };
       }),
     );
   };
@@ -336,8 +386,20 @@ export default function SaleForm({
     setItems((prev) =>
       prev.map((it) => {
         if (it.productId !== productId) return it;
-        const d = Math.max(0, Math.floor(Number(raw || 0)));
-        return { ...it, discount: d };
+        const txt = normalizeDecimalInput(raw);
+
+        if (txt.trim() === "") {
+          return { ...it, discount: 0, discountInput: "" };
+        }
+
+        if (txt === ".") {
+          return { ...it, discount: 0, discountInput: "0." };
+        }
+
+        const num = Number(txt);
+        const safe = Number.isFinite(num) ? Math.max(0, Math.floor(num)) : 0;
+        const nextInput = txt.endsWith(".") ? txt : String(safe);
+        return { ...it, discount: safe, discountInput: nextInput };
       }),
     );
   };
@@ -824,7 +886,7 @@ export default function SaleForm({
             />
             <div className="flex gap-2">
               <select
-                className="flex-1 border rounded px-2 py-2"
+                className="flex-1 border rounded px-1 py-2 text-sm"
                 value={selectedProductId}
                 onChange={async (e) => {
                   const id = e.target.value;
@@ -841,7 +903,8 @@ export default function SaleForm({
                     value={p.id}
                     disabled={chosenIds.has(p.id)}
                   >
-                    {p.productName} — {p.measurement} — C$ {p.price}
+                    {p.productName} | C$ {p.price} | Disp:{" "}
+                    {qty3(stockById[p.id] || 0)}
                   </option>
                 ))}
               </select>
@@ -875,7 +938,8 @@ export default function SaleForm({
                           className="border rounded px-2 py-1 text-right"
                           inputMode={isUnit ? "numeric" : "decimal"}
                           step={isUnit ? 1 : 0.01}
-                          value={it.qty === 0 ? "" : it.qty}
+                          value={it.qtyInput ?? (it.qty === 0 ? "" : it.qty)}
+                          onKeyDown={numberKeyGuard}
                           onChange={(e) =>
                             setItemQty(it.productId, e.target.value)
                           }
@@ -885,7 +949,10 @@ export default function SaleForm({
                         <input
                           className="border rounded px-1 py-1 text-right"
                           inputMode="numeric"
-                          value={it.discount === 0 ? "" : it.discount}
+                          value={
+                            it.discountInput ??
+                            (it.discount === 0 ? "" : it.discount)
+                          }
                           onChange={(e) =>
                             setItemDiscount(it.productId, e.target.value)
                           }
@@ -895,7 +962,10 @@ export default function SaleForm({
                         <input
                           className="border rounded px-2 py-1 text-right"
                           inputMode="decimal"
-                          value={it.specialPrice === 0 ? "" : it.specialPrice}
+                          value={
+                            it.specialPriceInput ??
+                            (it.specialPrice === 0 ? "" : it.specialPrice)
+                          }
                           onChange={(e) =>
                             setItemSpecialPrice(it.productId, e.target.value)
                           }
@@ -1217,7 +1287,7 @@ export default function SaleForm({
                           step={isUnit ? 1 : 0.01}
                           inputMode={isUnit ? "numeric" : "decimal"}
                           className="w-28 border p-1 rounded text-right"
-                          value={it.qty === 0 ? "" : it.qty}
+                          value={it.qtyInput ?? (it.qty === 0 ? "" : it.qty)}
                           onKeyDown={numberKeyGuard}
                           onChange={(e) =>
                             setItemQty(it.productId, e.target.value)

@@ -65,6 +65,8 @@ type GroupRow = {
 
   lbsIn: number;
   lbsRem: number;
+  udsIn: number;
+  udsRem: number;
 
   totalFacturado: number;
   totalEsperado: number;
@@ -359,6 +361,18 @@ export default function InventoryBatches({
           0,
         ),
       );
+      const udsIn = roundQty(
+        ordered.reduce(
+          (acc, x) => acc + (!isPounds(x.unit) ? Number(x.quantity || 0) : 0),
+          0,
+        ),
+      );
+      const udsRem = roundQty(
+        ordered.reduce(
+          (acc, x) => acc + (!isPounds(x.unit) ? Number(x.remaining || 0) : 0),
+          0,
+        ),
+      );
 
       const totalFacturado = Number(
         ordered
@@ -380,6 +394,8 @@ export default function InventoryBatches({
         status,
         lbsIn,
         lbsRem,
+        udsIn,
+        udsRem,
         totalFacturado,
         totalEsperado,
         utilidadBruta,
@@ -416,8 +432,17 @@ export default function InventoryBatches({
 
   // autocompletar precio proveedor si el producto tiene `providerPrice`
   useEffect(() => {
+    const existing = orderItems.find((it) => it.productId === productId);
+    if (existing) {
+      setQuantity(Number(existing.quantity || 0));
+      setPurchasePrice(Number(existing.purchasePrice || 0));
+      setSalePrice(Number(existing.salePrice || 0));
+      return;
+    }
+
     const p = products.find((x) => x.id === productId);
     if (p) {
+      setQuantity(0);
       setSalePrice(Number(p.price || 0));
       if (p.providerPrice != null && Number.isFinite(Number(p.providerPrice))) {
         setPurchasePrice(Number(p.providerPrice));
@@ -425,10 +450,11 @@ export default function InventoryBatches({
         setPurchasePrice(NaN);
       }
     } else {
+      setQuantity(0);
       setSalePrice(0);
       setPurchasePrice(NaN);
     }
-  }, [productId, products, refreshKey]);
+  }, [productId, products, refreshKey, orderItems]);
 
   // ===== Crear pedido: agregar item =====
   const addItemToOrder = () => {
@@ -1061,6 +1087,8 @@ export default function InventoryBatches({
               <th className="p-2 border">Tipo</th>
               <th className="p-2 border">Libras ingresadas</th>
               <th className="p-2 border">Libras restantes</th>
+              <th className="p-2 border">Unidades ingresadas</th>
+              <th className="p-2 border">Unidades restantes</th>
               <th className="p-2 border">Total Facturado</th>
               <th className="p-2 border">Total esperado</th>
               <th className="p-2 border">Utilidad bruta</th>
@@ -1072,13 +1100,13 @@ export default function InventoryBatches({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="p-4 text-center">
+                <td colSpan={11} className="p-4 text-center">
                   Cargando…
                 </td>
               </tr>
             ) : groupedRows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="p-4 text-center">
+                <td colSpan={11} className="p-4 text-center">
                   Sin lotes
                 </td>
               </tr>
@@ -1100,6 +1128,8 @@ export default function InventoryBatches({
                   <td className="p-2 border">{g.typeLabel}</td>
                   <td className="p-2 border">{g.lbsIn.toFixed(3)}</td>
                   <td className="p-2 border">{g.lbsRem.toFixed(3)}</td>
+                  <td className="p-2 border">{g.udsIn.toFixed(3)}</td>
+                  <td className="p-2 border">{g.udsRem.toFixed(3)}</td>
                   <td className="p-2 border">{money(g.totalFacturado)}</td>
                   <td className="p-2 border">{money(g.totalEsperado)}</td>
                   <td className="p-2 border">{money(g.utilidadBruta)}</td>
@@ -1258,6 +1288,16 @@ export default function InventoryBatches({
                           ? parseFloat(num.toFixed(3))
                           : 0;
                         setQuantity(Math.max(0, safe));
+                        const existing = orderItems.find(
+                          (it) => it.productId === productId,
+                        );
+                        if (existing) {
+                          updateOrderItemField(
+                            existing.tempId,
+                            "quantity",
+                            safe,
+                          );
+                        }
                       }}
                       disabled={!productId}
                     />
@@ -1283,6 +1323,16 @@ export default function InventoryBatches({
                         setPurchasePrice(
                           Number.isFinite(safe) ? Math.max(0, safe) : NaN,
                         );
+                        const existing = orderItems.find(
+                          (it) => it.productId === productId,
+                        );
+                        if (existing && Number.isFinite(safe)) {
+                          updateOrderItemField(
+                            existing.tempId,
+                            "purchasePrice",
+                            safe,
+                          );
+                        }
                       }}
                       disabled={!productId}
                     />
@@ -1305,6 +1355,16 @@ export default function InventoryBatches({
                           ? parseFloat(num.toFixed(2))
                           : 0;
                         setSalePrice(Math.max(0, safe));
+                        const existing = orderItems.find(
+                          (it) => it.productId === productId,
+                        );
+                        if (existing) {
+                          updateOrderItemField(
+                            existing.tempId,
+                            "salePrice",
+                            safe,
+                          );
+                        }
                       }}
                       disabled={!productId}
                     />

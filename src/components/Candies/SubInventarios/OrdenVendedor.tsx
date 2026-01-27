@@ -10,6 +10,7 @@ import {
   where,
   runTransaction,
   arrayUnion,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
@@ -333,8 +334,10 @@ export default function VendorCandyOrders({
   const [packagesToAdd, setPackagesToAdd] = useState<string>("0");
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [productSearch, setProductSearch] = useState("");
+  const [associatedSearch, setAssociatedSearch] = useState("");
 
   const [isSaving, setIsSaving] = useState(false);
+  const [isBackfilling, setIsBackfilling] = useState(false);
 
   // ===== Mobile collapse (filtros + KPIs) =====
   const [mobileMetaOpen, setMobileMetaOpen] = useState(false);
@@ -983,9 +986,19 @@ export default function VendorCandyOrders({
   // =========================
   // Modal items paginado 20
   // =========================
+  const filteredOrderItems = useMemo(() => {
+    const q = associatedSearch.trim().toLowerCase();
+    if (!q) return orderItems;
+    return orderItems.filter((it) => {
+      const name = String(it.productName || "").toLowerCase();
+      const cat = String(it.category || "").toLowerCase();
+      return name.includes(q) || cat.includes(q);
+    });
+  }, [orderItems, associatedSearch]);
+
   const itemsTotalPages = useMemo(() => {
-    return Math.max(1, Math.ceil(orderItems.length / ITEMS_PAGE_SIZE));
-  }, [orderItems.length]);
+    return Math.max(1, Math.ceil(filteredOrderItems.length / ITEMS_PAGE_SIZE));
+  }, [filteredOrderItems.length]);
 
   useEffect(() => {
     if (itemsPage > itemsTotalPages) setItemsPage(itemsTotalPages);
@@ -994,8 +1007,8 @@ export default function VendorCandyOrders({
 
   const pagedOrderItems = useMemo(() => {
     const start = (itemsPage - 1) * ITEMS_PAGE_SIZE;
-    return orderItems.slice(start, start + ITEMS_PAGE_SIZE);
-  }, [orderItems, itemsPage]);
+    return filteredOrderItems.slice(start, start + ITEMS_PAGE_SIZE);
+  }, [filteredOrderItems, itemsPage]);
 
   const pagedItemsByCategory = useMemo(() => {
     const map = new Map<string, OrderItem[]>();
@@ -1355,6 +1368,115 @@ export default function VendorCandyOrders({
         };
       }),
     );
+  };
+
+  // =========================
+  // BACKFILL CAMPOS CALCULADOS
+  // =========================
+  const backfillCalculatedFields = async () => {
+    if (!isAdmin) return;
+    if (isBackfilling) return;
+
+    try {
+      setIsBackfilling(true);
+      setMsg("");
+
+      const list = rows;
+      if (!list.length) {
+        setMsg("⚠️ No hay documentos para actualizar.");
+        return;
+      }
+
+      const findProduct = (pid: string) =>
+        productsAll.find((p) => p.id === pid) || null;
+
+      const pickBranch = (sid: string) => {
+        const s = sellers.find((x) => x.id === sid) || null;
+        return s?.branch;
+      };
+
+      const diff = (a: any, b: any) =>
+        Math.abs(Number(a || 0) - Number(b || 0)) > 0.01;
+
+      let batch = writeBatch(db);
+      let pending = 0;
+      let updated = 0;
+
+      for (const r of list) {
+        const br = pickBranch(r.sellerId) || "ISLA";
+        const packs = floor(r.packages);
+        const p = findProduct(String(r.productId || ""));
+
+        const grossProfit =
+          p && packs > 0
+            ? getGrossProfitPerPack(p, br) * packs
+            : Number(r.grossProfit || 0);
+
+        const logisticAllocated =
+          p && packs > 0
+            ? p.logisticAllocatedPerPack * packs
+            : Number(r.logisticAllocated || 0);
+
+        const uApproxPerPack = p ? getUApproxPerPack(p, br) : 0;
+        const uAproximada = packs > 0 ? uApproxPerPack * packs : 0;
+
+        const vendorMarginPercent =
+          r.vendorMarginPercent != null
+            ? clampPercent(r.vendorMarginPercent)
+            : getSellerMarginPercent(r.sellerId);
+
+        const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+        const uVendor = split.uVendor;
+        const uInvestor = split.uInvestor;
+        const uNeta = grossProfit - logisticAllocated - uVendor;
+
+        const needsUpdate =
+          (r as any).uVendor == null ||
+          (r as any).uNeta == null ||
+          (r as any).uAproximada == null ||
+          (r as any).uInvestor == null ||
+          (r as any).logisticAllocated == null ||
+          diff((r as any).uVendor, uVendor) ||
+          diff((r as any).uNeta, uNeta) ||
+          diff((r as any).uAproximada, uAproximada) ||
+          diff((r as any).uInvestor, uInvestor) ||
+          diff((r as any).logisticAllocated, logisticAllocated);
+
+        if (!needsUpdate) continue;
+
+        const ref = doc(db, "inventory_candies_sellers", r.id);
+        batch.update(ref, {
+          vendorMarginPercent,
+          grossProfit,
+          logisticAllocated,
+          uAproximada,
+          uVendor,
+          uInvestor,
+          uNeta,
+          vendorProfit: uVendor,
+          updatedAt: Timestamp.now(),
+        });
+
+        pending += 1;
+        updated += 1;
+
+        if (pending >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          pending = 0;
+        }
+      }
+
+      if (pending > 0) await batch.commit();
+
+      setMsg(`✅ Actualizados ${updated} documentos.`);
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error actualizando documentos.");
+    } finally {
+      setIsBackfilling(false);
+    }
   };
 
   // =========================
@@ -1848,6 +1970,8 @@ export default function VendorCandyOrders({
             vendorMarginPercent: split.vendorMarginPercent,
             uVendor: split.uVendor,
             uNeta,
+            uAproximada,
+            uInvestor: split.uInvestor,
 
             // ⚠️ compat: vendorProfit ahora es U. Vendedor
             vendorProfit: split.uVendor,
@@ -1998,6 +2122,17 @@ export default function VendorCandyOrders({
                 >
                   Exportar asociados
                 </button>
+                {isAdmin && (
+                  <button
+                    className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                    onClick={backfillCalculatedFields}
+                    disabled={isBackfilling}
+                  >
+                    {isBackfilling
+                      ? "Actualizando campos..."
+                      : "Actualizar campos calculados"}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2432,6 +2567,15 @@ export default function VendorCandyOrders({
                   </div>
 
                   <div className="flex gap-2">
+                    <input
+                      className="border rounded px-2 py-1 text-sm"
+                      placeholder="Buscar producto"
+                      value={associatedSearch}
+                      onChange={(e) => {
+                        setAssociatedSearch(e.target.value);
+                        setItemsPage(1);
+                      }}
+                    />
                     <button
                       className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
                       onClick={exportAssociatedItemsToCsv}

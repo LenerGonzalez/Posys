@@ -1257,8 +1257,6 @@ export default function SalesCandiesPOS({
           createdAt: Timestamp.now(),
           ref: { saleId: saleRef.id },
         };
-        const prevBalance = Number(selectedCustomer?.balance || 0);
-
         await addDoc(collection(db, "ar_movements"), {
           ...base,
           type: "CARGO",
@@ -1271,17 +1269,7 @@ export default function SalesCandiesPOS({
             amount: -Number(downPayment),
           });
         }
-        // ✅ SETEAR DEUDA INICIAL SOLO LA PRIMERA VEZ QUE FÍA (cuando estaba en 0)
-        if (prevBalance === 0) {
-          try {
-            await updateDoc(doc(db, "customers_candies", customerId), {
-              initialDebt: Number(totalAmount) || 0,
-              initialDebtDate: saleDate,
-            });
-          } catch (e) {
-            console.warn("No se pudo setear initialDebt:", e);
-          }
-        }
+        // Nota: no seteamos initialDebt aquí para evitar doble conteo con movimientos.
       }
 
       // 3) FIFO por producto, PERO AHORA SOBRE EL PEDIDO DEL VENDEDOR

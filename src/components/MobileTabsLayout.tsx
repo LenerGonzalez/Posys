@@ -98,7 +98,11 @@ export default function MobileTabsLayout({
               to: `${base}/financialDashboard`,
             },
             { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
-            { key: "trxs", label: "Transacciones", to: `${base}/transactionsPollo` },
+            {
+              key: "trxs",
+              label: "Transacciones",
+              to: `${base}/transactionsPollo`,
+            },
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
             { key: "gastos", label: "Gastos", to: `${base}/expenses` },
@@ -112,6 +116,11 @@ export default function MobileTabsLayout({
               key: "clientes",
               label: "Saldos pendientes",
               to: `${base}/customersPollo`,
+            },
+            {
+              key: "dash",
+              label: "Dashboard",
+              to: `${base}/financialDashboard`,
             },
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             {
@@ -138,7 +147,6 @@ export default function MobileTabsLayout({
               label: "Transacciones",
               to: `${base}/transactionsPollo`,
             },
-            
           ];
         } else if (isContPollo) {
           built = [
@@ -147,6 +155,11 @@ export default function MobileTabsLayout({
               key: "clientes",
               label: "Saldos Pendientes",
               to: `${base}/customersPollo`,
+            },
+            {
+              key: "dash",
+              label: "Dashboard",
+              to: `${base}/financialDashboard`,
             },
             { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
             {
@@ -241,6 +254,11 @@ export default function MobileTabsLayout({
       if (isSupervisor) {
         const supTabs = [
           { key: "venta", label: "Venta", to: `${base}/salesV2` },
+          {
+            key: "dash",
+            label: "Dashboard",
+            to: `${base}/financialDashboard`,
+          },
           { key: "inv", label: "Inventario", to: `${base}/batches` },
           {
             key: "clientes",
@@ -305,6 +323,7 @@ export default function MobileTabsLayout({
       "transactionsPollo",
       "batches",
       "salesV2",
+      "financialDashboard",
       // DULCES
       "salesCandies",
       "productsVendorsCandies",

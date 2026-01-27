@@ -50,6 +50,15 @@ const safeNum = (v: any) => {
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
+const normalizeDateKey = (value: any) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return raw;
+};
+
 function LineChartSimple({
   title,
   series,
@@ -492,6 +501,16 @@ type MainOrderDoc = {
   totalPackages?: number; // fallback
 };
 
+type VendorPriceCatalog = Record<
+  string,
+  {
+    unitPriceRivas: number;
+    unitPriceSanJorge: number;
+    unitPriceIsla: number;
+    key: string;
+  }
+>;
+
 type VendorOrderLineDoc = {
   id: string;
 
@@ -526,7 +545,12 @@ type VendorOrderLineDoc = {
   totalIsla?: number;
 };
 
-type CustomerDoc = { id: string; name?: string };
+type CustomerDoc = {
+  id: string;
+  name?: string;
+  initialDebt?: number;
+  initialDebtDate?: string;
+};
 
 type ARMovement = {
   id: string;
@@ -534,6 +558,15 @@ type ARMovement = {
   date?: string; // "yyyy-MM-dd"
   amount?: number;
   type?: "CARGO" | "ABONO";
+  ref?: { saleId?: string };
+};
+
+type ARCustomerRow = {
+  customerId: string;
+  name: string;
+  balance: number;
+  lastPayment: string;
+  lastPaymentAmount: number;
 };
 
 type ExpenseCandy = {
@@ -579,6 +612,8 @@ export default function DataCenterCandies({
   const [salesRows, setSalesRows] = useState<SaleRow[]>([]);
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
   const [mainOrders, setMainOrders] = useState<MainOrderDoc[]>([]);
+  const [vendorPriceCatalog, setVendorPriceCatalog] =
+    useState<VendorPriceCatalog>({});
   const [vendorOrdersLines, setVendorOrdersLines] = useState<
     VendorOrderLineDoc[]
   >([]);
@@ -591,6 +626,7 @@ export default function DataCenterCandies({
 
   const [detailKey, setDetailKey] = useState<string>("");
   const [vendorOrderKey, setVendorOrderKey] = useState<string>(""); // ✅ detalle por orden de vendedor
+  const [arOpen, setArOpen] = useState<ARCustomerRow | null>(null);
   const pdfRef = useRef<HTMLDivElement>(null);
 
   const [invCandiesAll, setInvCandiesAll] = useState<any[]>([]);
@@ -730,28 +766,81 @@ export default function DataCenterCandies({
     fetchOrders();
   }, [isAdmin, startDate, endDate]);
 
+  // --- catálogo de precios (candy_main_orders completo, último precio por producto) ---
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const fetchVendorPriceCatalog = async () => {
+      try {
+        const snap = await getDocs(
+          query(
+            collection(db, "candy_main_orders"),
+            orderBy("createdAt", "desc"),
+          ),
+        );
+
+        const pick: VendorPriceCatalog = {};
+
+        const makeKey = (dateStr: string, createdAtSec: number) =>
+          `${dateStr}#${String(createdAtSec).padStart(10, "0")}`;
+
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          const createdAtSec = Number(x.createdAt?.seconds ?? 0);
+          const dateStr = String(x.date || "");
+          const key = makeKey(dateStr, createdAtSec);
+
+          const items = Array.isArray(x.items) ? x.items : [];
+          for (const it of items) {
+            const pid = String(it.id || it.productId || "");
+            if (!pid) continue;
+
+            const cand = {
+              unitPriceRivas: Number(it.unitPriceRivas || 0),
+              unitPriceSanJorge: Number(it.unitPriceSanJorge || 0),
+              unitPriceIsla: Number(it.unitPriceIsla || 0),
+              key,
+            };
+
+            const prev = pick[pid];
+            if (!prev || cand.key > prev.key) pick[pid] = cand;
+          }
+        });
+
+        setVendorPriceCatalog(pick);
+      } catch (e) {
+        console.error("candy_main_orders catalog error:", e);
+        setVendorPriceCatalog({});
+      }
+    };
+
+    fetchVendorPriceCatalog();
+  }, [isAdmin]);
+
   // --- inventory_candies_sellers periodo (líneas de órdenes vendedor) ---
   useEffect(() => {
     if (!isAdmin) return;
 
-    const fetchVendorOrders = async () => {
-      try {
-        const qy = query(
-          collection(db, "inventory_candies_sellers"),
-          where("date", ">=", startDate),
-          where("date", "<=", endDate),
-        );
-        const snap = await getDocs(qy);
+    const qy = query(
+      collection(db, "inventory_candies_sellers"),
+      where("date", ">=", startDate),
+      where("date", "<=", endDate),
+    );
+
+    const unsub = onSnapshot(
+      qy,
+      (snap) => {
         const rows: VendorOrderLineDoc[] = [];
         snap.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
         setVendorOrdersLines(rows);
-      } catch (e) {
-        console.error("inventory_candies_sellers error:", e);
+      },
+      (err) => {
+        console.error("inventory_candies_sellers error:", err);
         setVendorOrdersLines([]);
-      }
-    };
+      },
+    );
 
-    fetchVendorOrders();
+    return () => unsub();
   }, [isAdmin, startDate, endDate]);
 
   // ✅ expenses_candies (sin manual)
@@ -846,6 +935,10 @@ export default function DataCenterCandies({
           rows.push({
             id: d.id,
             name: String((d.data() as any)?.name || "").trim(),
+            initialDebt: Number((d.data() as any)?.initialDebt || 0),
+            initialDebtDate: String(
+              (d.data() as any)?.initialDebtDate || "",
+            ).trim(),
           }),
         );
         setCustomers(rows);
@@ -1247,43 +1340,6 @@ export default function DataCenterCandies({
   }, [mainOrders]);
 
   // ==========================
-  //  ✅ NUEVO: Dispersado a vendedores (precio de venta) + Total existente (Isla)
-  // ==========================
-  const dispersedKpis = useMemo(() => {
-    // “Productos dispersados”: dinero en productos enviados a órdenes de vendedor (precio venta)
-    // “Total existente”: expectedIsla - dispersadoIsla
-    let dispersedTotal = 0;
-    let dispersedIsla = 0;
-
-    for (const line of vendorOrdersLines) {
-      const sid = String(line.sellerId || "").trim();
-      const seller = sid ? sellersMap[sid] : undefined;
-      const b = normalizeBranch(seller?.branch) || "ISLA"; // si solo usás ISLA, esto cae bien
-
-      const totalVenta =
-        safeNum(line.totalVendor) ||
-        (b === "ISLA"
-          ? safeNum(line.totalIsla)
-          : b === "RIVAS"
-            ? safeNum(line.totalRivas)
-            : safeNum(line.totalSanJorge));
-
-      dispersedTotal += totalVenta;
-      if (b === "ISLA") dispersedIsla += totalVenta;
-    }
-
-    const totalExistenteIsla = round2(
-      safeNum(expectedAndGross.expectedIsla) - dispersedIsla,
-    );
-
-    return {
-      dispersedTotal: round2(dispersedTotal),
-      dispersedIsla: round2(dispersedIsla),
-      totalExistenteIsla,
-    };
-  }, [vendorOrdersLines, sellersMap, expectedAndGross.expectedIsla]);
-
-  // ==========================
   //  ✅ NUEVO: KPIs de Órdenes de Vendedores (vista global + por orden)
   // ==========================
   const vendorOrdersKpis = useMemo(() => {
@@ -1332,10 +1388,34 @@ export default function DataCenterCandies({
 
     const pickBranch = (sellerId: string): Branch | "" => {
       const s = sellersMap[sellerId];
-      return normalizeBranch(s?.branch);
+      return normalizeBranch(s?.branch) || "ISLA";
+    };
+
+    const getPricePerPackage = (l: VendorOrderLineDoc, b: Branch | "") => {
+      if (b === "ISLA")
+        return safeNum(
+          vendorPriceCatalog[String(l.productId || "")]?.unitPriceIsla ??
+            l.unitPriceIsla,
+        );
+      if (b === "RIVAS")
+        return safeNum(
+          vendorPriceCatalog[String(l.productId || "")]?.unitPriceRivas ??
+            l.unitPriceRivas,
+        );
+      if (b === "SAN_JORGE")
+        return safeNum(
+          vendorPriceCatalog[String(l.productId || "")]?.unitPriceSanJorge ??
+            l.unitPriceSanJorge,
+        );
+      return 0;
     };
 
     const pickLineTotalVenta = (l: VendorOrderLineDoc, b: Branch | "") => {
+      const packs = Math.max(0, Math.floor(safeNum(l.packages)));
+      const pricePerPackage = getPricePerPackage(l, b);
+      const byPrice = round2(pricePerPackage * packs);
+      if (byPrice > 0) return byPrice;
+
       const direct =
         safeNum(l.totalVendor) ||
         (b === "ISLA"
@@ -1359,12 +1439,15 @@ export default function DataCenterCandies({
     };
 
     const getUnitPriceFromLine = (l: VendorOrderLineDoc, b: Branch | "") => {
+      const pricePerPackage = getPricePerPackage(l, b);
+      const { orderedUnits, upp } = getUnits(l);
+      if (pricePerPackage > 0 && upp > 0) return pricePerPackage / upp;
+
       const upv = safeNum(l.unitPriceVendor);
       if (upv > 0) return upv;
 
       // si no hay unitario, lo derivamos del total / unidades
       const total = pickLineTotalVenta(l, b);
-      const { orderedUnits } = getUnits(l);
       if (total > 0 && orderedUnits > 0) return total / orderedUnits;
 
       return 0;
@@ -1397,12 +1480,7 @@ export default function DataCenterCandies({
             ? (lineTotal * soldUnits) / orderedUnits
             : 0;
 
-      const lineRemainingValue =
-        unitPrice > 0
-          ? unitPrice * remainingUnits
-          : orderedUnits > 0
-            ? (lineTotal * remainingUnits) / orderedUnits
-            : 0;
+      const lineRemainingValue = round2(lineTotal - lineSoldValue);
 
       if (!map.has(orderKey)) {
         map.set(orderKey, {
@@ -1435,14 +1513,14 @@ export default function DataCenterCandies({
       agg.totalOrden += lineTotal;
       agg.vendido += lineSoldValue;
       agg.restante += lineRemainingValue;
+      agg.comision += safeNum(
+        (l as any).uVendor ?? (l as any).vendorProfit ?? (l as any).gainVendor,
+      );
     }
 
-    // calcular comisiones por orden (según comisión del vendedor)
+    // comisiones por orden = utilidad de vendedor ya calculada
     for (const agg of map.values()) {
-      const pct = agg.sellerId
-        ? safeNum(sellersMap[agg.sellerId]?.commissionPercent)
-        : 0;
-      agg.comision = round2((agg.totalOrden * pct) / 100);
+      agg.comision = round2(agg.comision);
       agg.totalEsperado = round2(agg.totalOrden - agg.comision);
 
       agg.totalOrden = round2(agg.totalOrden);
@@ -1478,7 +1556,124 @@ export default function DataCenterCandies({
       },
       orders,
     };
-  }, [vendorOrdersLines, sellersMap]);
+  }, [vendorOrdersLines, sellersMap, vendorPriceCatalog]);
+
+  // ==========================
+  //  ✅ NUEVO: Dispersado a vendedores (precio de venta) + Total existente (Isla)
+  // ==========================
+  const dispersedKpis = useMemo(() => {
+    // “Productos dispersados”: suma del total esperado de órdenes de vendedor (precio venta)
+    // Mismo cálculo que OrdenVendedor: precio por paquete * paquetes (precio actual del producto)
+    // “Total existente”: expectedIsla - dispersadoIsla
+    let dispersedTotal = 0;
+    let dispersedIsla = 0;
+
+    for (const line of vendorOrdersLines) {
+      const sid = String(line.sellerId || "").trim();
+      const seller = sid ? sellersMap[sid] : undefined;
+      const b = normalizeBranch(seller?.branch) || "ISLA";
+
+      const packs = Math.max(0, Math.floor(safeNum(line.packages)));
+      if (!packs) continue;
+
+      const pricePerPackage =
+        b === "ISLA"
+          ? safeNum(
+              vendorPriceCatalog[String(line.productId || "")]?.unitPriceIsla ??
+                line.unitPriceIsla,
+            )
+          : b === "RIVAS"
+            ? safeNum(
+                vendorPriceCatalog[String(line.productId || "")]
+                  ?.unitPriceRivas ?? line.unitPriceRivas,
+              )
+            : safeNum(
+                vendorPriceCatalog[String(line.productId || "")]
+                  ?.unitPriceSanJorge ?? line.unitPriceSanJorge,
+              );
+
+      let totalEsperado = round2(pricePerPackage * packs);
+      if (!totalEsperado) {
+        totalEsperado =
+          b === "ISLA"
+            ? safeNum(line.totalIsla)
+            : b === "RIVAS"
+              ? safeNum(line.totalRivas)
+              : safeNum(line.totalSanJorge);
+      }
+
+      if (!totalEsperado) continue;
+
+      dispersedTotal += totalEsperado;
+      dispersedIsla += totalEsperado; // solo existe ISLA
+    }
+
+    const totalExistenteIsla = round2(
+      safeNum(expectedAndGross.expectedIsla) - dispersedIsla,
+    );
+
+    return {
+      dispersedTotal: round2(dispersedTotal),
+      dispersedIsla: round2(dispersedIsla),
+      totalExistenteIsla,
+    };
+  }, [
+    vendorOrdersLines,
+    sellersMap,
+    expectedAndGross.expectedIsla,
+    vendorPriceCatalog,
+  ]);
+
+  const vendorOrdersNetKpi = useMemo(() => {
+    const net = round2(
+      vendorOrdersLines.reduce((s, l) => {
+        const rawUNeta = (l as any).uNeta;
+        const direct = safeNum(rawUNeta);
+        if (direct !== 0 || rawUNeta === 0) return s + direct;
+
+        const gross = safeNum((l as any).grossProfit);
+        const gastos = safeNum(
+          (l as any).logisticAllocated ?? (l as any).gastos ?? (l as any).gasto,
+        );
+        const uVendor = safeNum((l as any).uVendor ?? (l as any).vendorProfit);
+        return s + (gross - gastos - uVendor);
+      }, 0),
+    );
+    return { net };
+  }, [vendorOrdersLines]);
+
+  // ==========================
+  //  ✅ NUEVO: KPI CxC + Recaudación + Utilidad bruta crédito
+  // ==========================
+  const creditKpis = useMemo(() => {
+    let cxc = 0;
+    let utilidadBruta = 0;
+    let recaudado = 0;
+
+    for (const r of filteredRows) {
+      if (r.type !== "CREDITO") continue;
+      const amt = safeNum(r.amount);
+      const com = safeNum(r.commission);
+      cxc += amt;
+      utilidadBruta += amt - com;
+    }
+
+    for (const m of movements) {
+      const d = String(m.date || "").trim();
+      if (!d) continue;
+      if (d < startDate || d > endDate) continue;
+
+      const amt = safeNum(m.amount);
+      const type = m.type || (amt < 0 ? "ABONO" : "CARGO");
+      if (type === "ABONO") recaudado += Math.abs(amt);
+    }
+
+    return {
+      cxc: round2(cxc),
+      recaudado: round2(recaudado),
+      utilidadBruta: round2(utilidadBruta),
+    };
+  }, [filteredRows, movements, startDate, endDate]);
 
   const vendorOrderDetail = useMemo(() => {
     if (!vendorOrderKey) return null;
@@ -1487,7 +1682,7 @@ export default function DataCenterCandies({
     );
     if (!o) return null;
 
-    // resumen por producto: Asociados / Vendidos / Restantes (contadores en UNIDADES)
+    // resumen por producto: Asociados / Vendidos / Restantes (contadores en PAQUETES)
     const byProduct: Record<
       string,
       {
@@ -1507,9 +1702,25 @@ export default function DataCenterCandies({
           vendidos: 0,
           restantes: 0,
         };
-      byProduct[name].asociados += safeNum((l as any).orderedUnits);
-      byProduct[name].vendidos += safeNum((l as any).soldUnits);
-      byProduct[name].restantes += safeNum((l as any).remainingUnits);
+
+      const packs = Math.max(0, Math.floor(safeNum(l.packages)));
+      const upp = Math.max(1, Math.floor(safeNum(l.unitsPerPackage || 1)));
+
+      const remainingPacks = Math.max(
+        0,
+        Math.floor(
+          safeNum(l.remainingPackages) ||
+            (safeNum(l.remainingUnits) > 0
+              ? safeNum(l.remainingUnits) / upp
+              : 0),
+        ),
+      );
+
+      const soldPacks = Math.max(0, packs - remainingPacks);
+
+      byProduct[name].asociados += packs;
+      byProduct[name].vendidos += soldPacks;
+      byProduct[name].restantes += remainingPacks;
     }
 
     const products = Object.values(byProduct)
@@ -1679,10 +1890,29 @@ export default function DataCenterCandies({
   const arSummary = useMemo(() => {
     const byCustomer: Record<
       string,
-      { customerId: string; name: string; balance: number; lastPayment: string }
+      ARCustomerRow & {
+        initialDebt: number;
+        initialDebtDate: string;
+        movements: ARMovement[];
+      }
     > = {};
 
     const nameOf = (id: string) => (customersMap[id] || "").trim() || id;
+
+    for (const c of customers) {
+      const cid = String(c.id || "").trim();
+      if (!cid) continue;
+      byCustomer[cid] = {
+        customerId: cid,
+        name: nameOf(cid),
+        balance: 0,
+        lastPayment: "",
+        lastPaymentAmount: 0,
+        initialDebt: safeNum(c.initialDebt),
+        initialDebtDate: String(c.initialDebtDate || "").trim(),
+        movements: [],
+      };
+    }
 
     for (const m of movements) {
       const cid = String(m.customerId || "").trim();
@@ -1696,27 +1926,116 @@ export default function DataCenterCandies({
           name: nameOf(cid),
           balance: 0,
           lastPayment: "",
+          lastPaymentAmount: 0,
+          initialDebt: 0,
+          initialDebtDate: "",
+          movements: [],
         };
       }
 
-      const amt = safeNum(m.amount);
-      if (m.type === "CARGO") byCustomer[cid].balance += amt;
-      if (m.type === "ABONO") {
-        byCustomer[cid].balance -= amt;
-        if (!byCustomer[cid].lastPayment || d > byCustomer[cid].lastPayment) {
-          byCustomer[cid].lastPayment = d;
-        }
-      }
+      byCustomer[cid].movements.push(m);
     }
 
+    const getEffectiveInitialDebt = (
+      initialDebtValue: number,
+      initialDebtDate: string,
+      list: ARMovement[],
+    ) => {
+      const init = Number(initialDebtValue || 0);
+      if (!init) return 0;
+
+      const initDate = String(initialDebtDate || "").trim();
+      if (!initDate) return init;
+
+      const hasDup = list.some((m) => {
+        const amt = Number(m.amount || 0);
+        if (!(amt > 0)) return false;
+        const sameAmount = Math.abs(amt - init) < 0.01;
+        const sameDate = String(m.date || "").trim() === initDate;
+        const hasSale = Boolean(m.ref?.saleId);
+        return sameAmount && sameDate && hasSale;
+      });
+
+      return hasDup ? 0 : init;
+    };
+
     const list = Object.values(byCustomer)
-      .map((x) => ({ ...x, balance: round2(x.balance) }))
+      .map((x) => {
+        const sumMov = x.movements.reduce(
+          (acc, it) => acc + safeNum(it.amount),
+          0,
+        );
+        const effectiveInit = getEffectiveInitialDebt(
+          x.initialDebt,
+          x.initialDebtDate,
+          x.movements,
+        );
+        let lastPayment = "";
+        let lastPaymentAmount = 0;
+
+        for (const m of x.movements) {
+          const type = m.type || (safeNum(m.amount) < 0 ? "ABONO" : "CARGO");
+          const d = String(m.date || "");
+          if (type === "ABONO") {
+            const amt = Math.abs(safeNum(m.amount));
+            if (!lastPayment || d > lastPayment) {
+              lastPayment = d;
+              lastPaymentAmount = amt;
+            }
+          }
+        }
+
+        return {
+          customerId: x.customerId,
+          name: x.name,
+          balance: round2(effectiveInit + sumMov),
+          lastPayment,
+          lastPaymentAmount: round2(lastPaymentAmount),
+        };
+      })
       .filter((x) => x.balance > 0)
       .sort((a, b) => b.balance - a.balance);
 
     const totalPending = round2(list.reduce((s, x) => s + x.balance, 0));
     return { count: list.length, totalPending, list: list.slice(0, 20) };
-  }, [movements, customersMap, endDate]);
+  }, [movements, customersMap, customers, endDate]);
+
+  const arDetailRows = useMemo(() => {
+    if (!arOpen)
+      return [] as Array<{
+        id: string;
+        date: string;
+        type: string;
+        amount: number;
+        running: number;
+      }>;
+
+    const rows = movements
+      .filter((m) => (m.customerId || "").trim() === arOpen.customerId)
+      .filter((m) => !m.date || String(m.date) <= endDate)
+      .map((m) => ({
+        id: m.id,
+        date: String(m.date || ""),
+        type: String(m.type || ""),
+        amount: round2(safeNum(m.amount)),
+      }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+    let running = 0;
+    return rows.map((r) => {
+      const delta = r.type === "ABONO" ? -r.amount : r.amount;
+      running = round2(running + delta);
+      return { ...r, running };
+    });
+  }, [arOpen, movements, endDate]);
+
+  const arSalesRows = useMemo(() => {
+    if (!arOpen) return [] as SaleRow[];
+    return salesRows
+      .filter((r) => (r.customerId || "").trim() === arOpen.customerId)
+      .filter((r) => !r.date || String(r.date) <= endDate)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  }, [arOpen, salesRows, endDate]);
 
   // ==========================
   //  ✅ MACRO (SIN estimaciones)
@@ -2095,7 +2414,7 @@ export default function DataCenterCandies({
           {dataView === "MACRO" && (
             <>
               {/* KPIs Macro */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">Ingreso (ventas)</div>
                   <div className="text-xl sm:text-2xl font-bold">
@@ -2107,7 +2426,9 @@ export default function DataCenterCandies({
                 </div>
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Comisión vendedor</div>
+                  <div className="text-xs text-gray-600">
+                    Comisión vendedor (ventas)
+                  </div>
                   <div className="text-xl sm:text-2xl font-bold">
                     -C${money(macro.comision)}
                   </div>
@@ -2231,92 +2552,68 @@ export default function DataCenterCandies({
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Gross Profit total (órdenes maestras)
+                    Utilidad Bruta Aprox. (órdenes maestras)
                   </div>
                   <div className="text-xl sm:text-2xl font-bold">
-                    C${money(expectedAndGross.grossTotal)}
+                    C${money(expectedAndGross.grossIsla)}
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    R: {money(expectedAndGross.grossRivas)} • SJ:{" "}
-                    {money(expectedAndGross.grossSanJorge)} • I:{" "}
-                    {money(expectedAndGross.grossIsla)}
-                  </div>
+                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
                 </div>
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Total esperado (por sucursal)
+                    Total esperado (Isla)
                   </div>
-                  <div className="text-sm mt-2 space-y-1">
-                    <div className="flex justify-between">
-                      <span>Rivas</span>
-                      <strong>C${money(expectedAndGross.expectedRivas)}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>San Jorge</span>
-                      <strong>
-                        C${money(expectedAndGross.expectedSanJorge)}
-                      </strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Isla</span>
-                      <strong>C${money(expectedAndGross.expectedIsla)}</strong>
-                    </div>
+                  <div className="text-xl sm:text-2xl font-bold mt-2">
+                    C${money(expectedAndGross.expectedIsla)}
                   </div>
+                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
                 </div>
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Actual ventas por sucursal
+                    Actual ventas (Isla)
                   </div>
-                  <div className="text-sm mt-2 space-y-1">
-                    <div className="flex justify-between">
-                      <span>Rivas</span>
-                      <strong>C${money(actualByBranch.RIVAS.sales)}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>San Jorge</span>
-                      <strong>C${money(actualByBranch.SAN_JORGE.sales)}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Isla</span>
-                      <strong>C${money(actualByBranch.ISLA.sales)}</strong>
-                    </div>
+                  <div className="text-xl sm:text-2xl font-bold mt-2">
+                    C${money(actualByBranch.ISLA.sales)}
                   </div>
+                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
                 </div>
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Diferencia vs esperado
+                    Diferencia vs esperado (Isla)
                   </div>
-                  <div className="text-sm mt-2 space-y-1">
-                    <div className="flex justify-between">
-                      <span>Rivas</span>
-                      <strong>C${money(diffVsExpected.RIVAS)}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>San Jorge</span>
-                      <strong>C${money(diffVsExpected.SAN_JORGE)}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Isla</span>
-                      <strong>C${money(diffVsExpected.ISLA)}</strong>
-                    </div>
+                  <div className="text-xl sm:text-2xl font-bold mt-2">
+                    C${money(diffVsExpected.ISLA)}
                   </div>
+                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
                 </div>
               </div>
 
               {/* ✅ RESTAURADO: los 3 KPIs del screenshot */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Total facturado a precio proveedor (órdenes vendedor)
+                    Total facturado (precio proveedor)
                   </div>
                   <div className="text-xl sm:text-2xl font-bold">
-                    C${money(providerAndPackagesKpis.providerTotalVendor)}
+                    C${money(totalFacturadoProveedor)}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
+                    Sumatoria órdenes maestras (período)
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Utilidad neta (órdenes vendedor)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(vendorOrdersNetKpi.net)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    U bruta − Gastos − U vendedor
                   </div>
                 </div>
 
@@ -2367,13 +2664,13 @@ export default function DataCenterCandies({
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Total facturado (precio proveedor)
+                    Total facturado a precio proveedor (órdenes vendedor)
                   </div>
                   <div className="text-xl sm:text-2xl font-bold">
-                    C${money(totalFacturadoProveedor)}
+                    C${money(providerAndPackagesKpis.providerTotalVendor)}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
-                    Sumatoria órdenes maestras (período)
+                    {startDate} → {endDate}
                   </div>
                 </div>
 
@@ -2403,13 +2700,62 @@ export default function DataCenterCandies({
 
                 <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
                   <div className="text-xs text-gray-600">
-                    Total existente (Isla)
+                    Total existente en productos (Isla)
                   </div>
                   <div className="text-xl sm:text-2xl font-bold">
                     C${money(dispersedKpis.totalExistenteIsla)}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
                     Esperado Isla − Dispersado Isla
+                  </div>
+                </div>
+              </div>
+
+              {/* ✅ NUEVO: KPIs CxC + Recaudación + Utilidad bruta crédito */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    CxC (ventas crédito)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(creditKpis.cxc)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {startDate} → {endDate}
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">Comisión crédito</div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(kpis.commCredit)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {startDate} → {endDate}
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Recaudación (abonos)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(creditKpis.recaudado)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    abonos en ar_movements
+                  </div>
+                </div>
+
+                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                  <div className="text-xs text-gray-600">
+                    Utilidad bruta crédito (ventas − comisión)
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold">
+                    C${money(creditKpis.utilidadBruta)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Paquetes vendidos al crédito
                   </div>
                 </div>
               </div>
@@ -2536,7 +2882,7 @@ export default function DataCenterCandies({
                       <table className="min-w-full border text-sm">
                         <thead className="bg-gray-100">
                           <tr>
-                            <th className="border p-2 text-left">Orden</th>
+                            {/* <th className="border p-2 text-left">Orden</th> */}
                             <th className="border p-2 text-left">Vendedor</th>
                             <th className="border p-2">Sucursal</th>
                             <th className="border p-2">Fecha</th>
@@ -2551,9 +2897,9 @@ export default function DataCenterCandies({
                         <tbody>
                           {vendorOrdersKpis.orders.map((o) => (
                             <tr key={o.orderKey} className="text-center">
-                              <td className="border p-2 text-left">
+                              {/* <td className="border p-2 text-left">
                                 {o.orderId}
-                              </td>
+                              </td> */}
                               <td className="border p-2 text-left">
                                 {o.sellerName}
                               </td>
@@ -2792,7 +3138,7 @@ export default function DataCenterCandies({
               {/* CARTERA */}
               <div className="border rounded-2xl p-3 sm:p-4 mb-6 shadow-sm bg-white border-gray-100">
                 <h3 className="font-semibold mb-2 text-sm sm:text-base">
-                  Cartera (saldo pendiente hasta {endDate})
+                  Saldos pendientes (hasta {endDate})
                 </h3>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm mb-3">
@@ -2825,10 +3171,22 @@ export default function DataCenterCandies({
                             </div>
                           </div>
                           <div className="text-xs text-gray-600 mt-1">
-                            Último abono:{" "}
+                            Último abono: <b>C${money(c.lastPaymentAmount)}</b>
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            Fecha ult. abono:{" "}
                             <span className="font-medium">
                               {c.lastPayment || "—"}
                             </span>
+                          </div>
+                          <div className="mt-2">
+                            <button
+                              type="button"
+                              onClick={() => setArOpen(c)}
+                              className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                            >
+                              Ver
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -2839,8 +3197,10 @@ export default function DataCenterCandies({
                         <thead className="bg-gray-100">
                           <tr>
                             <th className="border p-2 text-left">Cliente</th>
-                            <th className="border p-2">Saldo</th>
+                            <th className="border p-2">Saldo pendiente</th>
                             <th className="border p-2">Último abono</th>
+                            <th className="border p-2">Fecha ult. abono</th>
+                            <th className="border p-2">Ver</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2851,7 +3211,19 @@ export default function DataCenterCandies({
                                 C${money(c.balance)}
                               </td>
                               <td className="border p-2">
+                                C${money(c.lastPaymentAmount)}
+                              </td>
+                              <td className="border p-2">
                                 {c.lastPayment || "—"}
+                              </td>
+                              <td className="border p-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setArOpen(c)}
+                                  className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                                >
+                                  Ver
+                                </button>
                               </td>
                             </tr>
                           ))}
@@ -3330,6 +3702,98 @@ export default function DataCenterCandies({
 
         {message && <p className="mt-3 text-sm">{message}</p>}
       </div>
+
+      {arOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h4 className="font-semibold text-lg">{arOpen.name}</h4>
+                <div className="text-xs text-gray-600">
+                  Saldo pendiente: <b>C${money(arOpen.balance)}</b>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setArOpen(null)}
+                className="text-sm text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full border text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="border p-2">Fecha</th>
+                    <th className="border p-2">Tipo</th>
+                    <th className="border p-2">Monto</th>
+                    <th className="border p-2">Saldo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {arDetailRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={4}
+                        className="border p-2 text-center text-gray-500"
+                      >
+                        Sin movimientos.
+                      </td>
+                    </tr>
+                  ) : (
+                    arDetailRows.map((r) => (
+                      <tr key={r.id} className="text-center">
+                        <td className="border p-1">{r.date || "—"}</td>
+                        <td className="border p-1">{r.type || "—"}</td>
+                        <td className="border p-1">C${money(r.amount)}</td>
+                        <td className="border p-1">C${money(r.running)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full border text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="border p-2">Fecha</th>
+                    <th className="border p-2">Producto</th>
+                    <th className="border p-2">Vendedor</th>
+                    <th className="border p-2">Tipo</th>
+                    <th className="border p-2">Monto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {arSalesRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="border p-2 text-center text-gray-500"
+                      >
+                        Sin ventas asociadas.
+                      </td>
+                    </tr>
+                  ) : (
+                    arSalesRows.map((r) => (
+                      <tr key={r.id} className="text-center">
+                        <td className="border p-1">{r.date || "—"}</td>
+                        <td className="border p-1">{r.productName || "—"}</td>
+                        <td className="border p-1">{r.vendorName || "—"}</td>
+                        <td className="border p-1">{r.type || "—"}</td>
+                        <td className="border p-1">C${money(r.amount)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

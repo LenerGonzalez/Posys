@@ -26,6 +26,7 @@ interface SaleItem {
   unitPrice: number; // precio por paquete
   discount?: number;
   vendorCommissionAmount?: number; // comisión por ítem (C$)
+  uBruta?: number; // utilidad bruta por ítem (C$)
 }
 
 interface SaleDoc {
@@ -38,6 +39,7 @@ interface SaleDoc {
   customerName?: string;
   vendorId?: string;
   vendorName?: string;
+  vendorCommissionAmount?: number;
 }
 
 interface BatchRow {
@@ -91,13 +93,16 @@ type VendorPieceType = "CASH" | "CREDIT" | "ASSOCIATED" | "REMAINING";
 interface VendorPiece {
   saleId: string;
   date: string;
+  productId?: string;
   productName: string;
   sku?: string;
   qty: number;
   unitPrice: number;
+  costTotal?: number;
   lineTotal: number;
   discount: number;
   lineFinal: number;
+  grossProfit?: number;
   vendorCommissionAmount: number;
   type: VendorPieceType;
 }
@@ -138,8 +143,9 @@ function normalizeSaleItems(x: any): SaleItem[] {
         unitPrice: Number(unitPrice || 0),
         discount: Number(it?.discount || 0),
         vendorCommissionAmount: Number(
-          it?.vendorCommissionAmount ?? it?.commissionAmount ?? 0
+          it?.vendorCommissionAmount ?? it?.commissionAmount ?? 0,
         ),
+        uBruta: Number(it?.uBruta ?? it?.grossProfit ?? 0),
       };
     });
   }
@@ -166,8 +172,9 @@ function normalizeSaleItems(x: any): SaleItem[] {
         unitPrice: Number(unitPrice || 0),
         discount: Number(it?.discount || 0),
         vendorCommissionAmount: Number(
-          it?.vendorCommissionAmount ?? it?.commissionAmount ?? 0
+          it?.vendorCommissionAmount ?? it?.commissionAmount ?? 0,
         ),
+        uBruta: Number(it?.uBruta ?? it?.grossProfit ?? 0),
       },
     ];
   }
@@ -185,8 +192,9 @@ function normalizeSaleItems(x: any): SaleItem[] {
         unitPrice: Number(unitPrice || 0),
         discount: Number(x?.discount || 0),
         vendorCommissionAmount: Number(
-          x?.vendorCommissionAmount ?? x?.commissionAmount ?? 0
+          x?.vendorCommissionAmount ?? x?.commissionAmount ?? 0,
         ),
+        uBruta: Number(x?.uBruta ?? x?.grossProfit ?? 0),
       },
     ];
   }
@@ -229,6 +237,7 @@ function normalizeSale(raw: any, id: string): SaleDoc | null {
     customerName: raw.customerName || undefined,
     vendorId,
     vendorName,
+    vendorCommissionAmount: Number(raw.vendorCommissionAmount || 0) || 0,
   };
 }
 
@@ -237,7 +246,7 @@ function computeFifoCogs(
   batches: BatchRow[],
   salesUpToToDate: SaleDoc[],
   fromDate: string,
-  toDate: string
+  toDate: string,
 ) {
   const byProd: Record<
     string,
@@ -263,7 +272,7 @@ function computeFifoCogs(
   }
 
   const orderedSales = [...salesUpToToDate].sort((a, b) =>
-    a.date.localeCompare(b.date)
+    a.date.localeCompare(b.date),
   );
 
   let cogsPeriod = 0;
@@ -296,11 +305,11 @@ function computeFifoCogs(
 async function deleteARMovesBySaleId(saleId: string) {
   const qMov = query(
     collection(db, "ar_movements"),
-    where("ref.saleId", "==", saleId)
+    where("ref.saleId", "==", saleId),
   );
   const snap = await getDocs(qMov);
   await Promise.all(
-    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id)))
+    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id))),
   );
 }
 
@@ -308,10 +317,10 @@ export default function FinancialDashboardCandies() {
   const { refreshKey, refresh } = useManualRefresh();
 
   const [fromDate, setFromDate] = useState(
-    format(startOfMonth(new Date()), "yyyy-MM-dd")
+    format(startOfMonth(new Date()), "yyyy-MM-dd"),
   );
   const [toDate, setToDate] = useState(
-    format(endOfMonth(new Date()), "yyyy-MM-dd")
+    format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
 
   const [salesRange, setSalesRange] = useState<SaleDoc[]>([]);
@@ -352,6 +361,10 @@ export default function FinancialDashboardCandies() {
   const [vendorModalTitle, setVendorModalTitle] = useState("");
   const [vendorModalPieces, setVendorModalPieces] = useState<VendorPiece[]>([]);
   const [vendorModalLoading, setVendorModalLoading] = useState(false);
+  const [vendorModalMode, setVendorModalMode] =
+    useState<VendorPieceType>("CASH");
+  const [vendorModalPage, setVendorModalPage] = useState(1);
+  const vendorModalPageSize = 10;
 
   // Modal detalle venta (transacciones)
   const [saleModalOpen, setSaleModalOpen] = useState(false);
@@ -419,7 +432,7 @@ export default function FinancialDashboardCandies() {
 
           const unitsPerPackage = Math.max(
             1,
-            Math.floor(Number(x.unitsPerPackage || 1))
+            Math.floor(Number(x.unitsPerPackage || 1)),
           );
           const totalUnits = Number(x.totalUnits ?? x.quantity ?? 0);
           const packagesField = Number(x.packages ?? 0);
@@ -430,15 +443,15 @@ export default function FinancialDashboardCandies() {
             packagesField > 0
               ? packagesField
               : totalUnits > 0
-              ? Math.floor(totalUnits / unitsPerPackage)
-              : 0;
+                ? Math.floor(totalUnits / unitsPerPackage)
+                : 0;
 
           const remainingPacks =
             remainingPackagesField > 0
               ? remainingPackagesField
               : remainingUnits > 0
-              ? Math.floor(remainingUnits / unitsPerPackage)
-              : 0;
+                ? Math.floor(remainingUnits / unitsPerPackage)
+                : 0;
 
           allBatches.push({
             id: d.id,
@@ -511,7 +524,7 @@ export default function FinancialDashboardCandies() {
 
         // Pedidos por vendedor (inventory_candies_sellers)
         const ivSnap = await getDocs(
-          collection(db, "inventory_candies_sellers")
+          collection(db, "inventory_candies_sellers"),
         );
         const orderDetailsTmp: Record<
           string,
@@ -531,7 +544,7 @@ export default function FinancialDashboardCandies() {
 
           const unitsPerPackage = Math.max(
             1,
-            Math.floor(Number(x.unitsPerPackage || 1))
+            Math.floor(Number(x.unitsPerPackage || 1)),
           );
           const totalUnits = Number(x.totalUnits ?? 0);
           const packagesField = Number(x.packages ?? 0);
@@ -542,25 +555,35 @@ export default function FinancialDashboardCandies() {
             packagesField > 0
               ? packagesField
               : totalUnits > 0
-              ? Math.floor(totalUnits / unitsPerPackage)
-              : 0;
+                ? Math.floor(totalUnits / unitsPerPackage)
+                : 0;
 
           const remainingPacks =
             remainingPackagesField > 0
               ? remainingPackagesField
               : remainingUnits > 0
-              ? Math.floor(remainingUnits / unitsPerPackage)
-              : 0;
+                ? Math.floor(remainingUnits / unitsPerPackage)
+                : 0;
 
           const totalVendorDoc = Number(x.totalVendor ?? 0);
-          const gainVendorDoc = Number(x.gainVendor ?? 0);
+          const uVendorDoc = Number(x.uVendor ?? 0);
+          const subtotalDoc = Number(x.subtotal ?? 0);
+          const uBrutaDoc = Number(x.uBruta ?? 0);
 
           const originalPackages = packagesOrdered;
 
           const moneyPerPackage =
             originalPackages > 0 ? totalVendorDoc / originalPackages : 0;
           const commissionPerPackage =
-            originalPackages > 0 ? gainVendorDoc / originalPackages : 0;
+            originalPackages > 0 ? uVendorDoc / originalPackages : 0;
+          const costPerPackage =
+            originalPackages > 0 ? subtotalDoc / originalPackages : 0;
+          const grossPerPackage =
+            originalPackages > 0
+              ? uBrutaDoc > 0
+                ? uBrutaDoc / originalPackages
+                : moneyPerPackage - costPerPackage
+              : 0;
 
           if (!orderDetailsTmp[vendorId]) {
             orderDetailsTmp[vendorId] = { associated: [], remaining: [] };
@@ -569,19 +592,24 @@ export default function FinancialDashboardCandies() {
           if (packagesOrdered > 0) {
             const qty = packagesOrdered;
             const lineTotal = qty * moneyPerPackage;
+            const costTotal = qty * costPerPackage;
             const lineFinal = lineTotal;
             const commission = qty * commissionPerPackage;
+            const grossProfit = qty * grossPerPackage;
 
             orderDetailsTmp[vendorId].associated.push({
               saleId: d.id,
               date,
+              productId: x.productId || x.id || "",
               productName,
               sku,
               qty,
               unitPrice: moneyPerPackage,
+              costTotal,
               lineTotal,
               discount: 0,
               lineFinal,
+              grossProfit,
               vendorCommissionAmount: commission,
               type: "ASSOCIATED",
             });
@@ -593,19 +621,24 @@ export default function FinancialDashboardCandies() {
           if (remainingPacks > 0) {
             const qty = remainingPacks;
             const lineTotal = qty * moneyPerPackage;
+            const costTotal = qty * costPerPackage;
             const lineFinal = lineTotal;
             const commission = qty * commissionPerPackage;
+            const grossProfit = qty * grossPerPackage;
 
             orderDetailsTmp[vendorId].remaining.push({
               saleId: d.id,
               date,
+              productId: x.productId || x.id || "",
               productName,
               sku,
               qty,
               unitPrice: moneyPerPackage,
+              costTotal,
               lineTotal,
               discount: 0,
               lineFinal,
+              grossProfit,
               vendorCommissionAmount: commission,
               type: "REMAINING",
             });
@@ -623,44 +656,22 @@ export default function FinancialDashboardCandies() {
     })();
   }, [fromDate, toDate, refreshKey]);
 
-  // ===== helpers de comisión =====
-  const getSellerForSale = useCallback(
-    (s: SaleDoc): SellerCandy | undefined => {
-      if (s.vendorId && sellersById[s.vendorId]) {
-        return sellersById[s.vendorId];
-      }
-      const nameNorm = (s.vendorName || "").trim().toLowerCase();
-      if (!nameNorm) return undefined;
-      return sellers.find(
-        (v) => (v.name || "").trim().toLowerCase() === nameNorm
-      );
-    },
-    [sellersById, sellers]
-  );
+  const getItemCommission = useCallback((s: SaleDoc, it: SaleItem): number => {
+    const storedLine = Number(it.vendorCommissionAmount || 0) || 0;
+    if (storedLine > 0) return storedLine;
 
-  const getItemCommission = useCallback(
-    (s: SaleDoc, it: SaleItem): number => {
-      // ✅ regla del sistema: crédito NO paga comisión
-      //if (s.type === "CREDITO") return 0;
+    const saleCommission = Number(s.vendorCommissionAmount || 0) || 0;
+    if (saleCommission <= 0) return 0;
 
-      const stored = Number(it.vendorCommissionAmount || 0);
-      if (stored) return stored;
+    const qty = Number(it.qty || 0);
+    const unitPrice = Number(it.unitPrice || 0);
+    const lineTotal = qty * unitPrice;
+    const discount = Math.max(0, Number(it.discount || 0));
+    const lineFinal = Math.max(0, lineTotal - discount);
+    if (!lineFinal || !s.total) return 0;
 
-      const seller = getSellerForSale(s);
-      if (!seller || !seller.commissionPercent) return 0;
-
-      const qty = Number(it.qty || 0);
-      const unitPrice = Number(it.unitPrice || 0);
-      const lineTotal = qty * unitPrice;
-      const discount = Math.max(0, Number(it.discount || 0));
-      const lineFinal = Math.max(0, lineTotal - discount);
-      if (!lineFinal) return 0;
-
-      const percent = Number(seller.commissionPercent) || 0;
-      return (lineFinal * percent) / 100;
-    },
-    [getSellerForSale]
-  );
+    return (saleCommission * lineFinal) / s.total;
+  }, []);
 
   // ====== COGS por FIFO ======
   const cogsFIFO = useMemo(() => {
@@ -669,7 +680,7 @@ export default function FinancialDashboardCandies() {
         batchesUpToToDate,
         salesUpToToDate,
         fromDate,
-        toDate
+        toDate,
       );
     } catch (e) {
       console.error(e);
@@ -684,15 +695,32 @@ export default function FinancialDashboardCandies() {
     const gananciaAntes = ventasTotales - cogsFIFO;
     const gananciaDespues = gananciaAntes - gastosPeriodo;
 
+    const makeKey = (id?: string, name?: string) => {
+      const pid = String(id || "").trim();
+      if (pid) return pid;
+      const pname = String(name || "")
+        .trim()
+        .toLowerCase();
+      return pname;
+    };
+
+    let utilidadBrutaVendida = 0;
+    for (const s of salesRange) {
+      for (const it of s.items || []) {
+        const u = Number(it.uBruta || 0);
+        if (Number.isFinite(u)) utilidadBrutaVendida += u;
+      }
+    }
+
     const abonosRecibidos = abonos.reduce(
       (a, m) => a + Math.abs(m.amount || 0),
-      0
+      0,
     );
 
     const clientesConSaldo = customers.filter((c) => (c.balance || 0) > 0);
     const saldosPendientes = clientesConSaldo.reduce(
       (a, c) => a + (c.balance || 0),
-      0
+      0,
     );
 
     let paquetesCash = 0;
@@ -703,12 +731,12 @@ export default function FinancialDashboardCandies() {
     for (const s of salesRange) {
       const saleQty = (s.items || []).reduce(
         (a, it) => a + (Number(it.qty) || 0),
-        0
+        0,
       );
 
       const saleCommission = (s.items || []).reduce(
         (a, it) => a + getItemCommission(s, it),
-        0
+        0,
       );
 
       if (s.type === "CONTADO") {
@@ -726,6 +754,7 @@ export default function FinancialDashboardCandies() {
       costoMercaderia: cogsFIFO,
       gastosPeriodo,
       gananciaAntes,
+      utilidadBrutaOrdenes: utilidadBrutaVendida,
       gananciaDespues,
       abonosRecibidos,
       saldosPendientes,
@@ -735,7 +764,15 @@ export default function FinancialDashboardCandies() {
       comisionCash,
       comisionCredito,
     };
-  }, [salesRange, expenses, abonos, customers, cogsFIFO, getItemCommission]);
+  }, [
+    salesRange,
+    expenses,
+    abonos,
+    customers,
+    cogsFIFO,
+    getItemCommission,
+    vendorOrderDetails,
+  ]);
 
   // ===== Consolidado por cliente con saldo ======
   const creditCustomersRows = useMemo(() => {
@@ -783,7 +820,7 @@ export default function FinancialDashboardCandies() {
       .map((s) => {
         const paquetes = (s.items || []).reduce(
           (acc, it) => acc + (Number(it.qty) || 0),
-          0
+          0,
         );
 
         let cliente = "Cash";
@@ -893,14 +930,14 @@ export default function FinancialDashboardCandies() {
       row.paquetesAsociados = assocPacks;
       row.paquetesRestantes = Math.max(
         assocPacks - row.paquetesVendidos - row.paquetesFiados,
-        0
+        0,
       );
 
       map.set(vId, row);
     }
 
     return Array.from(map.values()).sort(
-      (a, b) => b.totalVendido + b.totalFiado - (a.totalVendido + a.totalFiado)
+      (a, b) => b.totalVendido + b.totalFiado - (a.totalVendido + a.totalFiado),
     );
   }, [salesRange, vendorAssociatedPacks, sellersById, getItemCommission]);
 
@@ -984,9 +1021,11 @@ export default function FinancialDashboardCandies() {
   const openVendorModal = (
     vendorId: string,
     vendorName: string,
-    mode: VendorPieceType
+    mode: VendorPieceType,
   ) => {
     setVendorModalOpen(true);
+    setVendorModalMode(mode);
+    setVendorModalPage(1);
     let title = "";
 
     if (mode === "ASSOCIATED") title = `Paquetes asociados — ${vendorName}`;
@@ -1007,7 +1046,7 @@ export default function FinancialDashboardCandies() {
             ? details?.associated || []
             : details?.remaining || [];
         setVendorModalPieces(
-          [...pieces].sort((a, b) => a.date.localeCompare(b.date))
+          [...pieces].sort((a, b) => (b.qty || 0) - (a.qty || 0)),
         );
         setVendorModalLoading(false);
         return;
@@ -1057,6 +1096,35 @@ export default function FinancialDashboardCandies() {
     }
   };
 
+  const vendorModalTotalPages = useMemo(() => {
+    if (vendorModalMode !== "ASSOCIATED" && vendorModalMode !== "REMAINING")
+      return 1;
+    return Math.max(
+      1,
+      Math.ceil(vendorModalPieces.length / vendorModalPageSize),
+    );
+  }, [vendorModalMode, vendorModalPieces.length]);
+
+  const vendorModalPagedPieces = useMemo(() => {
+    if (vendorModalMode !== "ASSOCIATED" && vendorModalMode !== "REMAINING")
+      return vendorModalPieces;
+    const start = (vendorModalPage - 1) * vendorModalPageSize;
+    return vendorModalPieces.slice(start, start + vendorModalPageSize);
+  }, [vendorModalMode, vendorModalPage, vendorModalPieces]);
+
+  const vendorModalColSpan =
+    vendorModalMode === "ASSOCIATED" || vendorModalMode === "REMAINING"
+      ? 10
+      : 8;
+
+  useEffect(() => {
+    if (vendorModalMode !== "ASSOCIATED" && vendorModalMode !== "REMAINING")
+      return;
+    if (vendorModalPage > vendorModalTotalPages) {
+      setVendorModalPage(vendorModalTotalPages);
+    }
+  }, [vendorModalMode, vendorModalPage, vendorModalTotalPages]);
+
   // ===== Modal detalle venta (transacciones) =====
   const openSaleModal = (saleId: string) => {
     const sale = salesRange.find((s) => s.id === saleId) || null;
@@ -1082,7 +1150,7 @@ export default function FinancialDashboardCandies() {
     } catch (e) {
       console.error(e);
       alert(
-        "No se pudo eliminar la venta. Revisa la consola para más detalles."
+        "No se pudo eliminar la venta. Revisa la consola para más detalles.",
       );
     }
   };
@@ -1115,8 +1183,112 @@ export default function FinancialDashboardCandies() {
         </div>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-4">
+      {/* KPIs (mobile: colapsado) */}
+      <div className="md:hidden mb-4">
+        <details className="bg-white border rounded-lg shadow" open>
+          <summary className="cursor-pointer px-3 py-2 font-semibold">
+            KPIs
+          </summary>
+          <div className="p-3">
+            <div className="grid grid-cols-1 gap-3">
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Ventas Totales</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.ventasTotales)}
+                </div>
+                <div className="text-[11px] text-gray-500 mt-1">
+                  Contado + Crédito del periodo.
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">
+                  Costo de Mercadería (FIFO)
+                </div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.costoMercaderia)}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Utilidad Bruta</div>
+                <div className="text-xl font-semibold text-green-600">
+                  {money(kpis.utilidadBrutaOrdenes || 0)}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Gastos</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.gastosPeriodo)}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Utilidad Neta</div>
+                <div className="text-xl font-semibold text-green-600">
+                  {money(kpis.gananciaDespues)}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Abonos Recibidos</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.abonosRecibidos)}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Saldos Pendientes</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.saldosPendientes)}
+                </div>
+                <div className="text-[11px] text-gray-500 mt-1">
+                  A la fecha.
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Clientes con Saldo</div>
+                <div className="text-xl font-semibold">
+                  {kpis.clientesConSaldo}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Paquetes Cash</div>
+                <div className="text-xl font-semibold">{kpis.paquetesCash}</div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">
+                  Paquetes Crédito (vendidos)
+                </div>
+                <div className="text-xl font-semibold">
+                  {kpis.paquetesCredito}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Comisión Cash</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.comisionCash)}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Comisión Crédito</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.comisionCredito)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      {/* KPIs (desktop) */}
+      <div className="hidden md:grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-4">
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">Ventas Totales</div>
           <div className="text-xl font-semibold">
@@ -1139,7 +1311,7 @@ export default function FinancialDashboardCandies() {
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">Utilidad Bruta</div>
           <div className="text-xl font-semibold text-green-600">
-            {money(kpis.gananciaAntes)}
+            {money(kpis.utilidadBrutaOrdenes || 0)}
           </div>
         </div>
 
@@ -1151,9 +1323,7 @@ export default function FinancialDashboardCandies() {
         </div>
 
         <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">
-            Utilidad Neta
-          </div>
+          <div className="text-xs text-gray-600">Utilidad Neta</div>
           <div className="text-xl font-semibold text-green-600">
             {money(kpis.gananciaDespues)}
           </div>
@@ -1206,11 +1376,200 @@ export default function FinancialDashboardCandies() {
         </div>
       </div>
 
-      {/* Consolidado por cliente */}
-      <h3 className="text-lg font-semibold mb-2">
+      {/* Consolidado cliente + vendedores (mobile: colapsado) */}
+      <div className="md:hidden mb-6">
+        <details className="bg-white border rounded-lg shadow">
+          <summary className="cursor-pointer px-3 py-2 font-semibold">
+            Consolidado clientes y vendedores
+          </summary>
+          <div className="p-3">
+            <h3 className="text-base font-semibold mb-2">
+              Consolidado por cliente (Crédito)
+            </h3>
+            <div className="bg-white p-2 rounded border w-full mb-4 overflow-x-auto">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border">Cliente</th>
+                    <th className="p-2 border">Paquetes asociados</th>
+                    <th className="p-2 border">Saldo total</th>
+                    <th className="p-2 border">Saldo pendiente</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={4}>
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : creditCustomersRows.length === 0 ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={4}>
+                        Sin clientes con saldo
+                      </td>
+                    </tr>
+                  ) : (
+                    creditCustomersRows.map((r) => (
+                      <tr key={r.customerId} className="text-center">
+                        <td className="p-2 border">{r.name}</td>
+                        <td className="p-2 border">
+                          <button
+                            className="underline text-blue-600 hover:text-blue-800"
+                            onClick={() =>
+                              openCustomerModal({
+                                customerId: r.customerId,
+                                name: r.name,
+                              })
+                            }
+                            title="Ver paquetes fiados del periodo"
+                          >
+                            {r.paquetesAsociados}
+                          </button>
+                        </td>
+                        <td className="p-2 border">{money(r.saldoTotal)}</td>
+                        <td className="p-2 border font-semibold">
+                          {money(r.saldoPendiente)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <h3 className="text-base font-semibold mb-2">
+              Consolidado vendedores
+            </h3>
+            <div className="bg-white p-2 rounded border w-full overflow-x-auto">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border whitespace-nowrap">Vendedor</th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Paquetes asociados
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Paquetes restantes
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Paquetes vendidos (Cash)
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Total vendido (Cash)
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Comisión Cash
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Paquetes fiados (Crédito)
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Total fiado (Crédito)
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Comisión Crédito
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={9}>
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : vendorRows.length === 0 ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={9}>
+                        Sin datos de vendedores en el rango seleccionado.
+                      </td>
+                    </tr>
+                  ) : (
+                    vendorRows.map((v) => (
+                      <tr key={v.vendorId} className="text-center">
+                        <td className="p-2 border whitespace-nowrap">
+                          {v.vendorName}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          <button
+                            className="underline text-blue-600 hover:text-blue-800"
+                            onClick={() =>
+                              openVendorModal(
+                                v.vendorId,
+                                v.vendorName,
+                                "ASSOCIATED",
+                              )
+                            }
+                          >
+                            {v.paquetesAsociados}
+                          </button>
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          <button
+                            className="underline text-blue-600 hover:text-blue-800"
+                            onClick={() =>
+                              openVendorModal(
+                                v.vendorId,
+                                v.vendorName,
+                                "REMAINING",
+                              )
+                            }
+                          >
+                            {v.paquetesRestantes}
+                          </button>
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          <button
+                            className="underline text-blue-600 hover:text-blue-800"
+                            onClick={() =>
+                              openVendorModal(v.vendorId, v.vendorName, "CASH")
+                            }
+                          >
+                            {v.paquetesVendidos}
+                          </button>
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {money(v.totalVendido)}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {money(v.comisionCash)}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          <button
+                            className="underline text-blue-600 hover:text-blue-800"
+                            onClick={() =>
+                              openVendorModal(
+                                v.vendorId,
+                                v.vendorName,
+                                "CREDIT",
+                              )
+                            }
+                          >
+                            {v.paquetesFiados}
+                          </button>
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {money(v.totalFiado)}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {money(v.comisionCredito)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      {/* Consolidado por cliente (desktop) */}
+      <h3 className="hidden md:block text-lg font-semibold mb-2">
         Consolidado por cliente (Crédito)
       </h3>
-      <div className="bg-white p-2 rounded shadow border w-full mb-6">
+      <div className="hidden md:block bg-white p-2 rounded shadow border w-full mb-6">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
@@ -1262,9 +1621,11 @@ export default function FinancialDashboardCandies() {
         </table>
       </div>
 
-      {/* Consolidado de vendedores */}
-      <h3 className="text-lg font-semibold mb-2">Consolidado vendedores</h3>
-      <div className="bg-white p-2 rounded shadow border w-full mb-6 overflow-x-auto">
+      {/* Consolidado de vendedores (desktop) */}
+      <h3 className="hidden md:block text-lg font-semibold mb-2">
+        Consolidado vendedores
+      </h3>
+      <div className="hidden md:block bg-white p-2 rounded shadow border w-full mb-6 overflow-x-auto">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
@@ -1369,9 +1730,145 @@ export default function FinancialDashboardCandies() {
         </table>
       </div>
 
-      {/* Transacciones del periodo */}
-      <h3 className="text-lg font-semibold mb-2">Transacciones del periodo</h3>
-      <div className="bg-white p-2 rounded shadow border w-full mb-6 overflow-x-auto">
+      {/* Transacciones + Gastos (mobile: colapsado) */}
+      <div className="md:hidden mb-6">
+        <details className="bg-white border rounded-lg shadow">
+          <summary className="cursor-pointer px-3 py-2 font-semibold">
+            Transacciones y gastos
+          </summary>
+          <div className="p-3">
+            <h3 className="text-base font-semibold mb-2">
+              Transacciones del periodo
+            </h3>
+            <div className="bg-white p-2 rounded border w-full mb-4 overflow-x-auto">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border whitespace-nowrap">Fecha</th>
+                    <th className="p-2 border whitespace-nowrap">Cliente</th>
+                    <th className="p-2 border whitespace-nowrap">Tipo</th>
+                    <th className="p-2 border whitespace-nowrap">Paquetes</th>
+                    <th className="p-2 border whitespace-nowrap">
+                      Precio venta (prom.)
+                    </th>
+                    <th className="p-2 border whitespace-nowrap">Total</th>
+                    <th className="p-2 border whitespace-nowrap">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={7}>
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : salesRows.length === 0 ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={7}>
+                        Sin transacciones en el rango seleccionado.
+                      </td>
+                    </tr>
+                  ) : (
+                    salesRows.map((r) => (
+                      <tr key={r.id} className="text-center">
+                        <td className="p-2 border whitespace-nowrap">
+                          {r.date}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {r.customer}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {r.type}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          <button
+                            className="underline text-blue-600 hover:text-blue-800"
+                            onClick={() => openSaleModal(r.id)}
+                          >
+                            {r.paquetes}
+                          </button>
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {money(r.avgPrice)}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          {money(r.total)}
+                        </td>
+                        <td className="p-2 border whitespace-nowrap">
+                          <button
+                            className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                            onClick={() => handleDeleteSale(r.id)}
+                          >
+                            Eliminar
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <h3 className="text-base font-semibold mb-2">Gastos del periodo</h3>
+            <div className="bg-white p-2 rounded border w-full overflow-x-auto">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border">Fecha</th>
+                    <th className="p-2 border">Categoría</th>
+                    <th className="p-2 border">Descripción</th>
+                    <th className="p-2 border">Monto</th>
+                    <th className="p-2 border">Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={5}>
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : expenses.length === 0 ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={5}>
+                        Sin gastos en el rango seleccionado.
+                      </td>
+                    </tr>
+                  ) : (
+                    expenses
+                      .sort((a, b) => a.date.localeCompare(b.date))
+                      .map((g) => (
+                        <tr key={g.id} className="text-center">
+                          <td className="p-2 border">{g.date}</td>
+                          <td className="p-2 border">{g.category || "—"}</td>
+                          <td className="p-2 border">
+                            {g.description ? (
+                              <span title={g.description}>
+                                {g.description.length > 40
+                                  ? g.description.slice(0, 40) + "…"
+                                  : g.description}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="p-2 border">{money(g.amount)}</td>
+                          <td className="p-2 border">{g.status || "—"}</td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      {/* Transacciones del periodo (desktop) */}
+      <h3 className="hidden md:block text-lg font-semibold mb-2">
+        Transacciones del periodo
+      </h3>
+      <div className="hidden md:block bg-white p-2 rounded shadow border w-full mb-6 overflow-x-auto">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
@@ -1434,9 +1931,11 @@ export default function FinancialDashboardCandies() {
         </table>
       </div>
 
-      {/* Gastos */}
-      <h3 className="text-lg font-semibold mb-2">Gastos del periodo</h3>
-      <div className="bg-white p-2 rounded shadow border w-full">
+      {/* Gastos (desktop) */}
+      <h3 className="hidden md:block text-lg font-semibold mb-2">
+        Gastos del periodo
+      </h3>
+      <div className="hidden md:block bg-white p-2 rounded shadow border w-full">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
@@ -1529,15 +2028,15 @@ export default function FinancialDashboardCandies() {
                 </div>
               </div>
               <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Saldo actual</div>
-                <div className="text-xl font-semibold">
-                  {money(modalKpis.saldoActual)}
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Abonado (periodo)</div>
                 <div className="text-xl font-semibold">
                   {money(modalKpis.abonadoPeriodo)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Saldo actual</div>
+                <div className="text-xl font-semibold">
+                  {money(modalKpis.saldoActual)}
                 </div>
               </div>
             </div>
@@ -1548,9 +2047,8 @@ export default function FinancialDashboardCandies() {
                   <tr>
                     <th className="p-2 border">Fecha compra</th>
                     <th className="p-2 border">Producto</th>
-                    <th className="p-2 border">SKU</th>
                     <th className="p-2 border">Paquetes</th>
-                    <th className="p-2 border">P. Unit</th>
+                    <th className="p-2 border">Precio Paq</th>
                     <th className="p-2 border">Monto</th>
                     <th className="p-2 border">Descuento</th>
                     <th className="p-2 border">Monto final</th>
@@ -1576,7 +2074,6 @@ export default function FinancialDashboardCandies() {
                         <tr key={`${p.saleId}-${i}`} className="text-center">
                           <td className="p-2 border">{p.date}</td>
                           <td className="p-2 border">{p.productName}</td>
-                          <td className="p-2 border">{p.sku || "—"}</td>
                           <td className="p-2 border">{p.qty}</td>
                           <td className="p-2 border">{money(p.unitPrice)}</td>
                           <td className="p-2 border">{money(p.lineTotal)}</td>
@@ -1606,48 +2103,122 @@ export default function FinancialDashboardCandies() {
               </button>
             </div>
 
+            {(vendorModalMode === "ASSOCIATED" ||
+              vendorModalMode === "REMAINING") &&
+              !vendorModalLoading && (
+                <div className="flex items-center justify-between gap-2 mb-2 text-sm">
+                  <div className="text-gray-600">
+                    Página {vendorModalPage} de {vendorModalTotalPages}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="px-3 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
+                      onClick={() =>
+                        setVendorModalPage((p) => Math.max(1, p - 1))
+                      }
+                      disabled={vendorModalPage <= 1}
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      className="px-3 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
+                      onClick={() =>
+                        setVendorModalPage((p) =>
+                          Math.min(vendorModalTotalPages, p + 1),
+                        )
+                      }
+                      disabled={vendorModalPage >= vendorModalTotalPages}
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                </div>
+              )}
+
             <div className="bg-white rounded border overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-100">
                   <tr>
-                    <th className="p-2 border">Fecha</th>
+                    <th className="p-2 border">Fecha Orden</th>
                     <th className="p-2 border">Producto</th>
-                    <th className="p-2 border">SKU</th>
                     <th className="p-2 border">Paquetes</th>
-                    <th className="p-2 border">P. Unit</th>
-                    <th className="p-2 border">Monto</th>
+                    <th className="p-2 border">Precio Paq</th>
+                    {vendorModalMode === "ASSOCIATED" ||
+                    vendorModalMode === "REMAINING" ? (
+                      <>
+                        <th className="p-2 border">Costo</th>
+                        <th className="p-2 border">Monto</th>
+                      </>
+                    ) : (
+                      <th className="p-2 border">Monto</th>
+                    )}
                     <th className="p-2 border">Descuento</th>
                     <th className="p-2 border">Monto final</th>
-                    <th className="p-2 border">Comisión</th>
+                    {vendorModalMode === "ASSOCIATED" ||
+                    vendorModalMode === "REMAINING" ? (
+                      <>
+                        <th className="p-2 border">Utilidad bruta</th>
+                        <th className="p-2 border">Utilidad vendedor</th>
+                      </>
+                    ) : (
+                      <th className="p-2 border">Comisión</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {vendorModalLoading ? (
                     <tr>
-                      <td colSpan={9} className="p-4 text-center">
+                      <td
+                        colSpan={vendorModalColSpan}
+                        className="p-4 text-center"
+                      >
                         Cargando…
                       </td>
                     </tr>
                   ) : vendorModalPieces.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="p-4 text-center">
+                      <td
+                        colSpan={vendorModalColSpan}
+                        className="p-4 text-center"
+                      >
                         Sin paquetes para este vendedor en el periodo.
                       </td>
                     </tr>
                   ) : (
-                    vendorModalPieces.map((p, i) => (
+                    vendorModalPagedPieces.map((p, i) => (
                       <tr key={`${p.saleId}-${i}`} className="text-center">
                         <td className="p-2 border">{p.date}</td>
                         <td className="p-2 border">{p.productName}</td>
-                        <td className="p-2 border">{p.sku || "—"}</td>
                         <td className="p-2 border">{p.qty}</td>
                         <td className="p-2 border">{money(p.unitPrice)}</td>
-                        <td className="p-2 border">{money(p.lineTotal)}</td>
+                        {vendorModalMode === "ASSOCIATED" ||
+                        vendorModalMode === "REMAINING" ? (
+                          <>
+                            <td className="p-2 border">
+                              {money(p.costTotal ?? 0)}
+                            </td>
+                            <td className="p-2 border">{money(p.lineTotal)}</td>
+                          </>
+                        ) : (
+                          <td className="p-2 border">{money(p.lineTotal)}</td>
+                        )}
                         <td className="p-2 border">{money(p.discount)}</td>
                         <td className="p-2 border">{money(p.lineFinal)}</td>
-                        <td className="p-2 border">
-                          {money(p.vendorCommissionAmount)}
-                        </td>
+                        {vendorModalMode === "ASSOCIATED" ||
+                        vendorModalMode === "REMAINING" ? (
+                          <>
+                            <td className="p-2 border">
+                              {money(p.grossProfit || 0)}
+                            </td>
+                            <td className="p-2 border">
+                              {money(p.vendorCommissionAmount)}
+                            </td>
+                          </>
+                        ) : (
+                          <td className="p-2 border">
+                            {money(p.vendorCommissionAmount)}
+                          </td>
+                        )}
                       </tr>
                     ))
                   )}
@@ -1679,10 +2250,9 @@ export default function FinancialDashboardCandies() {
                 <thead className="bg-gray-100">
                   <tr>
                     <th className="p-2 border">Producto</th>
-                    <th className="p-2 border">SKU</th>
                     <th className="p-2 border">Paquetes</th>
-                    <th className="p-2 border">P. Unit</th>
-                    <th className="p-2 border">Monto</th>
+                    <th className="p-2 border">Precio Paq</th>
+                    <th className="p-2 border">Subtotal</th>
                     <th className="p-2 border">Comisión</th>
                   </tr>
                 </thead>
@@ -1696,7 +2266,6 @@ export default function FinancialDashboardCandies() {
                     return (
                       <tr key={i} className="text-center">
                         <td className="p-2 border">{it.productName}</td>
-                        <td className="p-2 border">{it.sku || "—"}</td>
                         <td className="p-2 border">{qty}</td>
                         <td className="p-2 border">{money(unitPrice)}</td>
                         <td className="p-2 border">{money(lineTotal)}</td>

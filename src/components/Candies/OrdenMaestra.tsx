@@ -155,6 +155,7 @@ type CandyMainOrderDoc = {
 
   // NUEVO
   logisticsCost?: number;
+  uBrutaGlobal?: number;
 
   createdAt: Timestamp;
   items: CandyOrderItem[];
@@ -282,6 +283,7 @@ export default function CandyMainOrders() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingOrder, setSavingOrder] = useState(false);
+  const [isBackfillingMain, setIsBackfillingMain] = useState(false);
 
   // ====== CATÁLOGO (products_candies) ======
   const [catalog, setCatalog] = useState<CatalogCandyProduct[]>([]);
@@ -1330,6 +1332,7 @@ export default function CandyMainOrders() {
 
         // ✅ NUEVO
         logisticsCost: logisticsTotal,
+        uBrutaGlobal: computed.grossTotal,
 
         items: itemsToSave,
       };
@@ -1699,6 +1702,102 @@ export default function CandyMainOrders() {
     }
   };
 
+  // =========================
+  // BACKFILL PRORRATEO LOGÍSTICO (ORDEN MAESTRA)
+  // =========================
+  const backfillMainOrdersLogistics = async () => {
+    if (isBackfillingMain) return;
+
+    try {
+      setIsBackfillingMain(true);
+      setMsg("");
+
+      const snap = await getDocs(collection(db, "candy_main_orders"));
+
+      let batch = writeBatch(db);
+      let pending = 0;
+      let updated = 0;
+
+      const diff = (a: any, b: any) =>
+        Math.abs(Number(a || 0) - Number(b || 0)) > 0.01;
+
+      snap.forEach((d) => {
+        const data = d.data() as any;
+        const items: CandyOrderItem[] = Array.isArray(data.items)
+          ? (data.items as CandyOrderItem[])
+          : [];
+        if (!items.length) return;
+
+        const subtotalTotal = items.reduce(
+          (acc, it) => acc + Number(it.subtotal || 0),
+          0,
+        );
+
+        let logisticsTotal = Number(
+          data.logisticsCost ?? data.gastosLogisticos ?? data.gastos ?? 0,
+        );
+        if (!Number.isFinite(logisticsTotal)) logisticsTotal = 0;
+
+        if (!logisticsTotal) {
+          const existingSum = items.reduce(
+            (acc, it) => acc + Number(it.logisticAllocated ?? 0),
+            0,
+          );
+          logisticsTotal = Number(existingSum || 0);
+        }
+
+        const itemsUpdated = items.map((it) =>
+          applyProfitSplitAndLogistics(it, logisticsTotal, subtotalTotal),
+        );
+        const uBrutaGlobal = itemsUpdated.reduce(
+          (acc, it) => acc + Number(it.grossProfit || 0),
+          0,
+        );
+
+        const needsUpdate =
+          diff(data.logisticsCost, logisticsTotal) ||
+          diff(data.uBrutaGlobal, uBrutaGlobal) ||
+          itemsUpdated.some((it, idx) => {
+            const prev = items[idx] || ({} as CandyOrderItem);
+            return (
+              diff(prev.logisticAllocated, it.logisticAllocated) ||
+              diff(prev.grossProfit, it.grossProfit) ||
+              diff(prev.grossProfitIsla, it.grossProfitIsla)
+            );
+          });
+
+        if (!needsUpdate) return;
+
+        const ref = doc(db, "candy_main_orders", d.id);
+        batch.update(ref, {
+          logisticsCost: logisticsTotal,
+          uBrutaGlobal,
+          items: itemsUpdated,
+          updatedAt: Timestamp.now(),
+        });
+
+        pending += 1;
+        updated += 1;
+
+        if (pending >= 400) {
+          batch.commit();
+          batch = writeBatch(db);
+          pending = 0;
+        }
+      });
+
+      if (pending > 0) await batch.commit();
+
+      setMsg(`✅ Ordenes maestras actualizadas: ${updated}`);
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error actualizando prorrateo de órdenes maestras.");
+    } finally {
+      setIsBackfillingMain(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto">
       {/* Header / acciones */}
@@ -1715,6 +1814,16 @@ export default function CandyMainOrders() {
               onClick={refresh}
               loading={loading || catalogLoading}
             />
+
+            <button
+              className="inline-flex items-center gap-2 bg-gray-200 text-gray-800 px-2 md:px-3 py-2 rounded-2xl hover:bg-gray-300 disabled:opacity-60"
+              onClick={backfillMainOrdersLogistics}
+              disabled={isBackfillingMain}
+            >
+              {isBackfillingMain
+                ? "Actualizando prorrateo..."
+                : "Actualizar prorrateo"}
+            </button>
 
             <button
               className="inline-flex items-center gap-2 bg-indigo-600 text-white px-2 md:px-3 py-2 rounded-2xl hover:bg-indigo-700 w-full md:w-auto max-w-[220px] justify-center"

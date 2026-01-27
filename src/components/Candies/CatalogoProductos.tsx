@@ -7,12 +7,14 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  limit,
   orderBy,
   query,
   updateDoc,
   writeBatch,
   Timestamp,
   onSnapshot,
+  where,
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
@@ -369,6 +371,8 @@ export default function ProductsCandies() {
 
   // ✅ cards colapsables en móvil
   const [openCardId, setOpenCardId] = useState<string | null>(null);
+  const creatingRef = useRef(false);
+  const lastCreateKeyRef = useRef<{ key: string; ts: number } | null>(null);
 
   // ============================
   //  LOAD CATALOG
@@ -487,6 +491,7 @@ export default function ProductsCandies() {
 
   const createProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (creatingRef.current || loading) return;
     setMsg("");
 
     const c = String(category || "").trim();
@@ -499,6 +504,17 @@ export default function ProductsCandies() {
     if (!n) return setMsg("⚠️ El nombre del producto es requerido.");
     if (pp <= 0) return setMsg("⚠️ El precio proveedor debe ser > 0.");
     if (upp <= 0) return setMsg("⚠️ Und x paquete debe ser > 0.");
+
+    const key = `${norm(c)}::${norm(n)}`;
+    const now = Date.now();
+    if (
+      lastCreateKeyRef.current &&
+      lastCreateKeyRef.current.key === key &&
+      now - lastCreateKeyRef.current.ts < 4000
+    ) {
+      setMsg("⚠️ Ya se está creando este producto.");
+      return;
+    }
 
     const exists = products.some(
       (p) => norm(p.category) === norm(c) && norm(p.name) === norm(n),
@@ -514,8 +530,39 @@ export default function ProductsCandies() {
       }
     }
 
+    creatingRef.current = true;
+    lastCreateKeyRef.current = { key, ts: now };
+
     try {
       setLoading(true);
+
+      const nameDupSnap = await getDocs(
+        query(
+          collection(db, "products_candies"),
+          where("category", "==", c),
+          where("name", "==", n),
+          limit(1),
+        ),
+      );
+      if (!nameDupSnap.empty) {
+        setMsg("⚠️ Ya existe un producto con esa categoría y nombre.");
+        return;
+      }
+
+      if (bc) {
+        const codeDupSnap = await getDocs(
+          query(
+            collection(db, "products_candies"),
+            where("barcode", "==", bc),
+            limit(1),
+          ),
+        );
+        if (!codeDupSnap.empty) {
+          setMsg("⚠️ Ya existe un producto con ese código de barras.");
+          return;
+        }
+      }
+
       const payload: any = {
         category: c,
         name: n,
@@ -527,12 +574,7 @@ export default function ProductsCandies() {
       const pk = String(packaging || "").trim();
       if (pk) payload.packaging = pk;
 
-      const ref = await addDoc(collection(db, "products_candies"), payload);
-      setProducts((prev) =>
-        [...prev, { id: ref.id, ...payload } as CandyProduct].sort((a, b) =>
-          a.name.localeCompare(b.name, "es"),
-        ),
-      );
+      await addDoc(collection(db, "products_candies"), payload);
       setMsg("✅ Producto creado.");
       resetForm();
     } catch (e) {
@@ -540,6 +582,7 @@ export default function ProductsCandies() {
       setMsg("❌ Error creando producto.");
     } finally {
       setLoading(false);
+      creatingRef.current = false;
     }
   };
 
@@ -1122,23 +1165,6 @@ export default function ProductsCandies() {
               onChange={(e) => setPackaging(e.target.value)}
             >
               <option value="">Seleccionar</option>
-              <option value="Tarro">Tarro</option>
-              <option value="Bolsa">Bolsa</option>
-              <option value="Ristra">Ristra</option>
-              <option value="Caja">Caja</option>
-              <option value="Vaso">Vaso</option>
-              <option value="Pana">Pana</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block font-semibold">Empaque</label>
-            <select
-              className="w-full border rounded px-2 py-1"
-              value={packaging}
-              onChange={(e) => setPackaging(e.target.value)}
-            >
-              <option value="">—</option>
               <option value="Tarro">Tarro</option>
               <option value="Bolsa">Bolsa</option>
               <option value="Ristra">Ristra</option>

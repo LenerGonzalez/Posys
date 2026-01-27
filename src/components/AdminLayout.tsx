@@ -569,6 +569,14 @@ export default function AdminLayout({
                           Vender
                         </NavLink>
                       )}
+                      {canPath(subject, "financialDashboard") && (
+                        <NavLink
+                          to={`${base}/financialDashboard`}
+                          className={linkCls}
+                        >
+                          Dashboard
+                        </NavLink>
+                      )}
                       {canPath(subject, "batches") && (
                         <NavLink to={`${base}/batches`} className={linkCls}>
                           Inventario Pollo

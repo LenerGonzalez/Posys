@@ -45,6 +45,7 @@ interface CustomerRow {
   vendorId?: string;
   vendorName?: string;
   initialDebt?: number;
+  initialDebtDate?: string;
 
   // ✅ NUEVO: para mobile (último abono)
   lastAbonoDate?: string; // yyyy-MM-dd
@@ -305,6 +306,7 @@ export default function CustomersCandy({
             vendorId: x.vendorId || "",
             vendorName: x.vendorName || "",
             initialDebt: Number(x.initialDebt || 0),
+            initialDebtDate: String(x.initialDebtDate || "").trim(),
 
             lastAbonoDate: "",
             lastAbonoAmount: 0,
@@ -322,19 +324,33 @@ export default function CustomersCandy({
 
             let sumMov = 0;
             let lastAbono: any = null;
+            const movements: MovementRow[] = [];
 
             mSnap.forEach((m) => {
               const x = m.data() as any;
               const amt = Number(x.amount || 0);
               sumMov += amt;
 
+              const d =
+                x.date ??
+                (x.createdAt?.toDate?.()
+                  ? x.createdAt.toDate().toISOString().slice(0, 10)
+                  : "");
+
+              movements.push({
+                id: m.id,
+                date: d,
+                type:
+                  (x.type as "CARGO" | "ABONO") ??
+                  (amt < 0 ? "ABONO" : "CARGO"),
+                amount: amt,
+                ref: x.ref || {},
+                comment: x.comment || "",
+                createdAt: x.createdAt,
+              });
+
               // detectar abonos (negativos)
               if (amt < 0) {
-                const d =
-                  x.date ??
-                  (x.createdAt?.toDate?.()
-                    ? x.createdAt.toDate().toISOString().slice(0, 10)
-                    : "");
                 const ts = x.createdAt?.seconds
                   ? Number(x.createdAt.seconds)
                   : 0;
@@ -346,9 +362,14 @@ export default function CustomersCandy({
             });
 
             const init = Number(c.initialDebt || 0);
+            const effectiveInit = getEffectiveInitialDebt(
+              init,
+              String(c.initialDebtDate || ""),
+              movements,
+            );
 
-            // ✅ FIX: balance incluye deuda inicial
-            c.balance = init + sumMov;
+            // ✅ balance incluye deuda inicial efectiva
+            c.balance = effectiveInit + sumMov;
 
             if (lastAbono) {
               c.lastAbonoDate = lastAbono?.date;
@@ -612,7 +633,34 @@ export default function CustomersCandy({
     }
   };
 
-  const recomputeKpis = (list: MovementRow[], initialDebtValue: number) => {
+  const getEffectiveInitialDebt = (
+    initialDebtValue: number,
+    initialDebtDate: string,
+    movements: MovementRow[],
+  ) => {
+    const init = Number(initialDebtValue || 0);
+    if (!init) return 0;
+
+    const initDate = String(initialDebtDate || "").trim();
+    if (!initDate) return init;
+
+    const hasDup = movements.some((m) => {
+      const amt = Number(m.amount || 0);
+      if (!(amt > 0)) return false;
+      const sameAmount = Math.abs(amt - init) < 0.01;
+      const sameDate = String(m.date || "").trim() === initDate;
+      const hasSale = Boolean(m.ref?.saleId);
+      return sameAmount && sameDate && hasSale;
+    });
+
+    return hasDup ? 0 : init;
+  };
+
+  const recomputeKpis = (
+    list: MovementRow[],
+    initialDebtValue: number,
+    initialDebtDate: string,
+  ) => {
     const sumMov = list.reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
 
     const totalAbonos = list
@@ -623,12 +671,17 @@ export default function CustomersCandy({
       .filter((x) => Number(x.amount) > 0)
       .reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
 
-    const saldoActual = Number(initialDebtValue || 0) + sumMov;
+    const effectiveInit = getEffectiveInitialDebt(
+      initialDebtValue,
+      initialDebtDate,
+      list,
+    );
+    const saldoActual = Number(effectiveInit || 0) + sumMov;
 
     setStKpis({
       saldoActual,
       totalAbonado: totalAbonos,
-      totalCargos: Number(initialDebtValue || 0) + totalCargosMov,
+      totalCargos: Number(effectiveInit || 0) + totalCargosMov,
       saldoRestante: saldoActual,
     });
   };
@@ -692,7 +745,11 @@ export default function CustomersCandy({
       });
 
       setStRows(list);
-      recomputeKpis(list, Number(customer.initialDebt || 0));
+      recomputeKpis(
+        list,
+        Number(customer.initialDebt || 0),
+        String(customer.initialDebtDate || ""),
+      );
     } catch (e) {
       console.error(e);
       setMsg("❌ No se pudo cargar el estado de cuenta");
@@ -712,6 +769,14 @@ export default function CustomersCandy({
       .sort((a, b) => (a.ts || 0) - (b.ts || 0));
     return abonos.length ? abonos[abonos.length - 1] : null;
   };
+
+  const stEffectiveInitialDebt = useMemo(() => {
+    return getEffectiveInitialDebt(
+      Number(stCustomer?.initialDebt || 0),
+      String(stCustomer?.initialDebtDate || ""),
+      stRows,
+    );
+  }, [stCustomer?.initialDebt, stCustomer?.initialDebtDate, stRows]);
 
   // ===== Registrar ABONO =====
   const saveAbono = async () => {
@@ -758,16 +823,30 @@ export default function CustomersCandy({
       });
 
       setStRows(newList);
-      recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
+      recomputeKpis(
+        newList,
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+      );
 
-      // ✅ update saldo en lista (balance incluye deuda inicial)
+      const sumMov = newList.reduce(
+        (acc, it) => acc + (Number(it.amount) || 0),
+        0,
+      );
+      const effectiveInit = getEffectiveInitialDebt(
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+        newList,
+      );
+      const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
+
+      // ✅ update saldo en lista (balance incluye deuda inicial efectiva)
       setRows((prev) =>
         prev.map((c) => {
           if (c.id !== stCustomer.id) return c;
-          const nextBal = (c.balance || 0) - safeAmt;
           return {
             ...c,
-            balance: nextBal,
+            balance: nuevoSaldo,
             lastAbonoDate: abonoDate,
             lastAbonoAmount: safeAmt,
           };
@@ -778,7 +857,7 @@ export default function CustomersCandy({
         prev
           ? {
               ...prev,
-              balance: (prev.balance || 0) - safeAmt,
+              balance: nuevoSaldo,
               lastAbonoDate: abonoDate,
               lastAbonoAmount: safeAmt,
             }
@@ -851,14 +930,23 @@ export default function CustomersCandy({
       });
 
       setStRows(newList);
-      recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
+      recomputeKpis(
+        newList,
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+      );
 
-      // recalcular balance total = initialDebt + sumMov
+      // recalcular balance total = deuda inicial efectiva + sumMov
       const sumMov = newList.reduce(
         (acc, it) => acc + (Number(it.amount) || 0),
         0,
       );
-      const nuevoSaldo = Number(stCustomer.initialDebt || 0) + sumMov;
+      const effectiveInit = getEffectiveInitialDebt(
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+        newList,
+      );
+      const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
 
       // actualizar último abono en lista (si cambió)
       const last = getLastAbonoFromList(newList);
@@ -934,13 +1022,22 @@ export default function CustomersCandy({
       });
 
       setStRows(newList);
-      recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
+      recomputeKpis(
+        newList,
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+      );
 
       const sumMov = newList.reduce(
         (acc, it) => acc + (Number(it.amount) || 0),
         0,
       );
-      const nuevoSaldo = Number(stCustomer.initialDebt || 0) + sumMov;
+      const effectiveInit = getEffectiveInitialDebt(
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+        newList,
+      );
+      const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
 
       const last = getLastAbonoFromList(newList);
 
@@ -1796,7 +1893,7 @@ export default function CustomersCandy({
                 <div className="p-3 border rounded bg-gray-50">
                   <div className="text-xs text-gray-600">Deuda inicial</div>
                   <div className="text-xl font-semibold">
-                    {money(Number(stCustomer?.initialDebt || 0))}
+                    {money(Number(stEffectiveInitialDebt || 0))}
                   </div>
                 </div>
 
@@ -1996,7 +2093,7 @@ export default function CustomersCandy({
                         Deuda inicial
                       </div>
                       <div className="font-bold">
-                        {money(Number(stCustomer?.initialDebt || 0))}
+                        {money(Number(stEffectiveInitialDebt || 0))}
                       </div>
                     </div>
 
