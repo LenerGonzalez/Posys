@@ -966,9 +966,14 @@ export default function InventoryBatches({
                   onClick={() => toggleGroupExpand(g.groupId)}
                 >
                   <div className="min-w-0">
-                    <div className="font-semibold text-lg">{g.date}</div>
+                    <div className="font-semibold text-lg">
+                      {g.date}
+                      <div className="text-sm text-gray-500">
+                        Producto: {g.typeLabel}
+                      </div>
+                    </div>
                     <div className="text-xs text-gray-500 truncate">
-                      {g.orderName}
+                      Nombre: {g.orderName}
                     </div>
                   </div>
 
@@ -982,8 +987,21 @@ export default function InventoryBatches({
                     >
                       {g.status}
                     </span>
-                    <div className="text-sm text-gray-500">{g.typeLabel}</div>
                   </div>
+                </div>
+                <div className="pb-4 p-4 flex items-start justify-between gap-1 cursor-pointer">
+                  <div className=" px-2 py-1 rounded text-xs shrink-0 bg-green-100 font-semibold text-gray-700">
+                    Ingresado: {g.lbsIn.toFixed(3)} Lbs
+                  </div>
+                  <span
+                    className={`px-2 py-1 rounded text-xs shrink-0 ${
+                      g.lbsRem > 0
+                        ? "bg-green-100 font-semibold text-gray-700"
+                        : "bg-red-100 font-semibold text-red-700"
+                    }`}
+                  >
+                    Disponible: {g.lbsRem.toFixed(3)} Lbs
+                  </span>
                 </div>
 
                 {expanded && (
