@@ -53,6 +53,7 @@ type PendingProductRow = {
   qty: number;
   amount: number;
   measurement?: string;
+  price?: number;
 };
 
 type PendingCustomerRow = {
@@ -100,6 +101,7 @@ export default function FinancialDashboard(): React.ReactElement {
   const [inventoryByProduct, setInventoryByProduct] = useState<
     Record<string, { incomingQty: number; remainingQty: number }>
   >({});
+  const [priceVenta, setPriceVenta] = useState<Record<string, number>>({});
 
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -1039,7 +1041,7 @@ export default function FinancialDashboard(): React.ReactElement {
                   <b>{money(kpisVisible.netProfit)}</b>
                 </div>
               </div>
-              <div className="text-gray-500">{kpiSectionOpen ? "▲" : "▼"}</div>
+              <div className="text-gray-500">{kpiSectionOpen ? "Cerrar" : "Ver"}</div>
             </button>
 
             {kpiSectionOpen && (
@@ -1302,7 +1304,7 @@ export default function FinancialDashboard(): React.ReactElement {
             >
               <div className="font-semibold">Saldos pendientes</div>
               <div className="text-gray-500">
-                {pendingSectionOpen ? "▲" : "▼"}
+                {pendingSectionOpen ? "Cerrar" : "Ver"}
               </div>
             </button>
 
@@ -1370,16 +1372,16 @@ export default function FinancialDashboard(): React.ReactElement {
               onClick={toggleConsolidatedSection}
               className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
             >
-              <div className="font-semibold">Consolidado y gastos</div>
+              <div className="font-semibold">Ventas y Gastos</div>
               <div className="text-gray-500">
-                {consolidatedSectionOpen ? "▲" : "▼"}
+                {consolidatedSectionOpen ? "Cerrar" : "Ver"}
               </div>
             </button>
 
             {consolidatedSectionOpen && (
               <div className="mt-3">
                 <h3 className="font-semibold mb-2">
-                  Consolidado por producto Libras - Unidades
+                  Ventas
                 </h3>
 
                 {/* Desktop: tabla */}
@@ -1455,14 +1457,14 @@ export default function FinancialDashboard(): React.ReactElement {
                   >
                     <div>
                       <div className="font-semibold">
-                        Consolidado por producto Libras - Unidades
+                        Ventas por producto
                       </div>
                       <div className="text-xs text-gray-600">
                         {byProduct.length} productos
                       </div>
                     </div>
                     <div className="text-gray-500">
-                      {consolidatedOpen ? "▲" : "▼"}
+                      {consolidatedOpen ? "Cerrar" : "Ver"}
                     </div>
                   </button>
 
@@ -1497,20 +1499,26 @@ export default function FinancialDashboard(): React.ReactElement {
                                     {r.productName}
                                   </div>
                                   <div className="text-xs text-gray-600 mt-1">
-                                    Total: <b>{qty3(r.units)}</b> • Utilidad:{" "}
+                                    Libras/Unidades
+                                  </div>
+                                  <div className="text-xs text-gray-600 mt-1">
+                                    Vendidas: <b>{qty3(r.units)}</b> •
+                                    Disponible:{" "}
                                     <b
                                       className={
-                                        r.profit >= 0
+                                        inventoryByProduct[r.productName]
+                                          ?.remainingQty > 0
                                           ? "text-green-700"
                                           : "text-red-700"
                                       }
                                     >
-                                      {money(r.profit)}
+                                      {qty3(inventoryByProduct[r.productName]
+                                        ?.remainingQty || 0)}
                                     </b>
                                   </div>
                                 </div>
-                                <div className="text-gray-500 text-sm pt-0.5">
-                                  {open ? "▲" : "▼"}
+                                <div className="text-gray-500 text-xs pt-0.10">
+                                  {open ? "Cerrar" : "Ver"}
                                 </div>
                               </button>
 
@@ -1518,28 +1526,35 @@ export default function FinancialDashboard(): React.ReactElement {
                                 <div className="px-3 pb-3 text-sm">
                                   <div className="grid grid-cols-2 gap-2">
                                     <Info
-                                      label="Ingresadas"
+                                      label="Lb/Un Ingresadas"
                                       value={qty3(
                                         inventoryByProduct[r.productName]
                                           ?.incomingQty || 0,
                                       )}
                                     />
                                     <Info
-                                      label="Disponibilidad"
+                                      label="Lb/Un Disponibles"
                                       value={qty3(
                                         inventoryByProduct[r.productName]
                                           ?.remainingQty || 0,
                                       )}
                                     />
-                                    <Info label="Fechas" value={fechas} />
-                                    <Info label="Total" value={qty3(r.units)} />
+                                    <Info label="Fechas Venta" value={fechas} />
                                     <Info
-                                      label="Ingreso"
+                                      label="Lb/Un Vendidas"
+                                      value={qty3(r.units)}
+                                    />
+                                    <Info
+                                      label="Facturado al costo"
+                                      value={money(r.cogs)}
+                                    />
+
+                                    <Info
+                                      label="Monto Venta"
                                       value={money(r.revenue)}
                                     />
-                                    <Info label="Costo" value={money(r.cogs)} />
                                     <Info
-                                      label="Utilidad"
+                                      label="Utilidad bruta"
                                       value={money(r.profit)}
                                       valueClass={
                                         r.profit >= 0
@@ -1621,7 +1636,7 @@ export default function FinancialDashboard(): React.ReactElement {
                       </div>
                     </div>
                     <div className="text-gray-500">
-                      {consolidatedExpensesOpen ? "▲" : "▼"}
+                      {consolidatedExpensesOpen ? "Cerrar" : "Abrir"}
                     </div>
                   </button>
 
@@ -1665,7 +1680,7 @@ export default function FinancialDashboard(): React.ReactElement {
                                   </div>
                                 </div>
                                 <div className="text-gray-500 text-sm pt-0.5">
-                                  {open ? "▲" : "▼"}
+                                  {open ? "Cerrar" : "Ver"}
                                 </div>
                               </button>
 
