@@ -658,6 +658,14 @@ export default function SaleForm({
         type: clientType,
         amountReceived: received,
         change: changeValue,
+
+        // ✅ cliente
+        customerId: clientType === "CREDITO" ? customerId : "",
+        customerName:
+          clientType === "CREDITO"
+            ? selectedCustomer?.name || ""
+            : clientName.trim(),
+        clientName: clientType === "CONTADO" ? clientName.trim() : "",
       };
 
       // ✅ Validaciones según tipo de cliente (NO usar return "string")

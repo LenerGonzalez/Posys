@@ -9,7 +9,7 @@ import {
   where,
   Timestamp,
 } from "firebase/firestore";
-import { format } from "date-fns";
+import { endOfMonth, format, parse, startOfMonth } from "date-fns";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import RefreshButton from "../../components/common/RefreshButton";
@@ -634,12 +634,13 @@ export default function FinancialDashboard(): React.ReactElement {
     const loadInventorySummary = async () => {
       try {
         const batchesSnap = await getDocs(
-          query(
-            collection(db, "inventory_batches"),
-            where("date", ">=", from),
-            where("date", "<=", to),
-          ),
+          query(collection(db, "inventory_batches")),
         );
+
+        const fromDate = parse(from, "yyyy-MM-dd", new Date());
+        const toDate = parse(to, "yyyy-MM-dd", new Date());
+        const monthStart = format(startOfMonth(fromDate), "yyyy-MM-dd");
+        const monthEnd = format(endOfMonth(toDate), "yyyy-MM-dd");
 
         const summary: Record<
           string,
@@ -651,10 +652,15 @@ export default function FinancialDashboard(): React.ReactElement {
           const productName = String(b.productName ?? "(sin nombre)");
           const qty = Number(b.quantity ?? 0);
           const remaining = Number(b.remaining ?? 0);
+          const batchDate = b?.date?.toDate
+            ? format(b.date.toDate(), "yyyy-MM-dd")
+            : String(b?.date ?? b?.createdAt ?? "");
+          const inMonth =
+            batchDate && batchDate >= monthStart && batchDate <= monthEnd;
           if (!summary[productName]) {
             summary[productName] = { incomingQty: 0, remainingQty: 0 };
           }
-          summary[productName].incomingQty += qty;
+          if (inMonth) summary[productName].incomingQty += qty;
           summary[productName].remainingQty += remaining;
         });
 

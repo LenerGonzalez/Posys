@@ -102,12 +102,88 @@ const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 
 // Normaliza UNA venta en MÚLTIPLES filas si trae items[]
+// const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
+//   const date =
+//     raw.date ??
+//     (raw.timestamp?.toDate
+//       ? format(raw.timestamp.toDate()!, "yyyy-MM-dd")
+//       : "");
+//   if (!date) return [];
+//
+//   const saleType: "CREDITO" | "CONTADO" = raw.type ?? "CONTADO";
+//
+//   if (Array.isArray(raw.items) && raw.items.length > 0) {
+//     return raw.items.map((it, idx) => {
+//       const qty = Number(it?.qty ?? 0);
+//       const lineFinal =
+//         Number(it?.lineFinal ?? 0) ||
+//         Math.max(
+//           0,
+//           Number(it?.unitPrice || 0) * qty - Number(it?.discount || 0),
+//         );
+//       return {
+//         id: `${id}#${idx}`,
+//         productName: String(it?.productName ?? "(sin nombre)"),
+//         quantity: qty,
+//         amount: round2(lineFinal),
+//         amountSuggested: Number(raw.amountSuggested ?? 0),
+//         date,
+//         userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
+//         clientName: raw.clientName ?? "",
+//         amountReceived: Number(raw.amountReceived ?? 0),
+//         change: String(raw.change ?? "0"),
+//         status: (raw.status as any) ?? "FLOTANTE",
+//         type: saleType,
+//         measurement: String(it?.measurement ?? raw.measurement ?? ""),
+//         allocations: Array.isArray(it?.allocations)
+//           ? it.allocations
+//           : raw.allocations,
+//         avgUnitCost: Number(it?.avgUnitCost ?? raw.avgUnitCost ?? 0),
+//         cogsAmount: Number(it?.cogsAmount ?? 0),
+//       };
+//     });
+//   }
+//
+//   return [
+//     {
+//       id,
+//       productName: raw.productName ?? "(sin nombre)",
+//       quantity: Number(raw.quantity ?? 0),
+//       amount: Number(raw.amount ?? raw.amountCharged ?? 0),
+//       amountSuggested: Number(raw.amountSuggested ?? 0),
+//       date,
+//       userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
+//       clientName: raw.clientName ?? "",
+//       amountReceived: Number(raw.amountReceived ?? 0),
+//       change: String(raw.change ?? "0"),
+//       status: (raw.status as any) ?? "FLOTANTE",
+//       type: saleType,
+//       measurement: String(raw.measurement ?? ""),
+//       allocations: raw.allocations,
+//       avgUnitCost: raw.avgUnitCost,
+//       cogsAmount: raw.cogsAmount,
+//     },
+//   ];
+// };
+
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
-  const date =
-    raw.date ??
-    (raw.timestamp?.toDate
-      ? format(raw.timestamp.toDate()!, "yyyy-MM-dd")
-      : "");
+  const dateFromField = raw.date ? String(raw.date) : "";
+  const dateFromTs = raw.timestamp?.toDate
+    ? format(raw.timestamp.toDate()!, "yyyy-MM-dd")
+    : "";
+
+  // ✅ Si hay raw.date pero está desfasada vs timestamp, gana timestamp
+  let date = dateFromField || dateFromTs;
+
+  if (dateFromField && dateFromTs) {
+    const a = new Date(dateFromField + "T00:00:00").getTime();
+    const b = new Date(dateFromTs + "T00:00:00").getTime();
+    const diffDays = Math.abs(a - b) / (1000 * 60 * 60 * 24);
+    if (isFinite(diffDays) && diffDays > 30) {
+      date = dateFromTs;
+    }
+  }
+
   if (!date) return [];
 
   const saleType: "CREDITO" | "CONTADO" = raw.type ?? "CONTADO";
@@ -121,6 +197,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
           0,
           Number(it?.unitPrice || 0) * qty - Number(it?.discount || 0),
         );
+
       return {
         id: `${id}#${idx}`,
         productName: String(it?.productName ?? "(sin nombre)"),
@@ -563,6 +640,7 @@ export default function CierreVentas({
           status: "PROCESADA",
           closureId: ref.id,
           closureDate: today,
+          date: s.date, // ✅ corrige el date malo
         });
       });
       await batch.commit();

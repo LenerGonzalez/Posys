@@ -8,16 +8,18 @@ import {
   getDocs,
   orderBy,
   query,
-  Timestamp,
   where,
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import { format, isValid, parse } from "date-fns";
 import { restoreSaleAndDelete } from "../../Services/inventory";
+import RefreshButton from "../../components/common/RefreshButton";
+import useManualRefresh from "../../hooks/useManualRefresh";
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+const qty3 = (n: number) => Number(n || 0).toFixed(3);
 
 interface Customer {
   id: string;
@@ -40,11 +42,28 @@ interface SaleDoc {
 const getSaleCustomerName = (
   s: SaleDoc,
   customersById: Record<string, string>,
-) =>
-  s._raw?.clientName ||
-  s.customerName ||
-  (s.customerId ? customersById[s.customerId] : "") ||
-  "Nombre cliente";
+) => {
+  const raw = s._raw || {};
+  const cashName =
+    s.customerName ||
+    raw.customerName ||
+    raw.customer?.name ||
+    raw.clientName ||
+    raw.client?.name ||
+    "";
+
+  if (s.type === "CONTADO" && cashName) return cashName;
+
+  return (
+    (s.customerId ? customersById[s.customerId] : "") ||
+    s.customerName ||
+    raw.customerName ||
+    raw.customer?.name ||
+    raw.clientName ||
+    raw.client?.name ||
+    "Nombre cliente"
+  );
+};
 
 const getSaleDateTs = (s: SaleDoc) => {
   const direct = toDateNumber(s.date);
@@ -62,6 +81,42 @@ const getSaleDateTs = (s: SaleDoc) => {
     if (isFinite(ts)) return ts;
   }
   return NaN;
+};
+
+const getSaleDateTsByStatus = (s: SaleDoc) => {
+  const raw = s._raw || {};
+  const normalized = ensureSaleDate(raw) || s.date;
+  const d = toDateNumber(normalized);
+  if (isFinite(d)) return d;
+  return NaN;
+};
+
+const getEstadoLabel = (raw: any): "PROCESADA" | "FLOTANTE" => {
+  const status = String(raw?.status || "").toUpperCase();
+  if (status === "PROCESADA") return "PROCESADA";
+  if (raw?.closureId || raw?.closureDate || raw?.processedDate) {
+    return "PROCESADA";
+  }
+  return "FLOTANTE";
+};
+
+const mStr = (v: unknown) =>
+  String(v ?? "")
+    .toLowerCase()
+    .trim();
+
+const isLb = (m: unknown) => ["lb", "lbs", "libra", "libras"].includes(mStr(m));
+
+const getQty = (x: any) => Number(x?.qty ?? x?.quantity ?? 0) || 0;
+
+const getLbsFromSaleRaw = (raw: any) => {
+  if (!raw) return 0;
+  if (Array.isArray(raw.items) && raw.items.length > 0) {
+    return raw.items.reduce((acc: number, it: any) => {
+      return isLb(it?.measurement ?? raw?.measurement) ? acc + getQty(it) : acc;
+    }, 0);
+  }
+  return isLb(raw?.measurement) ? getQty(raw) : 0;
 };
 
 function normalizeDateString(raw: any): string {
@@ -101,16 +156,7 @@ function toDateNumber(raw: any): number {
   return isValid(parsed) ? parsed.getTime() : NaN;
 }
 
-function ensureDate(x: any): string {
-  const status = String(x?.status || "").toUpperCase();
-
-  if (status === "PROCESADA") {
-    const fromClosure = normalizeDateString(x?.closureDate);
-    if (fromClosure) return fromClosure;
-    const fromProcessed = normalizeDateString(x?.processedDate);
-    if (fromProcessed) return fromProcessed;
-  }
-
+function ensureSaleDate(x: any): string {
   const fromDateField = normalizeDateString(x?.date);
   const createdAt = x?.createdAt?.toDate ? x.createdAt.toDate() : null;
 
@@ -135,15 +181,11 @@ function ensureDate(x: any): string {
 
   if (createdAt) return format(createdAt, "yyyy-MM-dd");
 
-  const fromClosureFallback = normalizeDateString(x?.closureDate);
-  if (fromClosureFallback) return fromClosureFallback;
-  const fromProcessedFallback = normalizeDateString(x?.processedDate);
-  if (fromProcessedFallback) return fromProcessedFallback;
   return "";
 }
 
 function normalizeSale(d: any, id: string): SaleDoc | null {
-  const date = ensureDate(d);
+  const date = ensureSaleDate(d);
   if (!date) return null;
   let quantity = 0;
   let total = 0;
@@ -166,8 +208,18 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     type: (d.type || "CONTADO") as SaleType,
     total,
     quantity,
-    customerId: d.customerId || undefined,
-    customerName: d.customerName || undefined,
+    customerId:
+      d.customerId ||
+      d.customer?.id ||
+      d.customer?.customerId ||
+      d.clientId ||
+      undefined,
+    customerName:
+      d.customerName ||
+      d.customer?.name ||
+      d.clientName ||
+      d.client?.name ||
+      undefined,
     _raw: d,
   };
 }
@@ -229,8 +281,8 @@ export default function TransactionsPollo({
     );
   }
 
-  // columnas: Fecha, Cliente, Producto, Libras, Ventas, (Acciones opcionales)
-  const columnsCount = canDelete ? 7 : 6;
+  // columnas: Fecha, Estado, Cliente, Producto, Libras, Ventas, (Acciones opcionales)
+  const columnsCount = canDelete ? 8 : 7;
 
   // ===== Modal Detalle de Ítems =====
   const [itemsModalOpen, setItemsModalOpen] = useState(false);
@@ -490,10 +542,15 @@ export default function TransactionsPollo({
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
+  const { refreshKey, refresh } = useManualRefresh();
+
   // Filtros: Cliente, Tipo y Producto
   const [filterCustomerId, setFilterCustomerId] = useState<string>("");
   const [filterType, setFilterType] = useState<"" | SaleType>("");
   const [productFilter, setProductFilter] = useState<string>("ALL");
+  const [statusFilter, setStatusFilter] = useState<
+    "" | "PROCESADA" | "FLOTANTE"
+  >("");
 
   // kebab menú
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -547,19 +604,95 @@ export default function TransactionsPollo({
           );
         }
         setCustomers(cList);
+        const customersByIdLocal: Record<string, string> = {};
+        cList.forEach((c) => {
+          customersByIdLocal[c.id] = c.name;
+        });
 
         // ventas (salesV2) para Pollo
-        const sSnap = await getDocs(
-          query(collection(db, "salesV2"), orderBy("createdAt", "desc")),
-        );
+        // el estado PROCESADA viene de daily_closures, así que lo mezclamos
+        const [sSnap, cSnap, mSnap] = await Promise.all([
+          getDocs(
+            query(collection(db, "salesV2"), orderBy("timestamp", "desc")),
+          ),
+          getDocs(
+            query(
+              collection(db, "daily_closures"),
+              orderBy("createdAt", "desc"),
+            ),
+          ),
+          getDocs(
+            query(
+              collection(db, "ar_movements_pollo"),
+              where("date", ">=", fromDate),
+              where("date", "<=", toDate),
+            ),
+          ),
+        ]);
+
+        const saleCustomerMap = new Map<string, string>();
+        mSnap.forEach((m) => {
+          const x = m.data() as any;
+          const saleId = String(x?.ref?.saleId || "").trim();
+          const custId = String(x?.customerId || "").trim();
+          if (saleId && custId) saleCustomerMap.set(saleId, custId);
+        });
+
+        const processedMap = new Map<
+          string,
+          { closureDate?: any; processedDate?: any }
+        >();
+
+        cSnap.forEach((cl) => {
+          const closure = cl.data() as any;
+          const arr = Array.isArray(closure?.salesV2) ? closure.salesV2 : [];
+          for (const rawSale of arr) {
+            const rawId = String(rawSale?.id || "").trim();
+            if (!rawId) continue;
+            const baseId = rawId.split("#")[0];
+            const status = String(rawSale?.status || "").toUpperCase();
+            if (
+              status === "PROCESADA" ||
+              rawSale?.closureDate ||
+              rawSale?.processedDate
+            ) {
+              processedMap.set(baseId, {
+                closureDate: rawSale?.closureDate,
+                processedDate: rawSale?.processedDate,
+              });
+            }
+          }
+        });
+
         const list: SaleDoc[] = [];
+
         sSnap.forEach((d) => {
-          const x = normalizeSale(d.data(), d.id);
+          const data = d.data() as any;
+          const processed = processedMap.get(d.id);
+          const fallbackCustomerId = saleCustomerMap.get(d.id);
+          if (!data.customerId && fallbackCustomerId) {
+            data.customerId = fallbackCustomerId;
+          }
+          if (!data.customerName && fallbackCustomerId) {
+            data.customerName = customersByIdLocal[fallbackCustomerId] || "";
+          }
+          if (processed) {
+            data.status = "PROCESADA";
+            if (!data.closureDate && processed.closureDate) {
+              data.closureDate = processed.closureDate;
+            }
+            if (!data.processedDate && processed.processedDate) {
+              data.processedDate = processed.processedDate;
+            }
+          }
+          const x = normalizeSale(data, d.id);
           if (!x) return;
           list.push(x);
         });
+
         const sorted = list.sort((a, b) => b.date.localeCompare(a.date));
         setSales(sorted);
+
         const startTs = toDateNumber(fromDate);
         const endTs = toDateNumber(toDate);
         setProducts(
@@ -567,7 +700,7 @@ export default function TransactionsPollo({
             new Set(
               sorted
                 .filter((s) => {
-                  const saleTs = getSaleDateTs(s);
+                  const saleTs = getSaleDateTsByStatus(s);
                   if (!isFinite(saleTs)) return false;
                   if (isFinite(startTs) && saleTs < startTs) return false;
                   if (isFinite(endTs) && saleTs > endTs) return false;
@@ -590,14 +723,14 @@ export default function TransactionsPollo({
         setLoading(false);
       }
     })();
-  }, [fromDate, toDate]);
+  }, [fromDate, toDate, refreshKey]);
 
   // === Filtros por rango de fecha (para KPIs) ===
   const dateFilteredSales = useMemo(() => {
     const startTs = toDateNumber(fromDate);
     const endTs = toDateNumber(toDate);
     return sales.filter((s) => {
-      const saleTs = getSaleDateTs(s);
+      const saleTs = getSaleDateTsByStatus(s);
       if (!isFinite(saleTs)) return false;
       if (isFinite(startTs) && saleTs < startTs) return false;
       if (isFinite(endTs) && saleTs > endTs) return false;
@@ -620,22 +753,33 @@ export default function TransactionsPollo({
           s._raw?.productName || s._raw?.items?.[0]?.productName || "";
         if (!prod || prod !== productFilter) return false;
       }
+      if (statusFilter) {
+        const estadoLabel = getEstadoLabel(s._raw);
+        if (estadoLabel !== statusFilter) return false;
+      }
       return true;
     });
-  }, [dateFilteredSales, filterCustomerId, filterType, productFilter]);
+  }, [
+    dateFilteredSales,
+    filterCustomerId,
+    filterType,
+    productFilter,
+    statusFilter,
+  ]);
 
-  // KPIs sobre rango de fechas (cantidad = paquetes)
+  // KPIs sobre el mismo conjunto visible (rango + filtros)
   const kpis = useMemo(() => {
     let packsCash = 0,
       packsCredito = 0,
       montoCash = 0,
       montoCredito = 0;
-    for (const s of dateFilteredSales) {
+    for (const s of filteredSales) {
+      const lbs = getLbsFromSaleRaw(s._raw);
       if (s.type === "CONTADO") {
-        packsCash += s.quantity;
+        packsCash += lbs;
         montoCash += s.total;
       } else {
-        packsCredito += s.quantity;
+        packsCredito += lbs;
         montoCredito += s.total;
       }
     }
@@ -649,7 +793,26 @@ export default function TransactionsPollo({
       montoCredito,
       montoTotal,
     };
-  }, [dateFilteredSales]);
+  }, [filteredSales]);
+
+  // === KPIs de unidades (usando s.quantity, no libras) ===
+  const kpisUnidades = useMemo(() => {
+    let unidadesCash = 0,
+      unidadesCredito = 0;
+    for (const s of filteredSales) {
+      if (s.type === "CONTADO") {
+        unidadesCash += s.quantity;
+      } else {
+        unidadesCredito += s.quantity;
+      }
+    }
+    const unidadesTotal = unidadesCash + unidadesCredito;
+    return {
+      unidadesCash,
+      unidadesCredito,
+      unidadesTotal,
+    };
+  }, [filteredSales]);
 
   // page slices
   const totalPages = Math.max(1, Math.ceil(filteredSales.length / PAGE_SIZE));
@@ -732,11 +895,20 @@ export default function TransactionsPollo({
     </style></head><body>
       <h1>${esc(title)}</h1>
       <div class="kpis">
+
+      
+        <div><b>Unidades Cash:</b> ${qty3(kpisUnidades.unidadesCash)}</div>
+        <div><b>Unidades Crédito:</b> ${qty3(kpisUnidades.unidadesCredito)}</div>
+        <div><b>Total Unidades:</b> ${qty3(kpisUnidades.unidadesTotal)}</div>
+      </div>
+
+      <div class="kpis">
         <div><b>Libras Cash:</b> ${kpis.packsCash}</div>
         <div><b>Libras Crédito:</b> ${kpis.packsCredito}</div>
         <div><b>Ventas Cash:</b> ${money(kpis.montoCash)}</div>
         <div><b>Ventas Crédito:</b> ${money(kpis.montoCredito)}</div>
       </div>
+
       <table><thead><tr>
         <th>Fecha</th><th>Cliente</th><th>Tipo</th><th>Libras</th><th>Ventas</th>
       </tr></thead><tbody>
@@ -839,7 +1011,7 @@ export default function TransactionsPollo({
       <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
 
       {/* Filtros (mobile-friendly) */}
-      <div className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end text-sm">
+      <div className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end text-sm">
         <div>
           <label className="block font-semibold">Desde</label>
           <input
@@ -920,27 +1092,64 @@ export default function TransactionsPollo({
           </select>
         </div>
 
+        <div>
+          <label className="block font-semibold">Estado</label>
+          <select
+            className="border rounded px-2 py-1 w-full"
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as "" | "PROCESADA" | "FLOTANTE");
+              setPage(1);
+            }}
+          >
+            <option value="">Todos</option>
+            <option value="FLOTANTE">FLOTANTE</option>
+            <option value="PROCESADA">PROCESADA</option>
+          </select>
+        </div>
+
         <button
           className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
           onClick={handleExportPDF}
         >
           Exportar PDF
         </button>
+        <div className="sm:col-span-2 lg:col-span-1 flex">
+          <RefreshButton
+            onClick={refresh}
+            loading={loading}
+            className="w-full justify-center"
+          />
+        </div>
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+        {/* <div className="p-3 border rounded bg-gray-50">
+          <div className="text-xs text-gray-600">Unidades Cash</div>
+          <div className="text-xl font-semibold">
+            {qty3(kpisUnidades.unidadesCash)}
+          </div>
+        </div>
+        <div className="p-3 border rounded bg-gray-50">
+          <div className="text-xs text-gray-600">Unidades Crédito</div>
+          <div className="text-xl font-semibold">
+            {qty3(kpisUnidades.unidadesCredito)}
+          </div>
+        </div>
+        <div className="p-3 border rounded bg-gray-50">
+          <div className="text-xs text-gray-600">Total Unidades</div>
+          <div className="text-xl font-semibold">
+            {qty3(kpisUnidades.unidadesTotal)}
+          </div>
+        </div> */}
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">Libras Cash</div>
-          <div className="text-xl font-semibold">{kpis.packsCash}</div>
+          <div className="text-xl font-semibold">{qty3(kpis.packsCash)}</div>
         </div>
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">Libras Crédito</div>
-          <div className="text-xl font-semibold">{kpis.packsCredito}</div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Libras Total</div>
-          <div className="text-xl font-semibold">{kpis.packsTotal}</div>
+          <div className="text-xl font-semibold">{qty3(kpis.packsCredito)}</div>
         </div>
         <div className="p-3 border rounded bg-gray-50">
           <div className="text-xs text-gray-600">Ventas Cash</div>
@@ -973,6 +1182,7 @@ export default function TransactionsPollo({
               s._raw?.productName ||
               s._raw?.items?.[0]?.productName ||
               "(sin producto)";
+            const estadoLabel = getEstadoLabel(s._raw);
 
             return (
               <div key={s.id} className="bg-white border rounded-xl shadow">
@@ -987,6 +1197,15 @@ export default function TransactionsPollo({
                       </div>
 
                       <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
+                        <span
+                          className={`px-2 py-1 rounded-full border ${
+                            estadoLabel === "PROCESADA"
+                              ? "bg-blue-50 border-blue-200 text-blue-700"
+                              : "bg-gray-50 border-gray-200 text-gray-700"
+                          }`}
+                        >
+                          {estadoLabel}
+                        </span>
                         <span
                           className={`px-2 py-1 rounded-full border ${
                             s.type === "CREDITO"
@@ -1008,7 +1227,7 @@ export default function TransactionsPollo({
                             }}
                             title="Ver detalle"
                           >
-                            {s.quantity}
+                            {qty3(s.quantity)}
                           </button>
                         </span>
 
@@ -1046,6 +1265,11 @@ export default function TransactionsPollo({
                       </div>
 
                       <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Estado</span>
+                        <span className="font-medium">{estadoLabel}</span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
                         <span className="text-gray-600">Tipo</span>
                         <span className="font-medium">
                           {s.type === "CREDITO" ? "Crédito" : "Cash"}
@@ -1061,7 +1285,7 @@ export default function TransactionsPollo({
                             onClick={() => openItemsModal(s.id)}
                             title="Ver detalle"
                           >
-                            {s.quantity}
+                            {qty3(s.quantity)}
                           </button>
                         </span>
                       </div>
@@ -1119,6 +1343,7 @@ export default function TransactionsPollo({
           <thead className="bg-gray-100">
             <tr>
               <th className="p-2 border">Fecha</th>
+              <th className="p-2 border">Estado</th>
               <th className="p-2 border">Cliente</th>
               <th className="p-2 border">Producto</th>
               <th className="p-2 border">Tipo</th>
@@ -1147,10 +1372,12 @@ export default function TransactionsPollo({
                   s._raw?.productName ||
                   s._raw?.items?.[0]?.productName ||
                   "(sin producto)";
+                const estadoLabel = getEstadoLabel(s._raw);
 
                 return (
                   <tr key={s.id} className="text-center">
                     <td className="p-2 border">{s.date}</td>
+                    <td className="p-2 border">{estadoLabel}</td>
                     <td className="p-2 border">{name}</td>
                     <td className="p-2 border">{productName}</td>
                     <td className="p-2 border">
@@ -1163,7 +1390,7 @@ export default function TransactionsPollo({
                         title="Ver detalle de productos de esta venta"
                         onClick={() => openItemsModal(s.id)}
                       >
-                        {s.quantity}
+                        {qty3(s.quantity)}
                       </button>
                     </td>
                     <td className="p-2 border">{money(s.total)}</td>

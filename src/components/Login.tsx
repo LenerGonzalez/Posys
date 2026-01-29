@@ -1,10 +1,11 @@
 // src/components/Login.tsx
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { auth, db } from "../firebase";
 import {
   signInWithEmailAndPassword,
   browserLocalPersistence,
   setPersistence,
+  onAuthStateChanged,
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { hasRole } from "../utils/roles";
@@ -25,6 +26,38 @@ export default function Login() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    let mounted = true;
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser || !mounted) return;
+      try {
+        const snap = await getDoc(doc(db, "users", firebaseUser.uid));
+        if (!snap.exists()) return;
+        const data = snap.data() as any;
+        const roles: string[] = Array.isArray(data.roles)
+          ? data.roles
+          : data.role
+            ? [data.role]
+            : [];
+        const role: string = roles[0] || "";
+        const name: string = data.name || "";
+
+        localStorage.setItem("user_email", firebaseUser.email || "");
+        if (name) localStorage.setItem("user_name", name);
+        localStorage.setItem("roles", JSON.stringify(roles));
+
+        if (roles.length === 1) goByRole(role as AllowedRole);
+        else navigate("/admin", { replace: true });
+      } catch {
+        /* ignore auto-redirect errors */
+      }
+    });
+    return () => {
+      mounted = false;
+      unsub();
+    };
+  }, [navigate]);
 
   const goByRole = (subject: string | string[]) => {
     // subject puede ser un string (rol) o un array de roles

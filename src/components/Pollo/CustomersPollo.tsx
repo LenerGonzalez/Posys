@@ -158,18 +158,202 @@ export default function CustomersPollo({
         data = snap.docs[0]?.data();
       }
 
-      const arr = Array.isArray(data?.items)
-        ? data.items
-        : data?.item
-          ? [data.item]
-          : [];
-      const rows = arr.map((it: any) => ({
-        productName: String(it.productName || ""),
-        qty: Number(it.qty || 0),
-        unitPrice: Number(it.unitPrice || 0),
-        discount: Number(it.discount || 0),
-        total: Number(it.total || 0),
-      }));
+      if (!data) {
+        setItemsModalRows([]);
+        return;
+      }
+
+      // Extraer items intentando varias formas que aparecen en distintos documentos
+      let arr: any[] = [];
+
+      if (Array.isArray(data.items) && data.items.length > 0) {
+        arr = data.items;
+      } else if (data.items && typeof data.items === "object") {
+        try {
+          arr = Object.values(data.items);
+        } catch {
+          arr = [];
+        }
+      } else if (data.item) {
+        arr = [data.item];
+      } else if (Array.isArray(data.products) && data.products.length > 0) {
+        arr = data.products;
+      } else if (Array.isArray(data.lines) && data.lines.length > 0) {
+        arr = data.lines;
+      } else if (Array.isArray(data.detalles) && data.detalles.length > 0) {
+        arr = data.detalles;
+      } else if (data.productName || data.product) {
+        arr = [
+          {
+            productName: data.productName || data.product || "",
+            qty: data.qty ?? data.quantity ?? data.lbs ?? 0,
+            unitPrice: data.unitPrice ?? data.price ?? 0,
+            discount: data.discount ?? 0,
+            total: data.total ?? data.amount ?? 0,
+          },
+        ];
+      }
+
+      // Helper: parse numbers tolerantly
+      const parseNum = (v: any) => {
+        if (v === undefined || v === null) return NaN;
+        if (typeof v === "number") return v;
+        let s = String(v).trim();
+        if (!s) return NaN;
+        s = s.replace(/[^0-9.,-]/g, "");
+        if (!s) return NaN;
+        if (s.indexOf(".") > -1 && s.indexOf(",") > -1) {
+          s = s.replace(/,/g, "");
+        } else if (s.indexOf(",") > -1 && s.indexOf(".") === -1) {
+          s = s.replace(/,/g, ".");
+        }
+        const n = Number(s);
+        return Number.isNaN(n) ? NaN : n;
+      };
+
+      // Si hay allocations por lote, traer precios desde inventory_batches
+      const batchIds = new Set<string>();
+      for (const it of arr) {
+        if (Array.isArray(it?.allocations)) {
+          for (const a of it.allocations) {
+            const id = String(a?.batchId || "").trim();
+            if (id) batchIds.add(id);
+          }
+        } else if (it?.allocations && typeof it.allocations === "object") {
+          try {
+            for (const a of Object.values(it.allocations)) {
+              const id = String((a as any)?.batchId || "").trim();
+              if (id) batchIds.add(id);
+            }
+          } catch {}
+        }
+      }
+
+      if (Array.isArray(data?.allocations)) {
+        for (const a of data.allocations) {
+          const id = String(a?.batchId || "").trim();
+          if (id) batchIds.add(id);
+        }
+      }
+
+      const batchPriceMap: Record<string, number> = {};
+      if (batchIds.size > 0) {
+        await Promise.all(
+          Array.from(batchIds).map(async (bid) => {
+            try {
+              const bSnap = await getDoc(doc(db, "inventory_batches", bid));
+              if (bSnap.exists()) {
+                const b = bSnap.data() as any;
+                batchPriceMap[bid] = Number(
+                  b.salePrice ?? b.sale_price ?? b.price ?? 0,
+                );
+              }
+            } catch {
+              /* ignore */
+            }
+          }),
+        );
+      }
+
+      // fallback: precio por producto en collection `products`
+      const productIds = new Set<string>();
+      for (const it of arr) {
+        const pid = String(it.productId || "").trim();
+        if (pid) productIds.add(pid);
+      }
+      const productPriceMap: Record<string, number> = {};
+      if (productIds.size > 0) {
+        await Promise.all(
+          Array.from(productIds).map(async (pid) => {
+            try {
+              const pSnap = await getDoc(doc(db, "products", pid));
+              if (pSnap.exists()) {
+                const p = pSnap.data() as any;
+                productPriceMap[pid] = Number(p.salePrice ?? p.price ?? 0);
+              }
+            } catch {
+              /* ignore */
+            }
+          }),
+        );
+      }
+
+      const rows = arr.map((it: any) => {
+        const productName = String(
+          it.productName || it.product || it.name || "(sin nombre)",
+        );
+
+        const qty =
+          Number(it.qty ?? it.quantity ?? it.lbs ?? it.weight ?? 0) || 0;
+
+        const totalCandidate =
+          parseNum(
+            it.total ?? it.lineFinal ?? it.amount ?? it.monto ?? it.line_total,
+          ) || 0;
+
+        let unitPrice = 0;
+        const priceCandidates = [
+          it.unitPrice,
+          it.unitPricePackage,
+          it.salePrice,
+          it.sale_price,
+          it.price,
+          it.unit_price,
+          it.pricePerUnit,
+          it.price_per_unit,
+        ];
+        for (const p of priceCandidates) {
+          const n = parseNum(p);
+          if (!Number.isNaN(n) && n !== 0) {
+            unitPrice = n;
+            break;
+          }
+        }
+
+        if (!unitPrice) {
+          const saleLevelRaw =
+            data?.salePrice ??
+            data?.sale_price ??
+            data?.unitPrice ??
+            data?.unit_price ??
+            data?.price ??
+            data?.pricePerUnit;
+          const saleLevel = parseNum(saleLevelRaw);
+          if (!Number.isNaN(saleLevel) && saleLevel !== 0)
+            unitPrice = saleLevel;
+        }
+
+        if (!unitPrice) {
+          const firstAlloc = Array.isArray(it.allocations)
+            ? it.allocations[0]
+            : it.allocations && typeof it.allocations === "object"
+              ? Object.values(it.allocations)[0]
+              : null;
+          const bid = firstAlloc
+            ? String((firstAlloc as any).batchId || "").trim()
+            : "";
+          if (bid && batchPriceMap[bid]) unitPrice = batchPriceMap[bid] || 0;
+        }
+
+        if (!unitPrice && it.productId) {
+          unitPrice = productPriceMap[String(it.productId)] || 0;
+        }
+
+        if ((!unitPrice || unitPrice === 0) && totalCandidate > 0 && qty > 0) {
+          unitPrice = totalCandidate / qty;
+        }
+
+        const discount = parseNum(it.discount ?? it.desc ?? 0) || 0;
+
+        let total = totalCandidate;
+        if (!total || total === 0) {
+          total = Number(unitPrice * qty || 0);
+        }
+        total = Number(total) || 0;
+
+        return { productName, qty, unitPrice, discount, total };
+      });
+
       setItemsModalRows(rows);
     } catch (e) {
       console.error(e);
@@ -1479,7 +1663,7 @@ export default function CustomersPollo({
       {/* modal estado de cuenta y demás modales reutilizan la misma lógica que en Candies pero apuntando a las collections de Pollo */}
       {showStatement &&
         createPortal(
-          <div className="fixed inset-0 z-[80]">
+          <div className="fixed inset-0 z-[50]" style={{ zIndex: 50 }}>
             {/* overlay */}
             <div
               className="absolute inset-0 bg-black/40"
@@ -1553,7 +1737,7 @@ export default function CustomersPollo({
                       <tr>
                         <th className="p-2 border">Fecha</th>
                         <th className="p-2 border">Tipo</th>
-                        <th className="p-2 border">Referencia</th>
+                        {/* <th className="p-2 border">Referencia</th> */}
                         <th className="p-2 border">Comentario</th>
                         <th className="p-2 border">Monto</th>
                         <th className="p-2 border">Acciones</th>
@@ -1603,11 +1787,11 @@ export default function CustomersPollo({
                                         openItemsModal(m.ref!.saleId!)
                                       }
                                     >
-                                      COMPRA (CARGO)
+                                      COMPRA (Ver detalle)
                                     </button>
                                   ) : (
                                     <span className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">
-                                      COMPRA (CARGO)
+                                      COMPRA (Ver detalle)
                                     </span>
                                   )
                                 ) : (
@@ -1617,9 +1801,9 @@ export default function CustomersPollo({
                                 )}
                               </td>
 
-                              <td className="p-2 border">
+                              {/* <td className="p-2 border">
                                 {m.ref?.saleId ? `Venta #${m.ref.saleId}` : "—"}
-                              </td>
+                              </td> */}
 
                               <td className="p-2 border">
                                 {isEditing ? (
@@ -1704,6 +1888,77 @@ export default function CustomersPollo({
                 </div>
               </div>
             </div>
+
+            {/* items modal (sobre el estado de cuenta) */}
+            {itemsModalOpen && (
+              <div
+                className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]"
+                style={{ zIndex: 60 }}
+              >
+                <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-lg font-bold">
+                      Productos vendidos{" "}
+                      {/* {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""} */}
+                    </h3>
+                    <button
+                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                      onClick={() => setItemsModalOpen(false)}
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+                  <div className="bg-white rounded border overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="p-2 border">Producto</th>
+                          <th className="p-2 border text-right">Cantidad</th>
+                          <th className="p-2 border text-right">Precio</th>
+                          <th className="p-2 border text-right">Descuento</th>
+                          <th className="p-2 border text-right">Monto</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {itemsModalLoading ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Cargando…
+                            </td>
+                          </tr>
+                        ) : itemsModalRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Sin ítems en esta venta.
+                            </td>
+                          </tr>
+                        ) : (
+                          itemsModalRows.map((it, idx) => (
+                            <tr key={idx} className="text-center">
+                              <td className="p-2 border text-left">
+                                {it.productName}
+                              </td>
+                              <td className="p-2 border text-right">
+                                {it.qty}
+                              </td>
+                              <td className="p-2 border text-right">
+                                {money(it.unitPrice)}
+                              </td>
+                              <td className="p-2 border text-right">
+                                {money(it.discount || 0)}
+                              </td>
+                              <td className="p-2 border text-right">
+                                {money(it.total)}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>,
           document.body,
         )}
@@ -1781,72 +2036,6 @@ export default function CustomersPollo({
               >
                 {savingAbono ? "Guardando..." : "Guardar abono"}
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* items modal */}
-      {itemsModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[65]">
-          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">
-                Productos vendidos{" "}
-                {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
-              </h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                onClick={() => setItemsModalOpen(false)}
-              >
-                Cerrar
-              </button>
-            </div>
-            <div className="bg-white rounded border overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Producto</th>
-                    <th className="p-2 border text-right">Cantidad</th>
-                    <th className="p-2 border text-right">Precio</th>
-                    <th className="p-2 border text-right">Descuento</th>
-                    <th className="p-2 border text-right">Monto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {itemsModalLoading ? (
-                    <tr>
-                      <td colSpan={5} className="p-4 text-center">
-                        Cargando…
-                      </td>
-                    </tr>
-                  ) : itemsModalRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-4 text-center">
-                        Sin ítems en esta venta.
-                      </td>
-                    </tr>
-                  ) : (
-                    itemsModalRows.map((it, idx) => (
-                      <tr key={idx} className="text-center">
-                        <td className="p-2 border text-left">
-                          {it.productName}
-                        </td>
-                        <td className="p-2 border text-right">{it.qty}</td>
-                        <td className="p-2 border text-right">
-                          {money(it.unitPrice)}
-                        </td>
-                        <td className="p-2 border text-right">
-                          {money(it.discount || 0)}
-                        </td>
-                        <td className="p-2 border text-right">
-                          {money(it.total)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
             </div>
           </div>
         </div>
