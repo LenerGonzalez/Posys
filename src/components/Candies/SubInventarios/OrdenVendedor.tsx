@@ -1,5 +1,5 @@
 // src/components/Candies/VendorCandyOrders.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
@@ -21,6 +21,7 @@ import {
   allocateVendorCandyPacks,
   restoreVendorCandyPacks,
 } from "../../../Services/Candies_vendor_orders";
+import TrasladosModal from "./TrasladosModal";
 
 // ===== Tipos base =====
 type Branch = "RIVAS" | "SAN_JORGE" | "ISLA";
@@ -111,6 +112,8 @@ interface VendorCandyRow {
   // ⚠️ Compatibilidad: se mantiene vendorProfit (pero ahora equivale a uVendor)
   vendorProfit: number;
 
+  transferDelta?: number;
+
   subtotal?: number;
   providerPrice?: number;
 
@@ -130,6 +133,9 @@ interface OrderItem {
 
   totalExpected: number;
   pricePerPackage: number;
+
+  // Solo visible para admin en UI/CSV
+  providerPrice?: number;
 
   grossProfit: number;
 
@@ -151,6 +157,7 @@ interface OrderItem {
   unitPriceIsla: number;
 
   remainingPackages: number; // ✅ NO se quita
+  transferDelta?: number;
 }
 
 // Resumen de pedido para listado
@@ -161,14 +168,19 @@ interface OrderSummaryRow {
   date: string;
 
   totalPackages: number;
+  totalActivePackages: number;
   totalRemainingPackages: number;
 
   totalExpected: number;
+  totalExpectedActive: number;
   grossProfit: number;
+  grossProfitActive: number;
   vendorProfit: number; // ahora = U. Vendedor (por compat)
+  vendorProfitActive: number;
 
   // Gastos prorrateados traídos desde la orden maestra (sum por productos)
   gastos?: number;
+  gastosActive?: number;
 
   transferredOut: number;
   transferredIn: number;
@@ -322,6 +334,15 @@ export default function VendorCandyOrders({
 
   // ===== Sub-inventario (docs por vendedor) =====
   const [rows, setRows] = useState<VendorCandyRow[]>([]);
+  const rowsByIdRef = useRef<Record<string, VendorCandyRow>>({});
+
+  useEffect(() => {
+    const map: Record<string, VendorCandyRow> = {};
+    rows.forEach((r) => {
+      map[r.id] = r;
+    });
+    rowsByIdRef.current = map;
+  }, [rows]);
 
   // ===== Modal pedido =====
   const [openForm, setOpenForm] = useState(false);
@@ -360,6 +381,10 @@ export default function VendorCandyOrders({
   const [transferAgg, setTransferAgg] = useState<
     Record<string, { out: number; in: number }>
   >({});
+  const [transferRowDeltas, setTransferRowDeltas] = useState<
+    Record<string, number>
+  >({});
+  const [openTransferModal, setOpenTransferModal] = useState(false);
 
   const selectedSeller = useMemo(
     () => sellers.find((s) => s.id === sellerId) || null,
@@ -472,58 +497,86 @@ export default function VendorCandyOrders({
   const loadTransferAgg = async () => {
     try {
       const colRef = collection(db, "inventory_transfers_candies");
+      const bumpOrder = (
+        map: Record<string, { out: number; in: number }>,
+        key: string,
+        mode: "out" | "in",
+        packs: number,
+      ) => {
+        if (!key) return;
+        map[key] = map[key] || { out: 0, in: 0 };
+        map[key][mode] += packs;
+      };
+
+      const bumpRow = (
+        map: Record<string, number>,
+        rowId: unknown,
+        delta: number,
+      ) => {
+        const key = String(rowId || "");
+        if (!key) return;
+        map[key] = (map[key] || 0) + delta;
+      };
+
+      const orderAgg: Record<string, { out: number; in: number }> = {};
+      const rowAgg: Record<string, number> = {};
+      const rowsMap = rowsByIdRef.current;
+
+      const isDestRowNew = (x: any) => {
+        if (x.destRowWasNew != null) return Boolean(x.destRowWasNew);
+        const toRowId = String(x.toVendorRowId || "");
+        if (!toRowId) return false;
+        const row = rowsMap[toRowId];
+        if (!row) return false;
+        const rowCreatedTs = Number(row.createdAt?.seconds ?? 0);
+        const transferTs = Number(x.createdAt?.seconds ?? 0);
+        const timestampsClose =
+          rowCreatedTs > 0 &&
+          transferTs > 0 &&
+          Math.abs(rowCreatedTs - transferTs) <= 1;
+        const packagesMatch =
+          Math.max(0, Number(row.packages || 0)) ===
+          Math.max(0, Number(x.packagesMoved || 0));
+        return timestampsClose && packagesMatch;
+      };
+
+      const processDoc = (d: any) => {
+        const x = d.data() as any;
+        const packs = Number(x.packagesMoved || 0);
+        if (!(packs > 0)) return;
+        bumpOrder(orderAgg, String(x.fromOrderKey || ""), "out", packs);
+        bumpOrder(orderAgg, String(x.toOrderKey || ""), "in", packs);
+        bumpRow(rowAgg, x.fromVendorRowId, -packs);
+        if (!isDestRowNew(x)) {
+          bumpRow(rowAgg, x.toVendorRowId, packs);
+        }
+      };
 
       if (!isVendor) {
         const snap = await getDocs(colRef);
-        const agg: Record<string, { out: number; in: number }> = {};
-
-        snap.forEach((d) => {
-          const x = d.data() as any;
-          const packs = Number(x.packagesMoved || 0);
-          const fromKey = String(x.fromOrderKey || "");
-          const toKey = String(x.toOrderKey || "");
-
-          if (fromKey) {
-            agg[fromKey] = agg[fromKey] || { out: 0, in: 0 };
-            agg[fromKey].out += packs;
-          }
-          if (toKey) {
-            agg[toKey] = agg[toKey] || { out: 0, in: 0 };
-            agg[toKey].in += packs;
-          }
-        });
-
-        setTransferAgg(agg);
-        return;
+        snap.forEach(processDoc);
+      } else {
+        const qFrom = query(colRef, where("fromSellerId", "==", sellerCandyId));
+        const qTo = query(colRef, where("toSellerId", "==", sellerCandyId));
+        const [sFrom, sTo] = await Promise.all([getDocs(qFrom), getDocs(qTo)]);
+        const seen = new Set<string>();
+        const apply = (docs: any[]) => {
+          docs.forEach((d) => {
+            if (seen.has(d.id)) return;
+            seen.add(d.id);
+            processDoc(d);
+          });
+        };
+        apply(sFrom.docs);
+        apply(sTo.docs);
       }
 
-      const qFrom = query(colRef, where("fromSellerId", "==", sellerCandyId));
-      const qTo = query(colRef, where("toSellerId", "==", sellerCandyId));
-      const [sFrom, sTo] = await Promise.all([getDocs(qFrom), getDocs(qTo)]);
-
-      const agg: Record<string, { out: number; in: number }> = {};
-
-      const apply = (docs: any[], mode: "out" | "in") => {
-        docs.forEach((d) => {
-          const x = d.data() as any;
-          const packs = Number(x.packagesMoved || 0);
-          const key =
-            mode === "out"
-              ? String(x.fromOrderKey || "")
-              : String(x.toOrderKey || "");
-          if (!key) return;
-          agg[key] = agg[key] || { out: 0, in: 0 };
-          agg[key][mode] += packs;
-        });
-      };
-
-      apply(sFrom.docs, "out");
-      apply(sTo.docs, "in");
-
-      setTransferAgg(agg);
+      setTransferAgg(orderAgg);
+      setTransferRowDeltas(rowAgg);
     } catch (e) {
       console.error(e);
       setTransferAgg({});
+      setTransferRowDeltas({});
     }
   };
   // =========================
@@ -742,6 +795,10 @@ export default function VendorCandyOrders({
         const invList: VendorCandyRow[] = [];
         invSnap.forEach((d) => {
           const x = d.data() as any;
+          const hasTransferDeltaField = Object.prototype.hasOwnProperty.call(
+            x,
+            "transferDelta",
+          );
 
           const sellerFallback = sList.find((s) => s.id === x.sellerId) || null;
           const vendorMarginPercent = clampPercent(
@@ -821,6 +878,11 @@ export default function VendorCandyOrders({
 
             vendorProfit: Number(x.vendorProfit ?? split.uVendor ?? 0),
 
+            transferDelta:
+              hasTransferDeltaField && typeof x.transferDelta === "number"
+                ? Number(x.transferDelta || 0)
+                : undefined,
+
             subtotal: Number(x.subtotal || 0),
             providerPrice: Number(x.providerPrice || 0),
 
@@ -829,6 +891,11 @@ export default function VendorCandyOrders({
           });
         });
 
+        const nextRowsMap: Record<string, VendorCandyRow> = {};
+        invList.forEach((r) => {
+          nextRowsMap[r.id] = r;
+        });
+        rowsByIdRef.current = nextRowsMap;
         setRows(invList);
         await loadTransferAgg();
       } catch (e) {
@@ -844,6 +911,8 @@ export default function VendorCandyOrders({
   // HELPERS: orderKey y branch calc
   // =========================
   const buildOrderKey = (sid: string, d: string) => `${sid}__${d}`;
+  const getRowOrderKey = (row: VendorCandyRow) =>
+    row.orderId || buildOrderKey(row.sellerId, row.date);
 
   const getPricePerPack = (p: ProductCandyFromMain, b?: Branch) => {
     if (!b)
@@ -884,6 +953,23 @@ export default function VendorCandyOrders({
     return clampPercent(s?.commissionPercent ?? 0);
   };
 
+  const getRowTransferDelta = (row: VendorCandyRow) => {
+    const delta = transferRowDeltas[row.id];
+    if (typeof delta === "number" && Number.isFinite(delta)) {
+      return delta;
+    }
+    if (typeof row.transferDelta === "number") {
+      return Number(row.transferDelta || 0);
+    }
+    return 0;
+  };
+
+  const getRowActivePackages = (row: VendorCandyRow) => {
+    const base = Math.max(0, Number(row.packages || 0));
+    const delta = getRowTransferDelta(row);
+    return Math.max(0, base + delta);
+  };
+
   // =========================
   // AGRUPAR a "pedidos" (OrderSummaryRow)
   // =========================
@@ -891,7 +977,7 @@ export default function VendorCandyOrders({
     const agg = new Map<string, OrderSummaryRow>();
 
     for (const r of rowsByRole) {
-      const key = buildOrderKey(r.sellerId, r.date);
+      const key = getRowOrderKey(r);
       const cur =
         agg.get(key) ||
         ({
@@ -900,23 +986,33 @@ export default function VendorCandyOrders({
           sellerName: r.sellerName,
           date: r.date,
           totalPackages: 0,
+          totalActivePackages: 0,
           totalRemainingPackages: 0,
           totalExpected: 0,
+          totalExpectedActive: 0,
           grossProfit: 0,
+          grossProfitActive: 0,
           vendorProfit: 0,
+          vendorProfitActive: 0,
           gastos: 0,
+          gastosActive: 0,
           transferredOut: 0,
           transferredIn: 0,
         } as OrderSummaryRow);
 
-      cur.totalPackages += Number(r.packages || 0);
-      cur.totalRemainingPackages += Number(r.remainingPackages || 0);
+      const packages = Math.max(0, Number(r.packages || 0));
+      const remaining = Math.max(0, Number(r.remainingPackages || 0));
+      const activePackages = getRowActivePackages(r);
+      const activeRatio = packages > 0 ? activePackages / packages : 1;
+
+      cur.totalPackages += packages;
+      cur.totalRemainingPackages += remaining;
+      cur.totalActivePackages += activePackages;
 
       const seller = sellers.find((s) => s.id === r.sellerId) || null;
       const br = seller?.branch;
 
       const p = productsAll.find((x) => x.id === String(r.productId)) || null;
-      const packs = floor(r.packages);
 
       const pricePerPackage = p
         ? getPricePerPack(p, br)
@@ -926,29 +1022,44 @@ export default function VendorCandyOrders({
             ? Number(r.unitPriceSanJorge || 0)
             : Number(r.unitPriceIsla || 0);
 
-      const totalExpectedRow = pricePerPackage * packs;
+      const totalExpectedRow = pricePerPackage * packages;
+      const totalExpectedActiveRow = pricePerPackage * activePackages;
       cur.totalExpected += Number(totalExpectedRow || 0);
+      cur.totalExpectedActive += Number(totalExpectedActiveRow || 0);
 
       const grossPerPack = p
         ? getGrossProfitPerPack(p, br)
-        : packs > 0
-          ? Number(r.grossProfit || 0) / packs
+        : packages > 0
+          ? Number(r.grossProfit || 0) / packages
           : 0;
-      const grossProfitRow = grossPerPack * packs;
+      const grossProfitRow = grossPerPack * packages;
+      const grossProfitActiveRow = grossPerPack * activePackages;
       cur.grossProfit += Number(grossProfitRow || 0);
+      cur.grossProfitActive += Number(grossProfitActiveRow || 0);
 
-      // gastos/prorrateo: mismo cálculo que el modal
-      const logisticAllocated = p
-        ? p.logisticAllocatedPerPack * packs
-        : Number(
-            r.logisticAllocated ?? (r as any).gastos ?? (r as any).gasto ?? 0,
-          );
+      const logisticPerPack =
+        typeof p?.logisticAllocatedPerPack === "number"
+          ? Number(p.logisticAllocatedPerPack || 0)
+          : (() => {
+              const totalLog = Number(
+                r.logisticAllocated ??
+                  (r as any).gastos ??
+                  (r as any).gasto ??
+                  0,
+              );
+              const base = packages > 0 ? packages : activePackages || 1;
+              return base > 0 ? totalLog / base : 0;
+            })();
+      const logisticAllocated = logisticPerPack * packages;
+      const logisticAllocatedActive = logisticPerPack * activePackages;
       cur.gastos = (cur.gastos || 0) + Number(logisticAllocated || 0);
+      cur.gastosActive =
+        (cur.gastosActive || 0) + Number(logisticAllocatedActive || 0);
 
-      // U. Vendedor: mismo cálculo que el modal
       const vendorMarginPercent = getSellerMarginPercent(r.sellerId);
       const split = calcSplitFromGross(grossProfitRow, vendorMarginPercent);
       cur.vendorProfit += Number(split.uVendor || 0);
+      cur.vendorProfitActive += Number(split.uVendor || 0) * activeRatio;
 
       agg.set(key, cur);
     }
@@ -958,12 +1069,24 @@ export default function VendorCandyOrders({
       const tr = transferAgg[v.orderKey] || { out: 0, in: 0 };
       v.transferredOut = tr.out || 0;
       v.transferredIn = tr.in || 0;
+      if (!Number.isFinite(v.totalExpectedActive)) {
+        v.totalExpectedActive = v.totalExpected;
+      }
+      if (!Number.isFinite(v.grossProfitActive)) {
+        v.grossProfitActive = v.grossProfit;
+      }
+      if (!Number.isFinite(v.vendorProfitActive)) {
+        v.vendorProfitActive = v.vendorProfit;
+      }
+      if (!Number.isFinite(v.gastosActive || 0)) {
+        v.gastosActive = v.gastos;
+      }
       out.push(v);
     }
 
     out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return out;
-  }, [rowsByRole, sellers, transferAgg, productsAll]);
+  }, [rowsByRole, sellers, transferAgg, productsAll, transferRowDeltas]);
 
   // ✅ paginado 20 pedidos por página
   const totalPages = useMemo(() => {
@@ -1034,51 +1157,69 @@ export default function VendorCandyOrders({
   // =========================
   // KPIs del modal (orden actual)
   // =========================
+  const getItemActivePackages = (it: OrderItem) => {
+    const base = Math.max(0, Number(it.packages || 0));
+    const delta = Number(it.transferDelta || 0);
+    return Math.max(0, base + delta);
+  };
+
+  const getItemActiveRatio = (it: OrderItem) => {
+    const base = Math.max(0, Number(it.packages || 0));
+    const active = getItemActivePackages(it);
+    if (base === 0) return active > 0 ? 1 : 0;
+    return active / base;
+  };
+
+  const getItemActiveValue = (it: OrderItem, value: number) =>
+    Number(value || 0) * getItemActiveRatio(it);
+
+  const getItemLogisticBase = (it: OrderItem) =>
+    Number(
+      it.logisticAllocated ??
+        (it as any).logisticAllocated ??
+        (it as any).gastos ??
+        (it as any).gasto ??
+        0,
+    );
+
+  const getItemActiveFinancials = (it: OrderItem) => {
+    const totalExpected = getItemActiveValue(it, Number(it.totalExpected || 0));
+    const grossProfit = getItemActiveValue(it, Number(it.grossProfit || 0));
+    const gastos = getItemActiveValue(it, getItemLogisticBase(it));
+    const uVendor = getItemActiveValue(it, Number(it.uVendor || 0));
+    const uNeta = grossProfit - gastos - uVendor;
+    return { totalExpected, grossProfit, gastos, uVendor, uNeta };
+  };
+
   const kpiTotals = useMemo(() => {
-    const totalPackages = orderItems.reduce(
-      (acc, it) => acc + Number(it.packages || 0),
-      0,
+    return orderItems.reduce(
+      (acc, it) => {
+        const packages = Math.max(0, Number(it.packages || 0));
+        const active = getItemActivePackages(it);
+        const financials = getItemActiveFinancials(it);
+
+        acc.totalPackages += packages;
+        acc.totalActivePackages += active;
+        acc.totalExpected += financials.totalExpected;
+        acc.grossProfit += financials.grossProfit;
+        acc.gastosTotal += financials.gastos;
+        acc.uVendor += financials.uVendor;
+        return acc;
+      },
+      {
+        totalPackages: 0,
+        totalActivePackages: 0,
+        totalExpected: 0,
+        grossProfit: 0,
+        gastosTotal: 0,
+        uVendor: 0,
+      },
     );
-
-    const totalExpected = orderItems.reduce(
-      (acc, it) => acc + Number(it.totalExpected || 0),
-      0,
-    );
-
-    const grossProfit = orderItems.reduce(
-      (acc, it) => acc + Number(it.grossProfit || 0),
-      0,
-    );
-
-    const gastosTotal = orderItems.reduce(
-      (acc, it) =>
-        acc +
-        Number(
-          it.logisticAllocated ?? (it as any).gastos ?? (it as any).gasto ?? 0,
-        ),
-      0,
-    );
-
-    const uVendor = orderItems.reduce(
-      (acc, it) => acc + Number(it.uVendor || 0),
-      0,
-    );
-
-    const uNeta = grossProfit - gastosTotal - uVendor;
-
-    // compat (si todavía lo ocupás en otro lado)
-    const vendorProfit = uVendor;
-
-    return {
-      totalPackages,
-      totalExpected,
-      grossProfit,
-      gastosTotal,
-      uVendor,
-      uNeta,
-      vendorProfit,
-    };
   }, [orderItems]);
+
+  const kpiUNeta = useMemo(() => {
+    return kpiTotals.grossProfit - kpiTotals.gastosTotal - kpiTotals.uVendor;
+  }, [kpiTotals.grossProfit, kpiTotals.gastosTotal, kpiTotals.uVendor]);
 
   // =========================
   // ACCIONES: abrir modal / editar / reset
@@ -1123,9 +1264,7 @@ export default function VendorCandyOrders({
     setSellerId(sid || "");
     setDate(d || "");
 
-    const orderRows = rowsByRole.filter(
-      (r) => buildOrderKey(r.sellerId, r.date) === orderKey,
-    );
+    const orderRows = rowsByRole.filter((r) => getRowOrderKey(r) === orderKey);
 
     const seller = sellers.find((s) => s.id === sid) || null;
     const br = seller?.branch;
@@ -1201,7 +1340,10 @@ export default function VendorCandyOrders({
         unitPriceSanJorge,
         unitPriceIsla,
 
+        providerPrice: Number((r as any).providerPrice || 0),
+
         remainingPackages: Number(r.remainingPackages || 0),
+        transferDelta: getRowTransferDelta(r),
       };
     });
 
@@ -1273,7 +1415,8 @@ export default function VendorCandyOrders({
       unitPriceSanJorge: p.unitPriceSanJorge || 0,
       unitPriceIsla: p.unitPriceIsla || 0,
 
-      remainingPackages: 0,
+      remainingPackages: packs,
+      transferDelta: 0,
     };
 
     setOrderItems((prev) => [item, ...prev]);
@@ -1287,7 +1430,7 @@ export default function VendorCandyOrders({
   };
 
   const updateItemPackages = (id: string, packsRaw: any) => {
-    const packs = floor(packsRaw);
+    const packs = Math.max(0, floor(packsRaw));
     setOrderItems((prev) =>
       prev.map((it) => {
         if (it.id !== id) return it;
@@ -1317,6 +1460,10 @@ export default function VendorCandyOrders({
 
         const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
 
+        const shouldSyncRemaining =
+          String(it.id || "").startsWith("tmp_") ||
+          Number(it.remainingPackages || 0) === Number(it.packages || 0);
+
         return {
           ...it,
           packages: packs,
@@ -1335,6 +1482,7 @@ export default function VendorCandyOrders({
           totalSanJorge:
             (p?.unitPriceSanJorge || it.unitPriceSanJorge || 0) * packs,
           totalIsla: (p?.unitPriceIsla || it.unitPriceIsla || 0) * packs,
+          remainingPackages: shouldSyncRemaining ? packs : it.remainingPackages,
         };
       }),
     );
@@ -1404,7 +1552,19 @@ export default function VendorCandyOrders({
 
       for (const r of list) {
         const br = pickBranch(r.sellerId) || "ISLA";
-        const packs = floor(r.packages);
+
+        // Recalcular P. asociados (packages) de forma idempotente
+        const unitsPerPackage = Math.max(
+          1,
+          Number(r.unitsPerPackage || 0) || 1,
+        );
+        const totalUnits = Number(r.totalUnits || 0);
+        const remainingUnits = Number(r.remainingUnits || 0);
+        const soldUnits = Math.max(0, totalUnits - remainingUnits);
+        const soldPacks = soldUnits / unitsPerPackage;
+        const remainingPacks = Number(r.remainingPackages || 0);
+        const packs = Math.max(0, remainingPacks + soldPacks);
+
         const p = findProduct(String(r.productId || ""));
 
         const grossProfit =
@@ -1431,6 +1591,7 @@ export default function VendorCandyOrders({
         const uNeta = grossProfit - logisticAllocated - uVendor;
 
         const needsUpdate =
+          diff(r.packages, packs) ||
           (r as any).uVendor == null ||
           (r as any).uNeta == null ||
           (r as any).uAproximada == null ||
@@ -1446,6 +1607,8 @@ export default function VendorCandyOrders({
 
         const ref = doc(db, "inventory_candies_sellers", r.id);
         batch.update(ref, {
+          // Corrige P. asociados a partir de unidades vendidas + restantes
+          packages: packs,
           vendorMarginPercent,
           grossProfit,
           logisticAllocated,
@@ -1480,6 +1643,60 @@ export default function VendorCandyOrders({
   };
 
   // =========================
+  // FIX LEGACY: P. asociados = P. restantes en filas con traslados
+  // =========================
+  const fixLegacyAssociatedFromRemaining = async () => {
+    if (!isAdmin) return;
+    if (isBackfilling) return;
+
+    try {
+      setIsBackfilling(true);
+      setMsg("");
+
+      const list = rows;
+      if (!list.length) {
+        setMsg("⚠️ No hay documentos para reparar.");
+        return;
+      }
+
+      let batch = writeBatch(db);
+      let pending = 0;
+      let updated = 0;
+
+      for (const r of list) {
+        const currentPacks = floor(r.packages);
+        const remainingPacks = floor(r.remainingPackages);
+        if (currentPacks === remainingPacks) continue;
+
+        const ref = doc(db, "inventory_candies_sellers", r.id);
+        batch.update(ref, {
+          packages: remainingPacks,
+          updatedAt: Timestamp.now(),
+        });
+
+        pending += 1;
+        updated += 1;
+
+        if (pending >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          pending = 0;
+        }
+      }
+
+      if (pending > 0) await batch.commit();
+
+      setMsg(`✅ Reparadas ${updated} filas legacy de P. asociados.`);
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error reparando P. asociados legacy.");
+    } finally {
+      setIsBackfilling(false);
+    }
+  };
+
+  // =========================
   // CSV / DESCARGAS (Excel)
   // =========================
   const downloadTextFile = (
@@ -1499,6 +1716,10 @@ export default function VendorCandyOrders({
   };
 
   const exportAssociatedItemsToCsv = () => {
+    if (!isAdmin) {
+      setMsg("⚠️ Solo admin puede exportar CSV.");
+      return;
+    }
     const headers = [
       "Vendedor",
       "Sucursal",
@@ -1509,6 +1730,7 @@ export default function VendorCandyOrders({
       "Paquetes",
       "Paquetes restantes",
       "Precio paquete",
+      "Precio proveedor",
       "Total esperado",
       "U. Bruta",
       "U. Vendedor",
@@ -1532,10 +1754,8 @@ export default function VendorCandyOrders({
     const lines = [
       headers.join(","),
       ...orderItems.map((it) => {
-        const uNeta =
-          Number(it.grossProfit || 0) -
-          Number(it.logisticAllocated ?? (it as any).gastos ?? 0) -
-          Number(it.uVendor || 0);
+        const { totalExpected, grossProfit, gastos, uVendor, uNeta } =
+          getItemActiveFinancials(it);
         const row = [
           seller?.name || "",
           String(branchLabel || ""),
@@ -1546,9 +1766,10 @@ export default function VendorCandyOrders({
           String(Number(it.packages || 0)),
           String(Number(it.remainingPackages || 0)),
           String(Number(it.pricePerPackage || 0).toFixed(2)),
-          String(Number(it.totalExpected || 0).toFixed(2)),
-          String(Number(it.grossProfit || 0).toFixed(2)),
-          String(Number(it.uVendor || 0).toFixed(2)),
+          String(Number((it as any).providerPrice || 0).toFixed(2)),
+          String(Number(totalExpected || 0).toFixed(2)),
+          String(Number(grossProfit || 0).toFixed(2)),
+          String(Number(uVendor || 0).toFixed(2)),
           String(Number(uNeta || 0).toFixed(2)),
           String(Number(it.unitPriceRivas || 0).toFixed(2)),
           String(Number(it.unitPriceSanJorge || 0).toFixed(2)),
@@ -1750,7 +1971,7 @@ export default function VendorCandyOrders({
           unitPriceSanJorge: p.unitPriceSanJorge || 0,
           unitPriceIsla: p.unitPriceIsla || 0,
 
-          remainingPackages: 0,
+          remainingPackages: packs,
         };
 
         toAdd.push(item);
@@ -1785,9 +2006,7 @@ export default function VendorCandyOrders({
 
       // ====== SOLO SI ESTAMOS EDITANDO: sacar filas viejas del pedido ======
       const prevRows = editingOrderKey
-        ? rowsByRole.filter(
-            (r) => buildOrderKey(r.sellerId, r.date) === editingOrderKey,
-          )
+        ? rowsByRole.filter((r) => getRowOrderKey(r) === editingOrderKey)
         : [];
 
       const prevByProduct = new Map<string, VendorCandyRow>();
@@ -1820,20 +2039,21 @@ export default function VendorCandyOrders({
       // ====== EDIT: devolver paquetes si bajaron o si se quitó un producto ======
       if (editingOrderKey) {
         // A) productos quitados completamente
+        const orderItemIds = new Set(
+          orderItems.map((it) => String(it.id || "")),
+        );
         const removed = prevRows.filter(
-          (r) => !orderItems.some((it) => it.productId === String(r.productId)),
+          (r) => !orderItemIds.has(String(r.id || "")),
         );
 
+        const removedIds: string[] = [];
         for (const r of removed) {
-          const toReturn = floor(r.remainingPackages); // ⚠️ solo lo que está restante
-          if (toReturn > 0) {
-            await restoreVendorCandyPacks({
-              vendorInventoryId: r.id,
-              packagesToReturn: toReturn,
-            });
-          }
-          // si querés eliminar el doc (opcional si restore ya lo deja en 0)
-          // await deleteDoc(doc(db, "inventory_candies_sellers", r.id));
+          await deleteVendorCandyOrderAndRestore(r.id);
+          removedIds.push(r.id);
+        }
+
+        if (removedIds.length) {
+          setRows((prev) => prev.filter((row) => !removedIds.includes(row.id)));
         }
 
         // B) productos que siguen pero bajaron paquetes
@@ -1975,6 +2195,8 @@ export default function VendorCandyOrders({
 
             // ⚠️ compat: vendorProfit ahora es U. Vendedor
             vendorProfit: split.uVendor,
+
+            transferDelta: prev ? Number(prev.transferDelta || 0) : 0,
           };
 
           const extraAllocs = allocationsByProduct.get(it.productId) || [];
@@ -2020,7 +2242,7 @@ export default function VendorCandyOrders({
       if (!isAdmin) return setMsg("⚠️ Solo admin.");
       setIsSaving(true);
       const orderRows = rowsByRole.filter(
-        (r) => buildOrderKey(r.sellerId, r.date) === orderKey,
+        (r) => getRowOrderKey(r) === orderKey,
       );
 
       for (const r of orderRows) {
@@ -2058,7 +2280,8 @@ export default function VendorCandyOrders({
   // =========================
   // UI helpers
   // =========================
-  const disableSellerSelect = isVendor && !!currentSeller;
+  // Solo admin puede cambiar el vendedor en el selector
+  const disableSellerSelect = !isAdmin;
 
   // =========================
   // RENDER
@@ -2079,6 +2302,14 @@ export default function VendorCandyOrders({
 
         <div className="flex flex-wrap gap-2">
           <RefreshButton onClick={refresh} />
+          {isAdmin && (
+            <button
+              onClick={() => setOpenTransferModal(true)}
+              className="px-3 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-700"
+            >
+              Traslados
+            </button>
+          )}
           {!isReadOnly && (
             <button
               onClick={openNewOrder}
@@ -2108,30 +2339,41 @@ export default function VendorCandyOrders({
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                  onClick={() => {
-                    if (!openForm) {
-                      setMsg(
-                        "⚠️ Abrí un pedido para exportar productos asociados.",
-                      );
-                      return;
-                    }
-                    exportAssociatedItemsToCsv();
-                  }}
-                >
-                  Exportar asociados
-                </button>
                 {isAdmin && (
                   <button
                     className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                    onClick={backfillCalculatedFields}
-                    disabled={isBackfilling}
+                    onClick={() => {
+                      if (!openForm) {
+                        setMsg(
+                          "⚠️ Abrí un pedido para exportar productos asociados.",
+                        );
+                        return;
+                      }
+                      exportAssociatedItemsToCsv();
+                    }}
                   >
-                    {isBackfilling
-                      ? "Actualizando campos..."
-                      : "Actualizar campos calculados"}
+                    Exportar asociados
                   </button>
+                )}
+                {isAdmin && (
+                  <>
+                    <button
+                      className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                      onClick={backfillCalculatedFields}
+                      disabled={isBackfilling}
+                    >
+                      {isBackfilling
+                        ? "Actualizando campos..."
+                        : "Actualizar campos calculados"}
+                    </button>
+                    {/* <button
+                      className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                      onClick={fixLegacyAssociatedFromRemaining}
+                      disabled={isBackfilling}
+                    >
+                      Reparar P. asociados legacy
+                    </button> */}
+                  </>
                 )}
               </div>
             </div>
@@ -2142,9 +2384,13 @@ export default function VendorCandyOrders({
                   <tr>
                     <th className="text-left p-2 border-b">Fecha</th>
                     <th className="text-left p-2 border-b">Vendedor</th>
-                    <th className="text-right p-2 border-b">Paquetes</th>
-                    <th className="text-right p-2 border-b">Restantes</th>
-                    <th className="text-right p-2 border-b">Total esperado</th>
+                    <th className="text-right p-2 border-b">P. Asociados</th>
+                    <th className="text-right p-2 border-b">P. Restantes</th>
+                    {isAdmin && (
+                      <th className="text-right p-2 border-b">
+                        Total esperado
+                      </th>
+                    )}
                     <th className="text-right p-2 border-b">U. Bruta</th>
                     <th className="text-right p-2 border-b">Gastos</th>
                     <th className="text-right p-2 border-b">U. Vendedor</th>
@@ -2164,17 +2410,19 @@ export default function VendorCandyOrders({
                       <td className="p-2 border-b text-right">
                         {o.totalRemainingPackages}
                       </td>
+                      {isAdmin && (
+                        <td className="p-2 border-b text-right">
+                          {money(o.totalExpectedActive ?? o.totalExpected)}
+                        </td>
+                      )}
                       <td className="p-2 border-b text-right">
-                        {money(o.totalExpected)}
+                        {money(o.grossProfitActive ?? o.grossProfit)}
                       </td>
                       <td className="p-2 border-b text-right">
-                        {money(o.grossProfit)}
+                        {money((o.gastosActive ?? o.gastos) || 0)}
                       </td>
                       <td className="p-2 border-b text-right">
-                        {money(o.gastos || 0)}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {money(o.vendorProfit)}
+                        {money(o.vendorProfitActive ?? o.vendorProfit)}
                       </td>
                       <td className="p-2 border-b text-right">
                         {o.transferredOut}
@@ -2211,7 +2459,10 @@ export default function VendorCandyOrders({
 
                   {!pagedOrders.length && (
                     <tr>
-                      <td className="p-3 text-sm text-gray-600" colSpan={11}>
+                      <td
+                        className="p-3 text-sm text-gray-600"
+                        colSpan={isAdmin ? 11 : 10}
+                      >
                         No hay pedidos.
                       </td>
                     </tr>
@@ -2293,25 +2544,27 @@ export default function VendorCandyOrders({
                 <div className="px-2 pb-2">
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="border rounded p-2">
-                      <div className="text-gray-600">Paquetes</div>
+                      <div className="text-gray-600">P. Asociados</div>
                       <div className="font-semibold">{o.totalPackages}</div>
                     </div>
                     <div className="border rounded p-2">
-                      <div className="text-gray-600">Restantes</div>
+                      <div className="text-gray-600">P. Restantes</div>
                       <div className="font-semibold">
                         {o.totalRemainingPackages}
                       </div>
                     </div>
-                    <div className="border rounded p-2">
-                      <div className="text-gray-600">Total esperado</div>
-                      <div className="font-semibold">
-                        {money(o.totalExpected)}
+                    {isAdmin && (
+                      <div className="border rounded p-2">
+                        <div className="text-gray-600">Total esperado</div>
+                        <div className="font-semibold">
+                          {money(o.totalExpectedActive ?? o.totalExpected)}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <div className="border rounded p-2">
                       <div className="text-gray-600">U. Vendedor</div>
                       <div className="font-semibold">
-                        {money(o.vendorProfit)}
+                        {money(o.vendorProfitActive ?? o.vendorProfit)}
                       </div>
                     </div>
                   </div>
@@ -2456,37 +2709,46 @@ export default function VendorCandyOrders({
                 {/* KPIs */}
                 <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
                   <div className="border rounded p-2">
-                    <div className="text-xs text-gray-600">
-                      Paquetes totales
-                    </div>
+                    <div className="text-xs text-gray-600">P. asociados</div>
                     <div className="text-lg font-semibold">
                       {kpiTotals.totalPackages}
                     </div>
                   </div>
-                  <div className="border rounded p-2">
-                    <div className="text-xs text-gray-600">Total esperado</div>
-                    <div className="text-lg font-semibold">
-                      {money(kpiTotals.totalExpected)}
-                    </div>
-                  </div>
-                  <div className="border rounded p-2">
-                    <div className="text-xs text-gray-600">U. Bruta</div>
-                    <div className="text-lg font-semibold">
-                      {money(kpiTotals.grossProfit)}
-                    </div>
-                  </div>
+
+                  {isAdmin && (
+                    <>
+                      <div className="border rounded p-2">
+                        <div className="text-xs text-gray-600">
+                          Total esperado
+                        </div>
+                        <div className="text-lg font-semibold">
+                          {money(kpiTotals.totalExpected)}
+                        </div>
+                      </div>
+                      <div className="border rounded p-2">
+                        <div className="text-xs text-gray-600">U. Bruta</div>
+                        <div className="text-lg font-semibold">
+                          {money(kpiTotals.grossProfit)}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
                   <div className="border rounded p-2">
                     <div className="text-xs text-gray-600">U. Vendedor</div>
                     <div className="text-lg font-semibold">
                       {money(kpiTotals.uVendor)}
                     </div>
                   </div>
-                  <div className="border rounded p-2">
-                    <div className="text-xs text-gray-600">U. Neta</div>
-                    <div className="text-lg font-semibold">
-                      {money(kpiTotals.uNeta)}
+
+                  {isAdmin && (
+                    <div className="border rounded p-2">
+                      <div className="text-xs text-gray-600">U. Neta</div>
+                      <div className="text-lg font-semibold">
+                        {money(kpiUNeta)}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
 
@@ -2576,147 +2838,171 @@ export default function VendorCandyOrders({
                         setItemsPage(1);
                       }}
                     />
-                    <button
-                      className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                      onClick={exportAssociatedItemsToCsv}
-                      disabled={!orderItems.length}
-                    >
-                      Exportar CSV
-                    </button>
+                    {isAdmin && (
+                      <button
+                        className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                        onClick={exportAssociatedItemsToCsv}
+                        disabled={!orderItems.length}
+                      >
+                        Exportar CSV
+                      </button>
+                    )}
                   </div>
                 </div>
 
                 {/* Desktop table */}
                 <div className="hidden md:block overflow-x-auto">
-                  <table className="min-w-[1300px] w-full text-sm">
+                  <table className="min-w-[1400px] w-full text-sm">
                     <thead className="bg-gray-50">
                       <tr>
                         <th className="text-left p-2 border-b">Categoría</th>
                         <th className="text-left p-2 border-b">Producto</th>
-                        <th className="text-right p-2 border-b">Paquetes</th>
-                        <th className="text-right p-2 border-b">Restantes</th>
+                        <th className="text-right p-2 border-b">
+                          P. Asociados{" "}
+                        </th>
+                        <th className="text-right p-2 border-b">
+                          P. Restantes
+                        </th>
+                        {isAdmin && (
+                          <th className="text-right p-2 border-b">
+                            Precio prov.
+                          </th>
+                        )}
                         <th className="text-right p-2 border-b">Precio/paq</th>
                         <th className="text-right p-2 border-b">
                           Total esperado
                         </th>
-                        <th className="text-right p-2 border-b">U. Bruta</th>
-                        <th className="text-right p-2 border-b">Gastos</th>
+                        {isAdmin && (
+                          <>
+                            <th className="text-right p-2 border-b">
+                              U. Bruta
+                            </th>
+                            <th className="text-right p-2 border-b">Gastos</th>
+                            <th className="text-right p-2 border-b">U. Neta</th>
+                          </>
+                        )}
                         <th className="text-right p-2 border-b">U. Vendedor</th>
-                        <th className="text-right p-2 border-b">U. Neta</th>
                         <th className="text-right p-2 border-b">Margen (%)</th>
                         <th className="text-left p-2 border-b">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedOrderItems.map((it) => (
-                        <tr key={it.id} className="hover:bg-gray-50">
-                          <td className="p-2 border-b">{it.category}</td>
-                          <td className="p-2 border-b">{it.productName}</td>
+                      {pagedOrderItems.map((it) => {
+                        const {
+                          totalExpected,
+                          grossProfit,
+                          gastos,
+                          uVendor,
+                          uNeta,
+                        } = getItemActiveFinancials(it);
 
-                          <td className="p-2 border-b text-right">
-                            {!isReadOnly ? (
-                              <input
-                                className="w-20 border rounded p-1 text-right"
-                                value={String(it.packages)}
-                                onChange={(e) =>
-                                  updateItemPackages(it.id, e.target.value)
-                                }
-                                inputMode="numeric"
-                              />
-                            ) : (
-                              <span>{it.packages}</span>
+                        return (
+                          <tr key={it.id} className="hover:bg-gray-50">
+                            <td className="p-2 border-b">{it.category}</td>
+                            <td className="p-2 border-b">{it.productName}</td>
+
+                            <td className="p-2 border-b text-right">
+                              {!isReadOnly ? (
+                                <input
+                                  className="w-20 border rounded p-1 text-right"
+                                  value={String(it.packages)}
+                                  onChange={(e) =>
+                                    updateItemPackages(it.id, e.target.value)
+                                  }
+                                  inputMode="numeric"
+                                />
+                              ) : (
+                                <span>{it.packages}</span>
+                              )}
+                            </td>
+
+                            <td className="p-2 border-b text-right">
+                              {it.remainingPackages}
+                            </td>
+
+                            {isAdmin && (
+                              <td className="p-2 border-b text-right">
+                                {money((it as any).providerPrice || 0)}
+                              </td>
                             )}
-                          </td>
 
-                          <td className="p-2 border-b text-right">
-                            {it.remainingPackages}
-                          </td>
+                            <td className="p-2 border-b text-right">
+                              {money(it.pricePerPackage)}
+                            </td>
 
-                          <td className="p-2 border-b text-right">
-                            {money(it.pricePerPackage)}
-                          </td>
+                            <td className="p-2 border-b text-right">
+                              {money(totalExpected)}
+                            </td>
 
-                          <td className="p-2 border-b text-right">
-                            {money(it.totalExpected)}
-                          </td>
+                            {isAdmin && (
+                              <>
+                                <td className="p-2 border-b text-right">
+                                  {money(grossProfit)}
+                                </td>
 
-                          <td className="p-2 border-b text-right">
-                            {money(it.grossProfit)}
-                          </td>
+                                <td className="p-2 border-b text-right">
+                                  {money(gastos)}
+                                </td>
 
-                          <td className="p-2 border-b text-right">
-                            {money(
-                              it.logisticAllocated ??
-                                (it as any).logisticAllocated ??
-                                (it as any).gastos ??
-                                0,
+                                <td className="p-2 border-b text-right">
+                                  {money(uNeta)}
+                                </td>
+                              </>
                             )}
-                          </td>
 
-                          <td className="p-2 border-b text-right">
-                            {money(it.uVendor)}
-                          </td>
+                            <td className="p-2 border-b text-right">
+                              {money(uVendor)}
+                            </td>
 
-                          <td className="p-2 border-b text-right">
-                            {money(
-                              Number(it.grossProfit || 0) -
-                                Number(
-                                  it.logisticAllocated ??
-                                    (it as any).gastos ??
-                                    0,
-                                ) -
-                                Number(it.uVendor || 0),
-                            )}
-                          </td>
+                            <td className="p-2 border-b text-right">
+                              {!isReadOnly ? (
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min={0}
+                                  className="w-20 border rounded p-1 text-right"
+                                  value={String(
+                                    it.vendorMarginPercent ??
+                                      getSellerMarginPercent(sellerId),
+                                  )}
+                                  onChange={(e) =>
+                                    updateItemVendorMarginPercent(
+                                      it.id,
+                                      e.target.value,
+                                    )
+                                  }
+                                  inputMode="decimal"
+                                />
+                              ) : (
+                                <span>
+                                  {Number(
+                                    it.vendorMarginPercent ??
+                                      getSellerMarginPercent(sellerId),
+                                  ).toFixed(2)}
+                                  %
+                                </span>
+                              )}
+                            </td>
 
-                          <td className="p-2 border-b text-right">
-                            {!isReadOnly ? (
-                              <input
-                                type="number"
-                                step="0.01"
-                                min={0}
-                                className="w-20 border rounded p-1 text-right"
-                                value={String(
-                                  it.vendorMarginPercent ??
-                                    getSellerMarginPercent(sellerId),
-                                )}
-                                onChange={(e) =>
-                                  updateItemVendorMarginPercent(
-                                    it.id,
-                                    e.target.value,
-                                  )
-                                }
-                                inputMode="decimal"
-                              />
-                            ) : (
-                              <span>
-                                {Number(
-                                  it.vendorMarginPercent ??
-                                    getSellerMarginPercent(sellerId),
-                                ).toFixed(2)}
-                                %
-                              </span>
-                            )}
-                          </td>
-
-                          <td className="p-2 border-b">
-                            {!isReadOnly && (
-                              <button
-                                className="px-3 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-700"
-                                onClick={() => removeItem(it.id)}
-                              >
-                                Quitar
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                            <td className="p-2 border-b">
+                              {!isReadOnly && (
+                                <button
+                                  className="px-3 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-700"
+                                  onClick={() => removeItem(it.id)}
+                                >
+                                  Quitar
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
 
                       {!pagedOrderItems.length && (
                         <tr>
                           <td
                             className="p-3 text-sm text-gray-600"
-                            colSpan={12}
+                            colSpan={isAdmin ? 13 : 9}
                           >
                             No hay productos asociados.
                           </td>
@@ -2746,150 +3032,157 @@ export default function VendorCandyOrders({
 
                         {expanded && (
                           <div className="px-3 pb-3 space-y-2">
-                            {items.map((it) => (
-                              <div
-                                key={it.id}
-                                className="border rounded p-2 text-xs space-y-2"
-                              >
-                                <div className="font-semibold text-sm">
-                                  {it.productName}
-                                </div>
+                            {items.map((it) => {
+                              const {
+                                totalExpected,
+                                grossProfit,
+                                gastos,
+                                uVendor,
+                                uNeta,
+                              } = getItemActiveFinancials(it);
 
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div>
-                                    <div className="text-gray-600">
-                                      Paquetes
-                                    </div>
-                                    {!isReadOnly ? (
-                                      <input
-                                        className="w-full border rounded p-1 text-right"
-                                        value={String(it.packages)}
-                                        onChange={(e) =>
-                                          updateItemPackages(
-                                            it.id,
-                                            e.target.value,
-                                          )
-                                        }
-                                        inputMode="numeric"
-                                      />
-                                    ) : (
-                                      <div className="font-semibold">
-                                        {it.packages}
+                              return (
+                                <div
+                                  key={it.id}
+                                  className="border rounded p-2 text-xs space-y-2"
+                                >
+                                  <div className="font-semibold text-sm">
+                                    {it.productName}
+                                  </div>
+
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <div className="text-gray-600">
+                                        Paquetes
                                       </div>
-                                    )}
-                                  </div>
-                                  <div>
-                                    <div className="text-gray-600">
-                                      Restantes
-                                    </div>
-                                    <div className="font-semibold">
-                                      {it.remainingPackages}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <div className="text-gray-600">
-                                      Precio/paq
-                                    </div>
-                                    <div className="font-semibold">
-                                      {money(it.pricePerPackage)}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <div className="text-gray-600">
-                                      Total esperado
-                                    </div>
-                                    <div className="font-semibold">
-                                      {money(it.totalExpected)}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <div className="text-gray-600">
-                                      U. Bruta
-                                    </div>
-                                    <div className="font-semibold">
-                                      {money(it.grossProfit)}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <div className="text-gray-600">Gastos</div>
-                                    <div className="font-semibold">
-                                      {money(
-                                        it.logisticAllocated ??
-                                          (it as any).logisticAllocated ??
-                                          (it as any).gastos ??
-                                          0,
+                                      {!isReadOnly ? (
+                                        <input
+                                          className="w-full border rounded p-1 text-right"
+                                          value={String(it.packages)}
+                                          onChange={(e) =>
+                                            updateItemPackages(
+                                              it.id,
+                                              e.target.value,
+                                            )
+                                          }
+                                          inputMode="numeric"
+                                        />
+                                      ) : (
+                                        <div className="font-semibold">
+                                          {it.packages}
+                                        </div>
                                       )}
                                     </div>
-                                  </div>
-                                  <div>
-                                    <div className="text-gray-600">
-                                      U. Vendedor
-                                    </div>
-                                    <div className="font-semibold">
-                                      {money(it.uVendor)}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <div className="text-gray-600">U. Neta</div>
-                                    <div className="font-semibold">
-                                      {money(
-                                        Number(it.grossProfit || 0) -
-                                          Number(
-                                            it.logisticAllocated ??
-                                              (it as any).gastos ??
-                                              0,
-                                          ) -
-                                          Number(it.uVendor || 0),
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                  <div className="flex-1">
-                                    <div className="text-gray-600">
-                                      Margen (%)
-                                    </div>
-                                    {!isReadOnly ? (
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        min={0}
-                                        className="w-full border rounded p-1 text-right"
-                                        value={String(
-                                          it.vendorMarginPercent ??
-                                            getSellerMarginPercent(sellerId),
-                                        )}
-                                        onChange={(e) =>
-                                          updateItemVendorMarginPercent(
-                                            it.id,
-                                            e.target.value,
-                                          )
-                                        }
-                                        inputMode="decimal"
-                                      />
-                                    ) : (
+                                    <div>
+                                      <div className="text-gray-600">
+                                        Restantes
+                                      </div>
                                       <div className="font-semibold">
-                                        {Number(
-                                          it.vendorMarginPercent ??
-                                            getSellerMarginPercent(sellerId),
-                                        ).toFixed(2)}
-                                        %
+                                        {it.remainingPackages}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-gray-600">
+                                        Precio/paq
+                                      </div>
+                                      <div className="font-semibold">
+                                        {money(it.pricePerPackage)}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-gray-600">
+                                        Total esperado
+                                      </div>
+                                      <div className="font-semibold">
+                                        {money(totalExpected)}
+                                      </div>
+                                    </div>
+                                    {isAdmin && (
+                                      <>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            U. Bruta
+                                          </div>
+                                          <div className="font-semibold">
+                                            {money(grossProfit)}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            Gastos
+                                          </div>
+                                          <div className="font-semibold">
+                                            {money(gastos)}
+                                          </div>
+                                        </div>
+                                      </>
+                                    )}
+                                    <div>
+                                      <div className="text-gray-600">
+                                        U. Vendedor
+                                      </div>
+                                      <div className="font-semibold">
+                                        {money(uVendor)}
+                                      </div>
+                                    </div>
+                                    {isAdmin && (
+                                      <div>
+                                        <div className="text-gray-600">
+                                          U. Neta
+                                        </div>
+                                        <div className="font-semibold">
+                                          {money(uNeta)}
+                                        </div>
                                       </div>
                                     )}
                                   </div>
 
-                                  {!isReadOnly && (
-                                    <button
-                                      className="px-3 py-2 rounded bg-red-600 text-white text-xs"
-                                      onClick={() => removeItem(it.id)}
-                                    >
-                                      Quitar
-                                    </button>
-                                  )}
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex-1">
+                                      <div className="text-gray-600">
+                                        Margen (%)
+                                      </div>
+                                      {!isReadOnly ? (
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          min={0}
+                                          className="w-full border rounded p-1 text-right"
+                                          value={String(
+                                            it.vendorMarginPercent ??
+                                              getSellerMarginPercent(sellerId),
+                                          )}
+                                          onChange={(e) =>
+                                            updateItemVendorMarginPercent(
+                                              it.id,
+                                              e.target.value,
+                                            )
+                                          }
+                                          inputMode="decimal"
+                                        />
+                                      ) : (
+                                        <div className="font-semibold">
+                                          {Number(
+                                            it.vendorMarginPercent ??
+                                              getSellerMarginPercent(sellerId),
+                                          ).toFixed(2)}
+                                          %
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {!isReadOnly && (
+                                      <button
+                                        className="px-3 py-2 rounded bg-red-600 text-white text-xs"
+                                        onClick={() => removeItem(it.id)}
+                                      >
+                                        Quitar
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -2963,6 +3256,24 @@ export default function VendorCandyOrders({
           </div>
         </div>
       )}
+
+      {/* Traslados modal */}
+      <TrasladosModal
+        open={openTransferModal}
+        onClose={() => setOpenTransferModal(false)}
+        orders={orderSummaries}
+        rows={rows}
+        setRows={setRows}
+        isAdmin={isAdmin}
+        currentUserEmail={currentUserEmail || ""}
+        currentUserName={""} // Ajusta si tienes el nombre del usuario
+        sellerCandyId={sellerCandyId}
+        sellers={sellers}
+        products={productsAll}
+        transferAgg={transferAgg}
+        setTransferAgg={setTransferAgg}
+        setTransferRowDeltas={setTransferRowDeltas}
+      />
     </div>
   );
 }

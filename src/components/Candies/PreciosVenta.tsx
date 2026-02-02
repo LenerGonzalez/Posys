@@ -1007,14 +1007,16 @@ export default function PrecioVentas() {
                                     </div>
 
                                     <div>
-                                      <div>
-                                        <div className="text-[10px] text-gray-600">
-                                          Utilidad Bruta
+                                      {isAdmin && (
+                                        <div>
+                                          <div className="text-[10px] text-gray-600">
+                                            Utilidad Bruta
+                                          </div>
+                                          <div className="text-sm tabular-nums">
+                                            {money(utilidad)}
+                                          </div>
                                         </div>
-                                        <div className="text-sm tabular-nums">
-                                          {money(utilidad)}
-                                        </div>
-                                      </div>
+                                      )}
 
                                       <div className="mt-1">
                                         <div className="text-[10px] text-gray-600">
