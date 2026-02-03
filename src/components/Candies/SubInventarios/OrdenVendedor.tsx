@@ -2282,6 +2282,7 @@ export default function VendorCandyOrders({
   // =========================
   // Solo admin puede cambiar el vendedor en el selector
   const disableSellerSelect = !isAdmin;
+  const desktopColumns = isAdmin ? 11 : 8;
 
   // =========================
   // RENDER
@@ -2391,8 +2392,12 @@ export default function VendorCandyOrders({
                         Total esperado
                       </th>
                     )}
-                    <th className="text-right p-2 border-b">U. Bruta</th>
-                    <th className="text-right p-2 border-b">Gastos</th>
+                    {isAdmin && (
+                      <th className="text-right p-2 border-b">U. Bruta</th>
+                    )}
+                    {isAdmin && (
+                      <th className="text-right p-2 border-b">Gastos</th>
+                    )}
                     <th className="text-right p-2 border-b">U. Vendedor</th>
                     <th className="text-right p-2 border-b">Trasl. Salida</th>
                     <th className="text-right p-2 border-b">Trasl. Entrada</th>
@@ -2415,12 +2420,16 @@ export default function VendorCandyOrders({
                           {money(o.totalExpectedActive ?? o.totalExpected)}
                         </td>
                       )}
-                      <td className="p-2 border-b text-right">
-                        {money(o.grossProfitActive ?? o.grossProfit)}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {money((o.gastosActive ?? o.gastos) || 0)}
-                      </td>
+                      {isAdmin && (
+                        <td className="p-2 border-b text-right">
+                          {money(o.grossProfitActive ?? o.grossProfit)}
+                        </td>
+                      )}
+                      {isAdmin && (
+                        <td className="p-2 border-b text-right">
+                          {money((o.gastosActive ?? o.gastos) || 0)}
+                        </td>
+                      )}
                       <td className="p-2 border-b text-right">
                         {money(o.vendorProfitActive ?? o.vendorProfit)}
                       </td>
@@ -2461,7 +2470,7 @@ export default function VendorCandyOrders({
                     <tr>
                       <td
                         className="p-3 text-sm text-gray-600"
-                        colSpan={isAdmin ? 11 : 10}
+                        colSpan={desktopColumns}
                       >
                         No hay pedidos.
                       </td>

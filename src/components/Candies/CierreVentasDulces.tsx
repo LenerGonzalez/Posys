@@ -13,6 +13,7 @@ import {
   doc,
   updateDoc,
   orderBy,
+  deleteDoc,
 } from "firebase/firestore";
 import { format } from "date-fns";
 import html2canvas from "html2canvas";
@@ -133,6 +134,18 @@ const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
+
+async function deleteARMovesBySaleId(saleId: string) {
+  if (!saleId) return;
+  const qMov = query(
+    collection(db, "ar_movements"),
+    where("ref.saleId", "==", saleId),
+  );
+  const snap = await getDocs(qMov);
+  await Promise.all(
+    snap.docs.map((d) => deleteDoc(doc(db, "ar_movements", d.id))),
+  );
+}
 
 // ✅ Normaliza UNA venta en MÚLTIPLES filas si trae items[]
 // ✅ Ajuste: prorratea vendorCommissionAmount por línea
@@ -788,13 +801,13 @@ export default function CierreVentasDulces({
     )
       return;
     try {
-      const { restored } = await restoreCandySaleAndDelete(
-        saleId.split("#")[0],
-      );
+      const baseSaleId = saleId.split("#")[0];
+      const { restored } = await restoreCandySaleAndDelete(baseSaleId);
+      await deleteARMovesBySaleId(baseSaleId);
       setMessage(
         `🗑️ Venta eliminada. Stock restaurado (unidades internas): ${Number(
           restored,
-        ).toFixed(2)}.`,
+        ).toFixed(2)}. Estado de cuenta ajustado.`,
       );
     } catch (e) {
       console.error(e);

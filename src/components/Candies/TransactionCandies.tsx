@@ -109,9 +109,11 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
 
 // ============ CUENTAS POR COBRAR (CxC) ============
 async function deleteARMovesBySaleId(saleId: string) {
+  const saleIdSafe = (saleId || "").trim();
+  if (!saleIdSafe) return;
   const qMov = query(
     collection(db, "ar_movements"),
-    where("ref.saleId", "==", saleId),
+    where("ref.saleId", "==", saleIdSafe),
   );
   const snap = await getDocs(qMov);
   await Promise.all(
@@ -364,11 +366,12 @@ export default function TransactionsReportCandies({
       return;
     try {
       setLoading(true);
-      await restoreSaleAndDeleteCandy(s.id);
-      await deleteARMovesBySaleId(s.id);
+      const baseSaleId = s.id.split("#")[0];
+      await restoreSaleAndDeleteCandy(baseSaleId);
+      await deleteARMovesBySaleId(baseSaleId);
 
       setSales((prev) => prev.filter((x) => x.id !== s.id));
-      setMsg("✅ Venta eliminada");
+      setMsg("✅ Venta eliminada y saldo del cliente ajustado");
     } catch (e) {
       console.error(e);
       setMsg("❌ No se pudo eliminar la venta.");
