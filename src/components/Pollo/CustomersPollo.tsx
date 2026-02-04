@@ -57,6 +57,7 @@ interface MovementRow {
   ref?: { saleId?: string };
   comment?: string;
   createdAt?: Timestamp;
+  debtStatus?: "PENDIENTE" | "PAGADA";
 }
 
 interface SellerRow {
@@ -66,6 +67,26 @@ interface SellerRow {
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+const roundCurrency = (value: number) =>
+  Math.round((Number(value) || 0) * 100) / 100;
+
+const PAID_DEBT_FLAGS = new Set([
+  "PAGADA",
+  "PAGADO",
+  "CERRADA",
+  "CERRADO",
+  "LIQUIDADA",
+  "LIQUIDADO",
+]);
+
+const normalizeDebtStatus = (value?: string): "PENDIENTE" | "PAGADA" => {
+  const upper = String(value || "")
+    .trim()
+    .toUpperCase();
+  if (PAID_DEBT_FLAGS.has(upper)) return "PAGADA";
+  return "PENDIENTE";
+};
 
 function normalizePhone(input: string): string {
   const prefix = "+505 ";
@@ -413,6 +434,9 @@ export default function CustomersPollo({
   const [eMovDate, setEMovDate] = useState<string>("");
   const [eMovAmount, setEMovAmount] = useState<number>(0);
   const [eMovComment, setEMovComment] = useState<string>("");
+  const [updatingDebtStatusId, setUpdatingDebtStatusId] = useState<
+    string | null
+  >(null);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(
@@ -496,11 +520,19 @@ export default function CustomersPollo({
 
             let sumMov = 0;
             let lastAbono: any = null;
+            let hasPendingCargo = false;
 
             mSnap.forEach((m) => {
               const x = m.data() as any;
               const amt = Number(x.amount || 0);
               sumMov += amt;
+
+              if (amt > 0) {
+                const status = normalizeDebtStatus(
+                  x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
+                );
+                if (status === "PENDIENTE") hasPendingCargo = true;
+              }
 
               if (amt < 0) {
                 const d =
@@ -519,11 +551,13 @@ export default function CustomersPollo({
             });
 
             const init = Number(c.initialDebt || 0);
-            c.balance = init + sumMov;
+            const currentBalance = roundCurrency(init + sumMov);
+            c.balance = currentBalance;
+            const hasOutstanding = hasPendingCargo || currentBalance > 0;
 
-            if (lastAbono) {
-              c.lastAbonoDate = lastAbono?.date;
-              c.lastAbonoAmount = lastAbono?.amount;
+            if (hasOutstanding && lastAbono) {
+              c.lastAbonoDate = lastAbono.date;
+              c.lastAbonoAmount = lastAbono.amount;
             } else {
               c.lastAbonoDate = "";
               c.lastAbonoAmount = 0;
@@ -844,6 +878,9 @@ export default function CustomersPollo({
           ref: x.ref || {},
           comment: x.comment || "",
           createdAt: x.createdAt,
+          debtStatus: normalizeDebtStatus(
+            x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
+          ),
         });
       });
 
@@ -862,6 +899,18 @@ export default function CustomersPollo({
     } finally {
       setStLoading(false);
     }
+  };
+
+  const hasOpenDebt = (
+    list: MovementRow[],
+    outstandingBalance: number,
+  ): boolean => {
+    if (roundCurrency(outstandingBalance || 0) > 0) return true;
+    return list.some(
+      (row) =>
+        row.type === "CARGO" &&
+        normalizeDebtStatus(row.debtStatus) === "PENDIENTE",
+    );
   };
 
   const getLastAbonoFromList = (list: MovementRow[]) => {
@@ -921,16 +970,24 @@ export default function CustomersPollo({
 
       setStRows(newList);
       recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
+      const sumMov = newList.reduce(
+        (acc, it) => acc + (Number(it.amount) || 0),
+        0,
+      );
+      const nuevoSaldo = roundCurrency(
+        Number(stCustomer.initialDebt || 0) + sumMov,
+      );
+      const openDebt = hasOpenDebt(newList, nuevoSaldo);
 
       setRows((prev) =>
         prev.map((c) => {
           if (c.id !== stCustomer.id) return c;
-          const nextBal = (c.balance || 0) - safeAmt;
+          const nextBal = roundCurrency((c.balance || 0) - safeAmt);
           return {
             ...c,
             balance: nextBal,
-            lastAbonoDate: abonoDate,
-            lastAbonoAmount: safeAmt,
+            lastAbonoDate: openDebt ? abonoDate : "",
+            lastAbonoAmount: openDebt ? safeAmt : 0,
           };
         }),
       );
@@ -939,9 +996,9 @@ export default function CustomersPollo({
         prev
           ? {
               ...prev,
-              balance: (prev.balance || 0) - safeAmt,
-              lastAbonoDate: abonoDate,
-              lastAbonoAmount: safeAmt,
+              balance: roundCurrency((prev.balance || 0) - safeAmt),
+              lastAbonoDate: openDebt ? abonoDate : "",
+              lastAbonoAmount: openDebt ? safeAmt : 0,
             }
           : prev,
       );
@@ -1017,9 +1074,12 @@ export default function CustomersPollo({
         (acc, it) => acc + (Number(it.amount) || 0),
         0,
       );
-      const nuevoSaldo = Number(stCustomer.initialDebt || 0) + sumMov;
+      const nuevoSaldo = roundCurrency(
+        Number(stCustomer.initialDebt || 0) + sumMov,
+      );
 
-      const last = getLastAbonoFromList(newList);
+      const openDebt = hasOpenDebt(newList, nuevoSaldo);
+      const last = openDebt ? getLastAbonoFromList(newList) : null;
 
       setRows((prev) =>
         prev.map((c) =>
@@ -1027,8 +1087,8 @@ export default function CustomersPollo({
             ? {
                 ...c,
                 balance: nuevoSaldo,
-                lastAbonoDate: last?.date || "",
-                lastAbonoAmount: last?.amount || 0,
+                lastAbonoDate: openDebt && last ? last.date : "",
+                lastAbonoAmount: openDebt && last ? last.amount : 0,
               }
             : c,
         ),
@@ -1038,8 +1098,8 @@ export default function CustomersPollo({
           ? {
               ...prev,
               balance: nuevoSaldo,
-              lastAbonoDate: last?.date || "",
-              lastAbonoAmount: last?.amount || 0,
+              lastAbonoDate: openDebt && last ? last.date : "",
+              lastAbonoAmount: openDebt && last ? last.amount : 0,
             }
           : prev,
       );
@@ -1095,9 +1155,12 @@ export default function CustomersPollo({
         (acc, it) => acc + (Number(it.amount) || 0),
         0,
       );
-      const nuevoSaldo = Number(stCustomer.initialDebt || 0) + sumMov;
+      const nuevoSaldo = roundCurrency(
+        Number(stCustomer.initialDebt || 0) + sumMov,
+      );
 
-      const last = getLastAbonoFromList(newList);
+      const openDebt = hasOpenDebt(newList, nuevoSaldo);
+      const last = openDebt ? getLastAbonoFromList(newList) : null;
 
       setRows((prev) =>
         prev.map((c) =>
@@ -1105,8 +1168,8 @@ export default function CustomersPollo({
             ? {
                 ...c,
                 balance: nuevoSaldo,
-                lastAbonoDate: last?.date || "",
-                lastAbonoAmount: last?.amount || 0,
+                lastAbonoDate: openDebt && last ? last.date : "",
+                lastAbonoAmount: openDebt && last ? last.amount : 0,
               }
             : c,
         ),
@@ -1116,8 +1179,8 @@ export default function CustomersPollo({
           ? {
               ...prev,
               balance: nuevoSaldo,
-              lastAbonoDate: last?.date || "",
-              lastAbonoAmount: last?.amount || 0,
+              lastAbonoDate: openDebt && last ? last.date : "",
+              lastAbonoAmount: openDebt && last ? last.amount : 0,
             }
           : prev,
       );
@@ -1129,6 +1192,74 @@ export default function CustomersPollo({
       setMsg("❌ Error al eliminar movimiento");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleDebtStatus = async (movement: MovementRow) => {
+    if (movement.type !== "CARGO") return;
+    const nextStatus =
+      normalizeDebtStatus(movement.debtStatus) === "PAGADA"
+        ? "PENDIENTE"
+        : "PAGADA";
+
+    try {
+      setUpdatingDebtStatusId(movement.id);
+      await updateDoc(doc(db, "ar_movements_pollo", movement.id), {
+        debtStatus: nextStatus,
+      });
+
+      const updatedList = stRows.map((row) =>
+        row.id === movement.id ? { ...row, debtStatus: nextStatus } : row,
+      );
+
+      setStRows(updatedList);
+      if (stCustomer) {
+        recomputeKpis(updatedList, Number(stCustomer.initialDebt || 0));
+        const sumMov = updatedList.reduce(
+          (acc, it) => acc + (Number(it.amount) || 0),
+          0,
+        );
+        const nuevoSaldo = roundCurrency(
+          Number(stCustomer.initialDebt || 0) + sumMov,
+        );
+        const openDebt = hasOpenDebt(updatedList, nuevoSaldo);
+        const last = openDebt ? getLastAbonoFromList(updatedList) : null;
+
+        setRows((prev) =>
+          prev.map((c) =>
+            c.id === stCustomer.id
+              ? {
+                  ...c,
+                  balance: nuevoSaldo,
+                  lastAbonoDate: openDebt && last ? last.date : "",
+                  lastAbonoAmount: openDebt && last ? last.amount : 0,
+                }
+              : c,
+          ),
+        );
+
+        setStCustomer((prev) =>
+          prev
+            ? {
+                ...prev,
+                balance: nuevoSaldo,
+                lastAbonoDate: openDebt && last ? last.date : "",
+                lastAbonoAmount: openDebt && last ? last.amount : 0,
+              }
+            : prev,
+        );
+      }
+
+      setMsg(
+        nextStatus === "PAGADA"
+          ? "✅ Compra marcada como pagada"
+          : "✅ Compra marcada como pendiente",
+      );
+    } catch (error) {
+      console.error(error);
+      setMsg("❌ No se pudo actualizar el estado de la compra");
+    } finally {
+      setUpdatingDebtStatusId(null);
     }
   };
 
@@ -1737,7 +1868,7 @@ export default function CustomersPollo({
                       <tr>
                         <th className="p-2 border">Fecha</th>
                         <th className="p-2 border">Tipo</th>
-                        {/* <th className="p-2 border">Referencia</th> */}
+                        <th className="p-2 border">Estado compra</th>
                         <th className="p-2 border">Comentario</th>
                         <th className="p-2 border">Monto</th>
                         <th className="p-2 border">Acciones</th>
@@ -1760,6 +1891,9 @@ export default function CustomersPollo({
                       ) : (
                         stRows.map((m) => {
                           const isEditing = editMovId === m.id;
+                          const normalizedDebt = normalizeDebtStatus(
+                            m.debtStatus,
+                          );
                           return (
                             <tr key={m.id} className="text-center">
                               <td className="p-2 border">
@@ -1804,6 +1938,20 @@ export default function CustomersPollo({
                               {/* <td className="p-2 border">
                                 {m.ref?.saleId ? `Venta #${m.ref.saleId}` : "—"}
                               </td> */}
+
+                              <td className="p-2 border">
+                                {m.type === "CARGO" ? (
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                                  >
+                                    {normalizedDebt === "PAGADA"
+                                      ? "Pagada"
+                                      : "Pendiente"}
+                                  </span>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
 
                               <td className="p-2 border">
                                 {isEditing ? (
@@ -1869,6 +2017,18 @@ export default function CustomersPollo({
                                     >
                                       Editar
                                     </button>
+                                    {m.type === "CARGO" && (
+                                      <button
+                                        type="button"
+                                        className={`px-2 py-1 rounded text-white ${normalizedDebt === "PAGADA" ? "bg-gray-600 hover:bg-gray-700" : "bg-emerald-600 hover:bg-emerald-700"} disabled:opacity-50`}
+                                        onClick={() => toggleDebtStatus(m)}
+                                        disabled={updatingDebtStatusId === m.id}
+                                      >
+                                        {normalizedDebt === "PAGADA"
+                                          ? "Marcar pendiente"
+                                          : "Marcar pagada"}
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"

@@ -122,9 +122,13 @@ export default function FinancialDashboard(): React.ReactElement {
   const [pendingSectionOpen, setPendingSectionOpen] = useState<boolean>(false);
   const [consolidatedSectionOpen, setConsolidatedSectionOpen] =
     useState<boolean>(false);
+  const [salesKpiCardOpen, setSalesKpiCardOpen] = useState<boolean>(false);
+  const [fundsKpiCardOpen, setFundsKpiCardOpen] = useState<boolean>(false);
   const toggleKpiSection = () => setKpiSectionOpen((v) => !v);
   const togglePendingSection = () => setPendingSectionOpen((v) => !v);
   const toggleConsolidatedSection = () => setConsolidatedSectionOpen((v) => !v);
+  const toggleSalesKpiCard = () => setSalesKpiCardOpen((v) => !v);
+  const toggleFundsKpiCard = () => setFundsKpiCardOpen((v) => !v);
   // product filter for KPIs
   const [productFilter, setProductFilter] = useState<string>("");
 
@@ -363,6 +367,7 @@ export default function FinancialDashboard(): React.ReactElement {
           { amount: number; date?: string; ts?: any }
         > = {};
         const salesByCustomer: Record<string, Set<string>> = {};
+        const activeSalesByCustomer: Record<string, Set<string>> = {};
         const saleIds = new Set<string>();
         const paymentsBySaleId: Record<string, number> = {};
         const paymentsByCustomerNoSaleId: Record<string, number> = {};
@@ -378,6 +383,19 @@ export default function FinancialDashboard(): React.ReactElement {
             (balanceByCustomer[customerId] || 0) + amount;
 
           const type = String(m.type ?? "").toUpperCase();
+          const statusRaw = String(
+            m.debtStatus ?? m.creditStatus ?? m.cycleStatus ?? m.status ?? "",
+          )
+            .toUpperCase()
+            .trim();
+          const isSettled = [
+            "PAGADA",
+            "PAGADO",
+            "CERRADA",
+            "CERRADO",
+            "LIQUIDADA",
+            "LIQUIDADO",
+          ].includes(statusRaw);
           const createdAt = m.createdAt ?? null;
           if (type === "ABONO") {
             abonosSum += Math.abs(amount);
@@ -407,14 +425,21 @@ export default function FinancialDashboard(): React.ReactElement {
           }
 
           if (type === "CARGO") {
-            globalByCustomer[customerId] =
-              (globalByCustomer[customerId] || 0) + Math.abs(amount);
             const saleId = m?.ref?.saleId ? String(m.ref.saleId) : "";
             if (saleId) {
               if (!salesByCustomer[customerId])
                 salesByCustomer[customerId] = new Set();
               salesByCustomer[customerId].add(saleId);
+              if (!isSettled) {
+                if (!activeSalesByCustomer[customerId])
+                  activeSalesByCustomer[customerId] = new Set();
+                activeSalesByCustomer[customerId].add(saleId);
+              }
               saleIds.add(saleId);
+            }
+            if (!isSettled) {
+              globalByCustomer[customerId] =
+                (globalByCustomer[customerId] || 0) + Math.abs(amount);
             }
           }
         });
@@ -545,7 +570,8 @@ export default function FinancialDashboard(): React.ReactElement {
           let units = 0;
           let lastSaleDate = "";
 
-          const salesSet = salesByCustomer[customerId] || new Set<string>();
+          const salesSet =
+            activeSalesByCustomer[customerId] || new Set<string>();
           salesSet.forEach((saleId) => {
             const sale = saleCache.get(saleId);
             if (!sale) return;
@@ -596,12 +622,14 @@ export default function FinancialDashboard(): React.ReactElement {
           });
 
           const lastPayment = lastPaymentByCustomer[customerId];
+          const activeGlobalBalance = Number(globalByCustomer[customerId] || 0);
 
           pendingRows.push({
             customerId,
             name: customerNameById[customerId] || "(sin nombre)",
             balance,
-            globalBalance: Number(globalByCustomer[customerId] || 0),
+            globalBalance:
+              activeGlobalBalance > 0 ? activeGlobalBalance : balance,
             lbs,
             units,
             lastPaymentAmount: Number(lastPayment?.amount || 0),
@@ -716,11 +744,16 @@ export default function FinancialDashboard(): React.ReactElement {
   );
 
   const cashRevenueWithAbonos = useMemo(
-    () => kpisCashVisible.revenue + totalAbonos,
-    [kpisCashVisible.revenue, totalAbonos],
+    () => kpisCashVisible.revenue,
+    [kpisCashVisible.revenue],
   );
 
   const totalSalesCashWithAbonos = useMemo(
+    () => totalSalesCash,
+    [totalSalesCash],
+  );
+
+  const collectedCashPlusAbonos = useMemo(
     () => totalSalesCash + totalAbonos,
     [totalSalesCash, totalAbonos],
   );
@@ -905,8 +938,8 @@ export default function FinancialDashboard(): React.ReactElement {
           "Libras",
           "Unidades",
           "Saldo Global",
-          "Saldo pendiente",
           "Último abono",
+          "Saldo pendiente",
           "Fecha ult. abono",
         ],
       ],
@@ -915,8 +948,8 @@ export default function FinancialDashboard(): React.ReactElement {
         qty3(c.lbs),
         qty3(c.units),
         money(c.globalBalance),
-        money(c.balance),
         money(c.lastPaymentAmount),
+        money(c.balance),
         c.lastPaymentDate || "—",
       ]),
       styles: { fontSize: 8 },
@@ -1041,7 +1074,9 @@ export default function FinancialDashboard(): React.ReactElement {
                   <b>{money(kpisVisible.netProfit)}</b>
                 </div>
               </div>
-              <div className="text-gray-500">{kpiSectionOpen ? "Cerrar" : "Ver"}</div>
+              <div className="text-gray-500">
+                {kpiSectionOpen ? "Cerrar" : "Ver"}
+              </div>
             </button>
 
             {kpiSectionOpen && (
@@ -1062,73 +1097,119 @@ export default function FinancialDashboard(): React.ReactElement {
                 </div>
 
                 <div className="md:hidden space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                    <Kpi
-                      title="Ventas"
-                      subtitle="Ventas cash"
-                      value={money(cashRevenueWithAbonos)}
-                      valueClass="text-[#1E4D2B]"
-                    />
-                    <Kpi
-                      title="Costo"
-                      value={money(kpisCashVisible.cogsReal)}
-                    />
-                    <Kpi
-                      title="Utilidad Bruta Cash"
-                      value={money(kpisCashVisible.grossProfit)}
-                      positive
-                    />
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-between text-left"
+                      onClick={toggleSalesKpiCard}
+                    >
+                      <div>
+                        <h3 className="font-semibold text-sm text-gray-800">
+                          Ventas cash - Credito
+                        </h3>
+                        <span className="text-xs text-gray-500">Resumen</span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {salesKpiCardOpen ? "Cerrar" : "Ver"}
+                      </span>
+                    </button>
+                    {salesKpiCardOpen && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          <Kpi
+                            title="Ventas"
+                            subtitle="Ventas cash"
+                            value={money(cashRevenueWithAbonos)}
+                            valueClass="text-[#1E4D2B]"
+                          />
+                          <Kpi
+                            title="Costo"
+                            value={money(kpisCashVisible.cogsReal)}
+                          />
+                          <Kpi
+                            title="Utilidad Bruta Cash"
+                            value={money(kpisCashVisible.grossProfit)}
+                            positive
+                          />
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          <Kpi
+                            title="Ventas Crédito"
+                            value={money(kpisCreditVisible.revenue)}
+                          />
+                          <Kpi
+                            title="Costo"
+                            value={money(kpisCreditVisible.cogsReal)}
+                            negative
+                          />
+                          <Kpi
+                            title="Utilidad Bruta Crédito"
+                            value={money(kpisCreditVisible.grossProfit)}
+                            positive
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                    <Kpi
-                      title="Ventas Crédito"
-                      value={money(kpisCreditVisible.revenue)}
-                    />
-                    <Kpi
-                      title="Costo"
-                      value={money(kpisCreditVisible.cogsReal)}
-                      negative
-                    />
-                    <Kpi
-                      title="Utilidad Bruta Crédito"
-                      value={money(kpisCreditVisible.grossProfit)}
-                      positive
-                    />
-                  </div>
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-between text-left"
+                      onClick={toggleFundsKpiCard}
+                    >
+                      <div>
+                        <h3 className="font-semibold text-sm text-gray-800">
+                          Fondos
+                        </h3>
+                        <span className="text-xs text-gray-500">Liquidez</span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {fundsKpiCardOpen ? "Cerrar" : "Ver"}
+                      </span>
+                    </button>
+                    {fundsKpiCardOpen && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <Kpi title="CxC" value={money(totalPendingBalance)} />
+                          <Kpi
+                            title="Recaudación (Abonos)"
+                            value={money(totalAbonos)}
+                          />
+                          <Kpi
+                            title="Recolectado Cash + Abonos"
+                            value={money(collectedCashPlusAbonos)}
+                            positive
+                          />
+                        </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                    <Kpi title="CxC" value={money(totalPendingBalance)} />
-                    <Kpi
-                      title="Recaudación (Abonos)"
-                      value={money(totalAbonos)}
-                    />
-                  </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <Kpi
+                            title="Utilidad Neta Crédito (Caja)"
+                            value={money(creditGrossProfitCash)}
+                            valueClass="text-[#BF5700]"
+                          />
+                          <Kpi
+                            title="Utilidad Bruta Cash + Crédito"
+                            value={money(grossProfitCashPlusCredit)}
+                            positive
+                          />
+                        </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                    <Kpi
-                      title="Utilidad Neta Crédito (Caja)"
-                      value={money(creditGrossProfitCash)}
-                      valueClass="text-[#BF5700]"
-                    />
-                    <Kpi
-                      title="Utilidad Bruta Cash + Crédito"
-                      value={money(grossProfitCashPlusCredit)}
-                      positive
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                    <Kpi
-                      title="Gastos"
-                      value={money(kpisCashVisible.expensesSum)}
-                      negative
-                    />
-                    <Kpi
-                      title="Utilidad Neta Cash + Crédito"
-                      value={money(netProfitCashPlusCredit)}
-                      positive
-                    />
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <Kpi
+                            title="Gastos"
+                            value={money(kpisCashVisible.expensesSum)}
+                            negative
+                          />
+                          <Kpi
+                            title="Utilidad Neta Cash + Crédito"
+                            value={money(netProfitCashPlusCredit)}
+                            positive
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
@@ -1214,7 +1295,7 @@ export default function FinancialDashboard(): React.ReactElement {
                   />
                 </div>
 
-                <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+                <div className="hidden md:grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
                   <Kpi
                     title="CxC"
                     value={money(totalPendingBalance)}
@@ -1223,6 +1304,11 @@ export default function FinancialDashboard(): React.ReactElement {
                   <Kpi
                     title="Recaudación (Abonos)"
                     value={money(totalAbonos)}
+                    positive
+                  />
+                  <Kpi
+                    title="Recolectado Cash + Abonos"
+                    value={money(collectedCashPlusAbonos)}
                     positive
                   />
                 </div>
@@ -1325,8 +1411,8 @@ export default function FinancialDashboard(): React.ReactElement {
                           <th className="border p-2">Libras</th>
                           <th className="border p-2">Unidades</th>
                           <th className="border p-2">Saldo Global</th>
-                          <th className="border p-2">Saldo pendiente</th>
                           <th className="border p-2">Último abono</th>
+                          <th className="border p-2">Saldo pendiente</th>
                           <th className="border p-2">Fecha ult. abono</th>
                           <th className="border p-2">Ver</th>
                         </tr>
@@ -1340,10 +1426,10 @@ export default function FinancialDashboard(): React.ReactElement {
                             <td className="border p-1">
                               {money(c.globalBalance)}
                             </td>
-                            <td className="border p-1">{money(c.balance)}</td>
                             <td className="border p-1">
                               {money(c.lastPaymentAmount)}
                             </td>
+                            <td className="border p-1">{money(c.balance)}</td>
                             <td className="border p-1">
                               {c.lastPaymentDate || "—"}
                             </td>
@@ -1380,9 +1466,7 @@ export default function FinancialDashboard(): React.ReactElement {
 
             {consolidatedSectionOpen && (
               <div className="mt-3">
-                <h3 className="font-semibold mb-2">
-                  Ventas
-                </h3>
+                <h3 className="font-semibold mb-2">Ventas</h3>
 
                 {/* Desktop: tabla */}
                 <div className="hidden md:block">
@@ -1456,9 +1540,7 @@ export default function FinancialDashboard(): React.ReactElement {
                     className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
                   >
                     <div>
-                      <div className="font-semibold">
-                        Ventas por producto
-                      </div>
+                      <div className="font-semibold">Ventas por producto</div>
                       <div className="text-xs text-gray-600">
                         {byProduct.length} productos
                       </div>
@@ -1512,8 +1594,10 @@ export default function FinancialDashboard(): React.ReactElement {
                                           : "text-red-700"
                                       }
                                     >
-                                      {qty3(inventoryByProduct[r.productName]
-                                        ?.remainingQty || 0)}
+                                      {qty3(
+                                        inventoryByProduct[r.productName]
+                                          ?.remainingQty || 0,
+                                      )}
                                     </b>
                                   </div>
                                 </div>

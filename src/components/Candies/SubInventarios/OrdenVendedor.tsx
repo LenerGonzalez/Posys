@@ -52,6 +52,9 @@ interface ProductCandyFromMain {
 
   unitsPerPackage: number;
 
+  // Precio de proveedor por paquete (desde orden maestra)
+  providerPrice: number;
+
   unitPriceRivas: number;
   unitPriceSanJorge: number;
   unitPriceIsla: number;
@@ -630,6 +633,8 @@ export default function VendorCandyOrders({
             category: string;
             unitsPerPackage: number;
 
+            providerPrice: number;
+
             unitPriceRivas: number;
             unitPriceSanJorge: number;
             unitPriceIsla: number;
@@ -669,6 +674,14 @@ export default function VendorCandyOrders({
             }
 
             const packsLine = Math.max(1, floor(it.packages ?? 0));
+
+            const providerPrice = Number(
+              it.providerPrice ??
+                it.provider_price ??
+                it.priceProvider ??
+                it.costProvider ??
+                0,
+            );
 
             const upr = Number(it.unitPriceRivas || 0);
             const ups = Number(it.unitPriceSanJorge || 0);
@@ -713,6 +726,8 @@ export default function VendorCandyOrders({
               name: String(it.name || it.productName || ""),
               category: String(it.category || ""),
               unitsPerPackage: floor(it.unitsPerPackage ?? 0),
+
+              providerPrice,
 
               unitPriceRivas: upr,
               unitPriceSanJorge: ups,
@@ -768,6 +783,8 @@ export default function VendorCandyOrders({
               name: p.name,
               category: p.category,
               unitsPerPackage: p.unitsPerPackage,
+
+              providerPrice: p.providerPrice,
 
               unitPriceRivas: p.unitPriceRivas,
               unitPriceSanJorge: p.unitPriceSanJorge,
@@ -1402,6 +1419,8 @@ export default function VendorCandyOrders({
 
       logisticAllocated,
 
+      providerPrice: p.providerPrice,
+
       vendorMarginPercent: split.vendorMarginPercent,
       uAproximada,
       uVendor: split.uVendor,
@@ -1472,6 +1491,11 @@ export default function VendorCandyOrders({
           grossProfit,
 
           logisticAllocated,
+
+          providerPrice:
+            p?.providerPrice ??
+            it.providerPrice ??
+            Number(it.providerPrice || 0),
 
           vendorMarginPercent: split.vendorMarginPercent,
           uAproximada,
@@ -1958,6 +1982,8 @@ export default function VendorCandyOrders({
 
           logisticAllocated,
 
+          providerPrice: p.providerPrice,
+
           vendorMarginPercent: split.vendorMarginPercent,
           uAproximada,
           uVendor: split.uVendor,
@@ -2192,6 +2218,8 @@ export default function VendorCandyOrders({
             uNeta,
             uAproximada,
             uInvestor: split.uInvestor,
+
+            providerPrice: Number(it.providerPrice ?? p?.providerPrice ?? 0),
 
             // ⚠️ compat: vendorProfit ahora es U. Vendedor
             vendorProfit: split.uVendor,
