@@ -421,29 +421,6 @@ export default function TransactionsPollo({
         );
       }
 
-      // fallback: precio por producto en collection `products`
-      const productIds = new Set<string>();
-      for (const it of arr) {
-        const pid = String(it.productId || it.productId || "").trim();
-        if (pid) productIds.add(pid);
-      }
-      const productPriceMap: Record<string, number> = {};
-      if (productIds.size > 0) {
-        await Promise.all(
-          Array.from(productIds).map(async (pid) => {
-            try {
-              const pSnap = await getDoc(doc(db, "products", pid));
-              if (pSnap.exists()) {
-                const p = pSnap.data() as any;
-                productPriceMap[pid] = Number(p.salePrice ?? p.price ?? 0);
-              }
-            } catch (e) {
-              /* ignore */
-            }
-          }),
-        );
-      }
-
       const rows = arr.map((it: any) => {
         const productName = String(
           it.productName || it.product || it.name || "(sin nombre)",
@@ -821,6 +798,10 @@ export default function TransactionsPollo({
     return filteredSales.slice(start, start + PAGE_SIZE);
   }, [filteredSales, page]);
 
+  const [filtersCardOpen, setFiltersCardOpen] = useState(true);
+  const [kpisCardOpen, setKpisCardOpen] = useState(true);
+  const [transactionsCardOpen, setTransactionsCardOpen] = useState(true);
+
   // venta actual del modal (para mostrar comisión en el detalle)
   const modalSale = useMemo(
     () =>
@@ -1010,425 +991,493 @@ export default function TransactionsPollo({
     <div className="max-w-6xl mx-auto">
       <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
 
-      {/* Filtros (mobile-friendly) */}
-      <div className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end text-sm">
-        <div>
-          <label className="block font-semibold">Desde</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 w-full"
-            value={fromDate}
-            onChange={(e) => {
-              setFromDate(e.target.value);
-              setPage(1);
-            }}
-          />
-        </div>
-
-        <div>
-          <label className="block font-semibold">Hasta</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 w-full"
-            value={toDate}
-            onChange={(e) => {
-              setToDate(e.target.value);
-              setPage(1);
-            }}
-          />
-        </div>
-
-        <div className="sm:col-span-2 lg:col-span-2">
-          <label className="block font-semibold">Cliente (crédito)</label>
-          <select
-            className="border rounded px-2 py-1 w-full"
-            value={filterCustomerId}
-            onChange={(e) => {
-              setFilterCustomerId(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">Todos</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block font-semibold">Tipo</label>
-          <select
-            className="border rounded px-2 py-1 w-full"
-            value={filterType}
-            onChange={(e) => {
-              setFilterType(e.target.value as "" | SaleType);
-              setPage(1);
-            }}
-          >
-            <option value="">Todos</option>
-            <option value="CONTADO">Cash</option>
-            <option value="CREDITO">Crédito</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block font-semibold">Producto</label>
-          <select
-            className="border rounded px-2 py-1 w-full"
-            value={productFilter}
-            onChange={(e) => {
-              setProductFilter(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="ALL">Todos</option>
-            {products.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block font-semibold">Estado</label>
-          <select
-            className="border rounded px-2 py-1 w-full"
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value as "" | "PROCESADA" | "FLOTANTE");
-              setPage(1);
-            }}
-          >
-            <option value="">Todos</option>
-            <option value="FLOTANTE">FLOTANTE</option>
-            <option value="PROCESADA">PROCESADA</option>
-          </select>
-        </div>
-
+      <div className="bg-white border rounded shadow-sm mb-4">
         <button
-          className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
-          onClick={handleExportPDF}
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setFiltersCardOpen((prev) => !prev)}
+          aria-expanded={filtersCardOpen}
         >
-          Exportar PDF
+          <span>Filtros de búsqueda</span>
+          <span
+            className={`transition-transform ${filtersCardOpen ? "rotate-180" : ""}`}
+          >
+            ▼
+          </span>
         </button>
-        <div className="sm:col-span-2 lg:col-span-1 flex">
-          <RefreshButton
-            onClick={refresh}
-            loading={loading}
-            className="w-full justify-center"
-          />
-        </div>
-      </div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-        {/* <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Unidades Cash</div>
-          <div className="text-xl font-semibold">
-            {qty3(kpisUnidades.unidadesCash)}
-          </div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Unidades Crédito</div>
-          <div className="text-xl font-semibold">
-            {qty3(kpisUnidades.unidadesCredito)}
-          </div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Total Unidades</div>
-          <div className="text-xl font-semibold">
-            {qty3(kpisUnidades.unidadesTotal)}
-          </div>
-        </div> */}
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Libras Cash</div>
-          <div className="text-xl font-semibold">{qty3(kpis.packsCash)}</div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Libras Crédito</div>
-          <div className="text-xl font-semibold">{qty3(kpis.packsCredito)}</div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Ventas Cash</div>
-          <div className="text-xl font-semibold">{money(kpis.montoCash)}</div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Ventas Crédito</div>
-          <div className="text-xl font-semibold">
-            {money(kpis.montoCredito)}
-          </div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Ventas Total</div>
-          <div className="text-xl font-semibold">{money(kpis.montoTotal)}</div>
-        </div>
-      </div>
-
-      {/* ===== MOBILE: Cards expandibles (sin perder datos) ===== */}
-      <div className="block md:hidden space-y-3">
-        {loading ? (
-          <div className="bg-white border rounded-lg p-4 shadow">Cargando…</div>
-        ) : paged.length === 0 ? (
-          <div className="bg-white border rounded-lg p-4 shadow">
-            Sin transacciones en el rango.
-          </div>
-        ) : (
-          paged.map((s) => {
-            const name = getSaleCustomerName(s, customersById);
-            const productName =
-              s._raw?.productName ||
-              s._raw?.items?.[0]?.productName ||
-              "(sin producto)";
-            const estadoLabel = getEstadoLabel(s._raw);
-
-            return (
-              <div key={s.id} className="bg-white border rounded-xl shadow">
-                <details className="group">
-                  <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="font-semibold truncate">{name}</div>
-                        <div className="text-xs text-gray-600 shrink-0">
-                          {s.date}
-                        </div>
-                      </div>
-
-                      <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
-                        <span
-                          className={`px-2 py-1 rounded-full border ${
-                            estadoLabel === "PROCESADA"
-                              ? "bg-blue-50 border-blue-200 text-blue-700"
-                              : "bg-gray-50 border-gray-200 text-gray-700"
-                          }`}
-                        >
-                          {estadoLabel}
-                        </span>
-                        <span
-                          className={`px-2 py-1 rounded-full border ${
-                            s.type === "CREDITO"
-                              ? "bg-yellow-50 border-yellow-200 text-yellow-700"
-                              : "bg-green-50 border-green-200 text-green-700"
-                          }`}
-                        >
-                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                        </span>
-
-                        <span className="text-gray-700">
-                          <b>Libras:</b>{" "}
-                          <button
-                            type="button"
-                            className="underline text-blue-600"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              openItemsModal(s.id);
-                            }}
-                            title="Ver detalle"
-                          >
-                            {qty3(s.quantity)}
-                          </button>
-                        </span>
-
-                        <span className="text-gray-700">
-                          <b>Monto:</b> {money(s.total)}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="text-gray-500 mt-1">
-                      <span className="inline-block transition-transform group-open:rotate-180">
-                        ▼
-                      </span>
-                    </div>
-                  </summary>
-
-                  {/* Detalle expandido */}
-                  <div className="px-3 pb-3 pt-0 text-sm">
-                    <div className="grid grid-cols-1 gap-2 border-t pt-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Cliente</span>
-                        <span className="font-medium text-right">{name}</span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Producto</span>
-                        <span className="font-medium text-right">
-                          {productName}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Fecha</span>
-                        <span className="font-medium">{s.date}</span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Estado</span>
-                        <span className="font-medium">{estadoLabel}</span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Tipo</span>
-                        <span className="font-medium">
-                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Libras</span>
-                        <span className="font-medium">
-                          <button
-                            type="button"
-                            className="underline text-blue-600"
-                            onClick={() => openItemsModal(s.id)}
-                            title="Ver detalle"
-                          >
-                            {qty3(s.quantity)}
-                          </button>
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Monto</span>
-                        <span className="font-semibold">{money(s.total)}</span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        {/* comisión/vendedor removidos para Pollo */}
-
-                        {/* Acciones (solo admin) */}
-                        {canDelete && (
-                          <div className="pt-2 flex items-center justify-end gap-2">
-                            <button
-                              className="px-3 py-2 rounded border hover:bg-gray-50"
-                              onClick={() =>
-                                setOpenMenuId((prev) =>
-                                  prev === s.id ? null : s.id,
-                                )
-                              }
-                            >
-                              ⋮ Acciones
-                            </button>
-
-                            {openMenuId === s.id && (
-                              <button
-                                className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
-                                onClick={() => confirmDelete(s)}
-                              >
-                                Eliminar
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </details>
+        {filtersCardOpen && (
+          <div className="p-4 border-t">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end text-sm">
+              <div>
+                <label className="block font-semibold">Desde</label>
+                <input
+                  type="date"
+                  className="border rounded px-2 py-1 w-full"
+                  value={fromDate}
+                  onChange={(e) => {
+                    setFromDate(e.target.value);
+                    setPage(1);
+                  }}
+                />
               </div>
-            );
-          })
-        )}
 
-        {/* Paginación */}
-        <div className="bg-white p-3 rounded shadow border">
-          {renderPager()}
-        </div>
+              <div>
+                <label className="block font-semibold">Hasta</label>
+                <input
+                  type="date"
+                  className="border rounded px-2 py-1 w-full"
+                  value={toDate}
+                  onChange={(e) => {
+                    setToDate(e.target.value);
+                    setPage(1);
+                  }}
+                />
+              </div>
+
+              <div className="sm:col-span-2 lg:col-span-2">
+                <label className="block font-semibold">Cliente (crédito)</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={filterCustomerId}
+                  onChange={(e) => {
+                    setFilterCustomerId(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">Todos</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold">Tipo</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={filterType}
+                  onChange={(e) => {
+                    setFilterType(e.target.value as "" | SaleType);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">Todos</option>
+                  <option value="CONTADO">Cash</option>
+                  <option value="CREDITO">Crédito</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold">Producto</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={productFilter}
+                  onChange={(e) => {
+                    setProductFilter(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="ALL">Todos</option>
+                  {products.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold">Estado</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={statusFilter}
+                  onChange={(e) => {
+                    setStatusFilter(
+                      e.target.value as "" | "PROCESADA" | "FLOTANTE",
+                    );
+                    setPage(1);
+                  }}
+                >
+                  <option value="">Todos</option>
+                  <option value="FLOTANTE">FLOTANTE</option>
+                  <option value="PROCESADA">PROCESADA</option>
+                </select>
+              </div>
+
+              <button
+                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
+                onClick={handleExportPDF}
+              >
+                Exportar PDF
+              </button>
+              <div className="sm:col-span-2 lg:col-span-1 flex">
+                <RefreshButton
+                  onClick={refresh}
+                  loading={loading}
+                  className="w-full justify-center"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ===== DESKTOP: Tabla original ===== */}
-      <div className="hidden md:block bg-white p-2 rounded shadow border w-full">
-        <table className="min-w-full w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">Estado</th>
-              <th className="p-2 border">Cliente</th>
-              <th className="p-2 border">Producto</th>
-              <th className="p-2 border">Tipo</th>
-              <th className="p-2 border">Libras</th>
-              <th className="p-2 border">Ventas</th>
-              {canDelete && <th className="p-2 border">Acciones</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td className="p-4 text-center" colSpan={columnsCount}>
+      <div className="bg-white border rounded shadow-sm mb-4">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setKpisCardOpen((prev) => !prev)}
+          aria-expanded={kpisCardOpen}
+        >
+          <span>KPIs</span>
+          <span
+            className={`transition-transform ${kpisCardOpen ? "rotate-180" : ""}`}
+          >
+            ▼
+          </span>
+        </button>
+        {kpisCardOpen && (
+          <div className="p-4 border-t">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {/* <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Unidades Cash</div>
+                <div className="text-xl font-semibold">
+                  {qty3(kpisUnidades.unidadesCash)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Unidades Crédito</div>
+                <div className="text-xl font-semibold">
+                  {qty3(kpisUnidades.unidadesCredito)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Total Unidades</div>
+                <div className="text-xl font-semibold">
+                  {qty3(kpisUnidades.unidadesTotal)}
+                </div>
+              </div> */}
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Libras Cash</div>
+                <div className="text-xl font-semibold">
+                  {qty3(kpis.packsCash)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Libras Crédito</div>
+                <div className="text-xl font-semibold">
+                  {qty3(kpis.packsCredito)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Ventas Cash</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.montoCash)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Ventas Crédito</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.montoCredito)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Ventas Total</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.montoTotal)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white border rounded shadow-sm">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setTransactionsCardOpen((prev) => !prev)}
+          aria-expanded={transactionsCardOpen}
+        >
+          <span>Transacciones</span>
+          <span
+            className={`transition-transform ${transactionsCardOpen ? "rotate-180" : ""}`}
+          >
+            ▼
+          </span>
+        </button>
+        {transactionsCardOpen && (
+          <div className="p-3 border-t space-y-4">
+            <div className="block md:hidden space-y-3">
+              {loading ? (
+                <div className="bg-white border rounded-lg p-4 shadow">
                   Cargando…
-                </td>
-              </tr>
-            ) : paged.length === 0 ? (
-              <tr>
-                <td className="p-4 text-center" colSpan={columnsCount}>
+                </div>
+              ) : paged.length === 0 ? (
+                <div className="bg-white border rounded-lg p-4 shadow">
                   Sin transacciones en el rango.
-                </td>
-              </tr>
-            ) : (
-              paged.map((s) => {
-                const name = getSaleCustomerName(s, customersById);
-                const productName =
-                  s._raw?.productName ||
-                  s._raw?.items?.[0]?.productName ||
-                  "(sin producto)";
-                const estadoLabel = getEstadoLabel(s._raw);
+                </div>
+              ) : (
+                paged.map((s) => {
+                  const name = getSaleCustomerName(s, customersById);
+                  const productName =
+                    s._raw?.productName ||
+                    s._raw?.items?.[0]?.productName ||
+                    "(sin producto)";
+                  const estadoLabel = getEstadoLabel(s._raw);
 
-                return (
-                  <tr key={s.id} className="text-center">
-                    <td className="p-2 border">{s.date}</td>
-                    <td className="p-2 border">{estadoLabel}</td>
-                    <td className="p-2 border">{name}</td>
-                    <td className="p-2 border">{productName}</td>
-                    <td className="p-2 border">
-                      {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                    </td>
-                    <td className="p-2 border">
-                      <button
-                        type="button"
-                        className="underline text-blue-600 hover:text-blue-800"
-                        title="Ver detalle de productos de esta venta"
-                        onClick={() => openItemsModal(s.id)}
-                      >
-                        {qty3(s.quantity)}
-                      </button>
-                    </td>
-                    <td className="p-2 border">{money(s.total)}</td>
+                  return (
+                    <div
+                      key={s.id}
+                      className="bg-white border rounded-xl shadow"
+                    >
+                      <details className="group">
+                        <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="font-semibold truncate">
+                                {name}
+                              </div>
+                              <div className="text-xs text-gray-600 shrink-0">
+                                {s.date}
+                              </div>
+                            </div>
 
-                    {canDelete && (
-                      <td className="p-2 border relative">
-                        <button
-                          className="px-2 py-1 rounded border hover:bg-gray-50"
-                          onClick={() =>
-                            setOpenMenuId((prev) =>
-                              prev === s.id ? null : s.id,
-                            )
-                          }
-                          title="Acciones"
-                        >
-                          ⋮
-                        </button>
-                        {openMenuId === s.id && (
-                          <div className="absolute right-2 mt-1 w-28 bg-white border rounded shadow z-10 text-left">
-                            <button
-                              className="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
-                              onClick={() => confirmDelete(s)}
-                            >
-                              Eliminar
-                            </button>
+                            <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
+                              <span
+                                className={`px-2 py-1 rounded-full border ${
+                                  estadoLabel === "PROCESADA"
+                                    ? "bg-blue-50 border-blue-200 text-blue-700"
+                                    : "bg-gray-50 border-gray-200 text-gray-700"
+                                }`}
+                              >
+                                {estadoLabel}
+                              </span>
+                              <span
+                                className={`px-2 py-1 rounded-full border ${
+                                  s.type === "CREDITO"
+                                    ? "bg-yellow-50 border-yellow-200 text-yellow-700"
+                                    : "bg-green-50 border-green-200 text-green-700"
+                                }`}
+                              >
+                                {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                              </span>
+
+                              <span className="text-gray-700">
+                                <b>Libras:</b>{" "}
+                                <button
+                                  type="button"
+                                  className="underline text-blue-600"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    openItemsModal(s.id);
+                                  }}
+                                  title="Ver detalle"
+                                >
+                                  {qty3(s.quantity)}
+                                </button>
+                              </span>
+
+                              <span className="text-gray-700">
+                                <b>Monto:</b> {money(s.total)}
+                              </span>
+                            </div>
                           </div>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
 
-        {/* Paginación */}
-        {renderPager()}
+                          <div className="text-gray-500 mt-1">
+                            <span className="inline-block transition-transform group-open:rotate-180">
+                              ▼
+                            </span>
+                          </div>
+                        </summary>
+
+                        <div className="px-3 pb-3 pt-0 text-sm">
+                          <div className="grid grid-cols-1 gap-2 border-t pt-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-600">Cliente</span>
+                              <span className="font-medium text-right">
+                                {name}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-600">Producto</span>
+                              <span className="font-medium text-right">
+                                {productName}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-600">Fecha</span>
+                              <span className="font-medium">{s.date}</span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-600">Estado</span>
+                              <span className="font-medium">{estadoLabel}</span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-600">Tipo</span>
+                              <span className="font-medium">
+                                {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-600">Libras</span>
+                              <span className="font-medium">
+                                <button
+                                  type="button"
+                                  className="underline text-blue-600"
+                                  onClick={() => openItemsModal(s.id)}
+                                  title="Ver detalle"
+                                >
+                                  {qty3(s.quantity)}
+                                </button>
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-600">Monto</span>
+                              <span className="font-semibold">
+                                {money(s.total)}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              {canDelete && (
+                                <div className="pt-2 flex items-center justify-end gap-2 w-full">
+                                  <button
+                                    className="px-3 py-2 rounded border hover:bg-gray-50"
+                                    onClick={() =>
+                                      setOpenMenuId((prev) =>
+                                        prev === s.id ? null : s.id,
+                                      )
+                                    }
+                                  >
+                                    ⋮ Acciones
+                                  </button>
+
+                                  {openMenuId === s.id && (
+                                    <button
+                                      className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                                      onClick={() => confirmDelete(s)}
+                                    >
+                                      Eliminar
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </details>
+                    </div>
+                  );
+                })
+              )}
+
+              <div className="bg-white p-3 rounded shadow border">
+                {renderPager()}
+              </div>
+            </div>
+
+            <div className="hidden md:block bg-white p-2 rounded shadow border w-full">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-2 border">Fecha</th>
+                    <th className="p-2 border">Estado</th>
+                    <th className="p-2 border">Cliente</th>
+                    <th className="p-2 border">Producto</th>
+                    <th className="p-2 border">Tipo</th>
+                    <th className="p-2 border">Libras</th>
+                    <th className="p-2 border">Ventas</th>
+                    {canDelete && <th className="p-2 border">Acciones</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={columnsCount}>
+                        Cargando…
+                      </td>
+                    </tr>
+                  ) : paged.length === 0 ? (
+                    <tr>
+                      <td className="p-4 text-center" colSpan={columnsCount}>
+                        Sin transacciones en el rango.
+                      </td>
+                    </tr>
+                  ) : (
+                    paged.map((s) => {
+                      const name = getSaleCustomerName(s, customersById);
+                      const productName =
+                        s._raw?.productName ||
+                        s._raw?.items?.[0]?.productName ||
+                        "(sin producto)";
+                      const estadoLabel = getEstadoLabel(s._raw);
+
+                      return (
+                        <tr key={s.id} className="text-center">
+                          <td className="p-2 border">{s.date}</td>
+                          <td className="p-2 border">{estadoLabel}</td>
+                          <td className="p-2 border">{name}</td>
+                          <td className="p-2 border">{productName}</td>
+                          <td className="p-2 border">
+                            {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                          </td>
+                          <td className="p-2 border">
+                            <button
+                              type="button"
+                              className="underline text-blue-600 hover:text-blue-800"
+                              title="Ver detalle de productos de esta venta"
+                              onClick={() => openItemsModal(s.id)}
+                            >
+                              {qty3(s.quantity)}
+                            </button>
+                          </td>
+                          <td className="p-2 border">{money(s.total)}</td>
+
+                          {canDelete && (
+                            <td className="p-2 border relative">
+                              <button
+                                className="px-2 py-1 rounded border hover:bg-gray-50"
+                                onClick={() =>
+                                  setOpenMenuId((prev) =>
+                                    prev === s.id ? null : s.id,
+                                  )
+                                }
+                                title="Acciones"
+                              >
+                                ⋮
+                              </button>
+                              {openMenuId === s.id && (
+                                <div className="absolute right-2 mt-1 w-28 bg-white border rounded shadow z-10 text-left">
+                                  <button
+                                    className="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
+                                    onClick={() => confirmDelete(s)}
+                                  >
+                                    Eliminar
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+
+              {renderPager()}
+            </div>
+          </div>
+        )}
       </div>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}

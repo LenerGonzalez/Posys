@@ -19,6 +19,8 @@ import { format, startOfMonth, endOfMonth } from "date-fns";
 import { roundQty } from "../../Services/decimal";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -180,6 +182,26 @@ export default function InventoryBatches({
   const [kpisExpanded, setKpisExpanded] = useState<boolean>(false);
   const toggleKpis = () => setKpisExpanded((v) => !v);
 
+  type AvailabilityFilter = "all" | "with" | "without";
+  const [availabilityFilter, setAvailabilityFilter] =
+    useState<AvailabilityFilter>("all");
+  const [mobileTypeOpen, setMobileTypeOpen] = useState<Record<string, boolean>>(
+    {},
+  );
+  const toggleMobileType = (type: string) =>
+    setMobileTypeOpen((prev) => ({
+      ...prev,
+      [type]: !(prev[type] ?? false),
+    }));
+
+  const formatQtyLabel = (lbs: number, uds: number) => {
+    const parts: string[] = [];
+    if (lbs > 0) parts.push(`${lbs.toFixed(3)} lb`);
+    if (uds > 0) parts.push(`${uds.toFixed(3)} un`);
+    if (parts.length === 0) return "0";
+    return parts.join(" • ");
+  };
+
   const isPounds = (u: string) => {
     const s = (u || "").toLowerCase();
     return /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(s) || s === "lb";
@@ -270,6 +292,13 @@ export default function InventoryBatches({
       return true;
     });
   }, [batches, fromDate, toDate, productFilterId]);
+
+  const productFilterLabel = useMemo(() => {
+    if (!productFilterId) return "Todos";
+    const prod = products.find((p) => p.id === productFilterId);
+    if (!prod) return "Filtro activo";
+    return `${prod.name} — ${prod.category}`;
+  }, [productFilterId, products]);
 
   // ===== Totales arriba =====
   const totals = useMemo(() => {
@@ -415,6 +444,24 @@ export default function InventoryBatches({
 
     return rows;
   }, [filteredBatches]);
+
+  const groupedRowsMobile = useMemo(() => {
+    if (availabilityFilter === "all") return groupedRows;
+    return groupedRows.filter((g) => {
+      const available = g.lbsRem > 0 || g.udsRem > 0;
+      return availabilityFilter === "with" ? available : !available;
+    });
+  }, [groupedRows, availabilityFilter]);
+
+  const groupedRowsMobileByType = useMemo(() => {
+    const map = new Map<string, GroupRow[]>();
+    groupedRowsMobile.forEach((g) => {
+      const key = g.typeLabel || "MIXTO";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(g);
+    });
+    return Array.from(map.entries()).map(([type, items]) => ({ type, items }));
+  }, [groupedRowsMobile]);
 
   // ===== productos filtrados por unidad =====
   const productsByUnit = useMemo(() => {
@@ -805,24 +852,176 @@ export default function InventoryBatches({
     setSelectedGroup(null);
   };
 
+  const handleExportInventoryPdf = () => {
+    const doc = new jsPDF({
+      unit: "pt",
+      format: "a4",
+      orientation: "landscape",
+    });
+    const title = "Inventario de Pollo";
+    const subtitle = `Rango: ${fromDate || "(sin inicio)"} a ${
+      toDate || "(sin fin)"
+    }`;
+    const productLine = `Producto: ${productFilterLabel}`;
+    const qtyFmt = (n: number) => Number(n || 0).toFixed(3);
+
+    let cursorY = 40;
+
+    doc.setFontSize(16);
+    doc.text(title, 40, cursorY);
+    cursorY += 16;
+
+    doc.setFontSize(10);
+    doc.text(subtitle, 40, cursorY);
+    cursorY += 12;
+    doc.text(productLine, 40, cursorY);
+    cursorY += 14;
+
+    const bumpCursor = () => {
+      cursorY = (doc as any).lastAutoTable?.finalY
+        ? (doc as any).lastAutoTable.finalY + 18
+        : cursorY + 18;
+    };
+
+    autoTable(doc, {
+      startY: cursorY,
+      head: [["KPI", "Valor"]],
+      body: [
+        ["Libras ingresadas", qtyFmt(totals.lbsIng)],
+        ["Libras restantes", qtyFmt(totals.lbsRem)],
+        ["Unidades ingresadas", qtyFmt(totals.udsIng)],
+        ["Unidades restantes", qtyFmt(totals.udsRem)],
+        ["Total esperado", money(totals.totalEsperado)],
+        ["Total facturado", money(totals.totalFacturado)],
+        [
+          "Ganancia sin gastos",
+          money(totals.totalEsperado - totals.totalFacturado),
+        ],
+        ["Cantidad de lotes", filteredBatches.length.toString()],
+      ],
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0] },
+    });
+
+    bumpCursor();
+
+    autoTable(doc, {
+      startY: cursorY,
+      head: [
+        [
+          "Fecha",
+          "Pedido",
+          "Tipo",
+          "Lb In",
+          "Lb Rem",
+          "Ud In",
+          "Ud Rem",
+          "Facturado",
+          "Esperado",
+          "Utilidad",
+          "Estado",
+        ],
+      ],
+      body: groupedRows.map((g) => [
+        g.date,
+        g.orderName,
+        g.typeLabel,
+        qtyFmt(g.lbsIn),
+        qtyFmt(g.lbsRem),
+        qtyFmt(g.udsIn),
+        qtyFmt(g.udsRem),
+        money(g.totalFacturado),
+        money(g.totalEsperado),
+        money(g.utilidadBruta),
+        g.status,
+      ]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0] },
+    });
+
+    bumpCursor();
+
+    groupedRows.forEach((group) => {
+      doc.setFontSize(11);
+      doc.text(
+        `Pedido: ${group.orderName} (${group.date}) — ${group.typeLabel}`,
+        40,
+        cursorY,
+      );
+      cursorY += 12;
+
+      autoTable(doc, {
+        startY: cursorY,
+        head: [
+          [
+            "Producto",
+            "Unidad",
+            "Ingresado",
+            "Restante",
+            "Precio compra",
+            "Precio venta",
+            "Total facturado",
+            "Total esperado",
+            "Utilidad",
+            "Estado",
+          ],
+        ],
+        body: group.items.map((item) => [
+          item.productName,
+          (item.unit || "").toUpperCase(),
+          qtyFmt(item.quantity),
+          qtyFmt(item.remaining),
+          money(item.purchasePrice),
+          money(item.salePrice),
+          money(item.invoiceTotal || item.purchasePrice * item.quantity),
+          money(item.expectedTotal || item.salePrice * item.quantity),
+          money(
+            (item.expectedTotal || item.salePrice * item.quantity) -
+              (item.invoiceTotal || item.purchasePrice * item.quantity),
+          ),
+          item.status,
+        ]),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [230, 230, 230], textColor: [0, 0, 0] },
+      });
+
+      bumpCursor();
+    });
+
+    doc.save(
+      `inventario_pollo_${fromDate || "sin_desde"}_a_${toDate || "sin_hasta"}.pdf`,
+    );
+  };
+
   // ===== UI =====
   return (
     <div className="max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h2 className="text-2xl font-bold">Inventario</h2>
 
-        {canCreateBatch && (
+        <div className="flex items-center gap-2">
           <button
-            className="px-3 py-2 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
+            className="px-3 py-2 rounded-2xl bg-gray-900 text-white hover:bg-black"
             type="button"
-            onClick={() => {
-              resetOrderModal();
-              setShowCreateModal(true);
-            }}
+            onClick={handleExportInventoryPdf}
+            disabled={loading}
           >
-            Crear Lote
+            Exportar PDF
           </button>
-        )}
+
+          {canCreateBatch && (
+            <button
+              className="px-3 py-2 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
+              type="button"
+              onClick={() => {
+                resetOrderModal();
+                setShowCreateModal(true);
+              }}
+            >
+              Crear Lote
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 🔎 Filtros */}
@@ -948,144 +1147,239 @@ export default function InventoryBatches({
       {/* ✅ MOBILE FIRST: CARDS */}
       {/* ===================== */}
       <div className="md:hidden space-y-3">
+        <div className="flex gap-2">
+          {(
+            [
+              { key: "all", label: "Todos" },
+              { key: "with", label: "Con disponibilidad" },
+              { key: "without", label: "Sin disponibilidad" },
+            ] as const
+          ).map((opt) => {
+            const active = availabilityFilter === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setAvailabilityFilter(opt.key)}
+                className={`flex-1 px-3 py-2 rounded-xl text-sm font-semibold shadow ${
+                  active
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-100 text-gray-700"
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
         {loading ? (
           <div className="bg-white border rounded-2xl p-4 shadow">
             Cargando…
           </div>
-        ) : groupedRows.length === 0 ? (
+        ) : groupedRowsMobile.length === 0 ? (
           <div className="bg-white border rounded-2xl p-4 shadow text-center">
-            Sin lotes
+            {availabilityFilter === "with"
+              ? "Sin lotes con disponibilidad."
+              : availabilityFilter === "without"
+                ? "Sin lotes sin disponibilidad."
+                : "Sin lotes"}
           </div>
         ) : (
-          groupedRows.map((g) => {
-            const expanded = expandedGroupId === g.groupId;
+          groupedRowsMobileByType.map(({ type, items }) => {
+            const openType = mobileTypeOpen[type] ?? false;
             return (
-              <div key={g.groupId} className="bg-white border rounded-2xl">
-                <div
-                  className="p-4 flex items-start justify-between gap-3 cursor-pointer"
-                  onClick={() => toggleGroupExpand(g.groupId)}
+              <div key={type} className="bg-white border rounded-2xl">
+                <button
+                  type="button"
+                  onClick={() => toggleMobileType(type)}
+                  className="w-full px-4 py-3 flex items-center justify-between text-left"
                 >
-                  <div className="min-w-0">
-                    <div className="font-semibold text-lg">
-                      {g.date}
-                      <div className="text-sm text-gray-500">
-                        Producto: {g.typeLabel}
-                      </div>
-                    </div>
-                    <div className="text-xs text-gray-500 truncate">
-                      Nombre: {g.orderName}
+                  <div>
+                    <div className="font-semibold">{type}</div>
+                    <div className="text-xs text-gray-500">
+                      {items.length} {items.length === 1 ? "lote" : "lotes"}
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`px-2 py-1 rounded text-xs shrink-0 ${
-                        g.status === "PAGADO"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-yellow-100 text-yellow-700"
-                      }`}
-                    >
-                      {g.status}
-                    </span>
-                  </div>
-                </div>
-                <div className="pb-4 p-4 flex items-start justify-between gap-1 cursor-pointer">
-                  <div className=" px-2 py-1 rounded text-xs shrink-0 bg-green-100 font-semibold text-gray-700">
-                    Ingresado: {g.lbsIn.toFixed(3)} Lbs
-                  </div>
-                  <span
-                    className={`px-2 py-1 rounded text-xs shrink-0 ${
-                      g.lbsRem > 0
-                        ? "bg-green-100 font-semibold text-gray-700"
-                        : "bg-red-100 font-semibold text-red-700"
-                    }`}
-                  >
-                    Disponible: {g.lbsRem.toFixed(3)} Lbs
+                  <span className="text-xs text-gray-500">
+                    {openType ? "Cerrar" : "Ver"}
                   </span>
-                </div>
+                </button>
 
-                {expanded && (
-                  <div className="p-4 pt-0">
-                    <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                      <div className="bg-gray-50 rounded-xl p-2">
-                        <div className="text-[11px] text-gray-500">Tipo</div>
-                        <div className="font-semibold">{g.typeLabel}</div>
-                      </div>
+                {openType && (
+                  <div className="space-y-3 px-2 pb-4">
+                    {items.map((g) => {
+                      const expanded = expandedGroupId === g.groupId;
+                      const hasRemaining = g.lbsRem > 0 || g.udsRem > 0;
+                      return (
+                        <div
+                          key={g.groupId}
+                          className="bg-gray-50 border rounded-2xl"
+                        >
+                          <div
+                            className="p-4 flex items-start justify-between gap-3 cursor-pointer"
+                            onClick={() => toggleGroupExpand(g.groupId)}
+                          >
+                            <div className="min-w-0">
+                              <div className="font-semibold text-lg">
+                                {g.date}
+                                <div className="text-sm text-gray-500">
+                                  Producto: {g.typeLabel}
+                                </div>
+                              </div>
+                              <div className="text-xs text-gray-500 truncate">
+                                Nombre: {g.orderName}
+                              </div>
+                            </div>
 
-                      <div className="bg-gray-50 rounded-xl p-2">
-                        <div className="text-[11px] text-gray-500">
-                          Utilidad bruta
-                        </div>
-                        <div className="font-semibold">
-                          {money(g.utilidadBruta)}
-                        </div>
-                      </div>
-
-                      <div className="bg-gray-50 rounded-xl p-2">
-                        <div className="text-[11px] text-gray-500">
-                          Lbs ingresadas
-                        </div>
-                        <div className="font-semibold">
-                          {g.lbsIn.toFixed(3)}
-                        </div>
-                      </div>
-
-                      <div className="bg-gray-50 rounded-xl p-2">
-                        <div className="text-[11px] text-gray-500">
-                          Lbs restantes
-                        </div>
-                        <div className="font-semibold">
-                          {g.lbsRem.toFixed(3)}
-                        </div>
-                      </div>
-
-                      <div className="bg-gray-50 rounded-xl p-2 col-span-2">
-                        <div className="flex justify-between text-[11px] text-gray-500">
-                          <span>Total facturado</span>
-                          <span>Total esperado</span>
-                        </div>
-                        <div className="flex justify-between font-semibold">
-                          <span>{money(g.totalFacturado)}</span>
-                          <span>{money(g.totalEsperado)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        className="flex-1 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm"
-                        onClick={() => openDetail(g)}
-                      >
-                        Ver detalle
-                      </button>
-
-                      {isAdmin ? (
-                        <>
-                          {g.status === "PENDIENTE" && (
-                            <button
-                              className="px-3 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm"
-                              onClick={() => payGroup(g)}
+                            <div className="flex items-center gap-3">
+                              <span
+                                className={`px-2 py-1 rounded text-xs shrink-0 ${
+                                  g.status === "PAGADO"
+                                    ? "bg-green-100 text-green-700"
+                                    : "bg-yellow-100 text-yellow-700"
+                                }`}
+                              >
+                                {g.status}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="pb-4 p-4 flex items-start justify-between gap-1 cursor-pointer">
+                            <div className="px-2 py-1 rounded text-xs shrink-0 bg-green-100 font-semibold text-gray-700">
+                              Ingresado: {formatQtyLabel(g.lbsIn, g.udsIn)}
+                            </div>
+                            <span
+                              className={`px-2 py-1 rounded text-xs shrink-0 ${
+                                hasRemaining
+                                  ? "bg-green-100 font-semibold text-gray-700"
+                                  : "bg-red-100 font-semibold text-red-700"
+                              }`}
                             >
-                              Pagar
-                            </button>
+                              Disponible: {formatQtyLabel(g.lbsRem, g.udsRem)}
+                            </span>
+                          </div>
+
+                          {expanded && (
+                            <div className="p-4 pt-0">
+                              <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                                <div className="bg-white rounded-xl p-2">
+                                  <div className="text-[11px] text-gray-500">
+                                    Tipo
+                                  </div>
+                                  <div className="font-semibold">
+                                    {g.typeLabel}
+                                  </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl p-2">
+                                  <div className="text-[11px] text-gray-500">
+                                    Utilidad bruta
+                                  </div>
+                                  <div className="font-semibold">
+                                    {money(g.utilidadBruta)}
+                                  </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl p-2">
+                                  <div className="text-[11px] text-gray-500">
+                                    Lbs ingresadas
+                                  </div>
+                                  <div className="font-semibold">
+                                    {g.lbsIn.toFixed(3)}
+                                  </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl p-2">
+                                  <div className="text-[11px] text-gray-500">
+                                    Lbs restantes
+                                  </div>
+                                  <div className="font-semibold">
+                                    {g.lbsRem.toFixed(3)}
+                                  </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl p-2 col-span-2">
+                                  <div className="flex justify-between text-[11px] text-gray-500">
+                                    <span>Total facturado</span>
+                                    <span>Total esperado</span>
+                                  </div>
+                                  <div className="flex justify-between font-semibold">
+                                    <span>{money(g.totalFacturado)}</span>
+                                    <span>{money(g.totalEsperado)}</span>
+                                  </div>
+                                </div>
+
+                                {g.items.length > 0 && (
+                                  <div className="bg-gray-50 rounded-xl p-2 col-span-2 border border-gray-100">
+                                    <div className="text-[11px] text-gray-500 mb-2">
+                                      Productos asociados
+                                    </div>
+                                    <div className="space-y-1">
+                                      {g.items.map((item) => (
+                                        <div
+                                          key={item.id}
+                                          className="flex items-center text-xs justify-between gap-2"
+                                        >
+                                          <div className="font-semibold text-gray-800 truncate">
+                                            {item.productName}
+                                          </div>
+                                          <div className="text-gray-600 text-right">
+                                            <div>
+                                              Ingresado:{" "}
+                                              {item.quantity.toFixed(3)}
+                                            </div>
+                                            <div>
+                                              Restante:{" "}
+                                              {item.remaining.toFixed(3)}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="mt-3 flex gap-2">
+                                <button
+                                  className="flex-1 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm"
+                                  onClick={() => openDetail(g)}
+                                >
+                                  Ver detalle
+                                </button>
+
+                                {isAdmin ? (
+                                  <>
+                                    {g.status === "PENDIENTE" && (
+                                      <button
+                                        className="px-3 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm"
+                                        onClick={() => payGroup(g)}
+                                      >
+                                        Pagar
+                                      </button>
+                                    )}
+
+                                    <button
+                                      className="px-3 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 text-white text-sm"
+                                      onClick={() => openForEdit(g)}
+                                    >
+                                      Editar
+                                    </button>
+
+                                    <button
+                                      className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm"
+                                      onClick={() => deleteGroup(g)}
+                                    >
+                                      Borrar
+                                    </button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </div>
                           )}
-
-                          <button
-                            className="px-3 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 text-white text-sm"
-                            onClick={() => openForEdit(g)}
-                          >
-                            Editar
-                          </button>
-
-                          <button
-                            className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm"
-                            onClick={() => deleteGroup(g)}
-                          >
-                            Borrar
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

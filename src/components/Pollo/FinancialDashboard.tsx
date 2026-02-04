@@ -124,11 +124,13 @@ export default function FinancialDashboard(): React.ReactElement {
     useState<boolean>(false);
   const [salesKpiCardOpen, setSalesKpiCardOpen] = useState<boolean>(false);
   const [fundsKpiCardOpen, setFundsKpiCardOpen] = useState<boolean>(false);
+  const [detailsKpiCardOpen, setDetailsKpiCardOpen] = useState<boolean>(false);
   const toggleKpiSection = () => setKpiSectionOpen((v) => !v);
   const togglePendingSection = () => setPendingSectionOpen((v) => !v);
   const toggleConsolidatedSection = () => setConsolidatedSectionOpen((v) => !v);
   const toggleSalesKpiCard = () => setSalesKpiCardOpen((v) => !v);
   const toggleFundsKpiCard = () => setFundsKpiCardOpen((v) => !v);
+  const toggleDetailsKpiCard = () => setDetailsKpiCardOpen((v) => !v);
   // product filter for KPIs
   const [productFilter, setProductFilter] = useState<string>("");
 
@@ -907,28 +909,85 @@ export default function FinancialDashboard(): React.ReactElement {
 
     let cursorY = 90;
 
-    autoTable(doc, {
-      startY: cursorY,
-      head: [["KPI", "Valor"]],
-      body: [
-        ["Ventas (rango)", money(kpisVisible.revenue)],
-        ["Costo", money(kpisVisible.cogsReal)],
-        ["Utilidad Bruta", money(kpisVisible.grossProfit)],
-        ["Gastos", money(kpisVisible.expensesSum)],
-        ["Utilidad Neta", money(kpisVisible.netProfit)],
-        ["CxC", money(totalPendingBalance)],
-        ["Recaudación (Abonos)", money(totalAbonos)],
-        ["Utilidad Neta Crédito (Caja)", money(creditGrossProfitCash)],
-        ["Utilidad Bruta Cash + Crédito", money(grossProfitCashPlusCredit)],
-        ["Utilidad Neta Cash + Crédito", money(netProfitCashPlusCredit)],
-      ],
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0] },
-    });
+    const bumpCursor = () => {
+      cursorY = (doc as any).lastAutoTable?.finalY
+        ? (doc as any).lastAutoTable.finalY + 18
+        : cursorY + 18;
+    };
 
-    cursorY = (doc as any).lastAutoTable?.finalY
-      ? (doc as any).lastAutoTable.finalY + 18
-      : 110;
+    const addKpiTable = (sectionTitle: string, rows: [string, string][]) => {
+      if (!rows.length) return;
+      doc.setFontSize(11);
+      doc.text(sectionTitle, 40, cursorY);
+      cursorY += 12;
+
+      autoTable(doc, {
+        startY: cursorY,
+        head: [["KPI", "Valor"]],
+        body: rows,
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0] },
+      });
+
+      bumpCursor();
+    };
+
+    addKpiTable("KPIs Generales", [
+      ["Ventas (rango)", money(kpisVisible.revenue)],
+      ["Costo", money(kpisVisible.cogsReal)],
+      ["Utilidad Bruta", money(kpisVisible.grossProfit)],
+      ["Gastos", money(kpisVisible.expensesSum)],
+      ["Utilidad Neta", money(kpisVisible.netProfit)],
+    ]);
+
+    addKpiTable("KPIs Cash", [
+      ["Ventas Cash", money(cashRevenueWithAbonos)],
+      ["Costo Cash", money(kpisCashVisible.cogsReal)],
+      ["Utilidad Bruta Cash", money(kpisCashVisible.grossProfit)],
+    ]);
+
+    addKpiTable("KPIs Crédito", [
+      ["Ventas Crédito", money(kpisCreditVisible.revenue)],
+      ["Costo Crédito", money(kpisCreditVisible.cogsReal)],
+      ["Utilidad Bruta Crédito", money(kpisCreditVisible.grossProfit)],
+    ]);
+
+    addKpiTable("Fondos y Utilidades", [
+      ["CxC", money(totalPendingBalance)],
+      ["Recaudación (Abonos)", money(totalAbonos)],
+      ["Recolectado Cash + Abonos", money(collectedCashPlusAbonos)],
+      ["Utilidad Neta Crédito (Caja)", money(creditGrossProfitCash)],
+      ["Utilidad Bruta Cash + Crédito", money(grossProfitCashPlusCredit)],
+      ["Gastos", money(kpisCashVisible.expensesSum)],
+      ["Utilidad Neta Cash + Crédito", money(netProfitCashPlusCredit)],
+    ]);
+
+    addKpiTable("KPIs de Volumen y Ventas", [
+      ["Ventas Cash", money(totalSalesCashWithAbonos)],
+      ["Ventas Crédito", money(totalSalesCredit)],
+      ["Libras Cash", qty3(totalLbsCash)],
+      ["Libras Crédito", qty3(totalLbsCredit)],
+      ["Libras Cash + Crédito", qty3(totalLbsCash + totalLbsCredit)],
+      ["Unidades Cash", qty3(totalUnitsCash)],
+      ["Unidades Crédito", qty3(totalUnitsCredit)],
+      ["Unidades Cash + Crédito", qty3(totalUnitsCash + totalUnitsCredit)],
+    ]);
+
+    if (topProducts.length > 0) {
+      doc.setFontSize(11);
+      doc.text("Top productos por unidades", 40, cursorY);
+      cursorY += 12;
+
+      autoTable(doc, {
+        startY: cursorY,
+        head: [["#", "Producto", "Cantidad"]],
+        body: topProducts.map((t) => [String(t.idx), t.name, qty3(t.units)]),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0] },
+      });
+
+      bumpCursor();
+    }
 
     autoTable(doc, {
       startY: cursorY,
@@ -962,9 +1021,7 @@ export default function FinancialDashboard(): React.ReactElement {
       },
     });
 
-    cursorY = (doc as any).lastAutoTable?.finalY
-      ? (doc as any).lastAutoTable.finalY + 18
-      : 110;
+    bumpCursor();
 
     autoTable(doc, {
       startY: cursorY,
@@ -998,9 +1055,7 @@ export default function FinancialDashboard(): React.ReactElement {
       headStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0] },
     });
 
-    cursorY = (doc as any).lastAutoTable?.finalY
-      ? (doc as any).lastAutoTable.finalY + 18
-      : 110;
+    bumpCursor();
 
     autoTable(doc, {
       startY: cursorY,
@@ -1212,50 +1267,73 @@ export default function FinancialDashboard(): React.ReactElement {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                    <KpiCompact
-                      title="Ventas Cash"
-                      value={money(totalSalesCashWithAbonos)}
-                    />
-                    <KpiCompact
-                      title="Ventas Crédito"
-                      value={money(totalSalesCredit)}
-                    />
-                    <KpiCompact
-                      title="Libras Cash"
-                      value={qty3(totalLbsCash)}
-                    />
-                    <KpiCompact
-                      title="Libras Crédito"
-                      value={qty3(totalLbsCredit)}
-                    />
-                    <KpiCompact
-                      title="Unidades Cash"
-                      value={qty3(totalUnitsCash)}
-                    />
-                    <KpiCompact
-                      title="Unidades Crédito"
-                      value={qty3(totalUnitsCredit)}
-                    />
-                  </div>
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-between text-left"
+                      onClick={toggleDetailsKpiCard}
+                    >
+                      <div>
+                        <h3 className="font-semibold text-sm text-gray-800">
+                          Detalles
+                        </h3>
+                        <span className="text-xs text-gray-500">
+                          Métricas adicionales
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {detailsKpiCardOpen ? "Cerrar" : "Ver"}
+                      </span>
+                    </button>
+                    {detailsKpiCardOpen && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
+                          <KpiCompact
+                            title="Ventas Cash"
+                            value={money(totalSalesCashWithAbonos)}
+                          />
+                          <KpiCompact
+                            title="Ventas Crédito"
+                            value={money(totalSalesCredit)}
+                          />
+                          <KpiCompact
+                            title="Libras Cash"
+                            value={qty3(totalLbsCash)}
+                          />
+                          <KpiCompact
+                            title="Libras Crédito"
+                            value={qty3(totalLbsCredit)}
+                          />
+                          <KpiCompact
+                            title="Unidades Cash"
+                            value={qty3(totalUnitsCash)}
+                          />
+                          <KpiCompact
+                            title="Unidades Crédito"
+                            value={qty3(totalUnitsCredit)}
+                          />
+                        </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
-                    <KpiCompact
-                      title="Libras Cash + Credito"
-                      value={qty3(totalLbsCash + totalLbsCredit)}
-                    />
-                    <KpiCompact
-                      title="Unidades Cash + Credito"
-                      value={qty3(totalUnitsCash + totalUnitsCredit)}
-                    />
-                    <KpiList
-                      title="Productos más vendidos"
-                      items={topProducts.map((t) => ({
-                        key: `${t.idx}`,
-                        label: `${t.idx}. ${t.name}`,
-                        value: `(${qty3(t.units)})`,
-                      }))}
-                    />
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
+                          <KpiCompact
+                            title="Libras Cash + Credito"
+                            value={qty3(totalLbsCash + totalLbsCredit)}
+                          />
+                          <KpiCompact
+                            title="Unidades Cash + Credito"
+                            value={qty3(totalUnitsCash + totalUnitsCredit)}
+                          />
+                          <KpiList
+                            title="Productos más vendidos"
+                            items={topProducts.map((t) => ({
+                              key: `${t.idx}`,
+                              label: `${t.idx}. ${t.name}`,
+                              value: `(${qty3(t.units)})`,
+                            }))}
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 

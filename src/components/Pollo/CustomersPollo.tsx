@@ -1295,6 +1295,23 @@ export default function CustomersPollo({
     });
   }, [orderedRows, fClient, fStatus, fMin, fMax]);
 
+  const totalPendingBalance = useMemo(() => {
+    return filteredRows.reduce((acc, row) => acc + Number(row.balance || 0), 0);
+  }, [filteredRows]);
+
+  const activeCustomersCount = useMemo(() => {
+    return filteredRows.filter((row) => row.status === "ACTIVO").length;
+  }, [filteredRows]);
+
+  const totalCustomersCount = filteredRows.length;
+
+  const handleResetFilters = () => {
+    setFClient("");
+    setFStatus("");
+    setFMin("");
+    setFMax("");
+  };
+
   return (
     <div className="max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-3">
@@ -1309,6 +1326,106 @@ export default function CustomersPollo({
         >
           Crear Cliente
         </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <div className="p-4 border rounded-lg bg-white shadow-sm">
+          <div className="text-xs uppercase tracking-wide text-gray-600">
+            Saldo pendiente
+          </div>
+          <div className="text-2xl font-semibold">
+            {money(totalPendingBalance)}
+          </div>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Calculado sobre los clientes filtrados
+          </p>
+        </div>
+        <div className="p-4 border rounded-lg bg-white shadow-sm">
+          <div className="text-xs uppercase tracking-wide text-gray-600">
+            Clientes activos
+          </div>
+          <div className="text-2xl font-semibold">{activeCustomersCount}</div>
+          <p className="text-[11px] text-gray-500 mt-1">
+            De un total de {totalCustomersCount}
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded shadow-sm p-4 mb-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end">
+          <div className="flex-1">
+            <label className="block text-sm font-semibold">
+              Filtrar cliente
+            </label>
+            <input
+              className="w-full border rounded px-3 py-2"
+              placeholder="Nombre, teléfono o nota"
+              value={fClient}
+              onChange={(e) => setFClient(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="px-3 py-2 rounded border bg-gray-50 hover:bg-gray-100"
+              onClick={() => setFiltersOpen((prev) => !prev)}
+            >
+              {filtersOpen ? "Ocultar filtros" : "Más filtros"}
+            </button>
+            <button
+              type="button"
+              className="px-3 py-2 rounded border bg-white hover:bg-gray-50"
+              onClick={handleResetFilters}
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+
+        {filtersOpen && (
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-sm font-semibold">Estado</label>
+              <select
+                className="w-full border rounded px-3 py-2"
+                value={fStatus}
+                onChange={(e) => setFStatus(e.target.value as Status | "")}
+              >
+                <option value="">Todos</option>
+                <option value="ACTIVO">Activo</option>
+                <option value="BLOQUEADO">Bloqueado</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold">
+                Saldo mínimo
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                className="w-full border rounded px-3 py-2"
+                value={fMin}
+                onChange={(e) => setFMin(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold">
+                Saldo máximo
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                className="w-full border rounded px-3 py-2"
+                value={fMax}
+                onChange={(e) => setFMax(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* el resto de la UI se mantiene muy similar al original, adaptada a Pollo */}
