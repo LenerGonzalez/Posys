@@ -315,6 +315,41 @@ export default function CandyMainOrders() {
   // items de la orden
   const [orderItems, setOrderItems] = useState<CandyOrderItem[]>([]);
 
+  // ===== Edición inline (lápiz) =====
+  const [editingPackagesMap, setEditingPackagesMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingUnitsMap, setEditingUnitsMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingMarginRivasMap, setEditingMarginRivasMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingMarginIslaMap, setEditingMarginIslaMap] = useState<
+    Record<string, boolean>
+  >({});
+
+  const openPackagesEdit = (id: string) =>
+    setEditingPackagesMap((prev) => ({ ...prev, [id]: true }));
+  const closePackagesEdit = (id: string) =>
+    setEditingPackagesMap((prev) => ({ ...prev, [id]: false }));
+
+  const openUnitsEdit = (id: string) =>
+    setEditingUnitsMap((prev) => ({ ...prev, [id]: true }));
+  const closeUnitsEdit = (id: string) =>
+    setEditingUnitsMap((prev) => ({ ...prev, [id]: false }));
+
+  const openMarginRivasEdit = (id: string) =>
+    setEditingMarginRivasMap((prev) => ({ ...prev, [id]: true }));
+  const closeMarginRivasEdit = (id: string) =>
+    setEditingMarginRivasMap((prev) => ({ ...prev, [id]: false }));
+
+  const openMarginIslaEdit = (id: string) =>
+    setEditingMarginIslaMap((prev) => ({ ...prev, [id]: true }));
+  const closeMarginIslaEdit = (id: string) =>
+    setEditingMarginIslaMap((prev) => ({ ...prev, [id]: false }));
+  const originalItemIdsRef = useRef<Set<string>>(new Set());
+
   // selección producto
   const [orderCategory, setOrderCategory] = useState<string>("");
   const [orderProductId, setOrderProductId] = useState<string>("");
@@ -423,6 +458,11 @@ export default function CandyMainOrders() {
     setOrderName("");
     setOrderDate("");
     setOrderItems([]);
+    setEditingPackagesMap({});
+    setEditingUnitsMap({});
+    setEditingMarginRivasMap({});
+    setEditingMarginIslaMap({});
+    originalItemIdsRef.current = new Set();
 
     setOrderCategory(catalogCategories[0] || "");
     setOrderProductId("");
@@ -454,6 +494,13 @@ export default function CandyMainOrders() {
     const catProd = catalog.find((x) => x.id === orderProductId);
     if (!catProd) {
       setMsg("Producto de catálogo no encontrado (refresca).");
+      return;
+    }
+
+    if (editingOrderId && !originalItemIdsRef.current.has(catProd.id)) {
+      setMsg(
+        "⚠️ En edición no se pueden agregar productos nuevos. Solo ajustar los existentes.",
+      );
       return;
     }
 
@@ -983,6 +1030,13 @@ export default function CandyMainOrders() {
           continue;
         }
 
+        if (editingOrderId && !originalItemIdsRef.current.has(catProd.id)) {
+          errors.push(
+            `Fila ${i + 2}: No se permiten productos nuevos en edición ("${catProd.name}").`,
+          );
+          continue;
+        }
+
         const packagesNum = Math.floor(num(packagesVal));
         if (packagesNum <= 0) {
           errors.push(
@@ -1300,6 +1354,17 @@ export default function CandyMainOrders() {
         }
       }
 
+      if (editingOrderId) {
+        const originalIds = originalItemIdsRef.current;
+        const hasNew = orderItems.some((it) => !originalIds.has(it.id));
+        if (hasNew) {
+          setMsg(
+            "⚠️ No se permiten productos nuevos en edición. Eliminá los nuevos para guardar.",
+          );
+          return;
+        }
+      }
+
       // ✅ guardo items con utilidades ya calculadas (para export / auditoría)
       const subtotalTotal = Number(orderSummaryBase.subtotal || 0);
       const itemsToSave = orderItems.map((it) =>
@@ -1594,6 +1659,10 @@ export default function CandyMainOrders() {
       const itemsFromDoc: CandyOrderItem[] = Array.isArray(orderData.items)
         ? (orderData.items as CandyOrderItem[])
         : [];
+
+      originalItemIdsRef.current = new Set(
+        itemsFromDoc.map((it) => String(it.id || "")),
+      );
 
       // inventario para paquetes restantes por producto (orderId)
       const invSnap = await getDocs(
@@ -2255,18 +2324,43 @@ export default function CandyMainOrders() {
                               <td className="p-2 font-semibold">{it.name}</td>
 
                               <td className="p-2 text-right">
-                                <input
-                                  type="number"
-                                  className="w-20 border rounded p-1 text-right"
-                                  value={it.packages}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "packages",
-                                      e.target.value,
-                                    )
-                                  }
-                                />
+                                {editingPackagesMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={it.packages}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "packages",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closePackagesEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closePackagesEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="numeric"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>{it.packages}</span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openPackagesEdit(it.id)}
+                                      aria-label="Editar paquetes"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="p-2 text-right">
@@ -2276,18 +2370,43 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-right">
-                                <input
-                                  type="number"
-                                  className="w-20 border rounded p-1 text-right"
-                                  value={it.unitsPerPackage}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "unitsPerPackage",
-                                      e.target.value,
-                                    )
-                                  }
-                                />
+                                {editingUnitsMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={it.unitsPerPackage}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "unitsPerPackage",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closeUnitsEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeUnitsEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="numeric"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>{it.unitsPerPackage}</span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openUnitsEdit(it.id)}
+                                      aria-label="Editar unidades por paquete"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="p-2 text-right">
@@ -2306,33 +2425,89 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-right">
-                                <input
-                                  type="number"
-                                  className="w-16 border rounded p-1 text-right"
-                                  value={Number(it.marginRivas ?? 0)}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "marginRivas",
-                                      e.target.value,
-                                    )
-                                  }
-                                />
+                                {editingMarginRivasMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    className="w-16 border rounded p-1 text-right"
+                                    value={Number(it.marginRivas ?? 0)}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "marginRivas",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closeMarginRivasEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeMarginRivasEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="decimal"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>
+                                      {Number(it.marginRivas ?? 0).toFixed(3)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openMarginRivasEdit(it.id)}
+                                      aria-label="Editar margen Rivas"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="p-2 text-right">
-                                <input
-                                  type="number"
-                                  className="w-16 border rounded p-1 text-right"
-                                  value={Number(it.marginIsla ?? 0)}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "marginIsla",
-                                      e.target.value,
-                                    )
-                                  }
-                                />
+                                {editingMarginIslaMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    className="w-16 border rounded p-1 text-right"
+                                    value={Number(it.marginIsla ?? 0)}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "marginIsla",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closeMarginIslaEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeMarginIslaEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="decimal"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>
+                                      {Number(it.marginIsla ?? 0).toFixed(3)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openMarginIslaEdit(it.id)}
+                                      aria-label="Editar margen Isla"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="p-2 text-right">
@@ -2456,18 +2631,46 @@ export default function CandyMainOrders() {
                               <label className="text-xs text-gray-600">
                                 Paquetes
                               </label>
-                              <input
-                                type="number"
-                                className="w-full border p-2 rounded text-right"
-                                value={it.packages}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "packages",
-                                    e.target.value,
-                                  )
-                                }
-                              />
+                              {editingPackagesMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  step="0.001"
+                                  className="w-full border p-2 rounded text-right"
+                                  value={it.packages}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "packages",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closePackagesEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closePackagesEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="numeric"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {it.packages}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() => openPackagesEdit(it.id)}
+                                    aria-label="Editar paquetes"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
                             </div>
 
                             <div>
@@ -2485,18 +2688,46 @@ export default function CandyMainOrders() {
                               <label className="text-xs text-gray-600">
                                 Und x Paquete
                               </label>
-                              <input
-                                type="number"
-                                className="w-full border p-2 rounded text-right"
-                                value={it.unitsPerPackage}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "unitsPerPackage",
-                                    e.target.value,
-                                  )
-                                }
-                              />
+                              {editingUnitsMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  step="0.001"
+                                  className="w-full border p-2 rounded text-right"
+                                  value={it.unitsPerPackage}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "unitsPerPackage",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closeUnitsEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closeUnitsEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="numeric"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {it.unitsPerPackage}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() => openUnitsEdit(it.id)}
+                                    aria-label="Editar unidades por paquete"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
                             </div>
 
                             <div>
@@ -2516,36 +2747,90 @@ export default function CandyMainOrders() {
                               <label className="text-xs text-gray-600">
                                 MV Rivas (%)
                               </label>
-                              <input
-                                type="number"
-                                className="w-full border p-2 rounded text-right"
-                                value={it.marginRivas ?? 0}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "marginRivas",
-                                    e.target.value,
-                                  )
-                                }
-                              />
+                              {editingMarginRivasMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  className="w-full border p-2 rounded text-right"
+                                  value={it.marginRivas ?? 0}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "marginRivas",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closeMarginRivasEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closeMarginRivasEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="decimal"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {Number(it.marginRivas ?? 0).toFixed(3)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() => openMarginRivasEdit(it.id)}
+                                    aria-label="Editar margen Rivas"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
                             </div>
 
                             <div>
                               <label className="text-xs text-gray-600">
                                 MV Isla (%)
                               </label>
-                              <input
-                                type="number"
-                                className="w-full border p-2 rounded text-right"
-                                value={it.marginIsla ?? 0}
-                                onChange={(e) =>
-                                  handleItemFieldChange(
-                                    it.id,
-                                    "marginIsla",
-                                    e.target.value,
-                                  )
-                                }
-                              />
+                              {editingMarginIslaMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  className="w-full border p-2 rounded text-right"
+                                  value={it.marginIsla ?? 0}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "marginIsla",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closeMarginIslaEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closeMarginIslaEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="decimal"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {Number(it.marginIsla ?? 0).toFixed(3)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() => openMarginIslaEdit(it.id)}
+                                    aria-label="Editar margen Isla"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
 

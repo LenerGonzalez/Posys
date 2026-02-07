@@ -127,6 +127,7 @@ export default function AdminLayout({
     canPath(subject, "customersPollo", "view") ||
     canPath(subject, "transactionsPollo", "view") ||
     canPath(subject, "bills", "view") ||
+    canPath(subject, "expenses", "view") ||
     canPath(subject, "batches", "view");
 
   const hasDulcesAccess =
@@ -593,6 +594,11 @@ export default function AdminLayout({
                           className={linkCls}
                         >
                           Transacciones
+                        </NavLink>
+                      )}
+                      {canPath(subject, "expenses") && (
+                        <NavLink to={`${base}/expenses`} className={linkCls}>
+                          Gastos
                         </NavLink>
                       )}
                       {canPath(subject, "customersPollo") && (

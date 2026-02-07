@@ -97,7 +97,10 @@ export default function FinancialDashboard(): React.ReactElement {
     null,
   );
   const [totalAbonos, setTotalAbonos] = useState(0);
+  const [totalAbonosRange, setTotalAbonosRange] = useState(0);
   const [creditGrossProfitCash, setCreditGrossProfitCash] = useState(0);
+  const [creditGrossProfitCashRange, setCreditGrossProfitCashRange] =
+    useState(0);
   const [inventoryByProduct, setInventoryByProduct] = useState<
     Record<string, { incomingQty: number; remainingQty: number }>
   >({});
@@ -373,7 +376,17 @@ export default function FinancialDashboard(): React.ReactElement {
         const saleIds = new Set<string>();
         const paymentsBySaleId: Record<string, number> = {};
         const paymentsByCustomerNoSaleId: Record<string, number> = {};
+        const paymentsBySaleIdRange: Record<string, number> = {};
+        const paymentsByCustomerNoSaleIdRange: Record<string, number> = {};
         let abonosSum = 0;
+        let abonosRangeSum = 0;
+
+        const resolveMovementDate = (m: any) => {
+          if (m?.date) return String(m.date);
+          if (m?.createdAt?.toDate)
+            return format(m.createdAt.toDate(), "yyyy-MM-dd");
+          return "";
+        };
 
         movementsSnap.forEach((d) => {
           const m = d.data() as any;
@@ -401,15 +414,29 @@ export default function FinancialDashboard(): React.ReactElement {
           const createdAt = m.createdAt ?? null;
           if (type === "ABONO") {
             abonosSum += Math.abs(amount);
+            const moveDate = resolveMovementDate(m);
+            if (moveDate && moveDate >= from && moveDate <= to) {
+              abonosRangeSum += Math.abs(amount);
+            }
             const abonoSaleId = m?.ref?.saleId ? String(m.ref.saleId) : "";
             if (abonoSaleId) {
               paymentsBySaleId[abonoSaleId] =
                 (paymentsBySaleId[abonoSaleId] || 0) + Math.abs(amount);
+              if (moveDate && moveDate >= from && moveDate <= to) {
+                paymentsBySaleIdRange[abonoSaleId] =
+                  (paymentsBySaleIdRange[abonoSaleId] || 0) +
+                  Math.abs(amount);
+              }
               saleIds.add(abonoSaleId);
             } else {
               paymentsByCustomerNoSaleId[customerId] =
                 (paymentsByCustomerNoSaleId[customerId] || 0) +
                 Math.abs(amount);
+              if (moveDate && moveDate >= from && moveDate <= to) {
+                paymentsByCustomerNoSaleIdRange[customerId] =
+                  (paymentsByCustomerNoSaleIdRange[customerId] || 0) +
+                  Math.abs(amount);
+              }
             }
             const prev = lastPaymentByCustomer[customerId];
             const isNewer =
@@ -455,6 +482,7 @@ export default function FinancialDashboard(): React.ReactElement {
         );
 
         let grossProfitCashSum = 0;
+        let grossProfitCashSumRange = 0;
         const calcLineFinal = (it: any) => {
           const qty = Number(it.qty ?? it.quantity ?? 0);
           return (
@@ -518,6 +546,8 @@ export default function FinancialDashboard(): React.ReactElement {
 
         const grossProfitAllocatedBySaleId: Record<string, number> = {};
         const paidBySaleId: Record<string, number> = {};
+        const grossProfitAllocatedBySaleIdRange: Record<string, number> = {};
+        const paidBySaleIdRange: Record<string, number> = {};
 
         Object.keys(paymentsBySaleId).forEach((saleId) => {
           const totals = saleTotalsById.get(saleId);
@@ -528,6 +558,17 @@ export default function FinancialDashboard(): React.ReactElement {
           const gpPart = totals.grossProfit * ratio;
           grossProfitAllocatedBySaleId[saleId] = gpPart;
           grossProfitCashSum += gpPart;
+        });
+
+        Object.keys(paymentsBySaleIdRange).forEach((saleId) => {
+          const totals = saleTotalsById.get(saleId);
+          if (!totals?.total) return;
+          const paid = Number(paymentsBySaleIdRange[saleId] || 0);
+          paidBySaleIdRange[saleId] = paid;
+          const ratio = Math.min(1, paid / totals.total);
+          const gpPart = totals.grossProfit * ratio;
+          grossProfitAllocatedBySaleIdRange[saleId] = gpPart;
+          grossProfitCashSumRange += gpPart;
         });
 
         Object.keys(paymentsByCustomerNoSaleId).forEach((customerId) => {
@@ -560,6 +601,39 @@ export default function FinancialDashboard(): React.ReactElement {
           const paid = Number(paymentsByCustomerNoSaleId[customerId] || 0);
           const ratio = Math.min(1, paid / remainingSales);
           grossProfitCashSum += remainingGrossProfit * ratio;
+        });
+
+        Object.keys(paymentsByCustomerNoSaleIdRange).forEach((customerId) => {
+          const saleSet = salesByCustomer[customerId];
+          if (!saleSet || saleSet.size === 0) return;
+
+          let totalSales = 0;
+          let totalGrossProfit = 0;
+          let allocatedSales = 0;
+          let allocatedGrossProfit = 0;
+
+          saleSet.forEach((saleId) => {
+            const totals = saleTotalsById.get(saleId);
+            if (!totals) return;
+            totalSales += totals.total;
+            totalGrossProfit += totals.grossProfit;
+            if (paidBySaleIdRange[saleId]) {
+              allocatedSales += Math.min(totals.total, paidBySaleIdRange[saleId]);
+            }
+            allocatedGrossProfit +=
+              grossProfitAllocatedBySaleIdRange[saleId] || 0;
+          });
+
+          const remainingSales = Math.max(0, totalSales - allocatedSales);
+          const remainingGrossProfit = Math.max(
+            0,
+            totalGrossProfit - allocatedGrossProfit,
+          );
+          if (!remainingSales || !remainingGrossProfit) return;
+
+          const paid = Number(paymentsByCustomerNoSaleIdRange[customerId] || 0);
+          const ratio = Math.min(1, paid / remainingSales);
+          grossProfitCashSumRange += remainingGrossProfit * ratio;
         });
 
         const pendingRows: PendingCustomerRow[] = [];
@@ -649,18 +723,22 @@ export default function FinancialDashboard(): React.ReactElement {
         withProducts.sort((a, b) => b.balance - a.balance);
         setPendingCustomers(withProducts);
         setTotalAbonos(abonosSum);
+        setTotalAbonosRange(abonosRangeSum);
         setCreditGrossProfitCash(grossProfitCashSum);
+        setCreditGrossProfitCashRange(grossProfitCashSumRange);
       } catch (e) {
         console.error("Error cargando saldos pendientes:", e);
         setPendingCustomers([]);
         setTotalAbonos(0);
+        setTotalAbonosRange(0);
+        setCreditGrossProfitCashRange(0);
       } finally {
         setPendingLoading(false);
       }
     };
 
     loadPending();
-  }, [refreshKey]);
+  }, [refreshKey, from, to]);
 
   useEffect(() => {
     const loadInventorySummary = async () => {
@@ -756,18 +834,18 @@ export default function FinancialDashboard(): React.ReactElement {
   );
 
   const collectedCashPlusAbonos = useMemo(
-    () => totalSalesCash + totalAbonos,
-    [totalSalesCash, totalAbonos],
+    () => totalSalesCash + totalAbonosRange,
+    [totalSalesCash, totalAbonosRange],
   );
 
   const grossProfitCashPlusCredit = useMemo(
-    () => kpisCashVisible.grossProfit + creditGrossProfitCash,
-    [kpisCashVisible.grossProfit, creditGrossProfitCash],
+    () => kpisCashVisible.grossProfit + creditGrossProfitCashRange,
+    [kpisCashVisible.grossProfit, creditGrossProfitCashRange],
   );
 
   const netProfitCashPlusCredit = useMemo(
-    () => kpisCashVisible.netProfit + creditGrossProfitCash,
-    [kpisCashVisible.netProfit, creditGrossProfitCash],
+    () => kpisCashVisible.netProfit + creditGrossProfitCashRange,
+    [kpisCashVisible.netProfit, creditGrossProfitCashRange],
   );
 
   const totalLbsCash = useMemo(
@@ -955,8 +1033,9 @@ export default function FinancialDashboard(): React.ReactElement {
     addKpiTable("Fondos y Utilidades", [
       ["CxC", money(totalPendingBalance)],
       ["Recaudación (Abonos)", money(totalAbonos)],
+      ["Recaudación a la fecha", money(totalAbonosRange)],
       ["Recolectado Cash + Abonos", money(collectedCashPlusAbonos)],
-      ["Utilidad Neta Crédito (Caja)", money(creditGrossProfitCash)],
+      ["Utilidad Neta Crédito (Caja)", money(creditGrossProfitCashRange)],
       ["Utilidad Bruta Cash + Crédito", money(grossProfitCashPlusCredit)],
       ["Gastos", money(kpisCashVisible.expensesSum)],
       ["Utilidad Neta Cash + Crédito", money(netProfitCashPlusCredit)],
@@ -1228,8 +1307,12 @@ export default function FinancialDashboard(): React.ReactElement {
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           <Kpi title="CxC" value={money(totalPendingBalance)} />
                           <Kpi
-                            title="Recaudación (Abonos)"
+                            title="Recaudación Global(Abonos)"
                             value={money(totalAbonos)}
+                          />
+                          <Kpi
+                            title="Recaudación a la fecha"
+                            value={money(totalAbonosRange)}
                           />
                           <Kpi
                             title="Recolectado Cash + Abonos"
@@ -1241,7 +1324,7 @@ export default function FinancialDashboard(): React.ReactElement {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <Kpi
                             title="Utilidad Neta Crédito (Caja)"
-                            value={money(creditGrossProfitCash)}
+                            value={money(creditGrossProfitCashRange)}
                             valueClass="text-[#BF5700]"
                           />
                           <Kpi
@@ -1380,8 +1463,13 @@ export default function FinancialDashboard(): React.ReactElement {
                     negative
                   />
                   <Kpi
-                    title="Recaudación (Abonos)"
+                    title="Recaudación Global(Abonos)"
                     value={money(totalAbonos)}
+                    positive
+                  />
+                  <Kpi
+                    title="Recaudación a la fecha"
+                    value={money(totalAbonosRange)}
                     positive
                   />
                   <Kpi
@@ -1394,7 +1482,7 @@ export default function FinancialDashboard(): React.ReactElement {
                 <div className="hidden md:grid grid-cols-1 sm:grid-cols-4 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
                   <Kpi
                     title="Utilidad Neta Crédito (Caja)"
-                    value={money(creditGrossProfitCash)}
+                    value={money(creditGrossProfitCashRange)}
                     valueClass="text-[#BF5700]"
                   />
                   <Kpi

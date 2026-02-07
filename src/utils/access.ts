@@ -14,6 +14,7 @@ export type Action = "view" | "edit";
 export type PathKey =
   // POLLO
   | "bills"
+  | "expenses"
   | "customersPollo"
   | "transactionsPollo"
   | "batches"
@@ -35,6 +36,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
   // ===== POLLO =====
   supervisor_pollo: {
     bills: { view: true, edit: false },
+    expenses: { view: true, edit: false },
     customersPollo: { view: true, edit: false },
     transactionsPollo: { view: true, edit: false },
     batches: { view: true, edit: false },
@@ -46,6 +48,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     batches: { view: true, edit: true }, // (nota: "solo crear lote" lo resolvemos en pantalla luego)
     transactionsPollo: { view: true, edit: false },
     bills: { view: true, edit: false },
+    expenses: { view: true, edit: true },
     financialDashboard: { view: true, edit: false },
   },
 

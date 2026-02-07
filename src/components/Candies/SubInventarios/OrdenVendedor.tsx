@@ -12,6 +12,7 @@ import {
   arrayUnion,
   writeBatch,
 } from "firebase/firestore";
+import * as XLSX from "xlsx";
 import { db } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
 import useManualRefresh from "../../../hooks/useManualRefresh";
@@ -219,66 +220,6 @@ function normalizeBranch(raw: any): Branch | undefined {
 
 const floor = (n: any) => Math.max(0, Math.floor(Number(n || 0)));
 
-const escapeCsv = (v: any) => {
-  const s = String(v ?? "");
-  if (/[,"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-};
-
-const parseCsv = (text: string) => {
-  const rowsParsed: string[][] = [];
-  let cur: string[] = [];
-  let field = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-
-    if (inQuotes) {
-      if (ch === '"') {
-        const next = text[i + 1];
-        if (next === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inQuotes = true;
-      continue;
-    }
-
-    if (ch === ",") {
-      cur.push(field);
-      field = "";
-      continue;
-    }
-
-    if (ch === "\n") {
-      cur.push(field);
-      field = "";
-      if (cur.some((x) => String(x ?? "").trim() !== "")) rowsParsed.push(cur);
-      cur = [];
-      continue;
-    }
-
-    if (ch === "\r") continue;
-
-    field += ch;
-  }
-
-  cur.push(field);
-  if (cur.some((x) => String(x ?? "").trim() !== "")) rowsParsed.push(cur);
-
-  return rowsParsed;
-};
-
 const clampPercent = (n: any) => {
   const v = Number(n || 0);
   if (!isFinite(v)) return 0;
@@ -388,6 +329,12 @@ export default function VendorCandyOrders({
     Record<string, number>
   >({});
   const [openTransferModal, setOpenTransferModal] = useState(false);
+  const [editingPackagesMap, setEditingPackagesMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingMarginMap, setEditingMarginMap] = useState<
+    Record<string, boolean>
+  >({});
 
   const selectedSeller = useMemo(
     () => sellers.find((s) => s.id === sellerId) || null,
@@ -422,7 +369,11 @@ export default function VendorCandyOrders({
         const uAproximada = uApproxPerPack * packs;
 
         const sellerMargin = getSellerMarginPercent(sellerId);
-        const vendorMarginPercent = sellerMargin;
+        const vendorMarginPercent =
+          it.vendorMarginPercent != null &&
+          String(it.vendorMarginPercent).trim() !== ""
+            ? clampPercent(it.vendorMarginPercent)
+            : sellerMargin;
 
         const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
 
@@ -1171,6 +1122,22 @@ export default function VendorCandyOrders({
   const itemsPrev = () => setItemsPage((p) => Math.max(1, p - 1));
   const itemsNext = () => setItemsPage((p) => Math.min(itemsTotalPages, p + 1));
 
+  const openPackageEdit = (id: string) => {
+    setEditingPackagesMap((prev) => ({ ...prev, [id]: true }));
+  };
+
+  const closePackageEdit = (id: string) => {
+    setEditingPackagesMap((prev) => ({ ...prev, [id]: false }));
+  };
+
+  const openMarginEdit = (id: string) => {
+    setEditingMarginMap((prev) => ({ ...prev, [id]: true }));
+  };
+
+  const closeMarginEdit = (id: string) => {
+    setEditingMarginMap((prev) => ({ ...prev, [id]: false }));
+  };
+
   // =========================
   // KPIs del modal (orden actual)
   // =========================
@@ -1250,6 +1217,8 @@ export default function VendorCandyOrders({
     setOrderItems([]);
     setProductSearch("");
     setItemsPage(1);
+    setEditingPackagesMap({});
+    setEditingMarginMap({});
   };
 
   const openNewOrder = () => {
@@ -1721,27 +1690,22 @@ export default function VendorCandyOrders({
   };
 
   // =========================
-  // CSV / DESCARGAS (Excel)
+  // EXCEL / DESCARGAS
   // =========================
-  const downloadTextFile = (
+  const downloadExcelFile = (
     filename: string,
-    content: string,
-    mime = "text/plain;charset=utf-8",
+    rows: (string | number)[][],
+    sheetName = "Hoja1",
   ) => {
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, filename);
   };
 
-  const exportAssociatedItemsToCsv = () => {
+  const exportAssociatedItemsToExcel = () => {
     if (!isAdmin) {
-      setMsg("⚠️ Solo admin puede exportar CSV.");
+      setMsg("⚠️ Solo admin puede exportar Excel.");
       return;
     }
     const headers = [
@@ -1775,45 +1739,44 @@ export default function VendorCandyOrders({
     const branchLabel =
       seller?.branch || normalizeBranch(seller?.branchLabel) || "—";
 
-    const lines = [
-      headers.join(","),
+    const rows: (string | number)[][] = [
+      headers,
       ...orderItems.map((it) => {
         const { totalExpected, grossProfit, gastos, uVendor, uNeta } =
           getItemActiveFinancials(it);
-        const row = [
+        return [
           seller?.name || "",
           String(branchLabel || ""),
           date || "",
           it.productId,
           it.productName,
           it.category,
-          String(Number(it.packages || 0)),
-          String(Number(it.remainingPackages || 0)),
-          String(Number(it.pricePerPackage || 0).toFixed(2)),
-          String(Number((it as any).providerPrice || 0).toFixed(2)),
-          String(Number(totalExpected || 0).toFixed(2)),
-          String(Number(grossProfit || 0).toFixed(2)),
-          String(Number(uVendor || 0).toFixed(2)),
-          String(Number(uNeta || 0).toFixed(2)),
-          String(Number(it.unitPriceRivas || 0).toFixed(2)),
-          String(Number(it.unitPriceSanJorge || 0).toFixed(2)),
-          String(Number(it.unitPriceIsla || 0).toFixed(2)),
-          String(Number(it.totalRivas || 0).toFixed(2)),
-          String(Number(it.totalSanJorge || 0).toFixed(2)),
-          String(Number(it.totalIsla || 0).toFixed(2)),
-          String(Number(it.unitsPerPackage || 0)),
-          String(Number(it.vendorMarginPercent || 0).toFixed(2)),
-          String(Number(it.uVendor || 0).toFixed(2)),
+          Number(it.packages || 0),
+          Number(it.remainingPackages || 0),
+          Number(it.pricePerPackage || 0),
+          Number((it as any).providerPrice || 0),
+          Number(totalExpected || 0),
+          Number(grossProfit || 0),
+          Number(uVendor || 0),
+          Number(uNeta || 0),
+          Number(it.unitPriceRivas || 0),
+          Number(it.unitPriceSanJorge || 0),
+          Number(it.unitPriceIsla || 0),
+          Number(it.totalRivas || 0),
+          Number(it.totalSanJorge || 0),
+          Number(it.totalIsla || 0),
+          Number(it.unitsPerPackage || 0),
+          Number(it.vendorMarginPercent || 0),
+          Number(it.uVendor || 0),
         ];
-        return row.map(escapeCsv).join(",");
       }),
-    ].join("\n");
+    ];
 
     const name = `vendor_order_items_${(seller?.name || "vendedor").replace(
       /\s+/g,
       "_",
-    )}_${date || "sin_fecha"}.csv`;
-    downloadTextFile(name, lines, "text/csv;charset=utf-8");
+    )}_${date || "sin_fecha"}.xlsx`;
+    downloadExcelFile(name, rows, "Productos");
   };
 
   const downloadTemplateFromMainOrders = () => {
@@ -1840,30 +1803,33 @@ export default function VendorCandyOrders({
         `${a.category} ${a.name}`.localeCompare(`${b.category} ${b.name}`),
       );
 
-    const lines = [
-      headers.join(","),
-      ...list.map((x) =>
-        [x.id, x.name, x.category, String(x.existentes), "", "", ""]
-          .map(escapeCsv)
-          .join(","),
-      ),
-    ].join("\n");
+    const rows: (string | number)[][] = [
+      headers,
+      ...list.map((x) => [x.id, x.name, x.category, x.existentes, "", "", ""]),
+    ];
 
-    downloadTextFile(
-      "plantilla_productos_orden_maestra.csv",
-      lines,
-      "text/csv;charset=utf-8",
-    );
+    downloadExcelFile("plantilla_orden_vendedor.xlsx", rows, "Plantilla");
   };
 
   const onImportTemplateFile = async (file: File) => {
     try {
       setMsg("");
-      const text = await file.text();
-      const rowsCsv = parseCsv(text);
-      if (!rowsCsv.length) return setMsg("⚠️ Archivo vacío.");
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const sheetNames = wb.SheetNames || [];
+      const ws =
+        wb.Sheets["Plantilla"] ||
+        wb.Sheets["Productos"] ||
+        wb.Sheets[sheetNames[0]];
+      if (!ws) return setMsg("⚠️ Archivo sin hojas.");
 
-      const header = rowsCsv[0].map((h) =>
+      const rowsXlsx = XLSX.utils.sheet_to_json(ws, {
+        header: 1,
+        defval: "",
+      }) as any[];
+      if (!rowsXlsx.length) return setMsg("⚠️ Archivo vacío.");
+
+      const header = (rowsXlsx[0] || []).map((h: any) =>
         String(h || "")
           .trim()
           .toLowerCase(),
@@ -1901,8 +1867,8 @@ export default function VendorCandyOrders({
 
       const toAdd: OrderItem[] = [];
 
-      for (let i = 1; i < rowsCsv.length; i++) {
-        const r = rowsCsv[i] || [];
+      for (let i = 1; i < rowsXlsx.length; i++) {
+        const r = rowsXlsx[i] || [];
         const pid = String(r[idxProductId] || "").trim();
         if (!pid) continue;
 
@@ -2011,7 +1977,7 @@ export default function VendorCandyOrders({
       setMsg(`✅ Importados ${toAdd.length} productos desde plantilla.`);
     } catch (e) {
       console.error(e);
-      setMsg("❌ Error importando archivo.");
+      setMsg("❌ Error importando Excel.");
     }
   };
   // =========================
@@ -2035,12 +2001,37 @@ export default function VendorCandyOrders({
         ? rowsByRole.filter((r) => getRowOrderKey(r) === editingOrderKey)
         : [];
 
-      const prevByProduct = new Map<string, VendorCandyRow>();
-      prevRows.forEach((r) => prevByProduct.set(String(r.productId), r));
+      const normPid = (v: any) => String(v ?? "").trim();
 
-      for (const it of orderItems) {
+      const prevByProduct = new Map<string, VendorCandyRow>();
+      prevRows.forEach((r) => prevByProduct.set(normPid(r.productId), r));
+
+      const getPrev = (pid: any) => prevByProduct.get(normPid(pid)) || null;
+
+      const getItemChange = (it: OrderItem) => {
+        const prev = getPrev(it.productId);
         const newPacks = floor(it.packages);
-        const prev = editingOrderKey ? prevByProduct.get(it.productId) : null;
+        const oldPacks = prev ? floor(prev.packages) : 0;
+        const packsChanged = !prev || newPacks !== oldPacks;
+        const prevMargin = prev
+          ? clampPercent(prev.vendorMarginPercent)
+          : clampPercent(it.vendorMarginPercent);
+        const nextMargin = clampPercent(it.vendorMarginPercent);
+        const marginChanged = prev ? prevMargin !== nextMargin : true;
+        return { prev, newPacks, oldPacks, packsChanged, marginChanged };
+      };
+
+      // Guardar solo: nuevos productos, paquetes modificados o margen modificado
+      const itemsToSave = editingOrderKey
+        ? orderItems.filter((it) => {
+            const ch = getItemChange(it);
+            return !ch.prev || ch.packsChanged || ch.marginChanged;
+          })
+        : orderItems;
+
+      for (const it of itemsToSave) {
+        const newPacks = floor(it.packages);
+        const prev = editingOrderKey ? getPrev(it.productId) : null;
         const oldPacks = prev ? floor(prev.packages) : 0;
 
         const delta = newPacks - oldPacks; // ✅ solo lo extra que se agrega
@@ -2062,16 +2053,20 @@ export default function VendorCandyOrders({
 
       const fallbackMargin = getSellerMarginPercent(sellerId);
 
+      // ====== EDIT: detectar si hay cambios reales ======
+      const orderItemIds = new Set(orderItems.map((it) => String(it.id || "")));
+      const removed = editingOrderKey
+        ? prevRows.filter((r) => !orderItemIds.has(String(r.id || "")))
+        : [];
+
+      if (editingOrderKey && itemsToSave.length === 0 && !removed.length) {
+        setIsSaving(false);
+        return setMsg("ℹ️ No hay cambios para guardar.");
+      }
+
       // ====== EDIT: devolver paquetes si bajaron o si se quitó un producto ======
       if (editingOrderKey) {
         // A) productos quitados completamente
-        const orderItemIds = new Set(
-          orderItems.map((it) => String(it.id || "")),
-        );
-        const removed = prevRows.filter(
-          (r) => !orderItemIds.has(String(r.id || "")),
-        );
-
         const removedIds: string[] = [];
         for (const r of removed) {
           await deleteVendorCandyOrderAndRestore(r.id);
@@ -2084,7 +2079,7 @@ export default function VendorCandyOrders({
 
         // B) productos que siguen pero bajaron paquetes
         for (const it of orderItems) {
-          const prev = prevByProduct.get(it.productId);
+          const prev = getPrev(it.productId);
           if (!prev) continue;
 
           const newPacks = floor(it.packages);
@@ -2112,28 +2107,67 @@ export default function VendorCandyOrders({
 
       // ====== Asignar paquetes NUEVOS desde orden maestra (delta > 0) ======
       const allocationsByProduct = new Map<string, any[]>();
-      for (const it of orderItems) {
-        const newPacks = floor(it.packages);
-        const prev = editingOrderKey ? prevByProduct.get(it.productId) : null;
-        const oldPacks = prev ? floor(prev.packages) : 0;
-        const delta = newPacks - oldPacks;
+      let allocErrorMsg = "";
+      for (const it of itemsToSave) {
+        const change = getItemChange(it);
+        const delta = change.newPacks - change.oldPacks;
 
-        if (delta > 0) {
-          const { allocations } = await allocateVendorCandyPacks({
-            productId: it.productId,
-            packagesToAllocate: delta,
-          });
-          allocationsByProduct.set(it.productId, allocations || []);
+        if (change.packsChanged && delta > 0) {
+          try {
+            const { allocations } = await allocateVendorCandyPacks({
+              productId: it.productId,
+              packagesToAllocate: delta,
+            });
+            allocationsByProduct.set(it.productId, allocations || []);
+          } catch (e) {
+            allocErrorMsg = `❌ No hay paquetes disponibles en orden maestra para "${it.productName}".`;
+            break;
+          }
         }
       }
 
+      if (allocErrorMsg) {
+        setIsSaving(false);
+        return setMsg(allocErrorMsg);
+      }
+
       await runTransaction(db, async (tx) => {
-        for (const it of orderItems) {
+        for (const it of itemsToSave) {
+          const change = getItemChange(it);
+          const prev = change.prev;
+
+          // ✅ Si solo cambió el margen, actualizar solo split
+          if (editingOrderKey && prev && !change.packsChanged) {
+            const vendorMarginPercent =
+              it.vendorMarginPercent != null
+                ? it.vendorMarginPercent
+                : fallbackMargin;
+
+            const grossProfit = Number(prev.grossProfit ?? it.grossProfit ?? 0);
+            const logisticAllocated = Number(
+              prev.logisticAllocated ?? it.logisticAllocated ?? 0,
+            );
+            const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+            const uNeta =
+              Number(grossProfit || 0) -
+              Number(logisticAllocated || 0) -
+              Number(split.uVendor || 0);
+
+            const ref = doc(db, "inventory_candies_sellers", it.id);
+            tx.update(ref, {
+              vendorMarginPercent: split.vendorMarginPercent,
+              uVendor: split.uVendor,
+              uInvestor: split.uInvestor,
+              uNeta,
+              vendorProfit: split.uVendor,
+            });
+            continue;
+          }
+
           const packs = floor(it.packages);
           const unitsPerPackage = floor(it.unitsPerPackage);
           const totalUnits = packs * unitsPerPackage;
 
-          const prev = editingOrderKey ? prevByProduct.get(it.productId) : null;
           const prevPacks = prev ? floor(prev.packages) : 0;
           const prevRemaining = prev ? floor(prev.remainingPackages) : 0;
           const delta = packs - prevPacks;
@@ -2287,7 +2321,7 @@ export default function VendorCandyOrders({
   };
 
   // =========================
-  // INPUT FILE IMPORT (CSV)
+  // INPUT FILE IMPORT (Excel)
   // =========================
   const importInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -2378,7 +2412,7 @@ export default function VendorCandyOrders({
                         );
                         return;
                       }
-                      exportAssociatedItemsToCsv();
+                      exportAssociatedItemsToExcel();
                     }}
                   >
                     Exportar asociados
@@ -2730,13 +2764,13 @@ export default function VendorCandyOrders({
                       className="flex-1 px-3 py-2 rounded border text-sm hover:bg-gray-50"
                       onClick={triggerImport}
                     >
-                      Importar CSV
+                      Importar Excel
                     </button>
 
                     <input
                       ref={importInputRef}
                       type="file"
-                      accept=".csv,text/csv"
+                      accept=".xlsx,.xls"
                       className="hidden"
                       onChange={onImportChange}
                     />
@@ -2878,10 +2912,10 @@ export default function VendorCandyOrders({
                     {isAdmin && (
                       <button
                         className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                        onClick={exportAssociatedItemsToCsv}
+                        onClick={exportAssociatedItemsToExcel}
                         disabled={!orderItems.length}
                       >
-                        Exportar CSV
+                        Exportar Excel
                       </button>
                     )}
                   </div>
@@ -2915,10 +2949,12 @@ export default function VendorCandyOrders({
                               U. Bruta
                             </th>
                             <th className="text-right p-2 border-b">Gastos</th>
-                            <th className="text-right p-2 border-b">U. Neta</th>
                           </>
                         )}
                         <th className="text-right p-2 border-b">U. Vendedor</th>
+                        {isAdmin && (
+                          <th className="text-right p-2 border-b">U. Neta</th>
+                        )}
                         <th className="text-right p-2 border-b">Margen (%)</th>
                         <th className="text-left p-2 border-b">Acciones</th>
                       </tr>
@@ -2940,14 +2976,38 @@ export default function VendorCandyOrders({
 
                             <td className="p-2 border-b text-right">
                               {!isReadOnly ? (
-                                <input
-                                  className="w-20 border rounded p-1 text-right"
-                                  value={String(it.packages)}
-                                  onChange={(e) =>
-                                    updateItemPackages(it.id, e.target.value)
-                                  }
-                                  inputMode="numeric"
-                                />
+                                editingPackagesMap[it.id] ? (
+                                  <input
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={String(it.packages)}
+                                    onChange={(e) =>
+                                      updateItemPackages(it.id, e.target.value)
+                                    }
+                                    onBlur={() => closePackageEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closePackageEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="numeric"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>{it.packages}</span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openPackageEdit(it.id)}
+                                      aria-label="Editar paquetes"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )
                               ) : (
                                 <span>{it.packages}</span>
                               )}
@@ -2980,42 +3040,73 @@ export default function VendorCandyOrders({
                                 <td className="p-2 border-b text-right">
                                   {money(gastos)}
                                 </td>
-
-                                <td className="p-2 border-b text-right">
-                                  {money(uNeta)}
-                                </td>
                               </>
                             )}
 
                             <td className="p-2 border-b text-right">
                               {money(uVendor)}
                             </td>
+                            {isAdmin && (
+                              <td className="p-2 border-b text-right">
+                                {money(uNeta)}
+                              </td>
+                            )}
 
                             <td className="p-2 border-b text-right">
                               {!isReadOnly ? (
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min={0}
-                                  className="w-20 border rounded p-1 text-right"
-                                  value={String(
-                                    it.vendorMarginPercent ??
-                                      getSellerMarginPercent(sellerId),
-                                  )}
-                                  onChange={(e) =>
-                                    updateItemVendorMarginPercent(
-                                      it.id,
-                                      e.target.value,
-                                    )
-                                  }
-                                  inputMode="decimal"
-                                />
+                                editingMarginMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    min={0}
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={String(
+                                      it.vendorMarginPercent ??
+                                        getSellerMarginPercent(sellerId),
+                                    )}
+                                    onChange={(e) =>
+                                      updateItemVendorMarginPercent(
+                                        it.id,
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closeMarginEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeMarginEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="decimal"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>
+                                      {Number(
+                                        it.vendorMarginPercent ??
+                                          getSellerMarginPercent(sellerId),
+                                      ).toFixed(3)}
+                                      %
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openMarginEdit(it.id)}
+                                      aria-label="Editar margen"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )
                               ) : (
                                 <span>
                                   {Number(
                                     it.vendorMarginPercent ??
                                       getSellerMarginPercent(sellerId),
-                                  ).toFixed(2)}
+                                  ).toFixed(3)}
                                   %
                                 </span>
                               )}
@@ -3025,9 +3116,13 @@ export default function VendorCandyOrders({
                               {!isReadOnly && (
                                 <button
                                   className="px-3 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-700"
-                                  onClick={() => removeItem(it.id)}
+                                  onClick={() => {
+                                    if (confirm("¿Eliminar este producto?")) {
+                                      removeItem(it.id);
+                                    }
+                                  }}
                                 >
-                                  Quitar
+                                  ✖
                                 </button>
                               )}
                             </td>
@@ -3093,17 +3188,47 @@ export default function VendorCandyOrders({
                                         Paquetes
                                       </div>
                                       {!isReadOnly ? (
-                                        <input
-                                          className="w-full border rounded p-1 text-right"
-                                          value={String(it.packages)}
-                                          onChange={(e) =>
-                                            updateItemPackages(
-                                              it.id,
-                                              e.target.value,
-                                            )
-                                          }
-                                          inputMode="numeric"
-                                        />
+                                        editingPackagesMap[it.id] ? (
+                                          <input
+                                            className="w-full border rounded p-1 text-right"
+                                            value={String(it.packages)}
+                                            onChange={(e) =>
+                                              updateItemPackages(
+                                                it.id,
+                                                e.target.value,
+                                              )
+                                            }
+                                            onBlur={() =>
+                                              closePackageEdit(it.id)
+                                            }
+                                            onKeyDown={(e) => {
+                                              if (
+                                                e.key === "Enter" ||
+                                                e.key === "Escape"
+                                              ) {
+                                                closePackageEdit(it.id);
+                                              }
+                                            }}
+                                            inputMode="numeric"
+                                            autoFocus
+                                          />
+                                        ) : (
+                                          <div className="flex items-center justify-end gap-2">
+                                            <span className="font-semibold">
+                                              {it.packages}
+                                            </span>
+                                            <button
+                                              type="button"
+                                              className="text-xs text-gray-600 hover:text-gray-900"
+                                              onClick={() =>
+                                                openPackageEdit(it.id)
+                                              }
+                                              aria-label="Editar paquetes"
+                                            >
+                                              ✏️
+                                            </button>
+                                          </div>
+                                        )
                                       ) : (
                                         <div className="font-semibold">
                                           {it.packages}
@@ -3180,29 +3305,67 @@ export default function VendorCandyOrders({
                                         Margen (%)
                                       </div>
                                       {!isReadOnly ? (
-                                        <input
-                                          type="number"
-                                          step="0.01"
-                                          min={0}
-                                          className="w-full border rounded p-1 text-right"
-                                          value={String(
-                                            it.vendorMarginPercent ??
-                                              getSellerMarginPercent(sellerId),
-                                          )}
-                                          onChange={(e) =>
-                                            updateItemVendorMarginPercent(
-                                              it.id,
-                                              e.target.value,
-                                            )
-                                          }
-                                          inputMode="decimal"
-                                        />
+                                        editingMarginMap[it.id] ? (
+                                          <input
+                                            type="number"
+                                            step="0.001"
+                                            min={0}
+                                            className="w-full border rounded p-1 text-right"
+                                            value={String(
+                                              it.vendorMarginPercent ??
+                                                getSellerMarginPercent(
+                                                  sellerId,
+                                                ),
+                                            )}
+                                            onChange={(e) =>
+                                              updateItemVendorMarginPercent(
+                                                it.id,
+                                                e.target.value,
+                                              )
+                                            }
+                                            onBlur={() =>
+                                              closeMarginEdit(it.id)
+                                            }
+                                            onKeyDown={(e) => {
+                                              if (
+                                                e.key === "Enter" ||
+                                                e.key === "Escape"
+                                              ) {
+                                                closeMarginEdit(it.id);
+                                              }
+                                            }}
+                                            inputMode="decimal"
+                                            autoFocus
+                                          />
+                                        ) : (
+                                          <div className="flex items-center justify-end gap-2">
+                                            <span className="font-semibold">
+                                              {Number(
+                                                it.vendorMarginPercent ??
+                                                  getSellerMarginPercent(
+                                                    sellerId,
+                                                  ),
+                                              ).toFixed(3)}
+                                              %
+                                            </span>
+                                            <button
+                                              type="button"
+                                              className="text-xs text-gray-600 hover:text-gray-900"
+                                              onClick={() =>
+                                                openMarginEdit(it.id)
+                                              }
+                                              aria-label="Editar margen"
+                                            >
+                                              ✏️
+                                            </button>
+                                          </div>
+                                        )
                                       ) : (
                                         <div className="font-semibold">
                                           {Number(
                                             it.vendorMarginPercent ??
                                               getSellerMarginPercent(sellerId),
-                                          ).toFixed(2)}
+                                          ).toFixed(3)}
                                           %
                                         </div>
                                       )}
@@ -3211,9 +3374,15 @@ export default function VendorCandyOrders({
                                     {!isReadOnly && (
                                       <button
                                         className="px-3 py-2 rounded bg-red-600 text-white text-xs"
-                                        onClick={() => removeItem(it.id)}
+                                        onClick={() => {
+                                          if (
+                                            confirm("¿Eliminar este producto?")
+                                          ) {
+                                            removeItem(it.id);
+                                          }
+                                        }}
                                       >
-                                        Quitar
+                                        ✖
                                       </button>
                                     )}
                                   </div>
