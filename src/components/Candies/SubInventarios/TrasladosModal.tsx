@@ -1248,21 +1248,23 @@ export default function TrasladosModal<T extends OrderRow = OrderRow>({
                 <th className="p-2 border">Precio proveedor</th>
                 <th className="p-2 border">Precio Rivas</th>
                 <th className="p-2 border">Precio Isla</th>
-                <th className="p-2 border">Movido a vendedor</th>
-                <th className="p-2 border">Movido a orden</th>
+                <th className="p-2 border">Desde vendedor</th>
+                <th className="p-2 border">Desde orden</th>
+                <th className="p-2 border">Hacia vendedor</th>
+                <th className="p-2 border">Hacia orden</th>
                 <th className="p-2 border">Motivo de movida</th>
               </tr>
             </thead>
             <tbody>
               {transfersLoading ? (
                 <tr>
-                  <td colSpan={10} className="p-4 text-center">
+                  <td colSpan={12} className="p-4 text-center">
                     Cargando…
                   </td>
                 </tr>
               ) : filteredTransfersRows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="p-4 text-center">
+                  <td colSpan={12} className="p-4 text-center">
                     Sin traslados
                   </td>
                 </tr>
@@ -1296,6 +1298,10 @@ export default function TrasladosModal<T extends OrderRow = OrderRow>({
                       </td>
                       <td className="p-2 border">
                         {money(t.unitPriceIsla || 0)}
+                      </td>
+                      <td className="p-2 border">{t.fromSellerName || "—"}</td>
+                      <td className="p-2 border">
+                        {t.fromOrderLabel || t.fromOrderKey || "—"}
                       </td>
                       <td className="p-2 border">{t.toSellerName || "—"}</td>
                       <td className="p-2 border">

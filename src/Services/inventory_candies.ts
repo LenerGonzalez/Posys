@@ -10,6 +10,7 @@ import {
   runTransaction,
   Timestamp,
   updateDoc,
+  writeBatch,
   where,
 } from "firebase/firestore";
 
@@ -112,6 +113,251 @@ export function getRemainingPacksFromDoc(x: any) {
       x.remaining_packages ??
       0,
   );
+}
+
+export async function backfillCandyInventoryFromMainOrder(orderId: string) {
+  const orderIdSafe = String(orderId || "").trim();
+  if (!orderIdSafe)
+    return { created: 0, skipped: 0, updated: 0, totalItems: 0 };
+
+  let orderRef = doc(db, "candy_main_orders", orderIdSafe);
+  let orderSnap = await getDoc(orderRef);
+  if (!orderSnap.exists()) {
+    const qAlt = query(
+      collection(db, "candy_main_orders"),
+      where("orderId", "==", orderIdSafe),
+    );
+    const altSnap = await getDocs(qAlt);
+    if (altSnap.empty) {
+      throw new Error("Orden maestra no existe");
+    }
+    orderRef = altSnap.docs[0].ref;
+    orderSnap = altSnap.docs[0];
+  }
+
+  const order = orderSnap.data() as any;
+  const resolvedOrderId = orderRef.id;
+  const items = Array.isArray(order.items) ? order.items : [];
+  if (!items.length)
+    return { created: 0, skipped: 0, updated: 0, totalItems: 0 };
+
+  const invSnap = await getDocs(
+    query(
+      collection(db, "inventory_candies"),
+      where("orderId", "==", resolvedOrderId),
+    ),
+  );
+
+  const existingProductIds = new Set<string>();
+  const inventoryByProduct = new Map<
+    string,
+    Array<{ ref: ReturnType<typeof doc>; data: any }>
+  >();
+  invSnap.forEach((d) => {
+    const x = d.data() as any;
+    const pid = String(x.productId || "").trim();
+    if (pid) existingProductIds.add(pid);
+    if (!pid) return;
+    const arr = inventoryByProduct.get(pid) || [];
+    arr.push({ ref: d.ref, data: x });
+    inventoryByProduct.set(pid, arr);
+  });
+
+  const batch = writeBatch(db);
+  let created = 0;
+  let skipped = 0;
+  let updated = 0;
+  const dateStr = String(order.date || "");
+
+  for (const it of items) {
+    const pid = String(it.id || it.productId || "").trim();
+    if (!pid) continue;
+    const existingDocs = inventoryByProduct.get(pid) || [];
+    if (existingDocs.length > 0) {
+      const needsRepair =
+        existingDocs.length === 1 &&
+        existingDocs.every((d) => {
+          const remP = Math.max(0, Math.floor(Number(d.data.remainingPackages || 0)));
+          const remU = Math.max(0, Math.floor(Number(d.data.remaining || 0)));
+          const totU = Math.max(0, Math.floor(Number(d.data.totalUnits || 0)));
+          return remP <= 0 && remU <= 0 && totU <= 0;
+        });
+
+      if (needsRepair) {
+        const ref = existingDocs[0].ref;
+        const unitsPerPackage = Math.max(
+          1,
+          Math.floor(
+            Number(
+              it.unitsPerPackage ??
+                it.units_per_package ??
+                it.upp ??
+                1,
+            ),
+          ),
+        );
+        const rawPackages = Number(
+          it.packages ??
+            it.totalPackages ??
+            it.packagesInitial ??
+            it.initialPackages ??
+            0,
+        );
+        const rawRemainingPackages = Number(
+          it.remainingPackages ??
+            it.remainingPacks ??
+            it.packagesRemaining ??
+            0,
+        );
+        let packages = Math.max(0, Math.floor(rawPackages || 0));
+        let remainingPackages = Math.max(0, Math.floor(rawRemainingPackages || 0));
+
+        if (packages <= 0 && remainingPackages > 0) {
+          packages = remainingPackages;
+        }
+        if (remainingPackages <= 0) {
+          remainingPackages = packages;
+        }
+
+        const totalUnits = packages * unitsPerPackage;
+        const remainingUnits = remainingPackages * unitsPerPackage;
+
+        batch.update(ref, {
+          productId: pid,
+          productName: String(it.name || it.productName || ""),
+          category: String(it.category || ""),
+          measurement: "unidad",
+
+          quantity: totalUnits,
+          remaining: remainingUnits,
+
+          packages,
+          remainingPackages,
+
+          unitsPerPackage,
+          totalUnits,
+
+          providerPrice: Number(
+            it.providerPrice ??
+              it.provider_price ??
+              it.priceProvider ??
+              it.costProvider ??
+              0,
+          ),
+          subtotal: Number(it.subtotal || 0),
+          totalRivas: Number(it.totalRivas || 0),
+          totalSanJorge: Number(it.totalSanJorge || 0),
+          totalIsla: Number(it.totalIsla || 0),
+
+          gainRivas: Number(it.gainRivas || 0),
+          gainSanJorge: Number(it.gainSanJorge || 0),
+          gainIsla: Number(it.gainIsla || 0),
+
+          unitPriceRivas: Number(it.unitPriceRivas || 0),
+          unitPriceSanJorge: Number(it.unitPriceSanJorge || 0),
+          unitPriceIsla: Number(it.unitPriceIsla || 0),
+
+          date: dateStr,
+          status: "PENDIENTE",
+          orderId: resolvedOrderId,
+          updatedAt: Timestamp.now(),
+        });
+
+        updated += 1;
+        continue;
+      }
+
+      skipped += 1;
+      continue;
+    }
+
+    const unitsPerPackage = Math.max(
+      1,
+      Math.floor(
+        Number(
+          it.unitsPerPackage ??
+            it.units_per_package ??
+            it.upp ??
+            1,
+        ),
+      ),
+    );
+    const rawPackages = Number(
+      it.packages ??
+        it.totalPackages ??
+        it.packagesInitial ??
+        it.initialPackages ??
+        0,
+    );
+    const rawRemainingPackages = Number(
+      it.remainingPackages ??
+        it.remainingPacks ??
+        it.packagesRemaining ??
+        0,
+    );
+    let packages = Math.max(0, Math.floor(rawPackages || 0));
+    let remainingPackages = Math.max(0, Math.floor(rawRemainingPackages || 0));
+
+    if (packages <= 0 && remainingPackages > 0) {
+      packages = remainingPackages;
+    }
+    if (remainingPackages <= 0) {
+      remainingPackages = packages;
+    }
+
+    const totalUnits = packages * unitsPerPackage;
+    const remainingUnits = remainingPackages * unitsPerPackage;
+
+    const ref = doc(collection(db, "inventory_candies"));
+    batch.set(ref, {
+      productId: pid,
+      productName: String(it.name || it.productName || ""),
+      category: String(it.category || ""),
+      measurement: "unidad",
+
+      quantity: totalUnits,
+      remaining: remainingUnits,
+
+      packages,
+      remainingPackages,
+
+      unitsPerPackage,
+      totalUnits,
+
+      providerPrice: Number(
+        it.providerPrice ??
+          it.provider_price ??
+          it.priceProvider ??
+          it.costProvider ??
+          0,
+      ),
+      subtotal: Number(it.subtotal || 0),
+      totalRivas: Number(it.totalRivas || 0),
+      totalSanJorge: Number(it.totalSanJorge || 0),
+      totalIsla: Number(it.totalIsla || 0),
+
+      gainRivas: Number(it.gainRivas || 0),
+      gainSanJorge: Number(it.gainSanJorge || 0),
+      gainIsla: Number(it.gainIsla || 0),
+
+      unitPriceRivas: Number(it.unitPriceRivas || 0),
+      unitPriceSanJorge: Number(it.unitPriceSanJorge || 0),
+      unitPriceIsla: Number(it.unitPriceIsla || 0),
+
+      date: dateStr,
+      createdAt: Timestamp.now(),
+      status: "PENDIENTE",
+      orderId: resolvedOrderId,
+    });
+
+    created += 1;
+  }
+
+  if (created > 0 || updated > 0) {
+    await batch.commit();
+  }
+
+  return { created, skipped, updated, totalItems: items.length };
 }
 
 /* -------------------------------------------------------------------------- */

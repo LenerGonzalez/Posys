@@ -22,6 +22,7 @@ import {
   allocateVendorCandyPacks,
   restoreVendorCandyPacks,
 } from "../../../Services/Candies_vendor_orders";
+import { backfillCandyInventoryFromMainOrder } from "../../../Services/inventory_candies";
 import TrasladosModal from "./TrasladosModal";
 
 // ===== Tipos base =====
@@ -72,6 +73,9 @@ interface ProductCandyFromMain {
   logisticAllocatedPerPack: number;
 
   existingPacks: number;
+
+  // Última orden maestra que contiene este producto
+  masterOrderId?: string;
 }
 
 // Sub-inventario por vendedor (cada doc = 1 producto de 1 pedido)
@@ -600,6 +604,7 @@ export default function VendorCandyOrders({
 
             logisticAllocatedPerPack: number;
 
+            masterOrderId?: string;
             key: string;
           }
         > = {};
@@ -694,6 +699,7 @@ export default function VendorCandyOrders({
 
               logisticAllocatedPerPack,
 
+              masterOrderId: d.id,
               key: makeKey(dateStr, createdAtSec),
             };
 
@@ -702,7 +708,52 @@ export default function VendorCandyOrders({
           }
         });
 
-        // 3) SUBINVENTARIO VENDEDORES
+        // 3) INVENTARIO REAL (inventory_candies) PARA DISPONIBLES
+        const invMasterSnap = await getDocs(
+          query(
+            collection(db, "inventory_candies"),
+            orderBy("createdAt", "desc"),
+          ),
+        );
+
+        const getRemainingPacksFromInventory = (x: any) => {
+          const upp = Math.max(1, floor(x.unitsPerPackage || 1));
+          const remainingUnits = Number(x.remaining ?? 0);
+          if (Number.isFinite(remainingUnits) && remainingUnits > 0) {
+            return Math.floor(remainingUnits / upp);
+          }
+          const remainingPackages = Number(x.remainingPackages ?? 0);
+          if (Number.isFinite(remainingPackages) && remainingPackages > 0) {
+            return Math.floor(remainingPackages);
+          }
+          return 0;
+        };
+
+        const invAvail: Record<string, number> = {};
+        invMasterSnap.forEach((d) => {
+          const x = d.data() as any;
+          const pid = String(x.productId || "");
+          if (!pid) return;
+          const packs = getRemainingPacksFromInventory(x);
+          if (packs <= 0) return;
+          invAvail[pid] = (invAvail[pid] || 0) + packs;
+        });
+
+        const avail: Record<string, number> = {};
+        const sourceKeys = Object.keys(invAvail).length
+          ? Object.keys(invAvail)
+          : Object.keys(existing);
+
+        sourceKeys.forEach((pid) => {
+          const realRemaining = Object.keys(invAvail).length
+            ? invAvail[pid]
+            : existing[pid];
+          avail[pid] = Math.max(0, floor(realRemaining));
+        });
+
+        setAvailablePacks(avail);
+
+        // 4) SUBINVENTARIO VENDEDORES
         const invSnap = await getDocs(
           isVendor
             ? query(
@@ -715,16 +766,6 @@ export default function VendorCandyOrders({
                 orderBy("createdAt", "desc"),
               ),
         );
-
-        const avail: Record<string, number> = {};
-        Object.keys(existing).forEach((pid) => {
-          const masterRemaining = floor(existing[pid]);
-
-          // ✅ Disponibles reales para nuevos pedidos (ya descuenta asignaciones)
-          avail[pid] = Math.max(0, masterRemaining);
-        });
-
-        setAvailablePacks(avail);
 
         const pList: ProductCandyFromMain[] = Object.keys(pick)
           .map((pid) => {
@@ -752,6 +793,8 @@ export default function VendorCandyOrders({
               logisticAllocatedPerPack: p.logisticAllocatedPerPack,
 
               existingPacks: avail[p.id] ?? 0,
+
+              masterOrderId: p.masterOrderId,
             };
           })
           .sort((a, b) =>
@@ -936,6 +979,52 @@ export default function VendorCandyOrders({
     const base = Math.max(0, Number(row.packages || 0));
     const delta = getRowTransferDelta(row);
     return Math.max(0, base + delta);
+  };
+
+  const getRemainingPacksFromInventoryDoc = (x: any) => {
+    const upp = Math.max(1, floor(x.unitsPerPackage || 1));
+    const remainingUnits = Number(x.remaining ?? 0);
+    if (Number.isFinite(remainingUnits) && remainingUnits > 0) {
+      return Math.floor(remainingUnits / upp);
+    }
+    const remainingPackages = Number(x.remainingPackages ?? 0);
+    if (Number.isFinite(remainingPackages) && remainingPackages > 0) {
+      return Math.floor(remainingPackages);
+    }
+    return 0;
+  };
+
+  const fetchAvailablePacksByProduct = async (
+    productId: string,
+    productName?: string,
+  ) => {
+    const pid = String(productId || "").trim();
+    if (!pid) return { byId: 0, byName: 0 };
+    const snap = await getDocs(
+      query(collection(db, "inventory_candies"), where("productId", "==", pid)),
+    );
+    let total = 0;
+    snap.forEach((d) => {
+      total += getRemainingPacksFromInventoryDoc(d.data());
+    });
+    const byId = Math.max(0, total);
+
+    let byName = 0;
+    const name = String(productName || "").trim();
+    if (byId === 0 && name) {
+      const snapByName = await getDocs(
+        query(
+          collection(db, "inventory_candies"),
+          where("productName", "==", name),
+        ),
+      );
+      snapByName.forEach((d) => {
+        byName += getRemainingPacksFromInventoryDoc(d.data());
+      });
+      byName = Math.max(0, byName);
+    }
+
+    return { byId, byName };
   };
 
   // =========================
@@ -2037,10 +2126,38 @@ export default function VendorCandyOrders({
         const delta = newPacks - oldPacks; // ✅ solo lo extra que se agrega
 
         if (delta > 0) {
-          const avail = availablePacks[it.productId] ?? 0;
+          let avail = availablePacks[it.productId] ?? 0;
+          const p = productsAll.find((x) => x.id === it.productId) || null;
+
+          if (delta > avail && p?.masterOrderId) {
+            try {
+              await backfillCandyInventoryFromMainOrder(p.masterOrderId);
+              const refreshed = await fetchAvailablePacksByProduct(
+                it.productId,
+                it.productName,
+              );
+              avail = refreshed.byId;
+              setAvailablePacks((prevMap) => ({
+                ...prevMap,
+                [it.productId]: refreshed.byId,
+              }));
+            } catch (e) {
+              // si falla el backfill, continuamos con el error de disponibilidad
+            }
+          }
+
           if (delta > avail) {
+            const live = await fetchAvailablePacksByProduct(
+              it.productId,
+              it.productName,
+            );
+            if (live.byId === 0 && live.byName > 0) {
+              return setMsg(
+                `❌ "${it.productName}" no tiene inventario por ID (${it.productId}). Pero existe por nombre: ${live.byName} paquetes. Revisa que el productId del inventario coincida con el catálogo.`,
+              );
+            }
             return setMsg(
-              `❌ "${it.productName}" excede existencias de orden maestra. Existentes: ${avail} (faltan ${delta})`,
+              `❌ "${it.productName}" excede existencias de orden maestra. Existentes: ${live.byId} (faltan ${delta})`,
             );
           }
         }
@@ -2120,7 +2237,42 @@ export default function VendorCandyOrders({
             });
             allocationsByProduct.set(it.productId, allocations || []);
           } catch (e) {
-            allocErrorMsg = `❌ No hay paquetes disponibles en orden maestra para "${it.productName}".`;
+            const p = productsAll.find((x) => x.id === it.productId) || null;
+
+            if (p?.masterOrderId) {
+              try {
+                await backfillCandyInventoryFromMainOrder(p.masterOrderId);
+                const { allocations } = await allocateVendorCandyPacks({
+                  productId: it.productId,
+                  packagesToAllocate: delta,
+                });
+                allocationsByProduct.set(it.productId, allocations || []);
+                continue;
+              } catch (retryErr) {
+                const live = await fetchAvailablePacksByProduct(
+                  it.productId,
+                  it.productName,
+                );
+                if (live.byId === 0 && live.byName > 0) {
+                  allocErrorMsg = `❌ "${it.productName}" no tiene inventario por ID (${it.productId}). Pero existe por nombre: ${live.byName} paquetes. Revisa que el productId del inventario coincida con el catálogo.`;
+                } else {
+                  allocErrorMsg = `❌ No hay paquetes disponibles en orden maestra para "${it.productName}". Disponibles: ${live.byId}.`;
+                }
+                break;
+              }
+            }
+
+            {
+              const live = await fetchAvailablePacksByProduct(
+                it.productId,
+                it.productName,
+              );
+              if (live.byId === 0 && live.byName > 0) {
+                allocErrorMsg = `❌ "${it.productName}" no tiene inventario por ID (${it.productId}). Pero existe por nombre: ${live.byName} paquetes. Revisa que el productId del inventario coincida con el catálogo.`;
+              } else {
+                allocErrorMsg = `❌ No hay paquetes disponibles en orden maestra para "${it.productName}". Disponibles: ${live.byId}.`;
+              }
+            }
             break;
           }
         }

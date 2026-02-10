@@ -424,8 +424,7 @@ export default function FinancialDashboard(): React.ReactElement {
                 (paymentsBySaleId[abonoSaleId] || 0) + Math.abs(amount);
               if (moveDate && moveDate >= from && moveDate <= to) {
                 paymentsBySaleIdRange[abonoSaleId] =
-                  (paymentsBySaleIdRange[abonoSaleId] || 0) +
-                  Math.abs(amount);
+                  (paymentsBySaleIdRange[abonoSaleId] || 0) + Math.abs(amount);
               }
               saleIds.add(abonoSaleId);
             } else {
@@ -618,7 +617,10 @@ export default function FinancialDashboard(): React.ReactElement {
             totalSales += totals.total;
             totalGrossProfit += totals.grossProfit;
             if (paidBySaleIdRange[saleId]) {
-              allocatedSales += Math.min(totals.total, paidBySaleIdRange[saleId]);
+              allocatedSales += Math.min(
+                totals.total,
+                paidBySaleIdRange[saleId],
+              );
             }
             allocatedGrossProfit +=
               grossProfitAllocatedBySaleIdRange[saleId] || 0;

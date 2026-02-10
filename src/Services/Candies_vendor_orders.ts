@@ -24,6 +24,14 @@ function getRemainingUnitsFromDoc(data: any): number {
     return Math.floor(remainingField);
   }
 
+  const remainingPackages = Number(
+    data.remainingPackages ?? data.remainingPacks ?? data.packagesRemaining ?? 0,
+  );
+  if (Number.isFinite(remainingPackages) && remainingPackages > 0) {
+    const upp = getUnitsPerPackage(data);
+    return Math.floor(remainingPackages * upp);
+  }
+
   const upp = getUnitsPerPackage(data);
   const totalUnits = Number(data.totalUnits || 0);
   const quantity = Number(data.quantity || 0);
@@ -33,6 +41,103 @@ function getRemainingUnitsFromDoc(data: any): number {
   if (quantity > 0) return Math.floor(quantity);
   if (packages > 0) return Math.floor(packages * upp);
   return 0;
+}
+
+async function restoreTransferredVendorCandyPacks(params: {
+  vendorInventoryId: string;
+  packagesToReturn: number;
+  deleteVendorAfter?: boolean;
+}) {
+  const vendorInventoryId = String(params.vendorInventoryId || "");
+  let packsToReturn = floor(params.packagesToReturn);
+  const deleteVendorAfter = Boolean(params.deleteVendorAfter);
+
+  if (!vendorInventoryId || packsToReturn <= 0) {
+    return { restoredPackages: 0, mode: "noop" as const };
+  }
+
+  const qTransfers = query(
+    collection(db, "inventory_transfers_candies"),
+    where("toVendorRowId", "==", vendorInventoryId),
+  );
+
+  const transferSnap = await getDocs(qTransfers);
+  if (transferSnap.empty) {
+    return { restoredPackages: 0, mode: "noop" as const };
+  }
+
+  const transfers = transferSnap.docs
+    .map((d) => ({ id: d.id, ...(d.data() as any) }))
+    .filter((t) => String(t.fromVendorRowId || "").trim() !== "")
+    .sort((a, b) => {
+      const as = Number(a.createdAt?.seconds ?? 0);
+      const bs = Number(b.createdAt?.seconds ?? 0);
+      return bs - as;
+    });
+
+  if (!transfers.length) {
+    return { restoredPackages: 0, mode: "noop" as const };
+  }
+
+  const plan: Array<{ fromVendorRowId: string; packs: number }> = [];
+  let packsLeft = packsToReturn;
+
+  for (const t of transfers) {
+    if (packsLeft <= 0) break;
+    const moved = floor(t.packagesMoved || 0);
+    if (moved <= 0) continue;
+    const take = Math.min(packsLeft, moved);
+    if (take <= 0) continue;
+    plan.push({ fromVendorRowId: String(t.fromVendorRowId), packs: take });
+    packsLeft -= take;
+  }
+
+  if (!plan.length) {
+    return { restoredPackages: 0, mode: "noop" as const };
+  }
+
+  const vendorRef = doc(db, "inventory_candies_sellers", vendorInventoryId);
+  const fromRefs = plan.map((p) =>
+    doc(db, "inventory_candies_sellers", p.fromVendorRowId),
+  );
+
+  await runTransaction(db, async (tx) => {
+    const fromSnaps = await Promise.all(fromRefs.map((r) => tx.get(r)));
+
+    for (let i = 0; i < plan.length; i++) {
+      const ref = fromRefs[i];
+      const snap = fromSnaps[i];
+      if (!snap.exists()) continue;
+
+      const row = snap.data() as any;
+      const packs = floor(plan[i].packs || 0);
+      if (packs <= 0) continue;
+
+      const upp = Math.max(1, floor(row.unitsPerPackage || 1));
+      const units = packs * upp;
+      const currentRemaining = Number(row.remainingPackages || 0);
+      const currentPackages = Number(row.packages || 0);
+
+      tx.update(ref, {
+        packages: Math.max(0, currentPackages + packs),
+        remainingPackages: Math.max(0, currentRemaining + packs),
+        ...(upp > 0
+          ? { remainingUnits: Number(row.remainingUnits || 0) + units }
+          : {}),
+        transferDelta: Number(row.transferDelta || 0) + packs,
+        updatedAt: Timestamp.now(),
+      });
+    }
+
+    if (deleteVendorAfter) {
+      tx.delete(vendorRef);
+    }
+  });
+
+  return {
+    restoredPackages: packsToReturn - packsLeft,
+    mode: "transfer" as const,
+  };
 }
 
 /**
@@ -571,12 +676,19 @@ export async function deleteVendorCandyOrderAndRestore(
   const v = vendorSnap.data() as any;
 
   const productId = String(v.productId || "");
+  const remainingPackages = floor(v.remainingPackages || v.packages || 0);
   const packagesLegacy = floor(v.packages || v.remainingPackages || 0);
 
   // ✅ Nuevo (blindado): allocations reales por lote
   const allocs = normalizeAllocations(
     v.masterAllocations || v.allocations || v.allocationsByBatch,
   );
+
+  const transferRestore = await restoreTransferredVendorCandyPacks({
+    vendorInventoryId,
+    packagesToReturn: remainingPackages,
+    deleteVendorAfter: false,
+  });
 
   // Si no hay allocations guardadas, caemos al LEGACY
   if (!allocs.length) {
@@ -585,6 +697,44 @@ export async function deleteVendorCandyOrderAndRestore(
     if (!orderIdLegacy)
       throw new Error("La orden del vendedor no tiene orderId");
     if (!productId) throw new Error("La orden del vendedor no tiene productId");
+
+    if (transferRestore.restoredPackages > 0) {
+      const packsLeft = Math.max(
+        0,
+        remainingPackages - transferRestore.restoredPackages,
+      );
+
+      if (packsLeft <= 0) {
+        await runTransaction(db, async (tx) => {
+          tx.delete(vendorRef);
+        });
+        return {
+          restoredPackages: transferRestore.restoredPackages,
+          mode: "transfer" as const,
+        };
+      }
+
+      await restoreToInventoryCandies({
+        orderId: orderIdLegacy,
+        productId,
+        packagesToReturn: packsLeft,
+      });
+
+      await restoreToCandyMainOrder({
+        orderId: orderIdLegacy,
+        productId,
+        packagesToReturn: packsLeft,
+      });
+
+      await runTransaction(db, async (tx) => {
+        tx.delete(vendorRef);
+      });
+
+      return {
+        restoredPackages: transferRestore.restoredPackages + packsLeft,
+        mode: "transfer+legacy" as const,
+      };
+    }
 
     if (packagesLegacy <= 0) {
       await runTransaction(db, async (tx) => {

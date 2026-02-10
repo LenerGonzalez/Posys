@@ -18,6 +18,7 @@ import {
 import * as XLSX from "xlsx";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import { backfillCandyInventoryFromMainOrder } from "../../Services/inventory_candies";
 
 // Small helpers used in this file
 const safeInt = (v: any) => Math.max(0, Math.floor(Number(v) || 0));
@@ -284,6 +285,7 @@ export default function CandyMainOrders() {
   const [loading, setLoading] = useState(true);
   const [savingOrder, setSavingOrder] = useState(false);
   const [isBackfillingMain, setIsBackfillingMain] = useState(false);
+  const [backfillingInventory, setBackfillingInventory] = useState(false);
 
   // ====== CATÁLOGO (products_candies) ======
   const [catalog, setCatalog] = useState<CatalogCandyProduct[]>([]);
@@ -1867,6 +1869,35 @@ export default function CandyMainOrders() {
     }
   };
 
+  const backfillInventoryForCurrentOrder = async () => {
+    if (!editingOrderId) return;
+    if (backfillingInventory) return;
+
+    try {
+      setBackfillingInventory(true);
+      setMsg("");
+
+      const result = await backfillCandyInventoryFromMainOrder(editingOrderId);
+
+      if (result.created > 0 || result.updated > 0) {
+        setMsg(
+          `✅ Inventario listo: ${result.created} creados, ${result.updated} reparados (de ${result.totalItems}).`,
+        );
+      } else if (result.totalItems > 0) {
+        setMsg("ℹ️ No había inventario faltante para crear o reparar.");
+      } else {
+        setMsg("ℹ️ La orden no tiene items para crear inventario.");
+      }
+
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error creando inventario faltante.");
+    } finally {
+      setBackfillingInventory(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto">
       {/* Header / acciones */}
@@ -1967,6 +1998,18 @@ export default function CandyMainOrders() {
                 </h3>
 
                 <div className="ml-auto flex gap-2">
+                  {editingOrderId && (
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60"
+                      disabled={savingOrder || backfillingInventory}
+                      onClick={backfillInventoryForCurrentOrder}
+                    >
+                      {backfillingInventory
+                        ? "Creando inventario..."
+                        : "Crear inventario faltante"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
