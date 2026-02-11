@@ -11,6 +11,7 @@ import { db, auth } from "../../firebase";
 import * as XLSX from "xlsx";
 import {
   createPolloCashAudit,
+  deletePolloCashAudit,
   listPolloCashAudits,
   PolloCashAudit,
 } from "../../Services/pollo_cash_audits";
@@ -39,6 +40,8 @@ export default function PolloCashAudits() {
   // ===== Modal / form state =====
   const [openForm, setOpenForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [colabOpen, setColabOpen] = useState(false);
+  const [inputsOpen, setInputsOpen] = useState(false);
 
   // Users (contadores)
   const [contadores, setContadores] = useState<UserRow[]>([]);
@@ -160,6 +163,8 @@ export default function PolloCashAudits() {
     setIngresosExtra(0);
     setDebitos(0);
     setComment("");
+    setColabOpen(false);
+    setInputsOpen(false);
   }
 
   async function onSave() {
@@ -205,6 +210,20 @@ export default function PolloCashAudits() {
 
       setOpenForm(false);
       resetForm();
+      await loadRows();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onDelete(row: PolloCashAudit) {
+    const ok = window.confirm(
+      `¿Eliminar el arqueo creado el ${row.createdAt?.toDate ? row.createdAt.toDate().toLocaleString() : ""}?`,
+    );
+    if (!ok) return;
+    setSaving(true);
+    try {
+      await deletePolloCashAudit(row.id);
       await loadRows();
     } finally {
       setSaving(false);
@@ -326,8 +345,83 @@ export default function PolloCashAudits() {
         </div>
       </div>
 
+      {/* Lista mobile: tarjetas */}
+      <div className="mt-4 block md:hidden space-y-3">
+        {loading ? (
+          <div className="p-4 text-center bg-white rounded-xl border shadow">
+            Cargando…
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="p-4 text-center bg-white rounded-xl border shadow">
+            No hay arqueos en este rango.
+          </div>
+        ) : (
+          rows.map((r) => (
+            <div
+              key={r.id}
+              className="bg-white border rounded-2xl p-3 shadow-sm"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] text-gray-500">
+                    Fecha de creación
+                  </div>
+                  <div className="font-semibold text-sm">
+                    {r.createdAt?.toDate
+                      ? r.createdAt.toDate().toLocaleString()
+                      : ""}
+                  </div>
+                  <div className="text-[11px] text-gray-500 mt-1">
+                    Rango arqueado
+                  </div>
+                  <div className="text-sm">
+                    {r.rangeFrom} a {r.rangeTo}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[11px] text-gray-500">
+                    Monto entregado
+                  </div>
+                  <div className="font-semibold">{money(r.totalEntregado)}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                <div>
+                  <span className="text-gray-500">Contador:</span>{" "}
+                  {r.contadorName}
+                </div>
+                <div>
+                  <span className="text-gray-500">Recibido:</span>{" "}
+                  {r.recibidoPor}
+                </div>
+                <div>
+                  <span className="text-gray-500">Sub total:</span>{" "}
+                  {money(r.subTotal)}
+                </div>
+                <div>
+                  <span className="text-gray-500">Débitos:</span>{" "}
+                  {money(r.debitos)}
+                </div>
+              </div>
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => onDelete(r)}
+                  className="text-xs px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                  disabled={saving}
+                >
+                  Eliminar
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
       {/* Tabla */}
-      <div className="mt-4 bg-white rounded shadow overflow-hidden">
+      <div className="mt-4 bg-white rounded shadow overflow-hidden hidden md:block">
         <div className="p-3 border-b flex items-center justify-between">
           <div className="text-sm font-semibold">Arqueos guardados</div>
           <div className="text-xs text-gray-500">
@@ -346,13 +440,14 @@ export default function PolloCashAudits() {
                 <th className="text-right px-3 py-2">Sub total</th>
                 <th className="text-right px-3 py-2">Débitos</th>
                 <th className="text-right px-3 py-2">Monto entregado</th>
+                <th className="text-right px-3 py-2">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {!loading && rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-3 py-6 text-center text-gray-500"
                   >
                     No hay arqueos en este rango.
@@ -379,6 +474,16 @@ export default function PolloCashAudits() {
                   <td className="px-3 py-2 text-right font-semibold">
                     {money(r.totalEntregado)}
                   </td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onDelete(r)}
+                      className="text-xs px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                      disabled={saving}
+                    >
+                      Eliminar
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -404,108 +509,235 @@ export default function PolloCashAudits() {
             </div>
 
             <div className="p-3 md:p-4 space-y-3 text-sm">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-600">Contador</label>
-                  <select
-                    value={contadorUid}
-                    onChange={(e) => {
-                      const uid = e.target.value;
-                      const u = contadores.find((x) => x.uid === uid);
-                      setContadorUid(uid);
-                      setContadorName(u?.name || "");
-                    }}
-                    className="w-full border rounded px-2 py-2"
-                  >
-                    {contadores.length === 0 && (
-                      <option value="">(No hay contadores)</option>
-                    )}
-                    {contadores.map((u) => (
-                      <option key={u.uid} value={u.uid}>
-                        {u.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="text-[11px] text-gray-400 mt-1">
-                    Por default se selecciona el contador logueado si aplica.
+              {/* Mobile: cards colapsables */}
+              <div className="md:hidden space-y-3">
+                <CollapsibleCard
+                  title="Datos colaboradores"
+                  open={colabOpen}
+                  onToggle={() => setColabOpen((v) => !v)}
+                >
+                  <div className="grid grid-cols-1 gap-3">
+                    <div>
+                      <label className="text-xs text-gray-600">Contador</label>
+                      <select
+                        value={contadorUid}
+                        onChange={(e) => {
+                          const uid = e.target.value;
+                          const u = contadores.find((x) => x.uid === uid);
+                          setContadorUid(uid);
+                          setContadorName(u?.name || "");
+                        }}
+                        className="w-full border rounded px-2 py-2"
+                      >
+                        {contadores.length === 0 && (
+                          <option value="">(No hay contadores)</option>
+                        )}
+                        {contadores.map((u) => (
+                          <option key={u.uid} value={u.uid}>
+                            {u.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-gray-400 mt-1">
+                        Por default se selecciona el contador logueado si
+                        aplica.
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600">
+                        Recibido por (obligatorio)
+                      </label>
+                      <input
+                        value={recibidoPor}
+                        onChange={(e) => setRecibidoPor(e.target.value)}
+                        className="w-full border rounded px-2 py-2"
+                        placeholder="Nombre de quien recibe el dinero"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600">
+                        Entregado por
+                      </label>
+                      <input
+                        value={entregadoPor}
+                        onChange={(e) => setEntregadoPor(e.target.value)}
+                        className="w-full border rounded px-2 py-2"
+                        placeholder="Nombre de quien entrega el dinero"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600">
+                        Rango cierre ventas
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="date"
+                          value={rangeFrom}
+                          onChange={(e) => setRangeFrom(e.target.value)}
+                          className="w-full border rounded px-2 py-2"
+                        />
+                        <input
+                          type="date"
+                          value={rangeTo}
+                          onChange={(e) => setRangeTo(e.target.value)}
+                          className="w-full border rounded px-2 py-2"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </CollapsibleCard>
+
+                <CollapsibleCard
+                  title="Inputs y KPIs"
+                  open={inputsOpen}
+                  onToggle={() => setInputsOpen((v) => !v)}
+                >
+                  <div className="grid grid-cols-1 gap-3">
+                    <MoneyInput
+                      label="Ventas cash"
+                      value={ventasCash}
+                      onChange={setVentasCash}
+                    />
+                    <MoneyInput
+                      label="Abonos"
+                      value={abonos}
+                      onChange={setAbonos}
+                    />
+                    <MoneyInput
+                      label="Ingresos extra oficiales"
+                      value={ingresosExtra}
+                      onChange={setIngresosExtra}
+                    />
+                    <MoneyInput
+                      label="Débitos (gasto o reabastecimiento)"
+                      value={debitos}
+                      onChange={setDebitos}
+                    />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 gap-3">
+                    <KpiBox
+                      title="Sub total (ventas + abonos + ingresos)"
+                      value={money(subTotal)}
+                    />
+                    <KpiBox
+                      title="Total (sub total - débitos)"
+                      value={money(totalEntregado)}
+                    />
+                  </div>
+                </CollapsibleCard>
+              </div>
+
+              {/* Desktop: layout original */}
+              <div className="hidden md:block space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-600">Contador</label>
+                    <select
+                      value={contadorUid}
+                      onChange={(e) => {
+                        const uid = e.target.value;
+                        const u = contadores.find((x) => x.uid === uid);
+                        setContadorUid(uid);
+                        setContadorName(u?.name || "");
+                      }}
+                      className="w-full border rounded px-2 py-2"
+                    >
+                      {contadores.length === 0 && (
+                        <option value="">(No hay contadores)</option>
+                      )}
+                      {contadores.map((u) => (
+                        <option key={u.uid} value={u.uid}>
+                          {u.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="text-[11px] text-gray-400 mt-1">
+                      Por default se selecciona el contador logueado si aplica.
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-600">
+                      Recibido por (obligatorio)
+                    </label>
+                    <input
+                      value={recibidoPor}
+                      onChange={(e) => setRecibidoPor(e.target.value)}
+                      className="w-full border rounded px-2 py-2"
+                      placeholder="Nombre de quien recibe el dinero"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-600">
+                      Entregado por
+                    </label>
+                    <input
+                      value={entregadoPor}
+                      onChange={(e) => setEntregadoPor(e.target.value)}
+                      className="w-full border rounded px-2 py-2"
+                      placeholder="Nombre de quien entrega el dinero"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-600">
+                      Rango cierre ventas
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="date"
+                        value={rangeFrom}
+                        onChange={(e) => setRangeFrom(e.target.value)}
+                        className="w-full border rounded px-2 py-2"
+                      />
+                      <input
+                        type="date"
+                        value={rangeTo}
+                        onChange={(e) => setRangeTo(e.target.value)}
+                        className="w-full border rounded px-2 py-2"
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-xs text-gray-600">
-                    Recibido por (obligatorio)
-                  </label>
-                  <input
-                    value={recibidoPor}
-                    onChange={(e) => setRecibidoPor(e.target.value)}
-                    className="w-full border rounded px-2 py-2"
-                    placeholder="Nombre de quien recibe el dinero"
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <MoneyInput
+                    label="Ventas cash"
+                    value={ventasCash}
+                    onChange={setVentasCash}
+                  />
+                  <MoneyInput
+                    label="Abonos"
+                    value={abonos}
+                    onChange={setAbonos}
+                  />
+                  <MoneyInput
+                    label="Ingresos extra oficiales"
+                    value={ingresosExtra}
+                    onChange={setIngresosExtra}
+                  />
+                  <MoneyInput
+                    label="Débitos (gasto o reabastecimiento)"
+                    value={debitos}
+                    onChange={setDebitos}
                   />
                 </div>
 
-                <div>
-                  <label className="text-xs text-gray-600">Entregado por</label>
-                  <input
-                    value={entregadoPor}
-                    onChange={(e) => setEntregadoPor(e.target.value)}
-                    className="w-full border rounded px-2 py-2"
-                    placeholder="Nombre de quien entrega el dinero"
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <KpiBox
+                    title="Sub total (ventas + abonos + ingresos)"
+                    value={money(subTotal)}
+                  />
+                  <KpiBox
+                    title="Total (sub total - débitos)"
+                    value={money(totalEntregado)}
                   />
                 </div>
-
-                <div>
-                  <label className="text-xs text-gray-600">
-                    Rango cierre ventas
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="date"
-                      value={rangeFrom}
-                      onChange={(e) => setRangeFrom(e.target.value)}
-                      className="w-full border rounded px-2 py-2"
-                    />
-                    <input
-                      type="date"
-                      value={rangeTo}
-                      onChange={(e) => setRangeTo(e.target.value)}
-                      className="w-full border rounded px-2 py-2"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <MoneyInput
-                  label="Ventas cash"
-                  value={ventasCash}
-                  onChange={setVentasCash}
-                />
-                <MoneyInput
-                  label="Abonos"
-                  value={abonos}
-                  onChange={setAbonos}
-                />
-                <MoneyInput
-                  label="Ingresos extra oficiales"
-                  value={ingresosExtra}
-                  onChange={setIngresosExtra}
-                />
-                <MoneyInput
-                  label="Débitos (gasto o reabastecimiento)"
-                  value={debitos}
-                  onChange={setDebitos}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <KpiBox
-                  title="Sub total (ventas + abonos + ingresos)"
-                  value={money(subTotal)}
-                />
-                <KpiBox
-                  title="Total (sub total - débitos)"
-                  value={money(totalEntregado)}
-                />
               </div>
 
               <div>
@@ -579,9 +811,30 @@ function MoneyInput({
   );
 }
 
-// local helper (same as above) to avoid scope issues
-function to2(v: any) {
-  const num = Number(String(v ?? "").replace(/,/g, "."));
-  if (isNaN(num)) return 0;
-  return Math.round(num * 100) / 100;
+function CollapsibleCard({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+      <div className="px-3 py-2 flex items-center justify-between">
+        <div className="font-semibold text-sm">{title}</div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="text-xs px-3 py-1.5 rounded border hover:bg-gray-50"
+        >
+          {open ? "Cerrar" : "Ver"}
+        </button>
+      </div>
+      {open && <div className="px-3 pb-3 pt-1">{children}</div>}
+    </div>
+  );
 }

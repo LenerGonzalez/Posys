@@ -177,7 +177,10 @@ export async function backfillCandyInventoryFromMainOrder(orderId: string) {
       const needsRepair =
         existingDocs.length === 1 &&
         existingDocs.every((d) => {
-          const remP = Math.max(0, Math.floor(Number(d.data.remainingPackages || 0)));
+          const remP = Math.max(
+            0,
+            Math.floor(Number(d.data.remainingPackages || 0)),
+          );
           const remU = Math.max(0, Math.floor(Number(d.data.remaining || 0)));
           const totU = Math.max(0, Math.floor(Number(d.data.totalUnits || 0)));
           return remP <= 0 && remU <= 0 && totU <= 0;
@@ -188,12 +191,7 @@ export async function backfillCandyInventoryFromMainOrder(orderId: string) {
         const unitsPerPackage = Math.max(
           1,
           Math.floor(
-            Number(
-              it.unitsPerPackage ??
-                it.units_per_package ??
-                it.upp ??
-                1,
-            ),
+            Number(it.unitsPerPackage ?? it.units_per_package ?? it.upp ?? 1),
           ),
         );
         const rawPackages = Number(
@@ -210,7 +208,10 @@ export async function backfillCandyInventoryFromMainOrder(orderId: string) {
             0,
         );
         let packages = Math.max(0, Math.floor(rawPackages || 0));
-        let remainingPackages = Math.max(0, Math.floor(rawRemainingPackages || 0));
+        let remainingPackages = Math.max(
+          0,
+          Math.floor(rawRemainingPackages || 0),
+        );
 
         if (packages <= 0 && remainingPackages > 0) {
           packages = remainingPackages;
@@ -274,12 +275,7 @@ export async function backfillCandyInventoryFromMainOrder(orderId: string) {
     const unitsPerPackage = Math.max(
       1,
       Math.floor(
-        Number(
-          it.unitsPerPackage ??
-            it.units_per_package ??
-            it.upp ??
-            1,
-        ),
+        Number(it.unitsPerPackage ?? it.units_per_package ?? it.upp ?? 1),
       ),
     );
     const rawPackages = Number(
@@ -290,10 +286,7 @@ export async function backfillCandyInventoryFromMainOrder(orderId: string) {
         0,
     );
     const rawRemainingPackages = Number(
-      it.remainingPackages ??
-        it.remainingPacks ??
-        it.packagesRemaining ??
-        0,
+      it.remainingPackages ?? it.remainingPacks ?? it.packagesRemaining ?? 0,
     );
     let packages = Math.max(0, Math.floor(rawPackages || 0));
     let remainingPackages = Math.max(0, Math.floor(rawRemainingPackages || 0));

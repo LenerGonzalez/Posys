@@ -20,6 +20,7 @@ export type PathKey =
   | "batches"
   | "salesV2"
   | "financialDashboard"
+  | "polloCashAudits"
   // DULCES
   | "salesCandies"
   | "productsVendorsCandies"
@@ -50,6 +51,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     bills: { view: true, edit: false },
     expenses: { view: true, edit: true },
     financialDashboard: { view: true, edit: false },
+    polloCashAudits: { view: true, edit: true },
   },
 
   vendedor_pollo: {

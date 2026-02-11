@@ -2,6 +2,8 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
+  doc,
   getDocs,
   orderBy,
   query,
@@ -96,4 +98,8 @@ export async function listPolloCashAudits(params?: {
   });
 
   return rows;
+}
+
+export async function deletePolloCashAudit(id: string) {
+  await deleteDoc(doc(db, COL, id));
 }

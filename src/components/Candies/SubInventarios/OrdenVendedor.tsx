@@ -84,6 +84,8 @@ interface VendorCandyRow {
   sellerId: string;
   sellerName: string;
 
+  orderName?: string;
+
   productId: string;
   productName: string;
   category: string;
@@ -173,6 +175,7 @@ interface OrderSummaryRow {
   orderKey: string;
   sellerId: string;
   sellerName: string;
+  orderName?: string;
   date: string;
 
   totalPackages: number;
@@ -298,6 +301,7 @@ export default function VendorCandyOrders({
 
   const [sellerId, setSellerId] = useState<string>("");
   const [date, setDate] = useState<string>("");
+  const [orderName, setOrderName] = useState<string>("");
 
   const [selectedProductId, setSelectedProductId] = useState<string>("");
   const [packagesToAdd, setPackagesToAdd] = useState<string>("0");
@@ -857,6 +861,8 @@ export default function VendorCandyOrders({
             sellerId: x.sellerId,
             sellerName: x.sellerName || "",
 
+            orderName: x.orderName || "",
+
             productId: x.productId,
             productName: x.productName || "",
             category: x.category || "",
@@ -1041,6 +1047,7 @@ export default function VendorCandyOrders({
           orderKey: key,
           sellerId: r.sellerId,
           sellerName: r.sellerName,
+          orderName: r.orderName || "",
           date: r.date,
           totalPackages: 0,
           totalActivePackages: 0,
@@ -1301,6 +1308,7 @@ export default function VendorCandyOrders({
     setEditingOrderKey(null);
     setSellerId("");
     setDate("");
+    setOrderName("");
     setSelectedProductId("");
     setPackagesToAdd("0");
     setOrderItems([]);
@@ -1322,6 +1330,7 @@ export default function VendorCandyOrders({
     const mm = String(today.getMonth() + 1).padStart(2, "0");
     const dd = String(today.getDate()).padStart(2, "0");
     setDate(`${yyyy}-${mm}-${dd}`);
+    setOrderName("");
 
     setOpenForm(true);
   };
@@ -1340,6 +1349,8 @@ export default function VendorCandyOrders({
     setDate(d || "");
 
     const orderRows = rowsByRole.filter((r) => getRowOrderKey(r) === orderKey);
+    const firstRow = orderRows[0] || null;
+    setOrderName(firstRow?.orderName || "");
 
     const seller = sellers.find((s) => s.id === sid) || null;
     const br = seller?.branch;
@@ -2090,6 +2101,12 @@ export default function VendorCandyOrders({
         ? rowsByRole.filter((r) => getRowOrderKey(r) === editingOrderKey)
         : [];
 
+      const prevOrderName = String(prevRows[0]?.orderName || "").trim();
+      const nextOrderName = String(orderName || "").trim();
+      const orderNameChanged = editingOrderKey
+        ? prevOrderName !== nextOrderName
+        : nextOrderName !== "";
+
       const normPid = (v: any) => String(v ?? "").trim();
 
       const prevByProduct = new Map<string, VendorCandyRow>();
@@ -2176,9 +2193,44 @@ export default function VendorCandyOrders({
         ? prevRows.filter((r) => !orderItemIds.has(String(r.id || "")))
         : [];
 
-      if (editingOrderKey && itemsToSave.length === 0 && !removed.length) {
+      if (
+        editingOrderKey &&
+        itemsToSave.length === 0 &&
+        !removed.length &&
+        !orderNameChanged
+      ) {
         setIsSaving(false);
         return setMsg("ℹ️ No hay cambios para guardar.");
+      }
+
+      if (
+        editingOrderKey &&
+        itemsToSave.length === 0 &&
+        !removed.length &&
+        orderNameChanged
+      ) {
+        const batch = writeBatch(db);
+        prevRows.forEach((r) => {
+          batch.update(doc(db, "inventory_candies_sellers", r.id), {
+            orderName: nextOrderName,
+            updatedAt: Timestamp.now(),
+          });
+        });
+        await batch.commit();
+
+        setRows((prev) =>
+          prev.map((row) =>
+            getRowOrderKey(row) === editingOrderKey
+              ? { ...row, orderName: nextOrderName }
+              : row,
+          ),
+        );
+
+        setMsg("✅ Pedido guardado.");
+        setOpenForm(false);
+        resetForm();
+        refresh();
+        return;
       }
 
       // ====== EDIT: devolver paquetes si bajaron o si se quitó un producto ======
@@ -2369,6 +2421,8 @@ export default function VendorCandyOrders({
             branch: seller.branch || "",
             branchLabel: seller.branchLabel || "",
 
+            orderName: String(orderName || "").trim(),
+
             productId: it.productId,
             productName: it.productName,
             category: it.category,
@@ -2435,6 +2489,27 @@ export default function VendorCandyOrders({
         }
       });
 
+      if (editingOrderKey && orderNameChanged) {
+        const removedIds = new Set(removed.map((r) => r.id));
+        const batch = writeBatch(db);
+        prevRows.forEach((r) => {
+          if (removedIds.has(r.id)) return;
+          batch.update(doc(db, "inventory_candies_sellers", r.id), {
+            orderName: nextOrderName,
+            updatedAt: Timestamp.now(),
+          });
+        });
+        await batch.commit();
+
+        setRows((prev) =>
+          prev.map((row) =>
+            getRowOrderKey(row) === editingOrderKey
+              ? { ...row, orderName: nextOrderName }
+              : row,
+          ),
+        );
+      }
+
       setMsg("✅ Pedido guardado.");
       setOpenForm(false);
       resetForm();
@@ -2496,7 +2571,7 @@ export default function VendorCandyOrders({
   // =========================
   // Solo admin puede cambiar el vendedor en el selector
   const disableSellerSelect = !isAdmin;
-  const desktopColumns = isAdmin ? 11 : 8;
+  const desktopColumns = isAdmin ? 12 : 9;
 
   // =========================
   // RENDER
@@ -2597,6 +2672,7 @@ export default function VendorCandyOrders({
               <table className="min-w-[1100px] w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="text-left p-2 border-b">Nombre</th>
                     <th className="text-left p-2 border-b">Fecha</th>
                     <th className="text-left p-2 border-b">Vendedor</th>
                     <th className="text-right p-2 border-b">P. Asociados</th>
@@ -2621,6 +2697,7 @@ export default function VendorCandyOrders({
                 <tbody>
                   {pagedOrders.map((o) => (
                     <tr key={o.orderKey} className="hover:bg-gray-50">
+                      <td className="p-2 border-b">{o.orderName || "—"}</td>
                       <td className="p-2 border-b">{o.date}</td>
                       <td className="p-2 border-b">{o.sellerName}</td>
                       <td className="p-2 border-b text-right">
@@ -2746,7 +2823,9 @@ export default function VendorCandyOrders({
                 <div className="p-2 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold">{o.sellerName}</div>
-                    <div className="text-xs text-gray-600">{o.date}</div>
+                    <div className="text-xs text-gray-600">
+                      {o.orderName || "—"} • {o.date}
+                    </div>
                   </div>
 
                   {isAdmin && (
@@ -2837,6 +2916,9 @@ export default function VendorCandyOrders({
                   {editingOrderKey ? "Editar pedido" : "Nuevo pedido"}
                 </div>
                 <div className="text-xs text-gray-600">
+                  Nombre: {orderName || "—"}
+                </div>
+                <div className="text-xs text-gray-600">
                   U. Bruta viene de Orden Maestra. U. Vendedor e Inversionista
                   se calculan aquí. U. Neta = U. Bruta - Gastos - U. Vendedor.
                 </div>
@@ -2877,6 +2959,16 @@ export default function VendorCandyOrders({
               >
                 {/* Top selectors */}
                 <div className="grid md:grid-cols-3 gap-2">
+                  <div className="md:col-span-3">
+                    <label className="text-xs text-gray-600">Nombre</label>
+                    <input
+                      className="w-full border rounded p-2 text-sm"
+                      value={orderName}
+                      onChange={(e) => setOrderName(e.target.value)}
+                      placeholder="Nombre de la orden"
+                      disabled={isReadOnly}
+                    />
+                  </div>
                   <div>
                     <label className="text-xs text-gray-600">Vendedor</label>
                     <select

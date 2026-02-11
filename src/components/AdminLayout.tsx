@@ -247,6 +247,12 @@ export default function AdminLayout({
                             >
                               Gastos
                             </NavLink>
+                            <NavLink
+                              to={`${base}/polloCashAudits`}
+                              className={linkCls}
+                            >
+                              Arqueos Caja
+                            </NavLink>
                             <NavLink to={`${base}/salesV2`} className={linkCls}>
                               Venta
                             </NavLink>
@@ -599,6 +605,14 @@ export default function AdminLayout({
                       {canPath(subject, "expenses") && (
                         <NavLink to={`${base}/expenses`} className={linkCls}>
                           Gastos
+                        </NavLink>
+                      )}
+                      {hasRole(subject, "contador") && (
+                        <NavLink
+                          to={`${base}/polloCashAudits`}
+                          className={linkCls}
+                        >
+                          Arqueos Caja
                         </NavLink>
                       )}
                       {canPath(subject, "customersPollo") && (

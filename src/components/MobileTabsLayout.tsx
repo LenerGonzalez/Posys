@@ -106,6 +106,11 @@ export default function MobileTabsLayout({
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
             { key: "gastos", label: "Gastos", to: `${base}/expenses` },
+            {
+              key: "arqueos",
+              label: "Arqueos Caja",
+              to: `${base}/polloCashAudits`,
+            },
           ];
         }
         // Usuario con ambos rubros mostrando POLLO
@@ -272,8 +277,16 @@ export default function MobileTabsLayout({
           },
           { key: "cierre", label: "Cierre", to: `${base}/bills` },
         ];
-        if (hasRole(subject, "contador")) built = supTabs;
-        else built = supTabs;
+        if (hasRole(subject, "contador")) {
+          built = [
+            ...supTabs,
+            {
+              key: "arqueos",
+              label: "Arqueos Caja",
+              to: `${base}/polloCashAudits`,
+            },
+          ];
+        } else built = supTabs;
       }
       // === VENDEDOR POLLO ===
       else if (isVendPollo) {
@@ -324,6 +337,7 @@ export default function MobileTabsLayout({
       "batches",
       "salesV2",
       "financialDashboard",
+      "polloCashAudits",
       // DULCES
       "salesCandies",
       "productsVendorsCandies",

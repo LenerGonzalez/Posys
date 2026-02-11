@@ -25,7 +25,10 @@ function getRemainingUnitsFromDoc(data: any): number {
   }
 
   const remainingPackages = Number(
-    data.remainingPackages ?? data.remainingPacks ?? data.packagesRemaining ?? 0,
+    data.remainingPackages ??
+      data.remainingPacks ??
+      data.packagesRemaining ??
+      0,
   );
   if (Number.isFinite(remainingPackages) && remainingPackages > 0) {
     const upp = getUnitsPerPackage(data);
@@ -367,6 +370,38 @@ export async function allocateVendorCandyPacks(params: {
         (packsByOrder[a.masterOrderId] || 0) + packs;
     }
 
+    const updatedByBatchId = new Map<string, number>();
+    for (let i = 0; i < plannedUpdates.length; i++) {
+      const u = plannedUpdates[i];
+      updatedByBatchId.set(u.ref.id, u.newRemUnits);
+    }
+
+    const remainingByOrderProduct: Record<string, Record<string, number>> = {};
+    for (let i = 0; i < refs.length; i++) {
+      const ref = refs[i];
+      const ds = snaps[i];
+      if (!ds.exists()) continue;
+      const data = ds.data() as any;
+      const masterOrderId = String(data.orderId || "");
+      const batchProductId = String(data.productId || "");
+      if (!masterOrderId) continue;
+      if (!batchProductId) continue;
+
+      const upp = getUnitsPerPackage(data);
+      const updatedUnits = updatedByBatchId.get(ref.id);
+      const remUnits =
+        typeof updatedUnits === "number"
+          ? updatedUnits
+          : getRemainingUnitsFromDoc(data);
+      const remPacks = Math.floor(remUnits / upp);
+      if (!remainingByOrderProduct[masterOrderId]) {
+        remainingByOrderProduct[masterOrderId] = {};
+      }
+      remainingByOrderProduct[masterOrderId][batchProductId] =
+        (remainingByOrderProduct[masterOrderId][batchProductId] || 0) +
+        Math.max(0, remPacks);
+    }
+
     const orderIds = Object.keys(packsByOrder);
     const orderRefs = orderIds.map((id) => doc(db, "candy_main_orders", id));
     const orderSnaps = await Promise.all(orderRefs.map((r) => tx.get(r)));
@@ -389,20 +424,20 @@ export async function allocateVendorCandyPacks(params: {
       const data = orderSnap.data() as any;
       const items = Array.isArray(data.items) ? data.items : [];
 
-      const packsToTake = floor(packsByOrder[orderIds[i]] || 0);
+      const targetOrderId = orderIds[i];
+      const packsToTake = floor(packsByOrder[targetOrderId] || 0);
       if (packsToTake <= 0) continue;
 
       let changed = false;
       const newItems = items.map((it: any) => {
         if (String(it?.id || "") !== productId) return it;
-        const current = floor(it.remainingPackages);
-        if (current < packsToTake) {
-          throw new Error("Orden maestra sin paquetes suficientes.");
-        }
         changed = true;
+        const nextRemaining =
+          remainingByOrderProduct[targetOrderId]?.[productId] ??
+          floor(it.remainingPackages || 0);
         return {
           ...it,
-          remainingPackages: current - packsToTake,
+          remainingPackages: Math.max(0, floor(nextRemaining || 0)),
         };
       });
 
