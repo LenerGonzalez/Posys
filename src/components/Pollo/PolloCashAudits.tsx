@@ -14,13 +14,21 @@ import {
   deletePolloCashAudit,
   listPolloCashAudits,
   PolloCashAudit,
+  updatePolloCashAudit,
 } from "../../Services/pollo_cash_audits";
 
 // Helpers
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+const qty3 = (n: number) => Number(n || 0).toFixed(3);
 const to2 = (v: any) => {
   const num = Number(String(v ?? "").replace(/,/g, "."));
   return isNaN(num) ? 0 : Math.round(num * 100) / 100;
+};
+const ymd = (d: Date) => {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 };
 const todayYMD = () => {
   const d = new Date();
@@ -29,10 +37,29 @@ const todayYMD = () => {
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
+const monthStartYMD = () => {
+  const d = new Date();
+  return ymd(new Date(d.getFullYear(), d.getMonth(), 1));
+};
+const monthEndYMD = () => {
+  const d = new Date();
+  return ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+};
 const startOfDay = (d: Date) =>
   new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
 const endOfDay = (d: Date) =>
   new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59);
+
+// Helpers para cantidades vendidas
+const mStr = (v: unknown) =>
+  String(v ?? "")
+    .toLowerCase()
+    .trim();
+const getQty = (s: any) => Number(s.qty ?? s.quantity ?? 0);
+const isLb = (m: unknown) =>
+  ["lb", "lbs", "libra", "libras"].includes(mStr(m));
+const isUnit = (m: unknown) =>
+  ["unidad", "unidades", "ud", "uds", "pieza", "piezas"].includes(mStr(m));
 
 type UserRow = { uid: string; name: string; role?: string; roles?: string[] };
 
@@ -42,6 +69,7 @@ export default function PolloCashAudits() {
   const [saving, setSaving] = useState(false);
   const [colabOpen, setColabOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
 
   // Users (contadores)
   const [contadores, setContadores] = useState<UserRow[]>([]);
@@ -73,8 +101,13 @@ export default function PolloCashAudits() {
   const [rows, setRows] = useState<PolloCashAudit[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [filterFrom, setFilterFrom] = useState<string>(""); // createdAt filter
-  const [filterTo, setFilterTo] = useState<string>("");
+  const [filterFrom, setFilterFrom] = useState<string>(monthStartYMD()); // createdAt filter
+  const [filterTo, setFilterTo] = useState<string>(monthEndYMD());
+
+  // KPIs del periodo (ventas/abonos/libras/unidades)
+  const [kpiSalesRows, setKpiSalesRows] = useState<any[]>([]);
+  const [kpiAbonosRange, setKpiAbonosRange] = useState<number>(0);
+  const [kpiLoading, setKpiLoading] = useState(false);
 
   async function loadContadores() {
     // Opción A: role == "contador"
@@ -138,6 +171,96 @@ export default function PolloCashAudits() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterFrom, filterTo]);
 
+  useEffect(() => {
+    const loadKpis = async () => {
+      if (!filterFrom || !filterTo) return;
+      setKpiLoading(true);
+      try {
+        // Ventas (salesV2) por rango
+        const qs = query(
+          collection(db, "salesV2"),
+          where("date", ">=", filterFrom),
+          where("date", "<=", filterTo),
+        );
+        const sSnap = await getDocs(qs);
+        const sRows: any[] = [];
+
+        sSnap.forEach((d) => {
+          const x = d.data() as any;
+          const baseDate = x.date ?? "";
+
+          if (Array.isArray(x.items) && x.items.length > 0) {
+            x.items.forEach((it: any, idx: number) => {
+              const prod = String(it.productName ?? "(sin nombre)");
+              const qty = Number(it.qty ?? 0);
+              const lineFinal =
+                Number(it.lineFinal ?? 0) ||
+                Math.max(
+                  0,
+                  Number(it.unitPrice || 0) * qty - Number(it.discount || 0),
+                );
+              sRows.push({
+                id: `${d.id}#${idx}`,
+                date: baseDate,
+                productName: prod,
+                quantity: qty,
+                amount: lineFinal,
+                measurement: it.measurement ?? x.measurement ?? "",
+                type: x.type ?? "CONTADO",
+              });
+            });
+            return;
+          }
+
+          sRows.push({
+            id: d.id,
+            date: baseDate,
+            productName: x.productName ?? "(sin nombre)",
+            quantity: Number(x.quantity ?? 0),
+            amount: Number(x.amount ?? x.amountCharged ?? 0),
+            measurement: x.measurement ?? "",
+            type: x.type ?? "CONTADO",
+          });
+        });
+
+        setKpiSalesRows(sRows);
+
+        // Recaudado (abonos) por rango
+        const movementsSnap = await getDocs(
+          collection(db, "ar_movements_pollo"),
+        );
+        let abonosRangeSum = 0;
+
+        const resolveMovementDate = (m: any) => {
+          if (m?.date) return String(m.date);
+          if (m?.createdAt?.toDate) return ymd(m.createdAt.toDate());
+          return "";
+        };
+
+        movementsSnap.forEach((d) => {
+          const m = d.data() as any;
+          const type = String(m.type ?? "").toUpperCase();
+          if (type !== "ABONO") return;
+          const amount = Math.abs(Number(m.amount ?? 0));
+          const moveDate = resolveMovementDate(m);
+          if (moveDate && moveDate >= filterFrom && moveDate <= filterTo) {
+            abonosRangeSum += amount;
+          }
+        });
+
+        setKpiAbonosRange(abonosRangeSum);
+      } catch (e) {
+        console.error("Error cargando KPIs del periodo:", e);
+        setKpiSalesRows([]);
+        setKpiAbonosRange(0);
+      } finally {
+        setKpiLoading(false);
+      }
+    };
+
+    loadKpis();
+  }, [filterFrom, filterTo]);
+
   // KPIs
   const kpi = useMemo(() => {
     const sumTotal = rows.reduce(
@@ -153,6 +276,40 @@ export default function PolloCashAudits() {
     };
   }, [rows]);
 
+  const kpiPeriod = useMemo(() => {
+    const cashSales = kpiSalesRows.filter((s) => s.type === "CONTADO");
+    const creditSales = kpiSalesRows.filter((s) => s.type === "CREDITO");
+
+    const ventasCash = cashSales.reduce((a, s) => a + (s.amount || 0), 0);
+    const recaudado = ventasCash + kpiAbonosRange;
+
+    const lbsCash = cashSales.reduce(
+      (a, s: any) => (isLb(s.measurement) ? a + getQty(s) : a),
+      0,
+    );
+    const unitsCash = cashSales.reduce(
+      (a, s: any) => (isUnit(s.measurement) ? a + getQty(s) : a),
+      0,
+    );
+    const lbsCredit = creditSales.reduce(
+      (a, s: any) => (isLb(s.measurement) ? a + getQty(s) : a),
+      0,
+    );
+    const unitsCredit = creditSales.reduce(
+      (a, s: any) => (isUnit(s.measurement) ? a + getQty(s) : a),
+      0,
+    );
+
+    return {
+      ventasCash: to2(ventasCash),
+      recaudado: to2(recaudado),
+      lbsCash: qty3(lbsCash),
+      unitsCash: qty3(unitsCash),
+      lbsCredit: qty3(lbsCredit),
+      unitsCredit: qty3(unitsCredit),
+    };
+  }, [kpiSalesRows, kpiAbonosRange]);
+
   function resetForm() {
     setRecibidoPor("");
     setEntregadoPor("");
@@ -165,6 +322,26 @@ export default function PolloCashAudits() {
     setComment("");
     setColabOpen(false);
     setInputsOpen(false);
+    setEditId(null);
+  }
+
+  function startEdit(row: PolloCashAudit) {
+    setEditId(row.id);
+    setOpenForm(true);
+    setColabOpen(true);
+    setInputsOpen(true);
+
+    setContadorUid(row.contadorUid || "");
+    setContadorName(row.contadorName || "");
+    setRecibidoPor(row.recibidoPor || "");
+    setEntregadoPor(row.entregadoPor || "");
+    setRangeFrom(row.rangeFrom || todayYMD());
+    setRangeTo(row.rangeTo || todayYMD());
+    setVentasCash(Number(row.ventasCash || 0));
+    setAbonos(Number(row.abonos || 0));
+    setIngresosExtra(Number(row.ingresosExtra || 0));
+    setDebitos(Number(row.debitos || 0));
+    setComment(row.comment || "");
   }
 
   async function onSave() {
@@ -177,36 +354,59 @@ export default function PolloCashAudits() {
 
     setSaving(true);
     try {
-      const createdByUid = auth.currentUser?.uid || "";
-      const createdByName =
-        auth.currentUser?.displayName ||
-        auth.currentUser?.email ||
-        createdByUid;
+      if (editId) {
+        await updatePolloCashAudit(editId, {
+          contadorUid,
+          contadorName,
 
-      await createPolloCashAudit({
-        createdAt: Timestamp.now(),
-        createdByUid,
-        createdByName,
+          recibidoPor: recibidoPor.trim(),
+          entregadoPor: entregadoPor.trim(),
 
-        contadorUid,
-        contadorName,
+          rangeFrom,
+          rangeTo,
 
-        recibidoPor: recibidoPor.trim(),
-        entregadoPor: entregadoPor.trim(),
+          ventasCash: to2(ventasCash),
+          abonos: to2(abonos),
+          ingresosExtra: to2(ingresosExtra),
+          debitos: to2(debitos),
 
-        rangeFrom,
-        rangeTo,
+          subTotal: to2(subTotal),
+          totalEntregado: to2(totalEntregado),
 
-        ventasCash: to2(ventasCash),
-        abonos: to2(abonos),
-        ingresosExtra: to2(ingresosExtra),
-        debitos: to2(debitos),
+          comment: comment.trim(),
+        });
+      } else {
+        const createdByUid = auth.currentUser?.uid || "";
+        const createdByName =
+          auth.currentUser?.displayName ||
+          auth.currentUser?.email ||
+          createdByUid;
 
-        subTotal: to2(subTotal),
-        totalEntregado: to2(totalEntregado),
+        await createPolloCashAudit({
+          createdAt: Timestamp.now(),
+          createdByUid,
+          createdByName,
 
-        comment: comment.trim(),
-      });
+          contadorUid,
+          contadorName,
+
+          recibidoPor: recibidoPor.trim(),
+          entregadoPor: entregadoPor.trim(),
+
+          rangeFrom,
+          rangeTo,
+
+          ventasCash: to2(ventasCash),
+          abonos: to2(abonos),
+          ingresosExtra: to2(ingresosExtra),
+          debitos: to2(debitos),
+
+          subTotal: to2(subTotal),
+          totalEntregado: to2(totalEntregado),
+
+          comment: comment.trim(),
+        });
+      }
 
       setOpenForm(false);
       resetForm();
@@ -269,7 +469,10 @@ export default function PolloCashAudits() {
 
         <div className="flex gap-2">
           <button
-            onClick={() => setOpenForm(true)}
+            onClick={() => {
+              resetForm();
+              setOpenForm(true);
+            }}
             className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
           >
             + Nuevo arqueo
@@ -345,6 +548,44 @@ export default function PolloCashAudits() {
         </div>
       </div>
 
+      {/* KPIs del periodo (ventas/abonos/libras/unidades) */}
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div className="bg-white rounded shadow p-3">
+          <div className="text-xs text-gray-500">Ventas cash (período)</div>
+          <div className="text-lg font-semibold">
+            {money(kpiPeriod.ventasCash)}
+          </div>
+          {kpiLoading && (
+            <div className="text-[11px] text-gray-400">Actualizando…</div>
+          )}
+        </div>
+        <div className="bg-white rounded shadow p-3">
+          <div className="text-xs text-gray-500">Recaudado (período)</div>
+          <div className="text-lg font-semibold">
+            {money(kpiPeriod.recaudado)}
+          </div>
+          <div className="text-[11px] text-gray-400">
+            Cash + abonos
+          </div>
+        </div>
+        <div className="bg-white rounded shadow p-3">
+          <div className="text-xs text-gray-500">Libras cash</div>
+          <div className="text-lg font-semibold">{kpiPeriod.lbsCash}</div>
+        </div>
+        <div className="bg-white rounded shadow p-3">
+          <div className="text-xs text-gray-500">Unidades cash</div>
+          <div className="text-lg font-semibold">{kpiPeriod.unitsCash}</div>
+        </div>
+        <div className="bg-white rounded shadow p-3">
+          <div className="text-xs text-gray-500">Libras crédito</div>
+          <div className="text-lg font-semibold">{kpiPeriod.lbsCredit}</div>
+        </div>
+        <div className="bg-white rounded shadow p-3">
+          <div className="text-xs text-gray-500">Unidades crédito</div>
+          <div className="text-lg font-semibold">{kpiPeriod.unitsCredit}</div>
+        </div>
+      </div>
+
       {/* Lista mobile: tarjetas */}
       <div className="mt-4 block md:hidden space-y-3">
         {loading ? (
@@ -408,8 +649,16 @@ export default function PolloCashAudits() {
               <div className="mt-3 flex justify-end">
                 <button
                   type="button"
+                  onClick={() => startEdit(r)}
+                  className="text-xs px-3 py-1.5 rounded border text-gray-700 hover:bg-gray-50"
+                  disabled={saving}
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
                   onClick={() => onDelete(r)}
-                  className="text-xs px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                  className="ml-2 text-xs px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
                   disabled={saving}
                 >
                   Eliminar
@@ -477,8 +726,16 @@ export default function PolloCashAudits() {
                   <td className="px-3 py-2 text-right">
                     <button
                       type="button"
+                      onClick={() => startEdit(r)}
+                      className="text-xs px-3 py-1.5 rounded border text-gray-700 hover:bg-gray-50"
+                      disabled={saving}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => onDelete(r)}
-                      className="text-xs px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                      className="ml-2 text-xs px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
                       disabled={saving}
                     >
                       Eliminar
@@ -496,7 +753,9 @@ export default function PolloCashAudits() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-3">
           <div className="bg-white w-full max-w-3xl rounded shadow-lg overflow-hidden">
             <div className="p-3 border-b flex items-center justify-between">
-              <div className="font-semibold">Nuevo arqueo</div>
+              <div className="font-semibold">
+                {editId ? "Editar arqueo" : "Nuevo arqueo"}
+              </div>
               <button
                 onClick={() => {
                   setOpenForm(false);
@@ -769,7 +1028,11 @@ export default function PolloCashAudits() {
                 className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
                 disabled={saving}
               >
-                {saving ? "Guardando..." : "Guardar arqueo"}
+                {saving
+                  ? "Guardando..."
+                  : editId
+                    ? "Guardar cambios"
+                    : "Guardar arqueo"}
               </button>
             </div>
           </div>

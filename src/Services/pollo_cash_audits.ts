@@ -10,6 +10,7 @@ import {
   Timestamp,
   where,
   DocumentData,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -102,4 +103,11 @@ export async function listPolloCashAudits(params?: {
 
 export async function deletePolloCashAudit(id: string) {
   await deleteDoc(doc(db, COL, id));
+}
+
+export async function updatePolloCashAudit(
+  id: string,
+  payload: Partial<Omit<PolloCashAudit, "id">>,
+) {
+  await updateDoc(doc(db, COL, id), payload);
 }
