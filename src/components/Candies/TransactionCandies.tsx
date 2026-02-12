@@ -224,6 +224,12 @@ export default function TransactionsReportCandies({
   const PAGE_SIZE = 15;
   const [page, setPage] = useState(1);
 
+  // UI: cards colapsables
+  const [filtersCardOpen, setFiltersCardOpen] = useState(false);
+  const [kpisCardOpen, setKpisCardOpen] = useState(false);
+  const [cashCardOpen, setCashCardOpen] = useState(false);
+  const [creditCardOpen, setCreditCardOpen] = useState(false);
+
   const customersById = useMemo(() => {
     const m: Record<string, string> = {};
     customers.forEach((c) => (m[c.id] = c.name));
@@ -324,17 +330,28 @@ export default function TransactionsReportCandies({
     let packsCash = 0,
       packsCredito = 0,
       montoCash = 0,
-      montoCredito = 0;
+      montoCredito = 0,
+      comisionCash = 0,
+      comisionCredito = 0;
     for (const s of filteredSales) {
       if (s.type === "CONTADO") {
         packsCash += s.quantity;
         montoCash += s.total;
+        comisionCash += getCommissionAmount(s);
       } else {
         packsCredito += s.quantity;
         montoCredito += s.total;
+        comisionCredito += getCommissionAmount(s);
       }
     }
-    return { packsCash, packsCredito, montoCash, montoCredito };
+    return {
+      packsCash,
+      packsCredito,
+      montoCash,
+      montoCredito,
+      comisionCash,
+      comisionCredito,
+    };
   }, [filteredSales]);
 
   // page slices
@@ -343,6 +360,15 @@ export default function TransactionsReportCandies({
     const start = (page - 1) * PAGE_SIZE;
     return filteredSales.slice(start, start + PAGE_SIZE);
   }, [filteredSales, page]);
+
+  const cashPaged = useMemo(
+    () => paged.filter((s) => s.type === "CONTADO"),
+    [paged],
+  );
+  const creditPaged = useMemo(
+    () => paged.filter((s) => s.type === "CREDITO"),
+    [paged],
+  );
 
   // venta actual del modal (para mostrar comisión en el detalle)
   const modalSale = useMemo(
@@ -524,97 +550,149 @@ export default function TransactionsReportCandies({
     <div className="max-w-6xl mx-auto">
       <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
 
-      {/* Filtros (mobile-friendly) */}
-      <div className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end text-sm">
-        <div>
-          <label className="block font-semibold">Desde</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 w-full"
-            value={fromDate}
-            onChange={(e) => {
-              setFromDate(e.target.value);
-              setPage(1);
-            }}
-          />
-        </div>
-
-        <div>
-          <label className="block font-semibold">Hasta</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 w-full"
-            value={toDate}
-            onChange={(e) => {
-              setToDate(e.target.value);
-              setPage(1);
-            }}
-          />
-        </div>
-
-        <div className="sm:col-span-2 lg:col-span-2">
-          <label className="block font-semibold">Cliente (crédito)</label>
-          <select
-            className="border rounded px-2 py-1 w-full"
-            value={filterCustomerId}
-            onChange={(e) => {
-              setFilterCustomerId(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">Todos</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block font-semibold">Tipo</label>
-          <select
-            className="border rounded px-2 py-1 w-full"
-            value={filterType}
-            onChange={(e) => {
-              setFilterType(e.target.value as "" | SaleType);
-              setPage(1);
-            }}
-          >
-            <option value="">Todos</option>
-            <option value="CONTADO">Cash</option>
-            <option value="CREDITO">Crédito</option>
-          </select>
-        </div>
-
+      {/* Filtros (colapsables) */}
+      <div className="bg-white border rounded shadow-sm mb-4">
         <button
-          className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
-          onClick={handleExportPDF}
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setFiltersCardOpen((prev) => !prev)}
+          aria-expanded={filtersCardOpen}
         >
-          Exportar PDF
+          <span>Filtros</span>
+          <span
+            className={`transition-transform ${filtersCardOpen ? "rotate-180" : ""}`}
+          >
+            ▼
+          </span>
         </button>
+        {filtersCardOpen && (
+          <div className="p-4 border-t">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end text-sm">
+              <div>
+                <label className="block font-semibold">Desde</label>
+                <input
+                  type="date"
+                  className="border rounded px-2 py-1 w-full"
+                  value={fromDate}
+                  onChange={(e) => {
+                    setFromDate(e.target.value);
+                    setPage(1);
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold">Hasta</label>
+                <input
+                  type="date"
+                  className="border rounded px-2 py-1 w-full"
+                  value={toDate}
+                  onChange={(e) => {
+                    setToDate(e.target.value);
+                    setPage(1);
+                  }}
+                />
+              </div>
+
+              <div className="sm:col-span-2 lg:col-span-2">
+                <label className="block font-semibold">Cliente (crédito)</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={filterCustomerId}
+                  onChange={(e) => {
+                    setFilterCustomerId(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">Todos</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold">Tipo</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={filterType}
+                  onChange={(e) => {
+                    setFilterType(e.target.value as "" | SaleType);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">Todos</option>
+                  <option value="CONTADO">Cash</option>
+                  <option value="CREDITO">Crédito</option>
+                </select>
+              </div>
+
+              <button
+                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
+                onClick={handleExportPDF}
+              >
+                Exportar PDF
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Paquetes Cash</div>
-          <div className="text-xl font-semibold">{kpis.packsCash}</div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Paquetes Crédito</div>
-          <div className="text-xl font-semibold">{kpis.packsCredito}</div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Monto Cash</div>
-          <div className="text-xl font-semibold">{money(kpis.montoCash)}</div>
-        </div>
-        <div className="p-3 border rounded bg-gray-50">
-          <div className="text-xs text-gray-600">Monto Crédito</div>
-          <div className="text-xl font-semibold">
-            {money(kpis.montoCredito)}
+      {/* KPIs (colapsables) */}
+      <div className="bg-white border rounded shadow-sm mb-4">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setKpisCardOpen((prev) => !prev)}
+          aria-expanded={kpisCardOpen}
+        >
+          <span>KPIs</span>
+          <span
+            className={`transition-transform ${kpisCardOpen ? "rotate-180" : ""}`}
+          >
+            ▼
+          </span>
+        </button>
+        {kpisCardOpen && (
+          <div className="p-4 border-t">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Paquetes Cash</div>
+                <div className="text-xl font-semibold">{kpis.packsCash}</div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Paquetes Crédito</div>
+                <div className="text-xl font-semibold">{kpis.packsCredito}</div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Monto Cash</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.montoCash)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Monto Crédito</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.montoCredito)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Comisión Cash</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.comisionCash)}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Comisión Crédito</div>
+                <div className="text-xl font-semibold">
+                  {money(kpis.comisionCredito)}
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* ===== MOBILE: Cards expandibles (sin perder datos) ===== */}
@@ -626,150 +704,357 @@ export default function TransactionsReportCandies({
             Sin transacciones en el rango.
           </div>
         ) : (
-          paged.map((s) => {
-            const name =
-              s.customerName ||
-              (s.customerId ? customersById[s.customerId] : "") ||
-              "Nombre cliente";
-            const commissionAmount = getCommissionAmount(s);
+          <>
+            <div className="bg-white border rounded-xl shadow">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                onClick={() => setCashCardOpen((prev) => !prev)}
+                aria-expanded={cashCardOpen}
+              >
+                <span>Cash</span>
+                <span
+                  className={`transition-transform ${cashCardOpen ? "rotate-180" : ""}`}
+                >
+                  ▼
+                </span>
+              </button>
+              {cashCardOpen && (
+                <div className="p-3 border-t space-y-3">
+                  {cashPaged.length === 0 ? (
+                    <div className="text-sm text-gray-500">
+                      Sin transacciones cash.
+                    </div>
+                  ) : (
+                    cashPaged.map((s) => {
+                      const name =
+                        s.customerName ||
+                        (s.customerId ? customersById[s.customerId] : "") ||
+                        "Nombre cliente";
+                      const commissionAmount = getCommissionAmount(s);
 
-            return (
-              <div key={s.id} className="bg-white border rounded-xl shadow">
-                <details className="group">
-                  <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="font-semibold truncate">{name}</div>
-                        <div className="text-xs text-gray-600 shrink-0">
-                          {s.date}
-                        </div>
-                      </div>
-
-                      <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
-                        <span
-                          className={`px-2 py-1 rounded-full border ${
-                            s.type === "CREDITO"
-                              ? "bg-yellow-50 border-yellow-200 text-yellow-700"
-                              : "bg-green-50 border-green-200 text-green-700"
-                          }`}
+                      return (
+                        <div
+                          key={s.id}
+                          className="bg-white border rounded-xl shadow"
                         >
-                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                        </span>
+                          <details className="group">
+                            <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="font-semibold truncate">
+                                    {name}
+                                  </div>
+                                  <div className="text-xs text-gray-600 shrink-0">
+                                    {s.date}
+                                  </div>
+                                </div>
 
-                        <span className="text-gray-700">
-                          <b>Paquetes:</b>{" "}
-                          <button
-                            type="button"
-                            className="underline text-blue-600"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              openItemsModal(s.id);
-                            }}
-                            title="Ver detalle"
-                          >
-                            {s.quantity}
-                          </button>
-                        </span>
+                                <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
+                                  <span className="px-2 py-1 rounded-full border bg-green-50 border-green-200 text-green-700">
+                                    Cash
+                                  </span>
 
-                        <span className="text-gray-700">
-                          <b>Monto:</b> {money(s.total)}
-                        </span>
-                      </div>
-                    </div>
+                                  <span className="text-gray-700">
+                                    <b>Paquetes:</b>{" "}
+                                    <button
+                                      type="button"
+                                      className="underline text-blue-600"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        openItemsModal(s.id);
+                                      }}
+                                      title="Ver detalle"
+                                    >
+                                      {s.quantity}
+                                    </button>
+                                  </span>
 
-                    <div className="text-gray-500 mt-1">
-                      <span className="inline-block transition-transform group-open:rotate-180">
-                        ▼
-                      </span>
-                    </div>
-                  </summary>
+                                  <span className="text-gray-700">
+                                    <b>Monto:</b> {money(s.total)}
+                                  </span>
+                                </div>
+                              </div>
 
-                  {/* Detalle expandido */}
-                  <div className="px-3 pb-3 pt-0 text-sm">
-                    <div className="grid grid-cols-1 gap-2 border-t pt-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Cliente</span>
-                        <span className="font-medium text-right">{name}</span>
-                      </div>
+                              <div className="text-gray-500 mt-1">
+                                <span className="inline-block transition-transform group-open:rotate-180">
+                                  ▼
+                                </span>
+                              </div>
+                            </summary>
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Fecha</span>
-                        <span className="font-medium">{s.date}</span>
-                      </div>
+                            <div className="px-3 pb-3 pt-0 text-sm">
+                              <div className="grid grid-cols-1 gap-2 border-t pt-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Cliente</span>
+                                  <span className="font-medium text-right">
+                                    {name}
+                                  </span>
+                                </div>
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Tipo</span>
-                        <span className="font-medium">
-                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                        </span>
-                      </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Fecha</span>
+                                  <span className="font-medium">{s.date}</span>
+                                </div>
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Paquetes</span>
-                        <span className="font-medium">
-                          <button
-                            type="button"
-                            className="underline text-blue-600"
-                            onClick={() => openItemsModal(s.id)}
-                            title="Ver detalle"
-                          >
-                            {s.quantity}
-                          </button>
-                        </span>
-                      </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Tipo</span>
+                                  <span className="font-medium">Cash</span>
+                                </div>
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Monto</span>
-                        <span className="font-semibold">{money(s.total)}</span>
-                      </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">
+                                    Paquetes
+                                  </span>
+                                  <span className="font-medium">
+                                    <button
+                                      type="button"
+                                      className="underline text-blue-600"
+                                      onClick={() => openItemsModal(s.id)}
+                                      title="Ver detalle"
+                                    >
+                                      {s.quantity}
+                                    </button>
+                                  </span>
+                                </div>
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Comisión</span>
-                        <span className="font-medium">
-                          {commissionAmount > 0 ? money(commissionAmount) : "—"}
-                        </span>
-                      </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Monto</span>
+                                  <span className="font-semibold">
+                                    {money(s.total)}
+                                  </span>
+                                </div>
 
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Vendedor</span>
-                        <span className="font-medium">
-                          {s.vendorName || "—"}
-                        </span>
-                      </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">
+                                    Comisión
+                                  </span>
+                                  <span className="font-medium">
+                                    {commissionAmount > 0
+                                      ? money(commissionAmount)
+                                      : "—"}
+                                  </span>
+                                </div>
 
-                      {/* Acciones (solo admin) */}
-                      {canDelete && (
-                        <div className="pt-2 flex items-center justify-end gap-2">
-                          <button
-                            className="px-3 py-2 rounded border hover:bg-gray-50"
-                            onClick={() =>
-                              setOpenMenuId((prev) =>
-                                prev === s.id ? null : s.id,
-                              )
-                            }
-                          >
-                            ⋮ Acciones
-                          </button>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">
+                                    Vendedor
+                                  </span>
+                                  <span className="font-medium">
+                                    {s.vendorName || "—"}
+                                  </span>
+                                </div>
 
-                          {openMenuId === s.id && (
-                            <button
-                              className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
-                              onClick={() => confirmDelete(s)}
-                            >
-                              Eliminar
-                            </button>
-                          )}
+                                {canDelete && (
+                                  <div className="pt-2 flex items-center justify-end gap-2">
+                                    <button
+                                      className="px-3 py-2 rounded border hover:bg-gray-50"
+                                      onClick={() =>
+                                        setOpenMenuId((prev) =>
+                                          prev === s.id ? null : s.id,
+                                        )
+                                      }
+                                    >
+                                      ⋮ Acciones
+                                    </button>
+
+                                    {openMenuId === s.id && (
+                                      <button
+                                        className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                                        onClick={() => confirmDelete(s)}
+                                      >
+                                        Eliminar
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </details>
                         </div>
-                      )}
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white border rounded-xl shadow">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                onClick={() => setCreditCardOpen((prev) => !prev)}
+                aria-expanded={creditCardOpen}
+              >
+                <span>Crédito</span>
+                <span
+                  className={`transition-transform ${creditCardOpen ? "rotate-180" : ""}`}
+                >
+                  ▼
+                </span>
+              </button>
+              {creditCardOpen && (
+                <div className="p-3 border-t space-y-3">
+                  {creditPaged.length === 0 ? (
+                    <div className="text-sm text-gray-500">
+                      Sin transacciones crédito.
                     </div>
-                  </div>
-                </details>
-              </div>
-            );
-          })
+                  ) : (
+                    creditPaged.map((s) => {
+                      const name =
+                        s.customerName ||
+                        (s.customerId ? customersById[s.customerId] : "") ||
+                        "Nombre cliente";
+                      const commissionAmount = getCommissionAmount(s);
+
+                      return (
+                        <div
+                          key={s.id}
+                          className="bg-white border rounded-xl shadow"
+                        >
+                          <details className="group">
+                            <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="font-semibold truncate">
+                                    {name}
+                                  </div>
+                                  <div className="text-xs text-gray-600 shrink-0">
+                                    {s.date}
+                                  </div>
+                                </div>
+
+                                <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
+                                  <span className="px-2 py-1 rounded-full border bg-yellow-50 border-yellow-200 text-yellow-700">
+                                    Crédito
+                                  </span>
+
+                                  <span className="text-gray-700">
+                                    <b>Paquetes:</b>{" "}
+                                    <button
+                                      type="button"
+                                      className="underline text-blue-600"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        openItemsModal(s.id);
+                                      }}
+                                      title="Ver detalle"
+                                    >
+                                      {s.quantity}
+                                    </button>
+                                  </span>
+
+                                  <span className="text-gray-700">
+                                    <b>Monto:</b> {money(s.total)}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="text-gray-500 mt-1">
+                                <span className="inline-block transition-transform group-open:rotate-180">
+                                  ▼
+                                </span>
+                              </div>
+                            </summary>
+
+                            <div className="px-3 pb-3 pt-0 text-sm">
+                              <div className="grid grid-cols-1 gap-2 border-t pt-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Cliente</span>
+                                  <span className="font-medium text-right">
+                                    {name}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Fecha</span>
+                                  <span className="font-medium">{s.date}</span>
+                                </div>
+
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Tipo</span>
+                                  <span className="font-medium">Crédito</span>
+                                </div>
+
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">
+                                    Paquetes
+                                  </span>
+                                  <span className="font-medium">
+                                    <button
+                                      type="button"
+                                      className="underline text-blue-600"
+                                      onClick={() => openItemsModal(s.id)}
+                                      title="Ver detalle"
+                                    >
+                                      {s.quantity}
+                                    </button>
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Monto</span>
+                                  <span className="font-semibold">
+                                    {money(s.total)}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">
+                                    Comisión
+                                  </span>
+                                  <span className="font-medium">
+                                    {commissionAmount > 0
+                                      ? money(commissionAmount)
+                                      : "—"}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">
+                                    Vendedor
+                                  </span>
+                                  <span className="font-medium">
+                                    {s.vendorName || "—"}
+                                  </span>
+                                </div>
+
+                                {canDelete && (
+                                  <div className="pt-2 flex items-center justify-end gap-2">
+                                    <button
+                                      className="px-3 py-2 rounded border hover:bg-gray-50"
+                                      onClick={() =>
+                                        setOpenMenuId((prev) =>
+                                          prev === s.id ? null : s.id,
+                                        )
+                                      }
+                                    >
+                                      ⋮ Acciones
+                                    </button>
+
+                                    {openMenuId === s.id && (
+                                      <button
+                                        className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                                        onClick={() => confirmDelete(s)}
+                                      >
+                                        Eliminar
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </details>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          </>
         )}
 
-        {/* Paginación */}
         <div className="bg-white p-3 rounded shadow border">
           {renderPager()}
         </div>

@@ -163,17 +163,22 @@ export default function CustomersCandy({
         data = snap.docs[0]?.data();
       }
 
-      const arr = Array.isArray(data?.items)
-        ? data.items
-        : data?.item
-          ? [data.item]
-          : [];
+      let arr: any[] = [];
+      if (Array.isArray(data?.items)) arr = data.items;
+      else if (data?.items && typeof data.items === "object") {
+        try {
+          arr = Object.values(data.items);
+        } catch (e) {
+          arr = [];
+        }
+      } else if (data?.item) arr = [data.item];
+
       const rows = arr.map((it: any) => ({
         productName: String(it.productName || ""),
-        qty: Number(it.qty || 0),
-        unitPrice: Number(it.unitPrice || 0),
+        qty: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
+        unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? it.price ?? 0),
         discount: Number(it.discount || 0),
-        total: Number(it.total || 0),
+        total: Number(it.total ?? it.lineFinal ?? it.amount ?? 0),
       }));
       setItemsModalRows(rows);
     } catch (e) {
@@ -197,6 +202,10 @@ export default function CustomersCandy({
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+
+  // paginación
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
 
   // ===== Edición inline =====
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1107,6 +1116,62 @@ export default function CustomersCandy({
     });
   }, [orderedRows, fClient, fStatus, fMin, fMax]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filteredRows.slice(start, start + PAGE_SIZE);
+  }, [filteredRows, page]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [fClient, fStatus, fMin, fMax]);
+
+  const goFirst = () => setPage(1);
+  const goPrev = () => setPage((p) => Math.max(1, p - 1));
+  const goNext = () => setPage((p) => Math.min(totalPages, p + 1));
+  const goLast = () => setPage(totalPages);
+
+  const renderPager = () => (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
+      <div className="flex items-center gap-1 flex-wrap">
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goFirst}
+          disabled={page === 1}
+        >
+          « Primero
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goPrev}
+          disabled={page === 1}
+        >
+          ‹ Anterior
+        </button>
+        <span className="px-2 text-sm">
+          Página {page} de {totalPages}
+        </span>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goNext}
+          disabled={page === totalPages}
+        >
+          Siguiente ›
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goLast}
+          disabled={page === totalPages}
+        >
+          Último »
+        </button>
+      </div>
+      <div className="text-sm text-gray-600">
+        {filteredRows.length} cliente(s)
+      </div>
+    </div>
+  );
+
   return (
     <div className="max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-3">
@@ -1226,14 +1291,14 @@ export default function CustomersCandy({
                     Cargando…
                   </td>
                 </tr>
-              ) : filteredRows.length === 0 ? (
+              ) : pagedRows.length === 0 ? (
                 <tr>
                   <td className="p-4 text-center" colSpan={10}>
                     Sin clientes
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((c) => {
+                pagedRows.map((c) => {
                   const isEditing = editingId === c.id;
                   return (
                     <tr key={c.id} className="text-center">
@@ -1425,17 +1490,18 @@ export default function CustomersCandy({
               )}
             </tbody>
           </table>
+          {renderPager()}
         </div>
 
         {/* ===================== MOBILE (COLAPSABLE + RAPIDO) ===================== */}
         <div className="md:hidden">
           {loading ? (
             <div className="p-4 text-center text-sm">Cargando…</div>
-          ) : filteredRows.length === 0 ? (
+          ) : pagedRows.length === 0 ? (
             <div className="p-4 text-center text-sm">Sin clientes</div>
           ) : (
             <div className="space-y-2">
-              {filteredRows.map((c) => {
+              {pagedRows.map((c) => {
                 const isExpanded = expandedCustomerId === c.id;
                 const isEditing = editingId === c.id;
 
@@ -1688,6 +1754,7 @@ export default function CustomersCandy({
               })}
             </div>
           )}
+          {renderPager()}
         </div>
       </div>
 
@@ -2213,6 +2280,17 @@ export default function CustomersCandy({
                                       ? `Venta #${m.ref.saleId}`
                                       : "—"}
                                   </div>
+                                  {m.ref?.saleId && (
+                                    <button
+                                      type="button"
+                                      className="mt-2 text-xs underline text-blue-600"
+                                      onClick={() =>
+                                        openItemsModal(m.ref!.saleId!)
+                                      }
+                                    >
+                                      Ver productos de la venta
+                                    </button>
+                                  )}
                                 </div>
 
                                 <div className="text-sm">

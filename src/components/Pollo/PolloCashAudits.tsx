@@ -696,9 +696,7 @@ export default function PolloCashAudits() {
           <div className="grid grid-cols-1 gap-3">
             <div className="bg-white rounded border p-3">
               <div className="text-xs text-gray-500">KPI: Monto entregado</div>
-              <div className="text-lg font-semibold">
-                {money(kpi.sumTotal)}
-              </div>
+              <div className="text-lg font-semibold">{money(kpi.sumTotal)}</div>
               <div className="text-xs text-gray-400">
                 Suma de Total (Sub total - Débitos)
               </div>
@@ -733,15 +731,11 @@ export default function PolloCashAudits() {
                   {money(kpiPeriod.ventasCash)}
                 </div>
                 {kpiLoading && (
-                  <div className="text-[11px] text-gray-400">
-                    Actualizando…
-                  </div>
+                  <div className="text-[11px] text-gray-400">Actualizando…</div>
                 )}
               </div>
               <div className="bg-white rounded border p-3">
-                <div className="text-xs text-gray-500">
-                  Recaudado (período)
-                </div>
+                <div className="text-xs text-gray-500">Recaudado (período)</div>
                 <div className="text-lg font-semibold">
                   {money(kpiPeriod.recaudado)}
                 </div>
@@ -749,9 +743,7 @@ export default function PolloCashAudits() {
               </div>
               <div className="bg-white rounded border p-3">
                 <div className="text-xs text-gray-500">Libras cash</div>
-                <div className="text-lg font-semibold">
-                  {kpiPeriod.lbsCash}
-                </div>
+                <div className="text-lg font-semibold">{kpiPeriod.lbsCash}</div>
               </div>
               <div className="bg-white rounded border p-3">
                 <div className="text-xs text-gray-500">Unidades cash</div>

@@ -551,6 +551,79 @@ export default function PrecioVentas() {
     );
   }, [filtered]);
 
+  // paginación (móvil: 5 grupos por página)
+  const PAGE_SIZE = 5;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredByCategory.length / PAGE_SIZE),
+  );
+  const pagedByCategory = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filteredByCategory.slice(start, start + PAGE_SIZE);
+  }, [filteredByCategory, page]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [
+    searchProduct,
+    searchCode,
+    minPrice,
+    maxPrice,
+    priceField,
+    packagingFilter,
+  ]);
+
+  useEffect(() => {
+    setPage((p) => Math.min(p, totalPages));
+  }, [totalPages]);
+
+  const goFirst = () => setPage(1);
+  const goPrev = () => setPage((p) => Math.max(1, p - 1));
+  const goNext = () => setPage((p) => Math.min(totalPages, p + 1));
+  const goLast = () => setPage(totalPages);
+
+  const renderPager = () => (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
+      <div className="flex items-center gap-1 flex-wrap">
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goFirst}
+          disabled={page === 1}
+        >
+          « Primero
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goPrev}
+          disabled={page === 1}
+        >
+          ‹ Anterior
+        </button>
+        <span className="px-2 text-sm">
+          Página {page} de {totalPages}
+        </span>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goNext}
+          disabled={page === totalPages}
+        >
+          Siguiente ›
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goLast}
+          disabled={page === totalPages}
+        >
+          Último »
+        </button>
+      </div>
+      <div className="text-sm text-gray-600">
+        {filteredByCategory.length} categoría(s)
+      </div>
+    </div>
+  );
+
   const toggleCategory = (cat: string) => {
     setOpenCategoryMap((prev) => ({
       ...prev,
@@ -883,7 +956,7 @@ export default function PrecioVentas() {
           </div>
         ) : (
           <div className="space-y-2">
-            {filteredByCategory.map(([cat, items]) => {
+            {pagedByCategory.map(([cat, items]) => {
               const expandedCategory = !!openCategoryMap[cat];
               return (
                 <div
@@ -1175,6 +1248,7 @@ export default function PrecioVentas() {
           </div>
         )}
 
+        {!loading && filteredByCategory.length > 0 && renderPager()}
         {msg && <p className="mt-2 text-sm">{msg}</p>}
       </div>
 

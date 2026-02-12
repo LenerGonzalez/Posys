@@ -371,6 +371,9 @@ export default function ProductsCandies() {
 
   // ✅ cards colapsables en móvil
   const [openCardId, setOpenCardId] = useState<string | null>(null);
+  const [categoryOpenMap, setCategoryOpenMap] = useState<
+    Record<string, boolean>
+  >({});
   const creatingRef = useRef(false);
   const lastCreateKeyRef = useRef<{ key: string; ts: number } | null>(null);
 
@@ -467,6 +470,100 @@ export default function ProductsCandies() {
       return okText && okCode;
     });
   }, [products, search, searchCode, packagingFilter]);
+
+  // paginación
+  const PAGE_SIZE = 7;
+  const [page, setPage] = useState(1);
+  const groupedByCategory = useMemo(() => {
+    const map: Record<string, CandyProduct[]> = {};
+    filtered.forEach((p) => {
+      const cat =
+        String(p.category || "(sin categoría)").trim() || "(sin categoría)";
+      if (!map[cat]) map[cat] = [];
+      map[cat].push(p);
+    });
+    return Object.entries(map)
+      .map(([category, rows]) => ({
+        category,
+        rows: rows.sort((a, b) => a.name.localeCompare(b.name, "es")),
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category, "es"));
+  }, [filtered]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(
+      (isMobile ? groupedByCategory.length : filtered.length) / PAGE_SIZE,
+    ),
+  );
+  const paged = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+
+  const pagedByCategory = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return groupedByCategory.slice(start, start + PAGE_SIZE);
+  }, [groupedByCategory, page]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, searchCode, packagingFilter]);
+
+  useEffect(() => {
+    setPage((p) => Math.min(p, totalPages));
+  }, [totalPages]);
+
+  const goFirst = () => setPage(1);
+  const goPrev = () => setPage((p) => Math.max(1, p - 1));
+  const goNext = () => setPage((p) => Math.min(totalPages, p + 1));
+  const goLast = () => setPage(totalPages);
+
+  const renderPager = () => (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
+      <div className="flex items-center gap-1 flex-wrap">
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goFirst}
+          disabled={page === 1}
+        >
+          « Primero
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goPrev}
+          disabled={page === 1}
+        >
+          ‹ Anterior
+        </button>
+        <span className="px-2 text-sm">
+          Página {page} de {totalPages}
+        </span>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goNext}
+          disabled={page === totalPages}
+        >
+          Siguiente ›
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={goLast}
+          disabled={page === totalPages}
+        >
+          Último »
+        </button>
+      </div>
+      <div className="text-sm text-gray-600">{filtered.length} producto(s)</div>
+    </div>
+  );
+
+  const toggleCategory = (cat: string) => {
+    setCategoryOpenMap((prev) => ({
+      ...prev,
+      [cat]: !prev[cat],
+    }));
+  };
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -1325,235 +1422,292 @@ export default function ProductsCandies() {
               Sin productos.
             </div>
           ) : (
-            filtered.map((p) => {
-              const isEd = editingId === p.id;
-              const expanded = openCardId === p.id;
-              const hasCode = !!String(p.barcode || "").trim();
-
-              return (
-                <div
-                  key={p.id}
-                  className="bg-white border rounded-2xl shadow-sm overflow-hidden"
-                >
-                  {/* header card (colapsada): nombre + "precio isla" (aquí solo tenemos providerPrice) */}
-                  <button
-                    type="button"
-                    className="w-full px-3 py-3 flex items-center justify-between text-left"
-                    onClick={() =>
-                      setOpenCardId((cur) => (cur === p.id ? null : p.id))
-                    }
+            <div className="space-y-3">
+              {pagedByCategory.map((group) => {
+                const isOpen = !!categoryOpenMap[group.category];
+                return (
+                  <div
+                    key={group.category}
+                    className="bg-white border rounded-2xl shadow-sm overflow-hidden"
                   >
-                    <div className="min-w-0">
-                      <div className="font-bold truncate">{p.name}</div>
-                      <div className="text-xs text-gray-600 truncate">
-                        {p.category}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-gray-600">
-                        Precio proveedor
-                      </div>
-                      <div className="font-bold tabular-nums">
-                        {money(p.providerPrice)}
-                      </div>
-                    </div>
-                  </button>
-
-                  {expanded && (
-                    <div className="px-3 pb-3 border-t">
-                      <div className="pt-3 space-y-2 text-sm">
-                        {/* si está en edición, mostramos inputs; si no, texto */}
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <div className="text-xs text-gray-600">
-                              Categoría
-                            </div>
-                            {isEd ? (
-                              <input
-                                className="w-full border rounded px-2 py-1"
-                                value={editCategory}
-                                onChange={(e) =>
-                                  setEditCategory(e.target.value)
-                                }
-                              />
-                            ) : (
-                              <div className="font-semibold">{p.category}</div>
-                            )}
-                          </div>
-
-                          <div>
-                            <div className="text-xs text-gray-600">
-                              Und x paquete
-                            </div>
-                            {isEd ? (
-                              <input
-                                type="number"
-                                min={1}
-                                className="w-full border rounded px-2 py-1 text-right"
-                                value={editUnitsPerPackage}
-                                onChange={(e) =>
-                                  setEditUnitsPerPackage(
-                                    roundInt(e.target.value, 1),
-                                  )
-                                }
-                              />
-                            ) : (
-                              <div className="font-semibold text-right tabular-nums">
-                                {p.unitsPerPackage}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="col-span-2">
-                            <div className="text-xs text-gray-600">Empaque</div>
-                            {isEd ? (
-                              <select
-                                className="w-full border rounded px-2 py-1"
-                                value={editPackaging}
-                                onChange={(e) =>
-                                  setEditPackaging(e.target.value)
-                                }
-                              >
-                                <option value="">Seleccionar</option>
-                                <option value="Tarro">Tarro</option>
-                                <option value="Bolsa">Bolsa</option>
-                                <option value="Ristra">Ristra</option>
-                                <option value="Caja">Caja</option>
-                                <option value="Vaso">Vaso</option>
-                                <option value="Pana">Pana</option>
-                              </select>
-                            ) : (
-                              <div className="font-semibold">
-                                {p.packaging || "—"}
-                              </div>
-                            )}
-                          </div>
-
-                          <div>
-                            <div className="text-xs text-gray-600">
-                              Precio proveedor
-                            </div>
-                            {isEd ? (
-                              <input
-                                type="number"
-                                step="0.01"
-                                inputMode="decimal"
-                                className="w-full border rounded px-2 py-1 text-right"
-                                value={
-                                  Number.isNaN(editProviderPrice)
-                                    ? ""
-                                    : editProviderPrice
-                                }
-                                onChange={(e) =>
-                                  setEditProviderPrice(
-                                    Math.max(0, toNum(e.target.value, 0)),
-                                  )
-                                }
-                              />
-                            ) : (
-                              <div className="font-semibold tabular-nums">
-                                {money(p.providerPrice)}
-                              </div>
-                            )}
-                          </div>
-
-                          <div>
-                            <div className="text-xs text-gray-600">Código</div>
-                            {isEd ? (
-                              <div className="flex gap-2">
-                                <input
-                                  className="flex-1 border rounded px-2 py-1"
-                                  value={editBarcode}
-                                  onChange={(e) =>
-                                    setEditBarcode(e.target.value)
-                                  }
-                                  placeholder="EAN/UPC"
-                                />
-                                <button
-                                  type="button"
-                                  className="px-3 py-2 rounded bg-gray-800 text-white"
-                                  onClick={() => {
-                                    setScanTarget("edit");
-                                    setScanOpen(true);
-                                  }}
-                                >
-                                  Escanear
-                                </button>
-                              </div>
-                            ) : hasCode ? (
-                              <button
-                                type="button"
-                                className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
-                                onClick={() => {
-                                  setCodeModalValue(
-                                    String(p.barcode || "").trim(),
-                                  );
-                                  setCodeModalOpen(true);
-                                }}
-                              >
-                                Ver código
-                              </button>
-                            ) : (
-                              <div className="text-gray-600">No</div>
-                            )}
-                          </div>
+                    <button
+                      type="button"
+                      className="w-full px-3 py-3 flex items-center justify-between text-left"
+                      onClick={() => toggleCategory(group.category)}
+                      aria-expanded={isOpen}
+                    >
+                      <div className="min-w-0">
+                        <div className="font-bold truncate">
+                          {group.category}
                         </div>
-
-                        {/* acciones */}
-                        <div className="pt-2 flex gap-2">
-                          {isEd ? (
-                            <>
-                              <button
-                                className="flex-1 px-3 py-2 rounded bg-blue-600 text-white"
-                                onClick={saveEdit}
-                                type="button"
-                              >
-                                Guardar
-                              </button>
-                              <button
-                                className="flex-1 px-3 py-2 rounded bg-gray-800 text-white"
-                                onClick={() => {
-                                  setScanTarget("edit");
-                                  setScanOpen(true);
-                                }}
-                                type="button"
-                              >
-                                Escanear
-                              </button>
-                              <button
-                                className="flex-1 px-3 py-2 rounded bg-gray-200"
-                                onClick={cancelEdit}
-                                type="button"
-                              >
-                                Cancelar
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                className="flex-1 px-3 py-2 rounded bg-yellow-400"
-                                onClick={() => startEdit(p)}
-                                type="button"
-                              >
-                                Editar
-                              </button>
-                              <button
-                                className="flex-1 px-3 py-2 rounded bg-red-600 text-white"
-                                onClick={() => removeProduct(p)}
-                                type="button"
-                              >
-                                Borrar
-                              </button>
-                            </>
-                          )}
+                        <div className="text-xs text-gray-600">
+                          {group.rows.length} producto(s)
                         </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })
+                      <span
+                        className={`transition-transform ${isOpen ? "rotate-180" : ""}`}
+                      >
+                        ▼
+                      </span>
+                    </button>
+
+                    {isOpen && (
+                      <div className="border-t p-2 space-y-2">
+                        {group.rows.map((p) => {
+                          const isEd = editingId === p.id;
+                          const expanded = openCardId === p.id;
+                          const hasCode = !!String(p.barcode || "").trim();
+
+                          return (
+                            <div
+                              key={p.id}
+                              className="bg-white border rounded-2xl shadow-sm overflow-hidden"
+                            >
+                              {/* header card (colapsada): nombre + "precio isla" (aquí solo tenemos providerPrice) */}
+                              <button
+                                type="button"
+                                className="w-full px-3 py-3 flex items-center justify-between text-left"
+                                onClick={() =>
+                                  setOpenCardId((cur) =>
+                                    cur === p.id ? null : p.id,
+                                  )
+                                }
+                              >
+                                <div className="min-w-0">
+                                  <div className="font-bold truncate">
+                                    {p.name}
+                                  </div>
+                                  <div className="text-xs text-gray-600 truncate">
+                                    {p.category}
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-xs text-gray-600">
+                                    Precio proveedor
+                                  </div>
+                                  <div className="font-bold tabular-nums">
+                                    {money(p.providerPrice)}
+                                  </div>
+                                </div>
+                              </button>
+
+                              {expanded && (
+                                <div className="px-3 pb-3 border-t">
+                                  <div className="pt-3 space-y-2 text-sm">
+                                    {/* si está en edición, mostramos inputs; si no, texto */}
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <div className="text-xs text-gray-600">
+                                          Categoría
+                                        </div>
+                                        {isEd ? (
+                                          <input
+                                            className="w-full border rounded px-2 py-1"
+                                            value={editCategory}
+                                            onChange={(e) =>
+                                              setEditCategory(e.target.value)
+                                            }
+                                          />
+                                        ) : (
+                                          <div className="font-semibold">
+                                            {p.category}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      <div>
+                                        <div className="text-xs text-gray-600">
+                                          Und x paquete
+                                        </div>
+                                        {isEd ? (
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            className="w-full border rounded px-2 py-1 text-right"
+                                            value={editUnitsPerPackage}
+                                            onChange={(e) =>
+                                              setEditUnitsPerPackage(
+                                                roundInt(e.target.value, 1),
+                                              )
+                                            }
+                                          />
+                                        ) : (
+                                          <div className="font-semibold text-right tabular-nums">
+                                            {p.unitsPerPackage}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      <div className="col-span-2">
+                                        <div className="text-xs text-gray-600">
+                                          Empaque
+                                        </div>
+                                        {isEd ? (
+                                          <select
+                                            className="w-full border rounded px-2 py-1"
+                                            value={editPackaging}
+                                            onChange={(e) =>
+                                              setEditPackaging(e.target.value)
+                                            }
+                                          >
+                                            <option value="">
+                                              Seleccionar
+                                            </option>
+                                            <option value="Tarro">Tarro</option>
+                                            <option value="Bolsa">Bolsa</option>
+                                            <option value="Ristra">
+                                              Ristra
+                                            </option>
+                                            <option value="Caja">Caja</option>
+                                            <option value="Vaso">Vaso</option>
+                                            <option value="Pana">Pana</option>
+                                          </select>
+                                        ) : (
+                                          <div className="font-semibold">
+                                            {p.packaging || "—"}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      <div>
+                                        <div className="text-xs text-gray-600">
+                                          Precio proveedor
+                                        </div>
+                                        {isEd ? (
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            inputMode="decimal"
+                                            className="w-full border rounded px-2 py-1 text-right"
+                                            value={
+                                              Number.isNaN(editProviderPrice)
+                                                ? ""
+                                                : editProviderPrice
+                                            }
+                                            onChange={(e) =>
+                                              setEditProviderPrice(
+                                                Math.max(
+                                                  0,
+                                                  toNum(e.target.value, 0),
+                                                ),
+                                              )
+                                            }
+                                          />
+                                        ) : (
+                                          <div className="font-semibold tabular-nums">
+                                            {money(p.providerPrice)}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      <div>
+                                        <div className="text-xs text-gray-600">
+                                          Código
+                                        </div>
+                                        {isEd ? (
+                                          <div className="flex gap-2">
+                                            <input
+                                              className="flex-1 border rounded px-2 py-1"
+                                              value={editBarcode}
+                                              onChange={(e) =>
+                                                setEditBarcode(e.target.value)
+                                              }
+                                              placeholder="EAN/UPC"
+                                            />
+                                            <button
+                                              type="button"
+                                              className="px-3 py-2 rounded bg-gray-800 text-white"
+                                              onClick={() => {
+                                                setScanTarget("edit");
+                                                setScanOpen(true);
+                                              }}
+                                            >
+                                              Escanear
+                                            </button>
+                                          </div>
+                                        ) : hasCode ? (
+                                          <button
+                                            type="button"
+                                            className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
+                                            onClick={() => {
+                                              setCodeModalValue(
+                                                String(p.barcode || "").trim(),
+                                              );
+                                              setCodeModalOpen(true);
+                                            }}
+                                          >
+                                            Ver código
+                                          </button>
+                                        ) : (
+                                          <div className="text-gray-600">
+                                            No
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* acciones */}
+                                    <div className="pt-2 flex gap-2">
+                                      {isEd ? (
+                                        <>
+                                          <button
+                                            className="flex-1 px-3 py-2 rounded bg-blue-600 text-white"
+                                            onClick={saveEdit}
+                                            type="button"
+                                          >
+                                            Guardar
+                                          </button>
+                                          <button
+                                            className="flex-1 px-3 py-2 rounded bg-gray-800 text-white"
+                                            onClick={() => {
+                                              setScanTarget("edit");
+                                              setScanOpen(true);
+                                            }}
+                                            type="button"
+                                          >
+                                            Escanear
+                                          </button>
+                                          <button
+                                            className="flex-1 px-3 py-2 rounded bg-gray-200"
+                                            onClick={cancelEdit}
+                                            type="button"
+                                          >
+                                            Cancelar
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <button
+                                            className="flex-1 px-3 py-2 rounded bg-yellow-400"
+                                            onClick={() => startEdit(p)}
+                                            type="button"
+                                          >
+                                            Editar
+                                          </button>
+                                          <button
+                                            className="flex-1 px-3 py-2 rounded bg-red-600 text-white"
+                                            onClick={() => removeProduct(p)}
+                                            type="button"
+                                          >
+                                            Borrar
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
+          {!loading && filtered.length > 0 && renderPager()}
         </div>
       ) : (
         /* ✅ WEB: TABLA igual */
@@ -1584,7 +1738,7 @@ export default function ProductsCandies() {
                   </td>
                 </tr>
               ) : (
-                filtered.map((p) => {
+                paged.map((p) => {
                   const isEd = editingId === p.id;
                   const hasCode = !!String(p.barcode || "").trim();
 
@@ -1756,6 +1910,7 @@ export default function ProductsCandies() {
               )}
             </tbody>
           </table>
+          {!loading && filtered.length > 0 && renderPager()}
         </div>
       )}
 

@@ -633,6 +633,14 @@ export default function DataCenterCandies({
 
   const [dataView, setDataView] = useState<"MACRO" | "DETALLE">("DETALLE");
 
+  // UI: cards colapsables
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [kpiOpen, setKpiOpen] = useState(false);
+  const [vendorOrdersOpen, setVendorOrdersOpen] = useState(false);
+  const [existenciasOpen, setExistenciasOpen] = useState(false);
+  const [vendedoresOpen, setVendedoresOpen] = useState(false);
+  const [saldosOpen, setSaldosOpen] = useState(false);
+
   const customersMap = useMemo(() => {
     const map: Record<string, string> = {};
     customers.forEach((c) => (map[c.id] = String(c.name || "").trim()));
@@ -2225,143 +2233,162 @@ export default function DataCenterCandies({
         </div>
 
         {/* FILTROS */}
-        <div className="rounded-2xl border border-gray-100 p-3 sm:p-4 mb-3 shadow-sm bg-white">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-            <div>
-              <label className="block text-xs text-gray-600">Desde</label>
-              <input
-                type="date"
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
-            </div>
+        <div className="bg-white border rounded-2xl shadow-sm mb-3">
+          <button
+            type="button"
+            className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+          >
+            <span>Filtros</span>
+            <span
+              className={`transition-transform ${filtersOpen ? "rotate-180" : ""}`}
+            >
+              ▼
+            </span>
+          </button>
+          <div
+            className={`collapsible-content ${filtersOpen ? "block" : "hidden"} border-t p-3 sm:p-4`}
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              <div>
+                <label className="block text-xs text-gray-600">Desde</label>
+                <input
+                  type="date"
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs text-gray-600">Hasta</label>
-              <input
-                type="date"
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
-            </div>
+              <div>
+                <label className="block text-xs text-gray-600">Hasta</label>
+                <input
+                  type="date"
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs text-gray-600">Estado</label>
-              <select
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as any)}
-              >
-                <option value="TODAS">Todas</option>
-                <option value="FLOTANTE">Flotante</option>
-                <option value="PROCESADA">Procesada</option>
-              </select>
-            </div>
+              <div>
+                <label className="block text-xs text-gray-600">Estado</label>
+                <select
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                >
+                  <option value="TODAS">Todas</option>
+                  <option value="FLOTANTE">Flotante</option>
+                  <option value="PROCESADA">Procesada</option>
+                </select>
+              </div>
 
-            <div>
-              <label className="block text-xs text-gray-600">Tipo</label>
-              <select
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value as any)}
-              >
-                <option value="AMBAS">Ambas</option>
-                <option value="CASH">Cash</option>
-                <option value="CREDITO">Crédito</option>
-              </select>
-            </div>
+              <div>
+                <label className="block text-xs text-gray-600">Tipo</label>
+                <select
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value as any)}
+                >
+                  <option value="AMBAS">Ambas</option>
+                  <option value="CASH">Cash</option>
+                  <option value="CREDITO">Crédito</option>
+                </select>
+              </div>
 
-            <div>
-              <label className="block text-xs text-gray-600">Vendedor</label>
-              <select
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={vendorFilter}
-                onChange={(e) => setVendorFilter(e.target.value)}
-              >
-                <option value="ALL">Todos</option>
-                {sellers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name || s.id}
-                  </option>
-                ))}
-              </select>
-            </div>
+              <div>
+                <label className="block text-xs text-gray-600">Vendedor</label>
+                <select
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={vendorFilter}
+                  onChange={(e) => setVendorFilter(e.target.value)}
+                >
+                  <option value="ALL">Todos</option>
+                  {sellers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || s.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div>
-              <label className="block text-xs text-gray-600">Sucursal</label>
-              <select
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={branchFilter}
-                onChange={(e) => setBranchFilter(e.target.value as any)}
-              >
-                <option value="ALL">Todas</option>
-                <option value="RIVAS">Rivas</option>
-                <option value="SAN_JORGE">San Jorge</option>
-                <option value="ISLA">Isla</option>
-              </select>
-            </div>
+              <div>
+                <label className="block text-xs text-gray-600">Sucursal</label>
+                <select
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={branchFilter}
+                  onChange={(e) => setBranchFilter(e.target.value as any)}
+                >
+                  <option value="ALL">Todas</option>
+                  <option value="RIVAS">Rivas</option>
+                  <option value="SAN_JORGE">San Jorge</option>
+                  <option value="ISLA">Isla</option>
+                </select>
+              </div>
 
-            <div className="sm:col-span-2 lg:col-span-3">
-              <label className="block text-xs text-gray-600">
-                Producto (opcional)
-              </label>
-              <input
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={productFilter}
-                onChange={(e) => setProductFilter(e.target.value)}
-                placeholder="Ej: Conitos"
-              />
-            </div>
+              <div className="sm:col-span-2 lg:col-span-3">
+                <label className="block text-xs text-gray-600">
+                  Producto (opcional)
+                </label>
+                <input
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={productFilter}
+                  onChange={(e) => setProductFilter(e.target.value)}
+                  placeholder="Ej: Conitos"
+                />
+              </div>
 
-            <div className="sm:col-span-2 lg:col-span-3">
-              <label className="block text-xs text-gray-600">
-                Cliente (opcional)
-              </label>
-              <input
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={customerFilter}
-                onChange={(e) => setCustomerFilter(e.target.value)}
-                placeholder="Ej: Javier"
-              />
-            </div>
+              <div className="sm:col-span-2 lg:col-span-3">
+                <label className="block text-xs text-gray-600">
+                  Cliente (opcional)
+                </label>
+                <input
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={customerFilter}
+                  onChange={(e) => setCustomerFilter(e.target.value)}
+                  placeholder="Ej: Javier"
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs text-gray-600">Monto min</label>
-              <input
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={minAmount}
-                onChange={(e) => setMinAmount(e.target.value)}
-                placeholder="0"
-              />
-            </div>
+              <div>
+                <label className="block text-xs text-gray-600">Monto min</label>
+                <input
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={minAmount}
+                  onChange={(e) => setMinAmount(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs text-gray-600">Monto max</label>
-              <input
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={maxAmount}
-                onChange={(e) => setMaxAmount(e.target.value)}
-                placeholder="999999"
-              />
-            </div>
+              <div>
+                <label className="block text-xs text-gray-600">Monto max</label>
+                <input
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={maxAmount}
+                  onChange={(e) => setMaxAmount(e.target.value)}
+                  placeholder="999999"
+                />
+              </div>
 
-            <div className="sm:col-span-2 lg:col-span-2">
-              <label className="block text-xs text-gray-600">Agrupar por</label>
-              <select
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-                value={groupBy}
-                onChange={(e) => {
-                  setDetailKey("");
-                  setGroupBy(e.target.value as any);
-                }}
-              >
-                <option value="DIA">Día</option>
-                <option value="VENDEDOR">Vendedor</option>
-                <option value="PRODUCTO">Producto</option>
-                <option value="SUCURSAL">Sucursal</option>
-              </select>
+              <div className="sm:col-span-2 lg:col-span-2">
+                <label className="block text-xs text-gray-600">
+                  Agrupar por
+                </label>
+                <select
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                  value={groupBy}
+                  onChange={(e) => {
+                    setDetailKey("");
+                    setGroupBy(e.target.value as any);
+                  }}
+                >
+                  <option value="DIA">Día</option>
+                  <option value="VENDEDOR">Vendedor</option>
+                  <option value="PRODUCTO">Producto</option>
+                  <option value="SUCURSAL">Sucursal</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -2414,63 +2441,84 @@ export default function DataCenterCandies({
           {dataView === "MACRO" && (
             <>
               {/* KPIs Macro */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Ingreso (ventas)</div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(macro.ingreso)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
-                  </div>
-                </div>
+              <div className="bg-white border rounded-2xl shadow-sm mb-4">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  onClick={() => setKpiOpen((v) => !v)}
+                  aria-expanded={kpiOpen}
+                >
+                  <span>KPI</span>
+                  <span
+                    className={`transition-transform ${kpiOpen ? "rotate-180" : ""}`}
+                  >
+                    ▼
+                  </span>
+                </button>
+                <div
+                  className={`collapsible-content ${kpiOpen ? "block" : "hidden"} border-t p-3`}
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Ingreso (ventas)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(macro.ingreso)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {startDate} → {endDate}
+                      </div>
+                    </div>
 
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Comisión vendedor (ventas)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    -C${money(macro.comision)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Cash: C${money(kpis.commCash)} • Crédito: C$
-                    {money(kpis.commCredit)}
-                  </div>
-                </div>
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Comisión vendedor (ventas)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        -C${money(macro.comision)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Cash: C${money(kpis.commCash)} • Crédito: C$
+                        {money(kpis.commCredit)}
+                      </div>
+                    </div>
 
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Gastos (expenses_candies)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    -C${money(macro.gastos)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Se calcula automático por fechas
-                  </div>
-                </div>
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Gastos (expenses_candies)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        -C${money(macro.gastos)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Se calcula automático por fechas
+                      </div>
+                    </div>
 
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Ganancia neta (real)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(macro.gananciaNeta)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Ingreso − Comisión − Gastos
-                  </div>
-                </div>
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Ganancia neta (real)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(macro.gananciaNeta)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Ingreso − Comisión − Gastos
+                      </div>
+                    </div>
 
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Promedio neto por día
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(macro.netaDia)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Días con ventas: <strong>{macro.daysCount}</strong>
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Promedio neto por día
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(macro.netaDia)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Días con ventas: <strong>{macro.daysCount}</strong>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2503,518 +2551,435 @@ export default function DataCenterCandies({
              ======================= */}
           {dataView === "DETALLE" && (
             <>
-              {/* KPIs ventas */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Paquetes cash</div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    {qty3(kpis.packsCash)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Paquetes crédito</div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    {qty3(kpis.packsCredit)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Ventas totales</div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(kpis.salesTotal)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Cash: C${money(kpis.salesCash)} • Crédito: C$
-                    {money(kpis.salesCredit)}
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Comisión</div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(kpis.commTotal)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Cash: C${money(kpis.commCash)} • Crédito: C$
-                    {money(kpis.commCredit)}
-                  </div>
-                </div>
-              </div>
-
-              {/* expected + actual + diff */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Utilidad Bruta Aprox. (órdenes maestras)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(expectedAndGross.grossIsla)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Total esperado (Isla)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold mt-2">
-                    C${money(expectedAndGross.expectedIsla)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Actual ventas (Isla)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold mt-2">
-                    C${money(actualByBranch.ISLA.sales)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Diferencia vs esperado (Isla)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold mt-2">
-                    C${money(diffVsExpected.ISLA)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">Isla Ometepe</div>
-                </div>
-              </div>
-
-              {/* ✅ RESTAURADO: los 3 KPIs del screenshot */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Total facturado (precio proveedor)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(totalFacturadoProveedor)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Sumatoria órdenes maestras (período)
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Utilidad neta (órdenes vendedor)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(vendorOrdersNetKpi.net)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    U bruta − Gastos − U vendedor
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Paquetes ordenados (maestras)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    {qty3(providerAndPackagesKpis.orderedPacksMaster)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Restantes (período):{" "}
-                    <strong>
-                      {qty3(providerAndPackagesKpis.remainingPacksMaster)}
-                    </strong>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Existencia global (todas):{" "}
-                    <strong>
-                      {qty3(globalStockKpis.masterRemainingPackages)}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Paquetes ordenados (órdenes vendedor)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    {qty3(providerAndPackagesKpis.orderedPacksVendor)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Restantes (período):{" "}
-                    <strong>
-                      {qty3(providerAndPackagesKpis.remainingPacksVendor)}
-                    </strong>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Existencia global (todas):{" "}
-                    <strong>
-                      {qty3(globalStockKpis.vendorRemainingPackages)}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              {/* ✅ KPIs pedidos: Total facturado + Dispersado + Total existente (Isla) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Total facturado a precio proveedor (órdenes vendedor)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(providerAndPackagesKpis.providerTotalVendor)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Productos dispersados (precio venta)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(dispersedKpis.dispersedTotal)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Sumatoria órdenes de vendedores (período)
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Dispersado Isla (precio venta)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(dispersedKpis.dispersedIsla)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Usado para “Total existente”
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Total existente en productos (Isla)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(dispersedKpis.totalExistenteIsla)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Esperado Isla − Dispersado Isla
-                  </div>
-                </div>
-              </div>
-
-              {/* ✅ NUEVO: KPIs CxC + Recaudación + Utilidad bruta crédito */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    CxC (ventas crédito)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(creditKpis.cxc)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">Comisión crédito</div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(kpis.commCredit)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {startDate} → {endDate}
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Recaudación (abonos)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(creditKpis.recaudado)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    abonos en ar_movements
-                  </div>
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Utilidad bruta crédito (ventas − comisión)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    C${money(creditKpis.utilidadBruta)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Paquetes vendidos al crédito
-                  </div>
-                </div>
-              </div>
-
-              {/* ✅ NUEVO: KPIs Órdenes de Vendedores (vista global) */}
-              <div className="border rounded-2xl p-3 sm:p-4 mb-4 shadow-sm bg-white border-gray-100">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <h3 className="font-semibold text-sm sm:text-base">
-                    Órdenes de vendedores (Global)
-                  </h3>
-                  <div className="text-xs text-gray-500">
-                    Basado en <strong>precio de venta</strong> (por sucursal del
-                    vendedor)
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm">
-                  <div className="border rounded-xl p-3 bg-gray-50">
-                    Total orden:{" "}
-                    <strong>
-                      C${money(vendorOrdersKpis.global.totalOrden)}
-                    </strong>
-                  </div>
-                  <div className="border rounded-xl p-3 bg-gray-50">
-                    Vendido:{" "}
-                    <strong>C${money(vendorOrdersKpis.global.vendido)}</strong>
-                  </div>
-                  <div className="border rounded-xl p-3 bg-gray-50">
-                    Restante:{" "}
-                    <strong>C${money(vendorOrdersKpis.global.restante)}</strong>
-                  </div>
-                  <div className="border rounded-xl p-3 bg-gray-50">
-                    Comisión:{" "}
-                    <strong>C${money(vendorOrdersKpis.global.comision)}</strong>
-                  </div>
-                  <div className="border rounded-xl p-3 bg-gray-50">
-                    Total esperado:{" "}
-                    <strong>
-                      C${money(vendorOrdersKpis.global.totalEsperado)}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              {/* ✅ NUEVO: Lista de órdenes de vendedores (clic para detalle) */}
-              <div className="border rounded-2xl p-3 sm:p-4 mb-6 shadow-sm bg-white border-gray-100">
-                <div className="flex items-center justify-between gap-2 mb-3">
-                  <h3 className="font-semibold text-sm sm:text-base">
-                    Órdenes de vendedores (Detalle por orden)
-                  </h3>
-                  <div className="text-xs text-gray-500">
-                    Click/Tap en una orden para ver productos
-                    asociados/vendidos/restantes
-                  </div>
-                </div>
-
-                {vendorOrdersKpis.orders.length === 0 ? (
-                  <div className="text-sm text-gray-500">—</div>
-                ) : (
-                  <>
-                    {/* MOBILE: cards */}
-                    <div className="md:hidden space-y-2">
-                      {vendorOrdersKpis.orders.map((o) => (
-                        <div
-                          key={o.orderKey}
-                          className="border rounded-2xl p-3"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="font-semibold truncate">
-                                {o.orderId}
-                              </div>
-                              <div className="text-xs text-gray-600 mt-1 truncate">
-                                {o.sellerName} {o.branch ? `• ${o.branch}` : ""}{" "}
-                                {o.date ? `• ${o.date}` : ""}
-                              </div>
-                            </div>
-                            <button
-                              className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm font-semibold"
-                              onClick={() => setVendorOrderKey(o.orderKey)}
-                            >
-                              Ver
-                            </button>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                            <div className="bg-gray-50 rounded-xl p-2">
-                              <div className="text-xs text-gray-600">Total</div>
-                              <div className="font-bold">
-                                C${money(o.totalOrden)}
-                              </div>
-                            </div>
-                            <div className="bg-gray-50 rounded-xl p-2">
-                              <div className="text-xs text-gray-600">
-                                Vendido
-                              </div>
-                              <div className="font-bold">
-                                C${money(o.vendido)}
-                              </div>
-                            </div>
-                            <div className="bg-gray-50 rounded-xl p-2">
-                              <div className="text-xs text-gray-600">
-                                Restante
-                              </div>
-                              <div className="font-bold">
-                                C${money(o.restante)}
-                              </div>
-                            </div>
-                            <div className="bg-gray-50 rounded-xl p-2">
-                              <div className="text-xs text-gray-600">
-                                Comisión
-                              </div>
-                              <div className="font-bold">
-                                C${money(o.comision)}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
+              {/* KPIs */}
+              <div className="bg-white border rounded-2xl shadow-sm mb-4">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  onClick={() => setKpiOpen((v) => !v)}
+                  aria-expanded={kpiOpen}
+                >
+                  <span>KPI</span>
+                  <span
+                    className={`transition-transform ${kpiOpen ? "rotate-180" : ""}`}
+                  >
+                    ▼
+                  </span>
+                </button>
+                <div
+                  className={`collapsible-content ${kpiOpen ? "block" : "hidden"} border-t p-3`}
+                >
+                  {/* KPIs ventas */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">Paquetes cash</div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        {qty3(kpis.packsCash)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {startDate} → {endDate}
+                      </div>
                     </div>
 
-                    {/* DESKTOP: tabla */}
-                    <div className="hidden md:block overflow-x-auto">
-                      <table className="min-w-full border text-sm">
-                        <thead className="bg-gray-100">
-                          <tr>
-                            {/* <th className="border p-2 text-left">Orden</th> */}
-                            <th className="border p-2 text-left">Vendedor</th>
-                            <th className="border p-2">Sucursal</th>
-                            <th className="border p-2">Fecha</th>
-                            <th className="border p-2">Total orden</th>
-                            <th className="border p-2">Vendido</th>
-                            <th className="border p-2">Restante</th>
-                            <th className="border p-2">Comisión</th>
-                            <th className="border p-2">Total esperado</th>
-                            <th className="border p-2">Acción</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {vendorOrdersKpis.orders.map((o) => (
-                            <tr key={o.orderKey} className="text-center">
-                              {/* <td className="border p-2 text-left">
-                                {o.orderId}
-                              </td> */}
-                              <td className="border p-2 text-left">
-                                {o.sellerName}
-                              </td>
-                              <td className="border p-2">{o.branch || "—"}</td>
-                              <td className="border p-2">{o.date || "—"}</td>
-                              <td className="border p-2">
-                                C${money(o.totalOrden)}
-                              </td>
-                              <td className="border p-2">
-                                C${money(o.vendido)}
-                              </td>
-                              <td className="border p-2">
-                                C${money(o.restante)}
-                              </td>
-                              <td className="border p-2">
-                                C${money(o.comision)}
-                              </td>
-                              <td className="border p-2">
-                                C${money(o.totalEsperado)}
-                              </td>
-                              <td className="border p-2">
-                                <button
-                                  className="text-xs bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-black"
-                                  onClick={() => setVendorOrderKey(o.orderKey)}
-                                >
-                                  Ver detalle
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Paquetes crédito
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        {qty3(kpis.packsCredit)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {startDate} → {endDate}
+                      </div>
                     </div>
 
-                    {/* DETALLE POR ORDEN */}
-                    {vendorOrderDetail && (
-                      <div className="mt-4 rounded-2xl border-2 border-gray-100 p-3 sm:p-4 shadow-lg bg-white">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
-                          <h4 className="text-base sm:text-xl font-semibold truncate">
-                            Detalle orden vendedor • {vendorOrderDetail.orderId}
-                          </h4>
-                          <button
-                            onClick={() => setVendorOrderKey("")}
-                            className="w-full sm:w-auto text-sm px-3 py-2 border rounded-lg hover:bg-gray-50"
-                          >
-                            Cerrar
-                          </button>
-                        </div>
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Ventas totales
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(kpis.salesTotal)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Cash: C${money(kpis.salesCash)} • Crédito: C$
+                        {money(kpis.salesCredit)}
+                      </div>
+                    </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm mb-4">
-                          <div className="border rounded-xl p-3 bg-gray-50">
-                            Total orden:{" "}
-                            <strong>
-                              C${money(vendorOrderDetail.totalOrden)}
-                            </strong>
-                          </div>
-                          <div className="border rounded-xl p-3 bg-gray-50">
-                            Vendido:{" "}
-                            <strong>
-                              C${money(vendorOrderDetail.vendido)}
-                            </strong>
-                          </div>
-                          <div className="border rounded-xl p-3 bg-gray-50">
-                            Restante:{" "}
-                            <strong>
-                              C${money(vendorOrderDetail.restante)}
-                            </strong>
-                          </div>
-                          <div className="border rounded-xl p-3 bg-gray-50">
-                            Comisión:{" "}
-                            <strong>
-                              C${money(vendorOrderDetail.comision)}
-                            </strong>
-                          </div>
-                          <div className="border rounded-xl p-3 bg-gray-50">
-                            Total esperado:{" "}
-                            <strong>
-                              C${money(vendorOrderDetail.totalEsperado)}
-                            </strong>
-                          </div>
-                        </div>
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">Comisión</div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(kpis.commTotal)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Cash: C${money(kpis.commCash)} • Crédito: C$
+                        {money(kpis.commCredit)}
+                      </div>
+                    </div>
+                  </div>
 
-                        <h5 className="font-semibold mb-2 text-sm sm:text-base">
-                          Productos asociados (Nombre - Asociados - Vendidos -
-                          Restantes)
-                        </h5>
+                  {/* expected + actual + diff */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Utilidad Bruta Aprox. (órdenes maestras)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(expectedAndGross.grossIsla)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Isla Ometepe
+                      </div>
+                    </div>
 
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Total esperado (Isla)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold mt-2">
+                        C${money(expectedAndGross.expectedIsla)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Isla Ometepe
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Actual ventas (Isla)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold mt-2">
+                        C${money(actualByBranch.ISLA.sales)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Isla Ometepe
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Diferencia vs esperado (Isla)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold mt-2">
+                        C${money(diffVsExpected.ISLA)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Isla Ometepe
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ✅ RESTAURADO: los 3 KPIs del screenshot */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Total facturado (precio proveedor)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(totalFacturadoProveedor)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Sumatoria órdenes maestras (período)
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Utilidad neta (órdenes vendedor)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(vendorOrdersNetKpi.net)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        U bruta − Gastos − U vendedor
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Paquetes ordenados (maestras)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        {qty3(providerAndPackagesKpis.orderedPacksMaster)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Restantes (período):{" "}
+                        <strong>
+                          {qty3(providerAndPackagesKpis.remainingPacksMaster)}
+                        </strong>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Existencia global (todas):{" "}
+                        <strong>
+                          {qty3(globalStockKpis.masterRemainingPackages)}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Paquetes ordenados (órdenes vendedor)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        {qty3(providerAndPackagesKpis.orderedPacksVendor)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Restantes (período):{" "}
+                        <strong>
+                          {qty3(providerAndPackagesKpis.remainingPacksVendor)}
+                        </strong>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Existencia global (todas):{" "}
+                        <strong>
+                          {qty3(globalStockKpis.vendorRemainingPackages)}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ✅ KPIs pedidos: Total facturado + Dispersado + Total existente (Isla) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Total facturado a precio proveedor (órdenes vendedor)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(providerAndPackagesKpis.providerTotalVendor)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {startDate} → {endDate}
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Productos dispersados (precio venta)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(dispersedKpis.dispersedTotal)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Sumatoria órdenes de vendedores (período)
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Dispersado Isla (precio venta)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(dispersedKpis.dispersedIsla)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Usado para “Total existente”
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Total existente en productos (Isla)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(dispersedKpis.totalExistenteIsla)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Esperado Isla − Dispersado Isla
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ✅ NUEVO: KPIs CxC + Recaudación + Utilidad bruta crédito */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        CxC (ventas crédito)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(creditKpis.cxc)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {startDate} → {endDate}
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Comisión crédito
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(kpis.commCredit)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {startDate} → {endDate}
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Recaudación (abonos)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(creditKpis.recaudado)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        abonos en ar_movements
+                      </div>
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Utilidad bruta crédito (ventas − comisión)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        C${money(creditKpis.utilidadBruta)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Paquetes vendidos al crédito
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Órdenes vendedores */}
+              <div className="bg-white border rounded-2xl shadow-sm mb-4">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  onClick={() => setVendorOrdersOpen((v) => !v)}
+                  aria-expanded={vendorOrdersOpen}
+                >
+                  <span>Órdenes vendedores</span>
+                  <span
+                    className={`transition-transform ${vendorOrdersOpen ? "rotate-180" : ""}`}
+                  >
+                    ▼
+                  </span>
+                </button>
+                <div
+                  className={`collapsible-content ${vendorOrdersOpen ? "block" : "hidden"} border-t p-3 sm:p-4`}
+                >
+                  {/* ✅ NUEVO: KPIs Órdenes de Vendedores (vista global) */}
+                  <div className="border rounded-2xl p-3 sm:p-4 mb-4 shadow-sm bg-white border-gray-100">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <h3 className="font-semibold text-sm sm:text-base">
+                        Órdenes de vendedores (Global)
+                      </h3>
+                      <div className="text-xs text-gray-500">
+                        Basado en <strong>precio de venta</strong> (por sucursal
+                        del vendedor)
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm">
+                      <div className="border rounded-xl p-3 bg-gray-50">
+                        Total orden:{" "}
+                        <strong>
+                          C${money(vendorOrdersKpis.global.totalOrden)}
+                        </strong>
+                      </div>
+                      <div className="border rounded-xl p-3 bg-gray-50">
+                        Vendido:{" "}
+                        <strong>
+                          C${money(vendorOrdersKpis.global.vendido)}
+                        </strong>
+                      </div>
+                      <div className="border rounded-xl p-3 bg-gray-50">
+                        Restante:{" "}
+                        <strong>
+                          C${money(vendorOrdersKpis.global.restante)}
+                        </strong>
+                      </div>
+                      <div className="border rounded-xl p-3 bg-gray-50">
+                        Comisión:{" "}
+                        <strong>
+                          C${money(vendorOrdersKpis.global.comision)}
+                        </strong>
+                      </div>
+                      <div className="border rounded-xl p-3 bg-gray-50">
+                        Total esperado:{" "}
+                        <strong>
+                          C${money(vendorOrdersKpis.global.totalEsperado)}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ✅ NUEVO: Lista de órdenes de vendedores (clic para detalle) */}
+                  <div className="border rounded-2xl p-3 sm:p-4 mb-6 shadow-sm bg-white border-gray-100">
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <h3 className="font-semibold text-sm sm:text-base">
+                        Órdenes de vendedores (Detalle por orden)
+                      </h3>
+                      <div className="text-xs text-gray-500">
+                        Click/Tap en una orden para ver productos
+                        asociados/vendidos/restantes
+                      </div>
+                    </div>
+
+                    {vendorOrdersKpis.orders.length === 0 ? (
+                      <div className="text-sm text-gray-500">—</div>
+                    ) : (
+                      <>
                         {/* MOBILE: cards */}
                         <div className="md:hidden space-y-2">
-                          {vendorOrderDetail.products.map((p) => (
+                          {vendorOrdersKpis.orders.map((o) => (
                             <div
-                              key={p.productName}
+                              key={o.orderKey}
                               className="border rounded-2xl p-3"
                             >
-                              <div className="font-semibold">
-                                {p.productName}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="font-semibold truncate">
+                                    {o.orderId}
+                                  </div>
+                                  <div className="text-xs text-gray-600 mt-1 truncate">
+                                    {o.sellerName}{" "}
+                                    {o.branch ? `• ${o.branch}` : ""}{" "}
+                                    {o.date ? `• ${o.date}` : ""}
+                                  </div>
+                                </div>
+                                <button
+                                  className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm font-semibold"
+                                  onClick={() => setVendorOrderKey(o.orderKey)}
+                                >
+                                  Ver
+                                </button>
                               </div>
-                              <div className="grid grid-cols-3 gap-2 mt-3 text-sm">
-                                <div className="bg-gray-50 rounded-xl p-2 text-center">
+
+                              <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                                <div className="bg-gray-50 rounded-xl p-2">
                                   <div className="text-xs text-gray-600">
-                                    Asociados
+                                    Total
                                   </div>
-                                  <div className="font-bold">{p.asociados}</div>
+                                  <div className="font-bold">
+                                    C${money(o.totalOrden)}
+                                  </div>
                                 </div>
-                                <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                <div className="bg-gray-50 rounded-xl p-2">
                                   <div className="text-xs text-gray-600">
-                                    Vendidos
+                                    Vendido
                                   </div>
-                                  <div className="font-bold">{p.vendidos}</div>
+                                  <div className="font-bold">
+                                    C${money(o.vendido)}
+                                  </div>
                                 </div>
-                                <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                <div className="bg-gray-50 rounded-xl p-2">
                                   <div className="text-xs text-gray-600">
-                                    Restantes
+                                    Restante
                                   </div>
-                                  <div className="font-bold">{p.restantes}</div>
+                                  <div className="font-bold">
+                                    C${money(o.restante)}
+                                  </div>
+                                </div>
+                                <div className="bg-gray-50 rounded-xl p-2">
+                                  <div className="text-xs text-gray-600">
+                                    Comisión
+                                  </div>
+                                  <div className="font-bold">
+                                    C${money(o.comision)}
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -3026,212 +2991,446 @@ export default function DataCenterCandies({
                           <table className="min-w-full border text-sm">
                             <thead className="bg-gray-100">
                               <tr>
+                                {/* <th className="border p-2 text-left">Orden</th> */}
                                 <th className="border p-2 text-left">
-                                  Nombre producto
+                                  Vendedor
                                 </th>
-                                <th className="border p-2">Asociados</th>
-                                <th className="border p-2">Vendidos</th>
-                                <th className="border p-2">Restantes</th>
+                                <th className="border p-2">Sucursal</th>
+                                <th className="border p-2">Fecha</th>
+                                <th className="border p-2">Total orden</th>
+                                <th className="border p-2">Vendido</th>
+                                <th className="border p-2">Restante</th>
+                                <th className="border p-2">Comisión</th>
+                                <th className="border p-2">Total esperado</th>
+                                <th className="border p-2">Acción</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {vendorOrderDetail.products.map((p) => (
-                                <tr key={p.productName} className="text-center">
+                              {vendorOrdersKpis.orders.map((o) => (
+                                <tr key={o.orderKey} className="text-center">
+                                  {/* <td className="border p-2 text-left">
+                                {o.orderId}
+                              </td> */}
                                   <td className="border p-2 text-left">
-                                    {p.productName}
+                                    {o.sellerName}
                                   </td>
-                                  <td className="border p-2">{p.asociados}</td>
-                                  <td className="border p-2">{p.vendidos}</td>
-                                  <td className="border p-2">{p.restantes}</td>
+                                  <td className="border p-2">
+                                    {o.branch || "—"}
+                                  </td>
+                                  <td className="border p-2">
+                                    {o.date || "—"}
+                                  </td>
+                                  <td className="border p-2">
+                                    C${money(o.totalOrden)}
+                                  </td>
+                                  <td className="border p-2">
+                                    C${money(o.vendido)}
+                                  </td>
+                                  <td className="border p-2">
+                                    C${money(o.restante)}
+                                  </td>
+                                  <td className="border p-2">
+                                    C${money(o.comision)}
+                                  </td>
+                                  <td className="border p-2">
+                                    C${money(o.totalEsperado)}
+                                  </td>
+                                  <td className="border p-2">
+                                    <button
+                                      className="text-xs bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-black"
+                                      onClick={() =>
+                                        setVendorOrderKey(o.orderKey)
+                                      }
+                                    >
+                                      Ver detalle
+                                    </button>
+                                  </td>
                                 </tr>
                               ))}
-                              {vendorOrderDetail.products.length === 0 && (
-                                <tr>
-                                  <td
-                                    colSpan={4}
-                                    className="p-4 text-center text-gray-500"
-                                  >
-                                    Sin productos.
-                                  </td>
-                                </tr>
-                              )}
                             </tbody>
                           </table>
                         </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
 
-              {/* KPI existencias globales (lo que ya tenías) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Existencia global (maestras)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    {qty3(globalStockKpis.masterRemainingPackages)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    remainingPackages (todas)
-                  </div>
-                </div>
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Existencia global (vendedores)
-                  </div>
-                  <div className="text-xl sm:text-2xl font-bold">
-                    {qty3(globalStockKpis.vendorRemainingPackages)}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    remainingPackages (todas)
-                  </div>
-                </div>
-              </div>
-
-              {/* KPI vendedores comisión */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Vendedores (comisión cash)
-                  </div>
-                  {vendorsKpi.cashArr.length === 0 ? (
-                    <div className="text-sm text-gray-500 mt-2">—</div>
-                  ) : (
-                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                      {vendorsKpi.cashArr.map((v) => (
-                        <div
-                          key={v.vendorId}
-                          className="flex justify-between text-sm"
-                        >
-                          <span className="truncate">{v.name}</span>
-                          <strong className="ml-2">C${money(v.total)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-                  <div className="text-xs text-gray-600">
-                    Vendedores (comisión crédito)
-                  </div>
-                  {vendorsKpi.creditArr.length === 0 ? (
-                    <div className="text-sm text-gray-500 mt-2">—</div>
-                  ) : (
-                    <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
-                      {vendorsKpi.creditArr.map((v) => (
-                        <div
-                          key={v.vendorId}
-                          className="flex justify-between text-sm"
-                        >
-                          <span className="truncate">{v.name}</span>
-                          <strong className="ml-2">C${money(v.total)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* CARTERA */}
-              <div className="border rounded-2xl p-3 sm:p-4 mb-6 shadow-sm bg-white border-gray-100">
-                <h3 className="font-semibold mb-2 text-sm sm:text-base">
-                  Saldos pendientes (hasta {endDate})
-                </h3>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm mb-3">
-                  <div>
-                    Clientes con saldo: <strong>{arSummary.count}</strong>
-                  </div>
-                  <div>
-                    Saldo total pendiente:{" "}
-                    <strong>C${money(arSummary.totalPending)}</strong>
-                  </div>
-                  <div className="text-gray-500">*Muestra top 20 por monto</div>
-                </div>
-
-                {arSummary.list.length === 0 ? (
-                  <div className="text-sm text-gray-500">—</div>
-                ) : (
-                  <>
-                    <div className="md:hidden space-y-2">
-                      {arSummary.list.map((c) => (
-                        <div
-                          key={c.customerId}
-                          className="border rounded-xl p-3"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="font-semibold truncate">
-                              {c.name}
+                        {/* DETALLE POR ORDEN */}
+                        {vendorOrderDetail && (
+                          <div className="mt-4 rounded-2xl border-2 border-gray-100 p-3 sm:p-4 shadow-lg bg-white">
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
+                              <h4 className="text-base sm:text-xl font-semibold truncate">
+                                Detalle orden vendedor •{" "}
+                                {vendorOrderDetail.orderId}
+                              </h4>
+                              <button
+                                onClick={() => setVendorOrderKey("")}
+                                className="w-full sm:w-auto text-sm px-3 py-2 border rounded-lg hover:bg-gray-50"
+                              >
+                                Cerrar
+                              </button>
                             </div>
-                            <div className="text-sm font-bold whitespace-nowrap">
-                              C${money(c.balance)}
-                            </div>
-                          </div>
-                          <div className="text-xs text-gray-600 mt-1">
-                            Último abono: <b>C${money(c.lastPaymentAmount)}</b>
-                          </div>
-                          <div className="text-xs text-gray-600">
-                            Fecha ult. abono:{" "}
-                            <span className="font-medium">
-                              {c.lastPayment || "—"}
-                            </span>
-                          </div>
-                          <div className="mt-2">
-                            <button
-                              type="button"
-                              onClick={() => setArOpen(c)}
-                              className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
-                            >
-                              Ver
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
 
-                    <div className="hidden md:block overflow-x-auto">
-                      <table className="min-w-full border text-sm">
-                        <thead className="bg-gray-100">
-                          <tr>
-                            <th className="border p-2 text-left">Cliente</th>
-                            <th className="border p-2">Saldo pendiente</th>
-                            <th className="border p-2">Último abono</th>
-                            <th className="border p-2">Fecha ult. abono</th>
-                            <th className="border p-2">Ver</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {arSummary.list.map((c) => (
-                            <tr key={c.customerId} className="text-center">
-                              <td className="border p-2 text-left">{c.name}</td>
-                              <td className="border p-2">
-                                C${money(c.balance)}
-                              </td>
-                              <td className="border p-2">
-                                C${money(c.lastPaymentAmount)}
-                              </td>
-                              <td className="border p-2">
-                                {c.lastPayment || "—"}
-                              </td>
-                              <td className="border p-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setArOpen(c)}
-                                  className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm mb-4">
+                              <div className="border rounded-xl p-3 bg-gray-50">
+                                Total orden:{" "}
+                                <strong>
+                                  C${money(vendorOrderDetail.totalOrden)}
+                                </strong>
+                              </div>
+                              <div className="border rounded-xl p-3 bg-gray-50">
+                                Vendido:{" "}
+                                <strong>
+                                  C${money(vendorOrderDetail.vendido)}
+                                </strong>
+                              </div>
+                              <div className="border rounded-xl p-3 bg-gray-50">
+                                Restante:{" "}
+                                <strong>
+                                  C${money(vendorOrderDetail.restante)}
+                                </strong>
+                              </div>
+                              <div className="border rounded-xl p-3 bg-gray-50">
+                                Comisión:{" "}
+                                <strong>
+                                  C${money(vendorOrderDetail.comision)}
+                                </strong>
+                              </div>
+                              <div className="border rounded-xl p-3 bg-gray-50">
+                                Total esperado:{" "}
+                                <strong>
+                                  C${money(vendorOrderDetail.totalEsperado)}
+                                </strong>
+                              </div>
+                            </div>
+
+                            <h5 className="font-semibold mb-2 text-sm sm:text-base">
+                              Productos asociados (Nombre - Asociados - Vendidos
+                              - Restantes)
+                            </h5>
+
+                            {/* MOBILE: cards */}
+                            <div className="md:hidden space-y-2">
+                              {vendorOrderDetail.products.map((p) => (
+                                <div
+                                  key={p.productName}
+                                  className="border rounded-2xl p-3"
                                 >
-                                  Ver
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                                  <div className="font-semibold">
+                                    {p.productName}
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-2 mt-3 text-sm">
+                                    <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                      <div className="text-xs text-gray-600">
+                                        Asociados
+                                      </div>
+                                      <div className="font-bold">
+                                        {p.asociados}
+                                      </div>
+                                    </div>
+                                    <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                      <div className="text-xs text-gray-600">
+                                        Vendidos
+                                      </div>
+                                      <div className="font-bold">
+                                        {p.vendidos}
+                                      </div>
+                                    </div>
+                                    <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                      <div className="text-xs text-gray-600">
+                                        Restantes
+                                      </div>
+                                      <div className="font-bold">
+                                        {p.restantes}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* DESKTOP: tabla */}
+                            <div className="hidden md:block overflow-x-auto">
+                              <table className="min-w-full border text-sm">
+                                <thead className="bg-gray-100">
+                                  <tr>
+                                    <th className="border p-2 text-left">
+                                      Nombre producto
+                                    </th>
+                                    <th className="border p-2">Asociados</th>
+                                    <th className="border p-2">Vendidos</th>
+                                    <th className="border p-2">Restantes</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {vendorOrderDetail.products.map((p) => (
+                                    <tr
+                                      key={p.productName}
+                                      className="text-center"
+                                    >
+                                      <td className="border p-2 text-left">
+                                        {p.productName}
+                                      </td>
+                                      <td className="border p-2">
+                                        {p.asociados}
+                                      </td>
+                                      <td className="border p-2">
+                                        {p.vendidos}
+                                      </td>
+                                      <td className="border p-2">
+                                        {p.restantes}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  {vendorOrderDetail.products.length === 0 && (
+                                    <tr>
+                                      <td
+                                        colSpan={4}
+                                        className="p-4 text-center text-gray-500"
+                                      >
+                                        Sin productos.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Existencias */}
+              <div className="bg-white border rounded-2xl shadow-sm mb-4">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  onClick={() => setExistenciasOpen((v) => !v)}
+                  aria-expanded={existenciasOpen}
+                >
+                  <span>Existencias</span>
+                  <span
+                    className={`transition-transform ${existenciasOpen ? "rotate-180" : ""}`}
+                  >
+                    ▼
+                  </span>
+                </button>
+                <div
+                  className={`collapsible-content ${existenciasOpen ? "block" : "hidden"} border-t p-3`}
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Existencia global (maestras)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        {qty3(globalStockKpis.masterRemainingPackages)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        remainingPackages (todas)
+                      </div>
                     </div>
-                  </>
-                )}
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Existencia global (vendedores)
+                      </div>
+                      <div className="text-xl sm:text-2xl font-bold">
+                        {qty3(globalStockKpis.vendorRemainingPackages)}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        remainingPackages (todas)
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Vendedores */}
+              <div className="bg-white border rounded-2xl shadow-sm mb-4">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  onClick={() => setVendedoresOpen((v) => !v)}
+                  aria-expanded={vendedoresOpen}
+                >
+                  <span>Vendedores</span>
+                  <span
+                    className={`transition-transform ${vendedoresOpen ? "rotate-180" : ""}`}
+                  >
+                    ▼
+                  </span>
+                </button>
+                <div
+                  className={`collapsible-content ${vendedoresOpen ? "block" : "hidden"} border-t p-3`}
+                >
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Vendedores (comisión cash)
+                      </div>
+                      {vendorsKpi.cashArr.length === 0 ? (
+                        <div className="text-sm text-gray-500 mt-2">—</div>
+                      ) : (
+                        <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                          {vendorsKpi.cashArr.map((v) => (
+                            <div
+                              key={v.vendorId}
+                              className="flex justify-between text-sm"
+                            >
+                              <span className="truncate">{v.name}</span>
+                              <strong className="ml-2">
+                                C${money(v.total)}
+                              </strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+                      <div className="text-xs text-gray-600">
+                        Vendedores (comisión crédito)
+                      </div>
+                      {vendorsKpi.creditArr.length === 0 ? (
+                        <div className="text-sm text-gray-500 mt-2">—</div>
+                      ) : (
+                        <div className="mt-2 space-y-1 max-h-40 overflow-auto pr-1">
+                          {vendorsKpi.creditArr.map((v) => (
+                            <div
+                              key={v.vendorId}
+                              className="flex justify-between text-sm"
+                            >
+                              <span className="truncate">{v.name}</span>
+                              <strong className="ml-2">
+                                C${money(v.total)}
+                              </strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Saldos pendientes */}
+              <div className="bg-white border rounded-2xl shadow-sm mb-6">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  onClick={() => setSaldosOpen((v) => !v)}
+                  aria-expanded={saldosOpen}
+                >
+                  <span>Saldos pendientes</span>
+                  <span
+                    className={`transition-transform ${saldosOpen ? "rotate-180" : ""}`}
+                  >
+                    ▼
+                  </span>
+                </button>
+                <div
+                  className={`collapsible-content ${saldosOpen ? "block" : "hidden"} border-t p-3 sm:p-4`}
+                >
+                  <h3 className="font-semibold mb-2 text-sm sm:text-base">
+                    Saldos pendientes (hasta {endDate})
+                  </h3>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm mb-3">
+                    <div>
+                      Clientes con saldo: <strong>{arSummary.count}</strong>
+                    </div>
+                    <div>
+                      Saldo total pendiente:{" "}
+                      <strong>C${money(arSummary.totalPending)}</strong>
+                    </div>
+                    <div className="text-gray-500">
+                      *Muestra top 20 por monto
+                    </div>
+                  </div>
+
+                  {arSummary.list.length === 0 ? (
+                    <div className="text-sm text-gray-500">—</div>
+                  ) : (
+                    <>
+                      <div className="md:hidden space-y-2">
+                        {arSummary.list.map((c) => (
+                          <div
+                            key={c.customerId}
+                            className="border rounded-xl p-3"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="font-semibold truncate">
+                                {c.name}
+                              </div>
+                              <div className="text-sm font-bold whitespace-nowrap">
+                                C${money(c.balance)}
+                              </div>
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              Último abono:{" "}
+                              <b>C${money(c.lastPaymentAmount)}</b>
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              Fecha ult. abono:{" "}
+                              <span className="font-medium">
+                                {c.lastPayment || "—"}
+                              </span>
+                            </div>
+                            <div className="mt-2">
+                              <button
+                                type="button"
+                                onClick={() => setArOpen(c)}
+                                className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                              >
+                                Ver
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="hidden md:block overflow-x-auto">
+                        <table className="min-w-full border text-sm">
+                          <thead className="bg-gray-100">
+                            <tr>
+                              <th className="border p-2 text-left">Cliente</th>
+                              <th className="border p-2">Saldo pendiente</th>
+                              <th className="border p-2">Último abono</th>
+                              <th className="border p-2">Fecha ult. abono</th>
+                              <th className="border p-2">Ver</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {arSummary.list.map((c) => (
+                              <tr key={c.customerId} className="text-center">
+                                <td className="border p-2 text-left">
+                                  {c.name}
+                                </td>
+                                <td className="border p-2">
+                                  C${money(c.balance)}
+                                </td>
+                                <td className="border p-2">
+                                  C${money(c.lastPaymentAmount)}
+                                </td>
+                                <td className="border p-2">
+                                  {c.lastPayment || "—"}
+                                </td>
+                                <td className="border p-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setArOpen(c)}
+                                    className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                                  >
+                                    Ver
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
 
               {/* TABLA PRINCIPAL */}

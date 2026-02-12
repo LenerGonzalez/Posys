@@ -806,7 +806,9 @@ export default function TransactionsPollo({
     const map = new Map<string, { cash: SaleDoc[]; credit: SaleDoc[] }>();
     paged.forEach((s) => {
       const category =
-        s._raw?.productName || s._raw?.items?.[0]?.productName || "(sin producto)";
+        s._raw?.productName ||
+        s._raw?.items?.[0]?.productName ||
+        "(sin producto)";
       if (!map.has(category)) {
         map.set(category, { cash: [], credit: [] });
       }
@@ -815,9 +817,7 @@ export default function TransactionsPollo({
       else grp.credit.push(s);
     });
 
-    return Array.from(map.entries()).sort((a, b) =>
-      a[0].localeCompare(b[0]),
-    );
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [paged]);
 
   // venta actual del modal (para mostrar comisión en el detalle)

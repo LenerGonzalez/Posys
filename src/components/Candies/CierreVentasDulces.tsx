@@ -134,6 +134,10 @@ const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
+const normKey = (v: unknown) =>
+  String(v ?? "")
+    .trim()
+    .toLowerCase();
 
 async function deleteARMovesBySaleId(saleId: string) {
   if (!saleId) return;
@@ -308,6 +312,14 @@ export default function CierreVentasDulces({
   const [editPaid, setEditPaid] = useState<number>(0);
   const [editChange, setEditChange] = useState<string>("0");
 
+  // UI: cards colapsables
+  const [filtersCardOpen, setFiltersCardOpen] = useState(false);
+  const [kpiCardOpen, setKpiCardOpen] = useState(false);
+  const [vendorKpiCardOpen, setVendorKpiCardOpen] = useState(false);
+  const [cashCardOpen, setCashCardOpen] = useState(false);
+  const [creditCardOpen, setCreditCardOpen] = useState(false);
+  const [productCardOpen, setProductCardOpen] = useState(false);
+
   const pdfRef = useRef<HTMLDivElement>(null);
 
   const subject = roles && roles.length ? roles : role;
@@ -317,6 +329,14 @@ export default function CierreVentasDulces({
 
   // vendedores para KPI listado + filtro
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
+
+  // catálogo de productos (para mapear categoría)
+  const [productCategoryMap, setProductCategoryMap] = useState<
+    Record<string, string>
+  >({});
+  const [categoryOpenMap, setCategoryOpenMap] = useState<
+    Record<string, boolean>
+  >({});
 
   // ✅ Ventas por PERIODO (sin importar estado)
   useEffect(() => {
@@ -392,6 +412,27 @@ export default function CierreVentasDulces({
     fetchSellers();
   }, []);
 
+  // cargar catálogo productos (para consolidado por categoría)
+  useEffect(() => {
+    const fetchProducts = async () => {
+      try {
+        const snap = await getDocs(collection(db, "products_candies"));
+        const map: Record<string, string> = {};
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          const nameKey = normKey(data?.name);
+          if (!nameKey) return;
+          const category = String(data?.category || "").trim();
+          map[nameKey] = category || "(sin categoría)";
+        });
+        setProductCategoryMap(map);
+      } catch (e) {
+        console.error("Error cargando products_candies", e);
+      }
+    };
+    fetchProducts();
+  }, []);
+
   // ✅ helper comisión por venta (YA VIENE EN LA VENTA)
   const getCommissionAmount = (s: SaleData): number => {
     return round2(Number(s.vendorCommissionAmount ?? 0) || 0);
@@ -434,6 +475,15 @@ export default function CierreVentasDulces({
     sellerCandyId,
     currentEmailNorm,
   ]);
+
+  const cashSales = React.useMemo(
+    () => visibleSales.filter((s) => s.type !== "CREDITO"),
+    [visibleSales],
+  );
+  const creditSales = React.useMemo(
+    () => visibleSales.filter((s) => s.type === "CREDITO"),
+    [visibleSales],
+  );
 
   // ✅ KPIs flotantes/procesadas
   const kpiFloCount = React.useMemo(
@@ -580,11 +630,62 @@ export default function CierreVentasDulces({
   const productSummaryArray = Object.entries(productMap).map(
     ([productName, v]) => ({
       productName,
+      category: productCategoryMap[normKey(productName)] || "(sin categoría)",
       totalQuantity: v.totalQuantity,
       totalAmount: v.totalAmount,
       totalCommission: v.totalCommission,
     }),
   );
+
+  const productSummaryByCategory = React.useMemo(() => {
+    const map: Record<
+      string,
+      {
+        category: string;
+        rows: typeof productSummaryArray;
+        totalQuantity: number;
+        totalAmount: number;
+        totalCommission: number;
+      }
+    > = {};
+
+    for (const row of productSummaryArray) {
+      const cat = row.category || "(sin categoría)";
+      if (!map[cat]) {
+        map[cat] = {
+          category: cat,
+          rows: [],
+          totalQuantity: 0,
+          totalAmount: 0,
+          totalCommission: 0,
+        };
+      }
+      map[cat].rows.push(row);
+      map[cat].totalQuantity = round3(
+        map[cat].totalQuantity + (row.totalQuantity || 0),
+      );
+      map[cat].totalAmount = round2(
+        map[cat].totalAmount + (row.totalAmount || 0),
+      );
+      map[cat].totalCommission = round2(
+        map[cat].totalCommission + (row.totalCommission || 0),
+      );
+    }
+
+    return Object.values(map)
+      .map((g) => ({
+        ...g,
+        rows: [...g.rows].sort((a, b) => b.totalAmount - a.totalAmount),
+      }))
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [productSummaryArray]);
+
+  const toggleCategory = (cat: string) => {
+    setCategoryOpenMap((prev) => ({
+      ...prev,
+      [cat]: !prev[cat],
+    }));
+  };
 
   // ✅ Guardar cierre (ADMIN):
   // - procesa SOLO FLOTANTES visibles del periodo
@@ -843,6 +944,7 @@ export default function CierreVentasDulces({
       <style>{`
         .pdf-print-mode .pdf-desktop { display: block !important; }
         .pdf-print-mode .pdf-mobile  { display: none !important; }
+        .pdf-print-mode .collapsible-content { display: block !important; }
       `}</style>
 
       <h2 className="text-2xl font-bold mb-4">
@@ -850,163 +952,218 @@ export default function CierreVentasDulces({
       </h2>
 
       {/* filtros por periodo + estado + vendedor */}
-      <div className="flex flex-col md:flex-row md:items-end gap-3 mb-4">
-        <div className="flex items-center gap-2">
-          <label className="text-sm">Desde:</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <label className="text-sm">Hasta:</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <label className="text-sm">Filtrar:</label>
-          <select
-            className="border rounded px-2 py-1"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as any)}
+      <div className="bg-white border rounded shadow-sm mb-4">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setFiltersCardOpen((v) => !v)}
+          aria-expanded={filtersCardOpen}
+        >
+          <span>Filtros</span>
+          <span
+            className={`transition-transform ${filtersCardOpen ? "rotate-180" : ""}`}
           >
-            <option value="ALL">Todas</option>
-            <option value="FLOTANTE">Venta Flotante</option>
-            <option value="PROCESADA">Venta Procesada</option>
-          </select>
-        </div>
+            ▼
+          </span>
+        </button>
+        <div
+          className={`collapsible-content ${filtersCardOpen ? "block" : "hidden"} border-t p-4`}
+        >
+          <div className="flex flex-col md:flex-row md:items-end gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-sm">Desde:</label>
+              <input
+                type="date"
+                className="border rounded px-2 py-1"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
 
-        {/* ✅ NUEVO: filtro por vendedor (solo admin) */}
-        {isAdmin && (
-          <div className="flex items-center gap-2">
-            <label className="text-sm">Vendedor:</label>
-            <select
-              className="border rounded px-2 py-1"
-              value={vendorFilter}
-              onChange={(e) => setVendorFilter(e.target.value)}
-            >
-              <option value="ALL">Todos</option>
-              {sellers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || s.id}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2">
+              <label className="text-sm">Hasta:</label>
+              <input
+                type="date"
+                className="border rounded px-2 py-1"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-sm">Filtrar:</label>
+              <select
+                className="border rounded px-2 py-1"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value as any)}
+              >
+                <option value="ALL">Todas</option>
+                <option value="FLOTANTE">Venta Flotante</option>
+                <option value="PROCESADA">Venta Procesada</option>
+              </select>
+            </div>
+
+            {/* ✅ NUEVO: filtro por vendedor (solo admin) */}
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                <label className="text-sm">Vendedor:</label>
+                <select
+                  className="border rounded px-2 py-1"
+                  value={vendorFilter}
+                  onChange={(e) => setVendorFilter(e.target.value)}
+                >
+                  <option value="ALL">Todos</option>
+                  {sellers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name || s.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* KPIs arriba */}
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">Ventas flotantes</div>
-          <div className="text-2xl font-bold">{kpiFloCount}</div>
-          <div className="text-xs text-gray-500 mt-1">
-            Período: {startDate} → {endDate}
-          </div>
-        </div>
+      <div className="bg-white border rounded shadow-sm mb-4">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setKpiCardOpen((v) => !v)}
+          aria-expanded={kpiCardOpen}
+        >
+          <span>KPIs</span>
+          <span
+            className={`transition-transform ${kpiCardOpen ? "rotate-180" : ""}`}
+          >
+            ▼
+          </span>
+        </button>
+        <div
+          className={`collapsible-content ${kpiCardOpen ? "block" : "hidden"} border-t p-4`}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">Ventas flotantes</div>
+              <div className="text-2xl font-bold">{kpiFloCount}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
 
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">Ventas procesadas</div>
-          <div className="text-2xl font-bold">{kpiProCount}</div>
-          <div className="text-xs text-gray-500 mt-1">
-            Período: {startDate} → {endDate}
-          </div>
-        </div>
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">Ventas procesadas</div>
+              <div className="text-2xl font-bold">{kpiProCount}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
 
-        {/* ✅ NUEVO */}
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">Ventas crédito</div>
-          <div className="text-2xl font-bold">{kpiCreditoCount}</div>
-          <div className="text-xs text-gray-500 mt-1">
-            Período: {startDate} → {endDate}
-          </div>
-        </div>
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">Ventas crédito</div>
+              <div className="text-2xl font-bold">{kpiCreditoCount}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
 
-        {/* ✅ NUEVO */}
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">Ventas cash</div>
-          <div className="text-2xl font-bold">{kpiCashCount}</div>
-          <div className="text-xs text-gray-500 mt-1">
-            Período: {startDate} → {endDate}
-          </div>
-        </div>
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">Ventas cash</div>
+              <div className="text-2xl font-bold">{kpiCashCount}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
 
-        {/* ✅ KPI: comisión cash (sumatoria) */}
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">Comisión cash (período)</div>
-          <div className="text-2xl font-bold">
-            C${money(totalCommissionCash)}
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            Período: {startDate} → {endDate}
-          </div>
-        </div>
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">
+                Comisión cash (período)
+              </div>
+              <div className="text-2xl font-bold">
+                C${money(totalCommissionCash)}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
 
-        {/* ✅ KPI: comisión crédito (sumatoria) */}
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">
-            Comisión crédito (período)
-          </div>
-          <div className="text-2xl font-bold">
-            C${money(totalCommissionCredito)}
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            Período: {startDate} → {endDate}
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">
+                Comisión crédito (período)
+              </div>
+              <div className="text-2xl font-bold">
+                C${money(totalCommissionCredito)}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       {/* KPIs listados por vendedor (cash / crédito) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">
-            Vendedores (comisión CASH del período)
-          </div>
-          {vendorCommissionRowsCash.length === 0 ? (
-            <div className="text-sm text-gray-500 mt-2">—</div>
-          ) : (
-            <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
-              {vendorCommissionRowsCash.map((v) => (
-                <div
-                  key={v.vendorId}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <span className="truncate">{v.name}</span>
-                  <strong className="ml-2">C${money(v.total)}</strong>
+      <div className="bg-white border rounded shadow-sm mb-4">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          onClick={() => setVendorKpiCardOpen((v) => !v)}
+          aria-expanded={vendorKpiCardOpen}
+        >
+          <span>KPIs por vendedor</span>
+          <span
+            className={`transition-transform ${vendorKpiCardOpen ? "rotate-180" : ""}`}
+          >
+            ▼
+          </span>
+        </button>
+        <div
+          className={`collapsible-content ${vendorKpiCardOpen ? "block" : "hidden"} border-t p-4`}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">
+                Vendedores (comisión CASH del período)
+              </div>
+              {vendorCommissionRowsCash.length === 0 ? (
+                <div className="text-sm text-gray-500 mt-2">—</div>
+              ) : (
+                <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
+                  {vendorCommissionRowsCash.map((v) => (
+                    <div
+                      key={v.vendorId}
+                      className="flex items-center justify-between text-sm"
+                    >
+                      <span className="truncate">{v.name}</span>
+                      <strong className="ml-2">C${money(v.total)}</strong>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
-          )}
-        </div>
 
-        <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-          <div className="text-xs text-gray-600">
-            Vendedores (comisión CRÉDITO del período)
-          </div>
-          {vendorCommissionRowsCredito.length === 0 ? (
-            <div className="text-sm text-gray-500 mt-2">—</div>
-          ) : (
-            <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
-              {vendorCommissionRowsCredito.map((v) => (
-                <div
-                  key={v.vendorId}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <span className="truncate">{v.name}</span>
-                  <strong className="ml-2">C${money(v.total)}</strong>
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">
+                Vendedores (comisión CRÉDITO del período)
+              </div>
+              {vendorCommissionRowsCredito.length === 0 ? (
+                <div className="text-sm text-gray-500 mt-2">—</div>
+              ) : (
+                <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
+                  {vendorCommissionRowsCredito.map((v) => (
+                    <div
+                      key={v.vendorId}
+                      className="flex items-center justify-between text-sm"
+                    >
+                      <span className="truncate">{v.name}</span>
+                      <strong className="ml-2">C${money(v.total)}</strong>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
 
@@ -1014,230 +1171,490 @@ export default function CierreVentasDulces({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          {/* =========================
-              DESKTOP / WEB -> TABLA (IGUAL)
-              ========================= */}
-          <div className="pdf-desktop hidden md:block">
-            <table className="min-w-full border text-sm mb-4 shadow-2xl">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="border p-2">Estado</th>
-                  <th className="border p-2">Producto</th>
-                  <th className="border p-2">Tipo</th>
-                  <th className="border p-2">Paquetes</th>
-                  <th className="border p-2">Monto</th>
-                  <th className="border p-2">Comisión</th>
-                  <th className="border p-2">Fecha venta</th>
-                  <th className="border p-2">Fecha proceso</th>
-                  <th className="border p-2">Vendedor</th>
-                  <th className="border p-2">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleSales.map((s) => {
+          <div className="bg-white border rounded shadow-sm mb-4">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              onClick={() => setCashCardOpen((v) => !v)}
+              aria-expanded={cashCardOpen}
+            >
+              <span>Transacciones Cash</span>
+              <span
+                className={`transition-transform ${cashCardOpen ? "rotate-180" : ""}`}
+              >
+                ▼
+              </span>
+            </button>
+            <div
+              className={`collapsible-content ${cashCardOpen ? "block" : "hidden"} border-t p-4`}
+            >
+              <div className="pdf-desktop hidden md:block">
+                <table className="min-w-full border text-sm mb-4 shadow-2xl">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="border p-2">Estado</th>
+                      <th className="border p-2">Producto</th>
+                      <th className="border p-2">Tipo</th>
+                      <th className="border p-2">Paquetes</th>
+                      <th className="border p-2">Monto</th>
+                      <th className="border p-2">Comisión</th>
+                      <th className="border p-2">Fecha venta</th>
+                      <th className="border p-2">Fecha proceso</th>
+                      <th className="border p-2">Vendedor</th>
+                      <th className="border p-2">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cashSales.map((s) => {
+                      const commission = getCommissionAmount(s);
+                      const processDate = (s.processedDate || "").trim();
+
+                      return (
+                        <tr key={s.id} className="text-center">
+                          <td className="border p-1">
+                            <span
+                              className={`px-2 py-0.5 rounded text-xs ${
+                                s.status === "PROCESADA"
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-yellow-100 text-yellow-700"
+                              }`}
+                            >
+                              {s.status}
+                            </span>
+                          </td>
+                          <td className="border p-1">{s.productName}</td>
+                          <td className="border p-1">Cash</td>
+                          <td className="border p-1">{qty3(s.quantity)}</td>
+                          <td className="border p-1">C${money(s.amount)}</td>
+                          <td className="border p-1">
+                            {commission > 0 ? `C$${money(commission)}` : "—"}
+                          </td>
+                          <td className="border p-1">{s.date}</td>
+                          <td className="border p-1">
+                            {processDate ? processDate : "—"}
+                          </td>
+                          <td className="border p-1">{s.userEmail}</td>
+                          <td className="border p-1">
+                            {s.status === "FLOTANTE" ? (
+                              <div className="flex gap-2 justify-center">
+                                {isAdmin ? (
+                                  <>
+                                    <button
+                                      onClick={() => openEdit(s)}
+                                      className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                                    >
+                                      Editar
+                                    </button>
+                                    <button
+                                      onClick={() => deleteSale(s.id)}
+                                      className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                                    >
+                                      Eliminar
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">
+                                    —
+                                  </span>
+                                )}
+                              </div>
+                            ) : s.status === "PROCESADA" ? (
+                              <div className="flex gap-2 justify-center">
+                                {isAdmin ? (
+                                  <button
+                                    onClick={() => handleRevert(s.id)}
+                                    className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                                  >
+                                    Revertir
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">
+                                    —
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 text-xs">
+                                No options
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {cashSales.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={10}
+                          className="p-3 text-center text-gray-500"
+                        >
+                          Sin ventas cash para mostrar.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="pdf-mobile md:hidden space-y-3 mb-4">
+                {cashSales.map((s) => {
                   const commission = getCommissionAmount(s);
                   const processDate = (s.processedDate || "").trim();
 
                   return (
-                    <tr key={s.id} className="text-center">
-                      <td className="border p-1">
-                        <span
-                          className={`px-2 py-0.5 rounded text-xs ${
-                            s.status === "PROCESADA"
-                              ? "bg-green-100 text-green-700"
-                              : "bg-yellow-100 text-yellow-700"
-                          }`}
-                        >
-                          {s.status}
-                        </span>
-                      </td>
-                      <td className="border p-1">{s.productName}</td>
-                      <td className="border p-1">
-                        {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                      </td>
-                      <td className="border p-1">{qty3(s.quantity)}</td>
-                      <td className="border p-1">C${money(s.amount)}</td>
-                      <td className="border p-1">
-                        {commission > 0 ? `C$${money(commission)}` : "—"}
-                      </td>
-                      <td className="border p-1">{s.date}</td>
-                      <td className="border p-1">
-                        {processDate ? processDate : "—"}
-                      </td>
-                      <td className="border p-1">{s.userEmail}</td>
-                      <td className="border p-1">
-                        {s.status === "FLOTANTE" ? (
-                          <div className="flex gap-2 justify-center">
-                            {isAdmin ? (
-                              <>
-                                <button
-                                  onClick={() => openEdit(s)}
-                                  className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                                >
-                                  Editar
-                                </button>
-                                <button
-                                  onClick={() => deleteSale(s.id)}
-                                  className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                                >
-                                  Eliminar
-                                </button>
-                              </>
-                            ) : (
-                              <span className="text-gray-400 text-xs">—</span>
-                            )}
+                    <details
+                      key={s.id}
+                      className="border rounded-xl bg-white shadow-sm"
+                    >
+                      <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
+                        <div className="min-w-0">
+                          <div className="font-semibold truncate">
+                            {s.productName}
                           </div>
-                        ) : s.status === "PROCESADA" ? (
-                          <div className="flex gap-2 justify-center">
-                            {isAdmin ? (
-                              <button
-                                onClick={() => handleRevert(s.id)}
-                                className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                              >
-                                Revertir
-                              </button>
-                            ) : (
-                              <span className="text-gray-400 text-xs">—</span>
-                            )}
+                          <div className="text-xs text-gray-500">
+                            Cash • {s.date}
                           </div>
-                        ) : (
-                          <span className="text-gray-400 text-xs">
-                            No options
+                        </div>
+
+                        <div className="text-right shrink-0 ml-3">
+                          <div className="font-bold">C${money(s.amount)}</div>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${
+                              s.status === "PROCESADA"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-yellow-100 text-yellow-700"
+                            }`}
+                          >
+                            {s.status}
                           </span>
-                        )}
-                      </td>
-                    </tr>
+                        </div>
+                      </summary>
+
+                      <div className="px-4 pb-4 pt-2 text-sm space-y-2">
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Paquetes</span>
+                          <strong>{qty3(s.quantity)}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Comisión</span>
+                          <strong>
+                            {commission > 0 ? `C$${money(commission)}` : "—"}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Fecha proceso</span>
+                          <strong>{processDate || "—"}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Vendedor</span>
+                          <strong className="text-right break-all">
+                            {s.userEmail}
+                          </strong>
+                        </div>
+
+                        <div className="pt-2">
+                          {s.status === "FLOTANTE" ? (
+                            <div className="flex gap-2">
+                              {isAdmin ? (
+                                <>
+                                  <button
+                                    onClick={() => openEdit(s)}
+                                    className="flex-1 text-xs bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700"
+                                  >
+                                    Editar
+                                  </button>
+                                  <button
+                                    onClick={() => deleteSale(s.id)}
+                                    className="flex-1 text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                  >
+                                    Eliminar
+                                  </button>
+                                </>
+                              ) : (
+                                <div className="text-gray-400 text-xs w-full text-center">
+                                  —
+                                </div>
+                              )}
+                            </div>
+                          ) : s.status === "PROCESADA" ? (
+                            <div className="flex gap-2">
+                              {isAdmin ? (
+                                <button
+                                  onClick={() => handleRevert(s.id)}
+                                  className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                >
+                                  Revertir
+                                </button>
+                              ) : (
+                                <div className="text-gray-400 text-xs w-full text-center">
+                                  —
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-gray-400 text-xs w-full text-center">
+                              No options
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </details>
                   );
                 })}
-                {visibleSales.length === 0 && (
-                  <tr>
-                    <td colSpan={10} className="p-3 text-center text-gray-500">
-                      Sin ventas para mostrar.
-                    </td>
-                  </tr>
+
+                {cashSales.length === 0 && (
+                  <div className="text-center text-gray-500 text-sm py-6">
+                    Sin ventas cash para mostrar.
+                  </div>
                 )}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
 
-          {/* =========================
-              MOBILE / PWA -> CARDS EXPANDIBLES (SIN PERDER DATOS)
-              ========================= */}
-          <div className="pdf-mobile md:hidden space-y-3 mb-4">
-            {visibleSales.map((s) => {
-              const commission = getCommissionAmount(s);
-              const processDate = (s.processedDate || "").trim();
+          <div className="bg-white border rounded shadow-sm mb-4">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              onClick={() => setCreditCardOpen((v) => !v)}
+              aria-expanded={creditCardOpen}
+            >
+              <span>Transacciones Crédito</span>
+              <span
+                className={`transition-transform ${creditCardOpen ? "rotate-180" : ""}`}
+              >
+                ▼
+              </span>
+            </button>
+            <div
+              className={`collapsible-content ${creditCardOpen ? "block" : "hidden"} border-t p-4`}
+            >
+              <div className="pdf-desktop hidden md:block">
+                <table className="min-w-full border text-sm mb-4 shadow-2xl">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="border p-2">Estado</th>
+                      <th className="border p-2">Producto</th>
+                      <th className="border p-2">Tipo</th>
+                      <th className="border p-2">Paquetes</th>
+                      <th className="border p-2">Monto</th>
+                      <th className="border p-2">Comisión</th>
+                      <th className="border p-2">Fecha venta</th>
+                      <th className="border p-2">Fecha proceso</th>
+                      <th className="border p-2">Vendedor</th>
+                      <th className="border p-2">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {creditSales.map((s) => {
+                      const commission = getCommissionAmount(s);
+                      const processDate = (s.processedDate || "").trim();
 
-              return (
-                <details
-                  key={s.id}
-                  className="border rounded-xl bg-white shadow-sm"
-                >
-                  <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
-                    <div className="min-w-0">
-                      <div className="font-semibold truncate">
-                        {s.productName}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {s.type === "CREDITO" ? "Crédito" : "Cash"} • {s.date}
-                      </div>
-                    </div>
-
-                    <div className="text-right shrink-0 ml-3">
-                      <div className="font-bold">C${money(s.amount)}</div>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded ${
-                          s.status === "PROCESADA"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-yellow-100 text-yellow-700"
-                        }`}
-                      >
-                        {s.status}
-                      </span>
-                    </div>
-                  </summary>
-
-                  <div className="px-4 pb-4 pt-2 text-sm space-y-2">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-gray-600">Paquetes</span>
-                      <strong>{qty3(s.quantity)}</strong>
-                    </div>
-
-                    <div className="flex justify-between gap-3">
-                      <span className="text-gray-600">Comisión</span>
-                      <strong>
-                        {commission > 0 ? `C$${money(commission)}` : "—"}
-                      </strong>
-                    </div>
-
-                    <div className="flex justify-between gap-3">
-                      <span className="text-gray-600">Fecha proceso</span>
-                      <strong>{processDate || "—"}</strong>
-                    </div>
-
-                    <div className="flex justify-between gap-3">
-                      <span className="text-gray-600">Vendedor</span>
-                      <strong className="text-right break-all">
-                        {s.userEmail}
-                      </strong>
-                    </div>
-
-                    {/* Acciones: mismo permiso/lógica que tabla */}
-                    <div className="pt-2">
-                      {s.status === "FLOTANTE" ? (
-                        <div className="flex gap-2">
-                          {isAdmin ? (
-                            <>
-                              <button
-                                onClick={() => openEdit(s)}
-                                className="flex-1 text-xs bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700"
-                              >
-                                Editar
-                              </button>
-                              <button
-                                onClick={() => deleteSale(s.id)}
-                                className="flex-1 text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
-                              >
-                                Eliminar
-                              </button>
-                            </>
-                          ) : (
-                            <div className="text-gray-400 text-xs w-full text-center">
-                              —
-                            </div>
-                          )}
-                        </div>
-                      ) : s.status === "PROCESADA" ? (
-                        <div className="flex gap-2">
-                          {isAdmin ? (
-                            <button
-                              onClick={() => handleRevert(s.id)}
-                              className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                      return (
+                        <tr key={s.id} className="text-center">
+                          <td className="border p-1">
+                            <span
+                              className={`px-2 py-0.5 rounded text-xs ${
+                                s.status === "PROCESADA"
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-yellow-100 text-yellow-700"
+                              }`}
                             >
-                              Revertir
-                            </button>
+                              {s.status}
+                            </span>
+                          </td>
+                          <td className="border p-1">{s.productName}</td>
+                          <td className="border p-1">Crédito</td>
+                          <td className="border p-1">{qty3(s.quantity)}</td>
+                          <td className="border p-1">C${money(s.amount)}</td>
+                          <td className="border p-1">
+                            {commission > 0 ? `C$${money(commission)}` : "—"}
+                          </td>
+                          <td className="border p-1">{s.date}</td>
+                          <td className="border p-1">
+                            {processDate ? processDate : "—"}
+                          </td>
+                          <td className="border p-1">{s.userEmail}</td>
+                          <td className="border p-1">
+                            {s.status === "FLOTANTE" ? (
+                              <div className="flex gap-2 justify-center">
+                                {isAdmin ? (
+                                  <>
+                                    <button
+                                      onClick={() => openEdit(s)}
+                                      className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                                    >
+                                      Editar
+                                    </button>
+                                    <button
+                                      onClick={() => deleteSale(s.id)}
+                                      className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                                    >
+                                      Eliminar
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">
+                                    —
+                                  </span>
+                                )}
+                              </div>
+                            ) : s.status === "PROCESADA" ? (
+                              <div className="flex gap-2 justify-center">
+                                {isAdmin ? (
+                                  <button
+                                    onClick={() => handleRevert(s.id)}
+                                    className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                                  >
+                                    Revertir
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">
+                                    —
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 text-xs">
+                                No options
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {creditSales.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={10}
+                          className="p-3 text-center text-gray-500"
+                        >
+                          Sin ventas crédito para mostrar.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="pdf-mobile md:hidden space-y-3 mb-4">
+                {creditSales.map((s) => {
+                  const commission = getCommissionAmount(s);
+                  const processDate = (s.processedDate || "").trim();
+
+                  return (
+                    <details
+                      key={s.id}
+                      className="border rounded-xl bg-white shadow-sm"
+                    >
+                      <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
+                        <div className="min-w-0">
+                          <div className="font-semibold truncate">
+                            {s.productName}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            Crédito • {s.date}
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0 ml-3">
+                          <div className="font-bold">C${money(s.amount)}</div>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${
+                              s.status === "PROCESADA"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-yellow-100 text-yellow-700"
+                            }`}
+                          >
+                            {s.status}
+                          </span>
+                        </div>
+                      </summary>
+
+                      <div className="px-4 pb-4 pt-2 text-sm space-y-2">
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Paquetes</span>
+                          <strong>{qty3(s.quantity)}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Comisión</span>
+                          <strong>
+                            {commission > 0 ? `C$${money(commission)}` : "—"}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Fecha proceso</span>
+                          <strong>{processDate || "—"}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Vendedor</span>
+                          <strong className="text-right break-all">
+                            {s.userEmail}
+                          </strong>
+                        </div>
+
+                        <div className="pt-2">
+                          {s.status === "FLOTANTE" ? (
+                            <div className="flex gap-2">
+                              {isAdmin ? (
+                                <>
+                                  <button
+                                    onClick={() => openEdit(s)}
+                                    className="flex-1 text-xs bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700"
+                                  >
+                                    Editar
+                                  </button>
+                                  <button
+                                    onClick={() => deleteSale(s.id)}
+                                    className="flex-1 text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                  >
+                                    Eliminar
+                                  </button>
+                                </>
+                              ) : (
+                                <div className="text-gray-400 text-xs w-full text-center">
+                                  —
+                                </div>
+                              )}
+                            </div>
+                          ) : s.status === "PROCESADA" ? (
+                            <div className="flex gap-2">
+                              {isAdmin ? (
+                                <button
+                                  onClick={() => handleRevert(s.id)}
+                                  className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                >
+                                  Revertir
+                                </button>
+                              ) : (
+                                <div className="text-gray-400 text-xs w-full text-center">
+                                  —
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             <div className="text-gray-400 text-xs w-full text-center">
-                              —
+                              No options
                             </div>
                           )}
                         </div>
-                      ) : (
-                        <div className="text-gray-400 text-xs w-full text-center">
-                          No options
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </details>
-              );
-            })}
+                      </div>
+                    </details>
+                  );
+                })}
 
-            {visibleSales.length === 0 && (
-              <div className="text-center text-gray-500 text-sm py-6">
-                Sin ventas para mostrar.
+                {creditSales.length === 0 && (
+                  <div className="text-center text-gray-500 text-sm py-6">
+                    Sin ventas crédito para mostrar.
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
           {/* Bloque de totales (igual) */}
@@ -1276,77 +1693,141 @@ export default function CierreVentasDulces({
             </div>
           )}
 
-          <h3 className="font-semibold mb-2">Consolidado por producto</h3>
-
-          {/* DESKTOP consolidado (tabla igual) */}
-          <div className="pdf-desktop hidden md:block">
-            <table className="min-w-full border text-sm mb-2 shadow-2xl">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="border p-2">Producto</th>
-                  <th className="border p-2">Total paquetes</th>
-                  <th className="border p-2">Total dinero</th>
-                  <th className="border p-2">Comisión</th>
-                </tr>
-              </thead>
-              <tbody>
-                {productSummaryArray.map((row) => (
-                  <tr key={row.productName} className="text-center">
-                    <td className="border p-1">{row.productName}</td>
-                    <td className="border p-1">{qty3(row.totalQuantity)}</td>
-                    <td className="border p-1">C${money(row.totalAmount)}</td>
-                    <td className="border p-1">
-                      {row.totalCommission > 0
-                        ? `C$${money(row.totalCommission)}`
-                        : "—"}
-                    </td>
-                  </tr>
-                ))}
-                {productSummaryArray.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="p-3 text-center text-gray-500">
-                      Sin datos para consolidar.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* MOBILE consolidado (cards) */}
-          <div className="pdf-mobile md:hidden space-y-2">
-            {productSummaryArray.map((row) => (
-              <div
-                key={row.productName}
-                className="border rounded-xl bg-white shadow-sm p-3"
+          <div className="bg-white border rounded shadow-sm mb-4">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              onClick={() => setProductCardOpen((v) => !v)}
+              aria-expanded={productCardOpen}
+            >
+              <span>Consolidado por producto</span>
+              <span
+                className={`transition-transform ${productCardOpen ? "rotate-180" : ""}`}
               >
-                <div className="font-semibold">{row.productName}</div>
-                <div className="mt-2 text-sm space-y-1">
-                  <div className="flex justify-between gap-3">
-                    <span className="text-gray-600">Total paquetes</span>
-                    <strong>{qty3(row.totalQuantity)}</strong>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-gray-600">Total dinero</span>
-                    <strong>C${money(row.totalAmount)}</strong>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-gray-600">Comisión</span>
-                    <strong>
-                      {row.totalCommission > 0
-                        ? `C$${money(row.totalCommission)}`
-                        : "—"}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-            ))}
+                ▼
+              </span>
+            </button>
+            <div
+              className={`collapsible-content ${productCardOpen ? "block" : "hidden"} border-t p-4`}
+            >
+              <div className="space-y-3">
+                {productSummaryByCategory.map((group) => {
+                  const isOpen = !!categoryOpenMap[group.category];
+                  return (
+                    <div
+                      key={group.category}
+                      className="border rounded-xl bg-white shadow-sm"
+                    >
+                      <button
+                        type="button"
+                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                        onClick={() => toggleCategory(group.category)}
+                        aria-expanded={isOpen}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate">{group.category}</div>
+                          <div className="text-xs text-gray-600">
+                            {qty3(group.totalQuantity)} paquetes · C$
+                            {money(group.totalAmount)} · Comisión{" "}
+                            {group.totalCommission > 0
+                              ? `C$${money(group.totalCommission)}`
+                              : "—"}
+                          </div>
+                        </div>
+                        <span
+                          className={`transition-transform ${isOpen ? "rotate-180" : ""}`}
+                        >
+                          ▼
+                        </span>
+                      </button>
 
-            {productSummaryArray.length === 0 && (
-              <div className="text-center text-gray-500 text-sm py-6">
-                Sin datos para consolidar.
+                      <div
+                        className={`collapsible-content ${isOpen ? "block" : "hidden"} border-t p-3`}
+                      >
+                        <div className="pdf-desktop hidden md:block">
+                          <table className="min-w-full border text-sm mb-2">
+                            <thead className="bg-gray-100">
+                              <tr>
+                                <th className="border p-2">Producto</th>
+                                <th className="border p-2">Total paquetes</th>
+                                <th className="border p-2">Total dinero</th>
+                                <th className="border p-2">Comisión</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {group.rows.map((row) => (
+                                <tr
+                                  key={row.productName}
+                                  className="text-center"
+                                >
+                                  <td className="border p-1">
+                                    {row.productName}
+                                  </td>
+                                  <td className="border p-1">
+                                    {qty3(row.totalQuantity)}
+                                  </td>
+                                  <td className="border p-1">
+                                    C${money(row.totalAmount)}
+                                  </td>
+                                  <td className="border p-1">
+                                    {row.totalCommission > 0
+                                      ? `C$${money(row.totalCommission)}`
+                                      : "—"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="pdf-mobile md:hidden space-y-2">
+                          {group.rows.map((row) => (
+                            <div
+                              key={row.productName}
+                              className="border rounded-xl bg-white shadow-sm p-3"
+                            >
+                              <div className="font-semibold">
+                                {row.productName}
+                              </div>
+                              <div className="mt-2 text-sm space-y-1">
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-600">
+                                    Total paquetes
+                                  </span>
+                                  <strong>{qty3(row.totalQuantity)}</strong>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-600">
+                                    Total dinero
+                                  </span>
+                                  <strong>C${money(row.totalAmount)}</strong>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-gray-600">
+                                    Comisión
+                                  </span>
+                                  <strong>
+                                    {row.totalCommission > 0
+                                      ? `C$${money(row.totalCommission)}`
+                                      : "—"}
+                                  </strong>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {productSummaryByCategory.length === 0 && (
+                  <div className="text-center text-gray-500 text-sm py-6">
+                    Sin datos para consolidar.
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </div>
       )}
