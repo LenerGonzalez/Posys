@@ -798,9 +798,27 @@ export default function TransactionsPollo({
     return filteredSales.slice(start, start + PAGE_SIZE);
   }, [filteredSales, page]);
 
-  const [filtersCardOpen, setFiltersCardOpen] = useState(true);
-  const [kpisCardOpen, setKpisCardOpen] = useState(true);
-  const [transactionsCardOpen, setTransactionsCardOpen] = useState(true);
+  const [filtersCardOpen, setFiltersCardOpen] = useState(false);
+  const [kpisCardOpen, setKpisCardOpen] = useState(false);
+  const [transactionsCardOpen, setTransactionsCardOpen] = useState(false);
+
+  const mobileGroups = useMemo(() => {
+    const map = new Map<string, { cash: SaleDoc[]; credit: SaleDoc[] }>();
+    paged.forEach((s) => {
+      const category =
+        s._raw?.productName || s._raw?.items?.[0]?.productName || "(sin producto)";
+      if (!map.has(category)) {
+        map.set(category, { cash: [], credit: [] });
+      }
+      const grp = map.get(category)!;
+      if (s.type === "CONTADO") grp.cash.push(s);
+      else grp.credit.push(s);
+    });
+
+    return Array.from(map.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    );
+  }, [paged]);
 
   // venta actual del modal (para mostrar comisión en el detalle)
   const modalSale = useMemo(
@@ -982,6 +1000,150 @@ export default function TransactionsPollo({
         <div className="text-sm text-gray-600">
           Página {page} de {totalPages} • {filteredSales.length} transacción(es)
         </div>
+      </div>
+    );
+  };
+
+  const renderMobileSaleCard = (s: SaleDoc) => {
+    const name = getSaleCustomerName(s, customersById);
+    const productName =
+      s._raw?.productName ||
+      s._raw?.items?.[0]?.productName ||
+      "(sin producto)";
+    const estadoLabel = getEstadoLabel(s._raw);
+
+    return (
+      <div key={s.id} className="bg-white border rounded-xl shadow">
+        <details className="group">
+          <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-semibold truncate">{name}</div>
+                <div className="text-xs text-gray-600 shrink-0">{s.date}</div>
+              </div>
+
+              <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
+                <span
+                  className={`px-2 py-1 rounded-full border ${
+                    estadoLabel === "PROCESADA"
+                      ? "bg-blue-50 border-blue-200 text-blue-700"
+                      : "bg-gray-50 border-gray-200 text-gray-700"
+                  }`}
+                >
+                  {estadoLabel}
+                </span>
+                <span
+                  className={`px-2 py-1 rounded-full border ${
+                    s.type === "CREDITO"
+                      ? "bg-yellow-50 border-yellow-200 text-yellow-700"
+                      : "bg-green-50 border-green-200 text-green-700"
+                  }`}
+                >
+                  {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                </span>
+
+                <span className="text-gray-700">
+                  <b>Libras:</b>{" "}
+                  <button
+                    type="button"
+                    className="underline text-blue-600"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      openItemsModal(s.id);
+                    }}
+                    title="Ver detalle"
+                  >
+                    {qty3(s.quantity)}
+                  </button>
+                </span>
+
+                <span className="text-gray-700">
+                  <b>Monto:</b> {money(s.total)}
+                </span>
+              </div>
+            </div>
+
+            <div className="text-gray-500 mt-1">
+              <span className="inline-block transition-transform group-open:rotate-180">
+                ▼
+              </span>
+            </div>
+          </summary>
+
+          <div className="px-3 pb-3 pt-0 text-sm">
+            <div className="grid grid-cols-1 gap-2 border-t pt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Cliente</span>
+                <span className="font-medium text-right">{name}</span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Producto</span>
+                <span className="font-medium text-right">{productName}</span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Fecha</span>
+                <span className="font-medium">{s.date}</span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Estado</span>
+                <span className="font-medium">{estadoLabel}</span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Tipo</span>
+                <span className="font-medium">
+                  {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Libras</span>
+                <span className="font-medium">
+                  <button
+                    type="button"
+                    className="underline text-blue-600"
+                    onClick={() => openItemsModal(s.id)}
+                    title="Ver detalle"
+                  >
+                    {qty3(s.quantity)}
+                  </button>
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Monto</span>
+                <span className="font-semibold">{money(s.total)}</span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                {canDelete && (
+                  <div className="pt-2 flex items-center justify-end gap-2 w-full">
+                    <button
+                      className="px-3 py-2 rounded border hover:bg-gray-50"
+                      onClick={() =>
+                        setOpenMenuId((prev) => (prev === s.id ? null : s.id))
+                      }
+                    >
+                      ⋮ Acciones
+                    </button>
+
+                    {openMenuId === s.id && (
+                      <button
+                        className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                        onClick={() => confirmDelete(s)}
+                      >
+                        Eliminar
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
     );
   };
@@ -1220,164 +1382,65 @@ export default function TransactionsPollo({
                   Sin transacciones en el rango.
                 </div>
               ) : (
-                paged.map((s) => {
-                  const name = getSaleCustomerName(s, customersById);
-                  const productName =
-                    s._raw?.productName ||
-                    s._raw?.items?.[0]?.productName ||
-                    "(sin producto)";
-                  const estadoLabel = getEstadoLabel(s._raw);
+                mobileGroups.map(([category, grp]) => (
+                  <div
+                    key={category}
+                    className="bg-white border rounded-xl shadow"
+                  >
+                    <details className="group">
+                      <summary className="list-none cursor-pointer p-3 flex items-center justify-between">
+                        <div className="font-semibold">
+                          Categoría: {category}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {grp.cash.length + grp.credit.length} transacción(es)
+                        </div>
+                      </summary>
 
-                  return (
-                    <div
-                      key={s.id}
-                      className="bg-white border rounded-xl shadow"
-                    >
-                      <details className="group">
-                        <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="font-semibold truncate">
-                                {name}
+                      <div className="p-3 pt-0 space-y-3">
+                        <div className="bg-gray-50 border rounded-lg">
+                          <details className="group">
+                            <summary className="list-none cursor-pointer p-3 flex items-center justify-between">
+                              <div className="font-semibold">Cash</div>
+                              <div className="text-xs text-gray-500">
+                                {grp.cash.length} item(s)
                               </div>
-                              <div className="text-xs text-gray-600 shrink-0">
-                                {s.date}
-                              </div>
-                            </div>
-
-                            <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
-                              <span
-                                className={`px-2 py-1 rounded-full border ${
-                                  estadoLabel === "PROCESADA"
-                                    ? "bg-blue-50 border-blue-200 text-blue-700"
-                                    : "bg-gray-50 border-gray-200 text-gray-700"
-                                }`}
-                              >
-                                {estadoLabel}
-                              </span>
-                              <span
-                                className={`px-2 py-1 rounded-full border ${
-                                  s.type === "CREDITO"
-                                    ? "bg-yellow-50 border-yellow-200 text-yellow-700"
-                                    : "bg-green-50 border-green-200 text-green-700"
-                                }`}
-                              >
-                                {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                              </span>
-
-                              <span className="text-gray-700">
-                                <b>Libras:</b>{" "}
-                                <button
-                                  type="button"
-                                  className="underline text-blue-600"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    openItemsModal(s.id);
-                                  }}
-                                  title="Ver detalle"
-                                >
-                                  {qty3(s.quantity)}
-                                </button>
-                              </span>
-
-                              <span className="text-gray-700">
-                                <b>Monto:</b> {money(s.total)}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="text-gray-500 mt-1">
-                            <span className="inline-block transition-transform group-open:rotate-180">
-                              ▼
-                            </span>
-                          </div>
-                        </summary>
-
-                        <div className="px-3 pb-3 pt-0 text-sm">
-                          <div className="grid grid-cols-1 gap-2 border-t pt-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">Cliente</span>
-                              <span className="font-medium text-right">
-                                {name}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">Producto</span>
-                              <span className="font-medium text-right">
-                                {productName}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">Fecha</span>
-                              <span className="font-medium">{s.date}</span>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">Estado</span>
-                              <span className="font-medium">{estadoLabel}</span>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">Tipo</span>
-                              <span className="font-medium">
-                                {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">Libras</span>
-                              <span className="font-medium">
-                                <button
-                                  type="button"
-                                  className="underline text-blue-600"
-                                  onClick={() => openItemsModal(s.id)}
-                                  title="Ver detalle"
-                                >
-                                  {qty3(s.quantity)}
-                                </button>
-                              </span>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-600">Monto</span>
-                              <span className="font-semibold">
-                                {money(s.total)}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                              {canDelete && (
-                                <div className="pt-2 flex items-center justify-end gap-2 w-full">
-                                  <button
-                                    className="px-3 py-2 rounded border hover:bg-gray-50"
-                                    onClick={() =>
-                                      setOpenMenuId((prev) =>
-                                        prev === s.id ? null : s.id,
-                                      )
-                                    }
-                                  >
-                                    ⋮ Acciones
-                                  </button>
-
-                                  {openMenuId === s.id && (
-                                    <button
-                                      className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
-                                      onClick={() => confirmDelete(s)}
-                                    >
-                                      Eliminar
-                                    </button>
-                                  )}
+                            </summary>
+                            <div className="px-3 pb-3 space-y-3">
+                              {grp.cash.length === 0 ? (
+                                <div className="text-sm text-gray-500">
+                                  Sin transacciones cash.
                                 </div>
+                              ) : (
+                                grp.cash.map(renderMobileSaleCard)
                               )}
                             </div>
-                          </div>
+                          </details>
                         </div>
-                      </details>
-                    </div>
-                  );
-                })
+
+                        <div className="bg-gray-50 border rounded-lg">
+                          <details className="group">
+                            <summary className="list-none cursor-pointer p-3 flex items-center justify-between">
+                              <div className="font-semibold">Crédito</div>
+                              <div className="text-xs text-gray-500">
+                                {grp.credit.length} item(s)
+                              </div>
+                            </summary>
+                            <div className="px-3 pb-3 space-y-3">
+                              {grp.credit.length === 0 ? (
+                                <div className="text-sm text-gray-500">
+                                  Sin transacciones crédito.
+                                </div>
+                              ) : (
+                                grp.credit.map(renderMobileSaleCard)
+                              )}
+                            </div>
+                          </details>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+                ))
               )}
 
               <div className="bg-white p-3 rounded shadow border">

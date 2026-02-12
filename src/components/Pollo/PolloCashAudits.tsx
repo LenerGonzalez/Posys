@@ -56,8 +56,7 @@ const mStr = (v: unknown) =>
     .toLowerCase()
     .trim();
 const getQty = (s: any) => Number(s.qty ?? s.quantity ?? 0);
-const isLb = (m: unknown) =>
-  ["lb", "lbs", "libra", "libras"].includes(mStr(m));
+const isLb = (m: unknown) => ["lb", "lbs", "libra", "libras"].includes(mStr(m));
 const isUnit = (m: unknown) =>
   ["unidad", "unidades", "ud", "uds", "pieza", "piezas"].includes(mStr(m));
 
@@ -70,6 +69,7 @@ export default function PolloCashAudits() {
   const [colabOpen, setColabOpen] = useState(false);
   const [inputsOpen, setInputsOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [kpiCardOpen, setKpiCardOpen] = useState(false);
 
   // Users (contadores)
   const [contadores, setContadores] = useState<UserRow[]>([]);
@@ -87,6 +87,11 @@ export default function PolloCashAudits() {
   const [ingresosExtra, setIngresosExtra] = useState<number>(0);
   const [debitos, setDebitos] = useState<number>(0);
   const [comment, setComment] = useState("");
+
+  // KPI modal (rango de cierre ventas seleccionado)
+  const [modalSalesRows, setModalSalesRows] = useState<any[]>([]);
+  const [modalAbonosRange, setModalAbonosRange] = useState<number>(0);
+  const [modalKpiLoading, setModalKpiLoading] = useState(false);
 
   const subTotal = useMemo(
     () => to2(ventasCash + abonos + ingresosExtra),
@@ -261,6 +266,94 @@ export default function PolloCashAudits() {
     loadKpis();
   }, [filterFrom, filterTo]);
 
+  useEffect(() => {
+    const loadModalKpi = async () => {
+      if (!rangeFrom || !rangeTo) return;
+      setModalKpiLoading(true);
+      try {
+        const qs = query(
+          collection(db, "salesV2"),
+          where("date", ">=", rangeFrom),
+          where("date", "<=", rangeTo),
+        );
+        const sSnap = await getDocs(qs);
+        const sRows: any[] = [];
+
+        sSnap.forEach((d) => {
+          const x = d.data() as any;
+          const baseDate = x.date ?? "";
+
+          if (Array.isArray(x.items) && x.items.length > 0) {
+            x.items.forEach((it: any, idx: number) => {
+              const prod = String(it.productName ?? "(sin nombre)");
+              const qty = Number(it.qty ?? 0);
+              const lineFinal =
+                Number(it.lineFinal ?? 0) ||
+                Math.max(
+                  0,
+                  Number(it.unitPrice || 0) * qty - Number(it.discount || 0),
+                );
+              sRows.push({
+                id: `${d.id}#${idx}`,
+                date: baseDate,
+                productName: prod,
+                quantity: qty,
+                amount: lineFinal,
+                measurement: it.measurement ?? x.measurement ?? "",
+                type: x.type ?? "CONTADO",
+              });
+            });
+            return;
+          }
+
+          sRows.push({
+            id: d.id,
+            date: baseDate,
+            productName: x.productName ?? "(sin nombre)",
+            quantity: Number(x.quantity ?? 0),
+            amount: Number(x.amount ?? x.amountCharged ?? 0),
+            measurement: x.measurement ?? "",
+            type: x.type ?? "CONTADO",
+          });
+        });
+
+        setModalSalesRows(sRows);
+
+        const movementsSnap = await getDocs(
+          collection(db, "ar_movements_pollo"),
+        );
+        let abonosRangeSum = 0;
+
+        const resolveMovementDate = (m: any) => {
+          if (m?.date) return String(m.date);
+          if (m?.createdAt?.toDate) return ymd(m.createdAt.toDate());
+          return "";
+        };
+
+        movementsSnap.forEach((d) => {
+          const m = d.data() as any;
+          const type = String(m.type ?? "").toUpperCase();
+          if (type !== "ABONO") return;
+          const amount = Math.abs(Number(m.amount ?? 0));
+          const moveDate = resolveMovementDate(m);
+          if (moveDate && moveDate >= rangeFrom && moveDate <= rangeTo) {
+            abonosRangeSum += amount;
+          }
+        });
+
+        setModalAbonosRange(abonosRangeSum);
+      } catch (e) {
+        console.error("Error cargando KPI de modal:", e);
+        setModalSalesRows([]);
+        setModalAbonosRange(0);
+      } finally {
+        setModalKpiLoading(false);
+      }
+    };
+
+    loadModalKpi();
+  }, [rangeFrom, rangeTo]);
+
   // KPIs
   const kpi = useMemo(() => {
     const sumTotal = rows.reduce(
@@ -309,6 +402,15 @@ export default function PolloCashAudits() {
       unitsCredit: qty3(unitsCredit),
     };
   }, [kpiSalesRows, kpiAbonosRange]);
+
+  const modalKpi = useMemo(() => {
+    const cashSales = modalSalesRows.filter((s) => s.type === "CONTADO");
+    const ventasCashRange = cashSales.reduce((a, s) => a + (s.amount || 0), 0);
+    const recaudadoRange = ventasCashRange + modalAbonosRange;
+    return {
+      recaudado: to2(recaudadoRange),
+    };
+  }, [modalSalesRows, modalAbonosRange]);
 
   function resetForm() {
     setRecibidoPor("");
@@ -523,7 +625,7 @@ export default function PolloCashAudits() {
           </button>
         </div>
 
-        <div className="bg-white rounded shadow p-3">
+        <div className="bg-white rounded shadow p-3 hidden md:block">
           <div className="text-xs text-gray-500">KPI: Monto entregado</div>
           <div className="text-xl font-semibold">{money(kpi.sumTotal)}</div>
           <div className="text-xs text-gray-400">
@@ -531,7 +633,7 @@ export default function PolloCashAudits() {
           </div>
         </div>
 
-        <div className="bg-white rounded shadow p-3">
+        <div className="bg-white rounded shadow p-3 hidden md:block">
           <div className="flex justify-between gap-3">
             <div>
               <div className="text-xs text-gray-500">KPI: Débitos</div>
@@ -549,7 +651,7 @@ export default function PolloCashAudits() {
       </div>
 
       {/* KPIs del periodo (ventas/abonos/libras/unidades) */}
-      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="mt-3 hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
         <div className="bg-white rounded shadow p-3">
           <div className="text-xs text-gray-500">Ventas cash (período)</div>
           <div className="text-lg font-semibold">
@@ -564,9 +666,7 @@ export default function PolloCashAudits() {
           <div className="text-lg font-semibold">
             {money(kpiPeriod.recaudado)}
           </div>
-          <div className="text-[11px] text-gray-400">
-            Cash + abonos
-          </div>
+          <div className="text-[11px] text-gray-400">Cash + abonos</div>
         </div>
         <div className="bg-white rounded shadow p-3">
           <div className="text-xs text-gray-500">Libras cash</div>
@@ -584,6 +684,96 @@ export default function PolloCashAudits() {
           <div className="text-xs text-gray-500">Unidades crédito</div>
           <div className="text-lg font-semibold">{kpiPeriod.unitsCredit}</div>
         </div>
+      </div>
+
+      {/* KPIs colapsables (mobile) */}
+      <div className="mt-3 md:hidden">
+        <CollapsibleCard
+          title="KPIs"
+          open={kpiCardOpen}
+          onToggle={() => setKpiCardOpen((v) => !v)}
+        >
+          <div className="grid grid-cols-1 gap-3">
+            <div className="bg-white rounded border p-3">
+              <div className="text-xs text-gray-500">KPI: Monto entregado</div>
+              <div className="text-lg font-semibold">
+                {money(kpi.sumTotal)}
+              </div>
+              <div className="text-xs text-gray-400">
+                Suma de Total (Sub total - Débitos)
+              </div>
+            </div>
+
+            <div className="bg-white rounded border p-3">
+              <div className="flex justify-between gap-3">
+                <div>
+                  <div className="text-xs text-gray-500">KPI: Débitos</div>
+                  <div className="text-lg font-semibold">
+                    {money(kpi.sumDeb)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">KPI: Sub totales</div>
+                  <div className="text-lg font-semibold">
+                    {money(kpi.sumSub)}
+                  </div>
+                </div>
+              </div>
+              <div className="text-xs text-gray-400 mt-1">
+                Sumas del listado filtrado
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="bg-white rounded border p-3">
+                <div className="text-xs text-gray-500">
+                  Ventas cash (período)
+                </div>
+                <div className="text-lg font-semibold">
+                  {money(kpiPeriod.ventasCash)}
+                </div>
+                {kpiLoading && (
+                  <div className="text-[11px] text-gray-400">
+                    Actualizando…
+                  </div>
+                )}
+              </div>
+              <div className="bg-white rounded border p-3">
+                <div className="text-xs text-gray-500">
+                  Recaudado (período)
+                </div>
+                <div className="text-lg font-semibold">
+                  {money(kpiPeriod.recaudado)}
+                </div>
+                <div className="text-[11px] text-gray-400">Cash + abonos</div>
+              </div>
+              <div className="bg-white rounded border p-3">
+                <div className="text-xs text-gray-500">Libras cash</div>
+                <div className="text-lg font-semibold">
+                  {kpiPeriod.lbsCash}
+                </div>
+              </div>
+              <div className="bg-white rounded border p-3">
+                <div className="text-xs text-gray-500">Unidades cash</div>
+                <div className="text-lg font-semibold">
+                  {kpiPeriod.unitsCash}
+                </div>
+              </div>
+              <div className="bg-white rounded border p-3">
+                <div className="text-xs text-gray-500">Libras crédito</div>
+                <div className="text-lg font-semibold">
+                  {kpiPeriod.lbsCredit}
+                </div>
+              </div>
+              <div className="bg-white rounded border p-3">
+                <div className="text-xs text-gray-500">Unidades crédito</div>
+                <div className="text-lg font-semibold">
+                  {kpiPeriod.unitsCredit}
+                </div>
+              </div>
+            </div>
+          </div>
+        </CollapsibleCard>
       </div>
 
       {/* Lista mobile: tarjetas */}
@@ -854,6 +1044,19 @@ export default function PolloCashAudits() {
                   open={inputsOpen}
                   onToggle={() => setInputsOpen((v) => !v)}
                 >
+                  <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-3">
+                    <div className="text-xs text-blue-700">
+                      Recaudado en el rango (Ventas cash + abonos)
+                    </div>
+                    <div className="text-lg font-semibold text-blue-900">
+                      {money(modalKpi.recaudado)}
+                    </div>
+                    {modalKpiLoading && (
+                      <div className="text-[11px] text-blue-600">
+                        Actualizando…
+                      </div>
+                    )}
+                  </div>
                   <div className="grid grid-cols-1 gap-3">
                     <MoneyInput
                       label="Ventas cash"
@@ -962,6 +1165,20 @@ export default function PolloCashAudits() {
                       />
                     </div>
                   </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                  <div className="text-xs text-blue-700">
+                    Recaudado en el rango (Ventas cash + abonos)
+                  </div>
+                  <div className="text-lg font-semibold text-blue-900">
+                    {money(modalKpi.recaudado)}
+                  </div>
+                  {modalKpiLoading && (
+                    <div className="text-[11px] text-blue-600">
+                      Actualizando…
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
