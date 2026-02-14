@@ -1,5 +1,31 @@
 // src/components/Chicken/ExpensesAdmin.tsx
 import React, { useEffect, useMemo, useState } from "react";
+// Modal simple reutilizable
+function Modal({
+  open,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+      <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-lg w-full relative">
+        <button
+          className="absolute top-2 right-2 text-gray-500 hover:text-gray-700 text-2xl font-bold"
+          onClick={onClose}
+          aria-label="Cerrar"
+        >
+          ×
+        </button>
+        {children}
+      </div>
+    </div>
+  );
+}
 import {
   addDoc,
   collection,
@@ -78,9 +104,10 @@ export default function ExpensesAdmin() {
   const [eStatus, setEStatus] = useState<Status>("PENDIENTE");
   const [eNotes, setENotes] = useState<string>("");
 
-  // Mobile collapsible states
-  const [formOpen, setFormOpen] = useState<boolean>(false);
-  const toggleForm = () => setFormOpen((v) => !v);
+  // Modal para crear gasto
+  const [modalOpen, setModalOpen] = useState<boolean>(false);
+  const openModal = () => setModalOpen(true);
+  const closeModal = () => setModalOpen(false);
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(
     null,
   );
@@ -251,9 +278,18 @@ export default function ExpensesAdmin() {
 
   return (
     <div className="max-w-6xl mx-auto px-3 sm:px-0">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <h2 className="text-2xl font-bold">Gastos (Pollo)</h2>
-        <RefreshButton onClick={refresh} loading={loading} />
+        <div className="flex gap-2">
+          <button
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            onClick={openModal}
+            type="button"
+          >
+            Crear pago
+          </button>
+          <RefreshButton onClick={refresh} loading={loading} />
+        </div>
       </div>
 
       {/* ===== Filtros ===== */}
@@ -287,128 +323,17 @@ export default function ExpensesAdmin() {
         </div>
       </div>
 
-      {/* ===== Formulario ===== */}
-      {/* Mobile: collapsible */}
-      <div className="md:hidden mb-4">
-        <button
-          type="button"
-          onClick={toggleForm}
-          className="w-full text-left px-3 py-3 flex items-center justify-between bg-white border rounded-2xl"
-        >
-          <div>
-            <div className="font-semibold">Crear gasto</div>
-            <div className="text-xs text-gray-600">
-              Fecha: {dateStr} • Monto: {amount === 0 ? "—" : money(amount)}
-            </div>
-          </div>
-          <div className="text-gray-500">{formOpen ? "▲" : "▼"}</div>
-        </button>
-
-        {formOpen && (
-          <form
-            onSubmit={handleCreate}
-            className="mt-3 bg-white p-4 rounded-2xl shadow-2xl border grid grid-cols-1 gap-4"
-          >
-            <div>
-              <label className="block text-sm font-semibold">Fecha</label>
-              <input
-                type="date"
-                className="w-full border p-2 rounded"
-                value={dateStr}
-                onChange={(e) => setDateStr(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold">Categoría</label>
-              <select
-                className="w-full border p-2 rounded"
-                value={category}
-                onChange={(e) => setCategory(e.target.value as Category)}
-              >
-                <option value="">Selecciona</option>
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold">Descripción</label>
-              <input
-                className="w-full border p-2 rounded"
-                placeholder="Detalle del gasto…"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold">Monto</label>
-              <input
-                type="number"
-                step="0.01"
-                inputMode="decimal"
-                className="w-full border p-2 rounded text-right"
-                value={amount === 0 ? "" : amount}
-                onChange={(e) => {
-                  const raw = String(e.target.value || "").replace(",", ".");
-                  const num = parseFloat(raw);
-                  setAmount(Number.isFinite(num) ? Math.max(0, num) : 0);
-                }}
-                placeholder="0.00"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold">Estado</label>
-              <select
-                className="w-full border p-2 rounded"
-                value={status}
-                onChange={(e) => setStatus(e.target.value as Status)}
-              >
-                <option value="PENDIENTE">Pendiente</option>
-                <option value="PAGADO">Pagado</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold">Comentario</label>
-              <textarea
-                className="w-full border p-2 rounded resize-y min-h-24"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                maxLength={500}
-                placeholder="Comentario / nota opcional…"
-              />
-              <div className="text-xs text-gray-500 text-right">
-                {notes.length}/500
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                Guardar gasto
-              </button>
-              <button
-                type="button"
-                className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
-                onClick={resetForm}
-              >
-                Limpiar
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-
-      {/* Desktop: original form (visible md+) */}
-      <div className="hidden md:block">
+      {/* ===== Modal para crear gasto ===== */}
+      <Modal open={modalOpen} onClose={closeModal}>
+        <h3 className="text-xl font-bold mb-4">Crear gasto</h3>
         <form
-          onSubmit={handleCreate}
-          className="bg-white p-4 rounded-2xl shadow-2xl border mb-6 grid grid-cols-1 md:grid-cols-2 gap-4"
+          onSubmit={(e) => {
+            handleCreate(e);
+            if (!category || !description.trim() || !amount || amount <= 0)
+              return;
+            closeModal();
+          }}
+          className="grid grid-cols-1 gap-4"
         >
           <div>
             <label className="block text-sm font-semibold">Fecha</label>
@@ -419,7 +344,6 @@ export default function ExpensesAdmin() {
               onChange={(e) => setDateStr(e.target.value)}
             />
           </div>
-
           <div>
             <label className="block text-sm font-semibold">Categoría</label>
             <select
@@ -435,8 +359,7 @@ export default function ExpensesAdmin() {
               ))}
             </select>
           </div>
-
-          <div className="md:col-span-2">
+          <div>
             <label className="block text-sm font-semibold">Descripción</label>
             <input
               className="w-full border p-2 rounded"
@@ -445,7 +368,6 @@ export default function ExpensesAdmin() {
               onChange={(e) => setDescription(e.target.value)}
             />
           </div>
-
           <div>
             <label className="block text-sm font-semibold">Monto</label>
             <input
@@ -462,7 +384,6 @@ export default function ExpensesAdmin() {
               placeholder="0.00"
             />
           </div>
-
           <div>
             <label className="block text-sm font-semibold">Estado</label>
             <select
@@ -474,8 +395,7 @@ export default function ExpensesAdmin() {
               <option value="PAGADO">Pagado</option>
             </select>
           </div>
-
-          <div className="md:col-span-2">
+          <div>
             <label className="block text-sm font-semibold">Comentario</label>
             <textarea
               className="w-full border p-2 rounded resize-y min-h-24"
@@ -488,21 +408,26 @@ export default function ExpensesAdmin() {
               {notes.length}/500
             </div>
           </div>
-
-          <div className="md:col-span-2 flex gap-2">
+          <div className="flex gap-2">
             <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
               Guardar gasto
             </button>
             <button
               type="button"
               className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
-              onClick={resetForm}
+              onClick={() => {
+                resetForm();
+                closeModal();
+              }}
             >
-              Limpiar
+              Cancelar
             </button>
           </div>
         </form>
-      </div>
+        {msg && <p className="mt-2 text-sm">{msg}</p>}
+      </Modal>
+
+      {/* Desktop: el formulario ahora solo está en el modal */}
 
       {/* ===== LISTA MOBILE FIRST: cards en móvil ===== */}
       <div className="block md:hidden space-y-3">
@@ -657,7 +582,163 @@ export default function ExpensesAdmin() {
       {/* ===== TABLA (md+) ===== */}
       <div className="hidden md:block bg-white p-2 rounded-2xl shadow-2xl border w-full">
         <table className="min-w-full w-full text-sm">
-          {/* ...existing code... */}
+          <thead>
+            <tr>
+              <th className="px-2 py-1 text-left">Fecha</th>
+              <th className="px-2 py-1 text-left">Categoría</th>
+              <th className="px-2 py-1 text-left">Descripción</th>
+              <th className="px-2 py-1 text-right">Monto</th>
+              <th className="px-2 py-1 text-center">Estado</th>
+              <th className="px-2 py-1 text-left">Comentario</th>
+              <th className="px-2 py-1 text-center">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={7} className="text-center py-4">
+                  Cargando…
+                </td>
+              </tr>
+            ) : filteredRows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="text-center py-4">
+                  Sin gastos en el rango seleccionado.
+                </td>
+              </tr>
+            ) : (
+              filteredRows.map((r) => {
+                const isEditing = editingId === r.id;
+                return (
+                  <tr key={r.id} className={isEditing ? "bg-yellow-50" : ""}>
+                    {isEditing ? (
+                      <>
+                        <td className="px-2 py-1">
+                          <input
+                            type="date"
+                            className="w-full border p-1 rounded"
+                            value={eDate}
+                            onChange={(e) => setEDate(e.target.value)}
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <select
+                            className="w-full border p-1 rounded"
+                            value={eCategory}
+                            onChange={(e) =>
+                              setECategory(e.target.value as Category)
+                            }
+                          >
+                            <option value="">Selecciona</option>
+                            {CATEGORIES.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            className="w-full border p-1 rounded"
+                            value={eDescription}
+                            onChange={(e) => setEDescription(e.target.value)}
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-right">
+                          <input
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            className="w-full border p-1 rounded text-right"
+                            value={Number.isNaN(eAmount) ? "" : eAmount}
+                            onChange={(e) => {
+                              const raw = String(e.target.value || "").replace(
+                                ",",
+                                ".",
+                              );
+                              const num = parseFloat(raw);
+                              setEAmount(
+                                Number.isFinite(num) ? Math.max(0, num) : 0,
+                              );
+                            }}
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <select
+                            className="w-full border p-1 rounded"
+                            value={eStatus}
+                            onChange={(e) =>
+                              setEStatus(e.target.value as Status)
+                            }
+                          >
+                            <option value="PENDIENTE">Pendiente</option>
+                            <option value="PAGADO">Pagado</option>
+                          </select>
+                        </td>
+                        <td className="px-2 py-1">
+                          <textarea
+                            className="w-full border p-1 rounded resize-y min-h-10"
+                            value={eNotes}
+                            onChange={(e) => setENotes(e.target.value)}
+                            maxLength={500}
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-center flex gap-1">
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                            onClick={saveEdit}
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                            onClick={cancelEdit}
+                          >
+                            Cancelar
+                          </button>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-2 py-1">{r.date}</td>
+                        <td className="px-2 py-1">{r.category || "—"}</td>
+                        <td className="px-2 py-1">{r.description}</td>
+                        <td className="px-2 py-1 text-right">
+                          {money(r.amount)}
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs ${badge(r.status)}`}
+                          >
+                            {r.status}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1">{r.notes ? r.notes : "—"}</td>
+                        <td className="px-2 py-1 text-center flex gap-1">
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                            onClick={() => startEdit(r)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                            onClick={() => handleDelete(r)}
+                          >
+                            Borrar
+                          </button>
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
         </table>
       </div>
 
