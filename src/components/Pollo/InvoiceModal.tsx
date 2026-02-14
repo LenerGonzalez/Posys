@@ -1,6 +1,7 @@
 // src/components/Pollo/InvoiceModal.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { db } from "../../firebase";
+import ExpenseFormModal from "./ExpenseFormModal";
 import {
   addDoc,
   collection,
@@ -74,7 +75,7 @@ export default function InvoiceModal({
   const productOptions = useMemo(() => {
     const m = new Map<string, { id: string; name: string }>();
     safeBatches.forEach((b) =>
-      m.set(b.productId, { id: b.productId, name: b.productName })
+      m.set(b.productId, { id: b.productId, name: b.productName }),
     );
     return Array.from(m.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [safeBatches]);
@@ -91,7 +92,7 @@ export default function InvoiceModal({
   // ========= Datos de factura =========
   const [invoiceDate, setInvoiceDate] = useState<string>(todayStr());
   const [invoiceNumber, setInvoiceNumber] = useState<string>(
-    () => `FAC-${Date.now().toString().slice(-6)}`
+    () => `FAC-${Date.now().toString().slice(-6)}`,
   );
   const [description, setDescription] = useState<string>("");
 
@@ -101,7 +102,7 @@ export default function InvoiceModal({
     // Mantener solo seleccionados válidos dentro del filtro actual
     setSelectedIds((prev) => {
       const valid = prev.filter((id) =>
-        filteredBatches.some((b) => b.id === id)
+        filteredBatches.some((b) => b.id === id),
       );
       // Si no hay ninguno seleccionado y hay resultados, auto-selecciona todos (comportamiento útil)
       return valid.length === 0 && filteredBatches.length > 0
@@ -116,6 +117,7 @@ export default function InvoiceModal({
   const [loadingExpenses, setLoadingExpenses] = useState<boolean>(false);
   const [expFrom, setExpFrom] = useState<string>(firstDayOfMonth());
   const [expTo, setExpTo] = useState<string>(todayStr());
+  const [openExpenseModal, setOpenExpenseModal] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -141,6 +143,12 @@ export default function InvoiceModal({
       }
     })();
   }, []);
+
+  // Handler para agregar gasto desde el modal
+  const handleExpenseCreated = (expense: Expense) => {
+    setExpenses((prev) => [expense, ...prev]);
+    setSelectedExpenseIds((prev) => [expense.id, ...prev]);
+  };
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter((g) => {
@@ -178,7 +186,7 @@ export default function InvoiceModal({
   const [editingAdjId, setEditingAdjId] = useState<string | null>(null);
   const [editAdjDesc, setEditAdjDesc] = useState<string>("");
   const [editAdjType, setEditAdjType] = useState<"DEBITO" | "CREDITO">(
-    "DEBITO"
+    "DEBITO",
   );
   const [editAdjAmount, setEditAdjAmount] = useState<string>("");
 
@@ -208,8 +216,8 @@ export default function InvoiceModal({
               type: editAdjType,
               amount: Number(amt.toFixed(2)),
             }
-          : x
-      )
+          : x,
+      ),
     );
     cancelEditAdjustment();
   };
@@ -221,7 +229,7 @@ export default function InvoiceModal({
   // ========= Selección =========
   const toggleBatch = (id: string, checked: boolean) => {
     setSelectedIds((prev) =>
-      checked ? [...new Set([...prev, id])] : prev.filter((x) => x !== id)
+      checked ? [...new Set([...prev, id])] : prev.filter((x) => x !== id),
     );
   };
   const selectAllBatches = (checked: boolean) => {
@@ -229,14 +237,14 @@ export default function InvoiceModal({
   };
   const toggleExpense = (id: string, checked: boolean) => {
     setSelectedExpenseIds((prev) =>
-      checked ? [...new Set([...prev, id])] : prev.filter((x) => x !== id)
+      checked ? [...new Set([...prev, id])] : prev.filter((x) => x !== id),
     );
   };
 
   // ========= Cálculos =========
   const selectedBatches = useMemo(
     () => filteredBatches.filter((b) => selectedIds.includes(b.id)),
-    [filteredBatches, selectedIds]
+    [filteredBatches, selectedIds],
   );
 
   const debitsSum = useMemo(
@@ -244,14 +252,14 @@ export default function InvoiceModal({
       adjustments
         .filter((a) => a.type === "DEBITO")
         .reduce((s, a) => s + a.amount, 0),
-    [adjustments]
+    [adjustments],
   );
   const creditsSum = useMemo(
     () =>
       adjustments
         .filter((a) => a.type === "CREDITO")
         .reduce((s, a) => s + a.amount, 0),
-    [adjustments]
+    [adjustments],
   );
 
   const totals = useMemo(() => {
@@ -273,8 +281,8 @@ export default function InvoiceModal({
           ? Number(b.invoiceTotal)
           : Number(
               (Number(b.quantity || 0) * Number(b.purchasePrice || 0)).toFixed(
-                2
-              )
+                2,
+              ),
             );
 
       expected += Number(lineExpected || 0);
@@ -344,7 +352,7 @@ export default function InvoiceModal({
           salePrice: Number(Number(b.salePrice || 0).toFixed(2)),
           purchasePrice: Number(Number(b.purchasePrice || 0).toFixed(2)),
           expectedTotal: Number(
-            (Number(b.quantity || 0) * Number(b.salePrice || 0)).toFixed(2)
+            (Number(b.quantity || 0) * Number(b.salePrice || 0)).toFixed(2),
           ),
           invoiceTotal:
             b.invoiceTotal !== undefined && b.invoiceTotal !== null
@@ -352,7 +360,7 @@ export default function InvoiceModal({
               : Number(
                   (
                     Number(b.quantity || 0) * Number(b.purchasePrice || 0)
-                  ).toFixed(2)
+                  ).toFixed(2),
                 ),
           batchDate: b.date,
           paidAt: b.paidAt?.toDate
@@ -535,7 +543,7 @@ export default function InvoiceModal({
                       Number(
                         (
                           Number(b.quantity || 0) * Number(b.salePrice || 0)
-                        ).toFixed(2)
+                        ).toFixed(2),
                       );
 
                     const facturado =
@@ -545,7 +553,7 @@ export default function InvoiceModal({
                             (
                               Number(b.quantity || 0) *
                               Number(b.purchasePrice || 0)
-                            ).toFixed(2)
+                            ).toFixed(2),
                           );
 
                     const gross = expected - facturado;
@@ -592,7 +600,14 @@ export default function InvoiceModal({
             {loadingExpenses && (
               <span className="text-xs text-gray-500">Cargando…</span>
             )}
-            <div className="ml-auto flex items-end gap-3">
+            <button
+              type="button"
+              className="ml-auto px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+              onClick={() => setOpenExpenseModal(true)}
+            >
+              Crear gasto
+            </button>
+            <div className="flex items-end gap-3">
               <div>
                 <label className="block text-xs text-gray-600">
                   Desde (gasto)
@@ -659,6 +674,14 @@ export default function InvoiceModal({
               </table>
             </div>
           )}
+
+          {/* Modal para crear gasto */}
+          {openExpenseModal && (
+            <ExpenseFormModal
+              onCreated={handleExpenseCreated}
+              onClose={() => setOpenExpenseModal(false)}
+            />
+          )}
         </div>
 
         {/* Notas Crédito/Débito */}
@@ -717,7 +740,7 @@ export default function InvoiceModal({
                               value={editAdjType}
                               onChange={(e) =>
                                 setEditAdjType(
-                                  e.target.value as "DEBITO" | "CREDITO"
+                                  e.target.value as "DEBITO" | "CREDITO",
                                 )
                               }
                             >
@@ -804,49 +827,93 @@ export default function InvoiceModal({
           )}
         </div>
 
-        {/* Totales */}
-        <div className="grid grid-cols-1 md:grid-cols-3 text-sm mb-4 justify-between">
-          <div className="space-y-1">
-            <div>
-              Total libras: <strong>{qty3(totals.totalLbs)}</strong>
+        {/* Totales en cards visuales */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div className="flex flex-col gap-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-blue-700 font-semibold mb-1">
+                Total libras
+              </div>
+              <div className="text-2xl font-bold text-blue-900">
+                {qty3(totals.totalLbs)}
+              </div>
             </div>
-            <div>
-              Total unidades: <strong>{qty3(totals.totalUnits)}</strong>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-blue-700 font-semibold mb-1">
+                Total unidades
+              </div>
+              <div className="text-2xl font-bold text-blue-900">
+                {qty3(totals.totalUnits)}
+              </div>
             </div>
-          </div>
-
-          <div className="space-y-1 text-center">
-            <div>
-              Total facturado (costo):{" "}
-              <strong>{money(totals.totalInvoiced)}</strong>
-            </div>
-            <div>
-              Total esperado (ventas):{" "}
-              <strong>{money(totals.totalExpected)}</strong>
-            </div>
-            <div>
-              Ganancia bruta (esperado − facturado):{" "}
-              <strong>{money(totals.grossProfit)}</strong>
-            </div>
-          </div>
-
-          <div className="space-y-1 text-right">
-            <div>
-              Gastos: <strong>{money(totals.totalGastos)}</strong>
-            </div>
-            <div>
-              Débitos: <strong>{money(totals.debits)}</strong>
-            </div>
-            <div>
-              Créditos: <strong>{money(totals.credits)}</strong>
+            <div className="bg-green-50 border border-green-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-green-700 font-semibold mb-1">
+                Total facturado (costo)
+              </div>
+              <div className="text-2xl font-bold text-green-900">
+                {money(totals.totalInvoiced)}
+              </div>
             </div>
           </div>
-
-          <div className="md:col-span-3 mt-3">
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded text-center font-semibold text-lg">
-              Monto final (esperado − gastos − débitos + créditos):{" "}
-              <span className="text-blue-700">{money(totals.finalAmount)}</span>
+          <div className="flex flex-col gap-4">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-red-700 font-semibold mb-1">
+                Gastos
+              </div>
+              <div className="text-2xl font-bold text-red-900">
+                {money(totals.totalGastos)}
+              </div>
             </div>
+            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-orange-700 font-semibold mb-1">
+                Débitos
+              </div>
+              <div className="text-2xl font-bold text-orange-900">
+                {money(totals.debits)}
+              </div>
+            </div>
+            <div className="bg-lime-50 border border-lime-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-lime-700 font-semibold mb-1">
+                Créditos
+              </div>
+              <div className="text-2xl font-bold text-lime-900">
+                {money(totals.credits)}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="bg-green-50 border border-green-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-green-700 font-semibold mb-1">
+                Total esperado (ventas)
+              </div>
+              <div className="text-2xl font-bold text-green-900">
+                {money(totals.totalExpected)}
+              </div>
+            </div>
+            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-yellow-700 font-semibold mb-1">
+                Ganancia bruta
+              </div>
+              <div className="text-2xl font-bold text-yellow-900">
+                {money(totals.grossProfit)}
+              </div>
+            </div>
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 shadow text-center">
+              <div className="text-xs text-purple-700 font-semibold mb-1">
+                Ganancia neta
+              </div>
+              <div className="text-2xl font-bold text-purple-900">
+                {money(totals.grossProfit - totals.totalGastos - totals.debits)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card de monto final */}
+        <div className="md:col-span-3 mt-3">
+          <div className="p-4 bg-blue-100 border border-blue-300 rounded-xl text-center font-semibold text-lg shadow">
+            Monto final (esperado − gastos − débitos + créditos):{" "}
+            <span className="text-blue-700">{money(totals.finalAmount)}</span>
           </div>
         </div>
 

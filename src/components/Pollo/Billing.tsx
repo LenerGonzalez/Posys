@@ -1,3 +1,5 @@
+
+
 // src/pages/Billing.tsx
 import React, { useEffect, useState, useRef } from "react";
 import { db } from "../../firebase";
@@ -12,8 +14,10 @@ import {
   getDoc,
   writeBatch,
 } from "firebase/firestore";
+
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+import InvoiceModal from "./InvoiceModal";
 
 type BatchItem = {
   id?: string; // id del lote (a veces viene como id)
@@ -107,7 +111,7 @@ async function enrichBatchesWithPurchasePrice(invoices: InvoiceDoc[]) {
       } catch {
         /* ignore */
       }
-    })
+    }),
   );
 
   return invoices.map((inv) => ({
@@ -208,44 +212,93 @@ export default function Billing() {
   const [selected, setSelected] = useState<InvoiceDoc | null>(null);
   const detailRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const qy = query(collection(db, "invoices"), orderBy("date", "desc"));
-      const snap = await getDocs(qy);
-      const list: InvoiceDoc[] = [];
-      snap.forEach((d) => {
-        const raw = d.data() as any;
-        list.push({
-          id: d.id,
-          ...raw,
-          batches: raw.batches || [],
-          expenses: raw.expenses || [],
-          adjustments: raw.adjustments || [],
-          totals: raw.totals || {
-            lbs: raw.totalLbs || 0,
-            units: raw.totalUnits || 0,
-            amount: raw.totalAmount || 0,
-            expenses: raw.totalExpenses || 0,
-            finalAmount: raw.finalAmount || 0,
-            invoiceTotal: raw.invoiceTotal || 0,
-          },
-          totalDebits: raw.totalDebits || 0,
-          totalCredits: raw.totalCredits || 0,
-        });
-      });
+  // Estado para el modal de factura
+  const [openInvoice, setOpenInvoice] = useState(false);
+  const [allBatches, setAllBatches] = useState<any[]>([]);
 
-      const enriched = await enrichBatchesWithPurchasePrice(list);
-      setRows(enriched);
-      setLoading(false);
-    })();
+  // Filtros
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [filterNumber, setFilterNumber] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+
+  // Filtrado de facturas
+  const filteredRows = rows.filter((f) => {
+    let ok = true;
+    if (filterFrom && f.date < filterFrom) ok = false;
+    if (filterTo && f.date > filterTo) ok = false;
+    if (
+      filterNumber &&
+      !(f.number || "").toLowerCase().includes(filterNumber.toLowerCase())
+    )
+      ok = false;
+    if (filterStatus && f.status !== filterStatus) ok = false;
+    return ok;
+  });
+
+  // Paginación
+  const [page, setPage] = useState(1);
+  const itemsPerPage = 5;
+  const totalPages = Math.ceil(filteredRows.length / itemsPerPage) || 1;
+  const paginatedRows = filteredRows.slice(
+    (page - 1) * itemsPerPage,
+    page * itemsPerPage,
+  );
+
+  // Resetear página si cambian los filtros o los datos
+  React.useEffect(() => {
+    setPage(1);
+  }, [filterFrom, filterTo, filterNumber, filterStatus, rows]);
+
+  const refreshInvoices = async () => {
+    setLoading(true);
+    // Cargar facturas
+    const qy = query(collection(db, "invoices"), orderBy("date", "desc"));
+    const snap = await getDocs(qy);
+    const list: InvoiceDoc[] = [];
+    snap.forEach((d) => {
+      const raw = d.data() as any;
+      list.push({
+        id: d.id,
+        ...raw,
+        batches: raw.batches || [],
+        expenses: raw.expenses || [],
+        adjustments: raw.adjustments || [],
+        totals: raw.totals || {
+          lbs: raw.totalLbs || 0,
+          units: raw.totalUnits || 0,
+          amount: raw.totalAmount || 0,
+          expenses: raw.totalExpenses || 0,
+          finalAmount: raw.finalAmount || 0,
+          invoiceTotal: raw.invoiceTotal || 0,
+        },
+        totalDebits: raw.totalDebits || 0,
+        totalCredits: raw.totalCredits || 0,
+      });
+    });
+    const enriched = await enrichBatchesWithPurchasePrice(list);
+    setRows(enriched);
+
+    // Cargar todos los lotes (pagados y pendientes)
+    const batchesSnap = await getDocs(collection(db, "inventory_batches"));
+    const batches: any[] = [];
+    batchesSnap.forEach((d) => {
+      const b = d.data();
+      batches.push({ id: d.id, ...b });
+    });
+    setAllBatches(batches);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    refreshInvoices();
   }, []);
 
   const toggleStatus = async (inv: InvoiceDoc) => {
     const next = inv.status === "PAGADA" ? "PENDIENTE" : "PAGADA";
     await updateDoc(doc(db, "invoices", inv.id), { status: next });
     setRows((prev) =>
-      prev.map((x) => (x.id === inv.id ? { ...x, status: next } : x))
+      prev.map((x) => (x.id === inv.id ? { ...x, status: next } : x)),
     );
     if (selected?.id === inv.id) setSelected({ ...inv, status: next });
   };
@@ -315,6 +368,84 @@ export default function Billing() {
     <div className="max-w-7xl mx-auto p-6 bg-white rounded shadow">
       <h2 className="text-2xl font-bold mb-4">Facturación</h2>
 
+      {/* Botón para crear factura */}
+      <div className="mb-4 flex justify-end">
+        <button
+          type="button"
+          className="px-4 py-2 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
+          onClick={() => setOpenInvoice(true)}
+        >
+          Crear factura
+        </button>
+      </div>
+      {/* Modal de factura */}
+      {openInvoice && (
+        <InvoiceModal
+          paidBatches={allBatches}
+          onClose={() => setOpenInvoice(false)}
+          onCreated={() => {
+            setOpenInvoice(false);
+            refreshInvoices();
+          }}
+        />
+      )}
+
+      {/* Filtros de facturas */}
+      <div className="bg-white p-3 rounded-xl shadow border mb-4 flex flex-wrap gap-3 items-end">
+        <div>
+          <label className="block text-xs font-semibold mb-1">Desde</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={filterFrom}
+            onChange={(e) => setFilterFrom(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1">Hasta</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1"
+            value={filterTo}
+            onChange={(e) => setFilterTo(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1">N° factura</label>
+          <input
+            type="text"
+            className="border rounded px-2 py-1"
+            placeholder="Buscar..."
+            value={filterNumber}
+            onChange={(e) => setFilterNumber(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1">Estado</label>
+          <select
+            className="border rounded px-2 py-1"
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+          >
+            <option value="">Todos</option>
+            <option value="PAGADA">Pagada</option>
+            <option value="PENDIENTE">Pendiente</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          className="ml-auto text-xs px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+          onClick={() => {
+            setFilterFrom("");
+            setFilterTo("");
+            setFilterNumber("");
+            setFilterStatus("");
+          }}
+        >
+          Limpiar filtros
+        </button>
+      </div>
+
       {/* Tabla principal */}
       <div className="bg-white p-2 rounded shadow border w-full mb-4">
         <table className="min-w-full w-full- text-sm">
@@ -342,14 +473,14 @@ export default function Billing() {
                   Cargando…
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : paginatedRows.length === 0 ? (
               <tr>
                 <td colSpan={13} className="p-4 text-center">
                   Sin facturas
                 </td>
               </tr>
             ) : (
-              rows.map((f) => {
+              paginatedRows.map((f) => {
                 const t = computeTotalsFromDoc(f);
                 return (
                   <tr key={f.id} className="text-center">
@@ -403,6 +534,26 @@ export default function Billing() {
                 );
               })
             )}
+            {/* Paginación */}
+            <div className="flex justify-center items-center gap-2 mb-4">
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+              >
+                Anterior
+              </button>
+              <span className="text-sm">
+                Página {page} de {totalPages}
+              </span>
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+              >
+                Siguiente
+              </button>
+            </div>
           </tbody>
         </table>
       </div>

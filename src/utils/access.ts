@@ -21,6 +21,7 @@ export type PathKey =
   | "salesV2"
   | "financialDashboard"
   | "polloCashAudits"
+  | "billing" // <-- AGREGADO
   // DULCES
   | "salesCandies"
   | "productsVendorsCandies"
@@ -32,7 +33,9 @@ export type PathKey =
 type Permission = Partial<Record<Action, boolean>>;
 
 const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
-  admin: {},
+  admin: {
+    billing: { view: true, edit: true },
+  },
 
   // ===== POLLO =====
   supervisor_pollo: {
@@ -44,6 +47,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
   },
 
   contador: {
+    billing: { view: true, edit: true },
     salesV2: { view: true, edit: true },
     customersPollo: { view: true, edit: true },
     batches: { view: true, edit: true }, // (nota: "solo crear lote" lo resolvemos en pantalla luego)

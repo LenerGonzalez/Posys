@@ -221,6 +221,9 @@ export default function AdminLayout({
                             >
                               Inventarios Pagados
                             </NavLink>
+                            <NavLink to={`${base}/billing`} className={linkCls}>
+                              Facturacion
+                            </NavLink>
                           </div>
                         )}
 
@@ -600,6 +603,11 @@ export default function AdminLayout({
                           className={linkCls}
                         >
                           Transacciones
+                        </NavLink>
+                      )}
+                      {canPath(subject, "billing") && (
+                        <NavLink to={`${base}/billing`} className={linkCls}>
+                          Facturacion
                         </NavLink>
                       )}
                       {canPath(subject, "expenses") && (

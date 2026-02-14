@@ -48,6 +48,7 @@ export default function MobileTabsLayout({
     canPath(subject, "bills", "view") ||
     canPath(subject, "transactionsPollo", "view") ||
     canPath(subject, "customersPollo", "view");
+  canPath(subject, "billing", "view");
 
   const hasDulces =
     canPath(subject, "salesCandies", "view") ||
@@ -134,6 +135,7 @@ export default function MobileTabsLayout({
               to: `${base}/transactionsPollo`,
             },
             { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
+            { key: "facturacion", label: "Facturación", to: `${base}/billing` },
           ];
 
           // contador no ve cierre (como tu lógica actual)
@@ -171,6 +173,11 @@ export default function MobileTabsLayout({
               key: "trxs",
               label: "Transacciones",
               to: `${base}/transactionsPollo`,
+            },
+            {
+              key: "bills",
+              label: "Facturación",
+              to: `${base}/billing`,
             },
           ];
         } else {
@@ -276,6 +283,7 @@ export default function MobileTabsLayout({
             to: `${base}/transactionsPollo`,
           },
           { key: "cierre", label: "Cierre", to: `${base}/bills` },
+          { key: "facturacion", label: "Facturación", to: `${base}/billing` },
         ];
         if (hasRole(subject, "contador")) {
           built = [
@@ -338,6 +346,7 @@ export default function MobileTabsLayout({
       "salesV2",
       "financialDashboard",
       "polloCashAudits",
+      "billing",
       // DULCES
       "salesCandies",
       "productsVendorsCandies",

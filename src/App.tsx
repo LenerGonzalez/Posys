@@ -31,6 +31,7 @@ import FixBatchesPages from "../src/components/Pollo/FixBatchesPages";
 import TransaciontsPollo from "./components/Pollo/TransactionsPollo";
 import PaidBatches from "../src/components/Pollo/PaidBatches";
 import PolloCashAudits from "./components/Pollo/PolloCashAudits";
+import Billing from "./components/Pollo/Billing";
 
 // Módulos ROPA
 import InventoryClothesBatches from "./components/Clothes/InventoryClothesBatches";
@@ -296,6 +297,14 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin"]}>
                 <FixBatchesPages />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="billing"
+            element={
+              <PrivateRoute allowedRoles={["admin", "contador"]}>
+                <Billing />
               </PrivateRoute>
             }
           />

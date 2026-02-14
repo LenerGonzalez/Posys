@@ -657,192 +657,34 @@ export default function ExpensesAdmin() {
       {/* ===== TABLA (md+) ===== */}
       <div className="hidden md:block bg-white p-2 rounded-2xl shadow-2xl border w-full">
         <table className="min-w-full w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">Categoría</th>
-              <th className="p-2 border">Descripción</th>
-              <th className="p-2 border">Monto</th>
-              <th className="p-2 border">Estado</th>
-              <th className="p-2 border">Comentario</th>
-              <th className="p-2 border">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td className="p-4 text-center" colSpan={7}>
-                  Cargando…
-                </td>
-              </tr>
-            ) : filteredRows.length === 0 ? (
-              <tr>
-                <td className="p-4 text-center" colSpan={7}>
-                  Sin gastos en el rango seleccionado.
-                </td>
-              </tr>
-            ) : (
-              filteredRows.map((r) => {
-                const isEditing = editingId === r.id;
-                return (
-                  <tr key={r.id} className="text-center">
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          type="date"
-                          className="w-full border p-1 rounded"
-                          value={eDate}
-                          onChange={(e) => setEDate(e.target.value)}
-                        />
-                      ) : (
-                        r.date
-                      )}
-                    </td>
-
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded"
-                          value={eCategory}
-                          onChange={(e) =>
-                            setECategory(e.target.value as Category)
-                          }
-                        >
-                          <option value="">Selecciona</option>
-                          {CATEGORIES.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        r.category || "—"
-                      )}
-                    </td>
-
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          className="w-full border p-1 rounded"
-                          value={eDescription}
-                          onChange={(e) => setEDescription(e.target.value)}
-                        />
-                      ) : (
-                        <span title={r.description}>
-                          {r.description.length > 45
-                            ? r.description.slice(0, 45) + "…"
-                            : r.description}
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          className="w-full border p-1 rounded text-right"
-                          value={Number.isNaN(eAmount) ? "" : eAmount}
-                          onChange={(e) => {
-                            const raw = String(e.target.value || "").replace(
-                              ",",
-                              ".",
-                            );
-                            const num = parseFloat(raw);
-                            setEAmount(
-                              Number.isFinite(num) ? Math.max(0, num) : 0,
-                            );
-                          }}
-                        />
-                      ) : (
-                        money(r.amount)
-                      )}
-                    </td>
-
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded"
-                          value={eStatus}
-                          onChange={(e) => setEStatus(e.target.value as Status)}
-                        >
-                          <option value="PENDIENTE">Pendiente</option>
-                          <option value="PAGADO">Pagado</option>
-                        </select>
-                      ) : (
-                        <span
-                          className={`px-2 py-0.5 rounded text-xs ${badge(
-                            r.status,
-                          )}`}
-                        >
-                          {r.status}
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="p-2 border">
-                      {isEditing ? (
-                        <textarea
-                          className="w-full border p-1 rounded resize-y min-h-10"
-                          value={eNotes}
-                          onChange={(e) => setENotes(e.target.value)}
-                          maxLength={500}
-                        />
-                      ) : (
-                        <span title={r.notes || ""}>
-                          {(r.notes || "").length > 45
-                            ? (r.notes || "").slice(0, 45) + "…"
-                            : r.notes || "—"}
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="p-2 border">
-                      <div className="flex gap-2 justify-center">
-                        {isEditing ? (
-                          <>
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                              onClick={saveEdit}
-                            >
-                              Guardar
-                            </button>
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                              onClick={cancelEdit}
-                            >
-                              Cancelar
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                              onClick={() => startEdit(r)}
-                            >
-                              Editar
-                            </button>
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                              onClick={() => handleDelete(r)}
-                            >
-                              Borrar
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
+          {/* ...existing code... */}
         </table>
+      </div>
+
+      {/* ===== KPIs en cards ===== */}
+      <div className="mt-6 flex flex-col md:flex-row gap-4 justify-center items-stretch">
+        <div className="flex-1 bg-blue-50 border border-blue-200 rounded-xl p-4 shadow text-center">
+          <div className="text-xs text-blue-700 font-semibold mb-1">Total</div>
+          <div className="text-2xl font-bold text-blue-900">
+            {money(totals.total)}
+          </div>
+        </div>
+        <div className="flex-1 bg-green-50 border border-green-200 rounded-xl p-4 shadow text-center">
+          <div className="text-xs text-green-700 font-semibold mb-1">
+            Pagado
+          </div>
+          <div className="text-2xl font-bold text-green-900">
+            {money(totals.pagado)}
+          </div>
+        </div>
+        <div className="flex-1 bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow text-center">
+          <div className="text-xs text-yellow-700 font-semibold mb-1">
+            Pendiente
+          </div>
+          <div className="text-2xl font-bold text-yellow-900">
+            {money(totals.pendiente)}
+          </div>
+        </div>
       </div>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
