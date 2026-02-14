@@ -711,7 +711,7 @@ export default function TransactionsReportCandies({
           onClick={() => setKpisCardOpen((prev) => !prev)}
           aria-expanded={kpisCardOpen}
         >
-          <span>KPIs</span>
+          <span>Indicadores</span>
           <span
             className={`transition-transform ${kpisCardOpen ? "rotate-180" : ""}`}
           >

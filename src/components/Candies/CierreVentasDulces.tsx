@@ -1038,7 +1038,7 @@ export default function CierreVentasDulces({
 
             <div className="flex items-center gap-2 w-full md:w-auto">
               <label className="text-xs md:text-sm whitespace-nowrap">
-                Producto:
+                Productos:
               </label>
               <select
                 className="border rounded px-2 py-1 text-xs w-full md:w-48 lg:w-56"

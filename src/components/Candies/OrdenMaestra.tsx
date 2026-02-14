@@ -1989,7 +1989,7 @@ export default function CandyMainOrders() {
                   />
                 </svg>
               </span>
-              Nueva Orden
+              Orden
             </button>
           </div>
         </div>
