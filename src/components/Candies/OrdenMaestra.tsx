@@ -23,6 +23,7 @@ import { backfillCandyInventoryFromMainOrder } from "../../Services/inventory_ca
 // Small helpers used in this file
 const safeInt = (v: any) => Math.max(0, Math.floor(Number(v) || 0));
 const roundToInt = (n: number) => Math.round(n || 0);
+const MAX_MARGIN_PERCENT = 99.999;
 
 // Helpers consistentes con inventory_candies.ts / InventoryCandyBatches
 function getBaseUnitsFromInvDoc(data: any): number {
@@ -212,9 +213,10 @@ function calcTotalsByMargins(
 ) {
   const subtotalCalc = providerPriceNum * packagesNum;
 
-  const mR = Math.min(Math.max(margins.marginR, 0), 99.9) / 100;
-  const mSJ = Math.min(Math.max(margins.marginSJ, 0), 99.9) / 100;
-  const mIsla = Math.min(Math.max(margins.marginIsla, 0), 99.9) / 100;
+  const limit = MAX_MARGIN_PERCENT;
+  const mR = Math.min(Math.max(margins.marginR, 0), limit) / 100;
+  const mSJ = Math.min(Math.max(margins.marginSJ, 0), limit) / 100;
+  const mIsla = Math.min(Math.max(margins.marginIsla, 0), limit) / 100;
 
   // ✅ total = subtotal / (1 - margen)
   const totalR =
@@ -324,6 +326,15 @@ export default function CandyMainOrders() {
   const [editingUnitsMap, setEditingUnitsMap] = useState<
     Record<string, boolean>
   >({});
+  const [editingRemainingMap, setEditingRemainingMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingUnitPriceRivasMap, setEditingUnitPriceRivasMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingUnitPriceIslaMap, setEditingUnitPriceIslaMap] = useState<
+    Record<string, boolean>
+  >({});
   const [editingMarginRivasMap, setEditingMarginRivasMap] = useState<
     Record<string, boolean>
   >({});
@@ -340,6 +351,18 @@ export default function CandyMainOrders() {
     setEditingUnitsMap((prev) => ({ ...prev, [id]: true }));
   const closeUnitsEdit = (id: string) =>
     setEditingUnitsMap((prev) => ({ ...prev, [id]: false }));
+  const openRemainingEdit = (id: string) =>
+    setEditingRemainingMap((prev) => ({ ...prev, [id]: true }));
+  const closeRemainingEdit = (id: string) =>
+    setEditingRemainingMap((prev) => ({ ...prev, [id]: false }));
+  const openUnitPriceRivasEdit = (id: string) =>
+    setEditingUnitPriceRivasMap((prev) => ({ ...prev, [id]: true }));
+  const closeUnitPriceRivasEdit = (id: string) =>
+    setEditingUnitPriceRivasMap((prev) => ({ ...prev, [id]: false }));
+  const openUnitPriceIslaEdit = (id: string) =>
+    setEditingUnitPriceIslaMap((prev) => ({ ...prev, [id]: true }));
+  const closeUnitPriceIslaEdit = (id: string) =>
+    setEditingUnitPriceIslaMap((prev) => ({ ...prev, [id]: false }));
 
   const openMarginRivasEdit = (id: string) =>
     setEditingMarginRivasMap((prev) => ({ ...prev, [id]: true }));
@@ -350,7 +373,6 @@ export default function CandyMainOrders() {
     setEditingMarginIslaMap((prev) => ({ ...prev, [id]: true }));
   const closeMarginIslaEdit = (id: string) =>
     setEditingMarginIslaMap((prev) => ({ ...prev, [id]: false }));
-  const originalItemIdsRef = useRef<Set<string>>(new Set());
 
   // selección producto
   const [orderCategory, setOrderCategory] = useState<string>("");
@@ -462,9 +484,11 @@ export default function CandyMainOrders() {
     setOrderItems([]);
     setEditingPackagesMap({});
     setEditingUnitsMap({});
+    setEditingRemainingMap({});
+    setEditingUnitPriceRivasMap({});
+    setEditingUnitPriceIslaMap({});
     setEditingMarginRivasMap({});
     setEditingMarginIslaMap({});
-    originalItemIdsRef.current = new Set();
 
     setOrderCategory(catalogCategories[0] || "");
     setOrderProductId("");
@@ -496,13 +520,6 @@ export default function CandyMainOrders() {
     const catProd = catalog.find((x) => x.id === orderProductId);
     if (!catProd) {
       setMsg("Producto de catálogo no encontrado (refresca).");
-      return;
-    }
-
-    if (editingOrderId && !originalItemIdsRef.current.has(catProd.id)) {
-      setMsg(
-        "⚠️ En edición no se pueden agregar productos nuevos. Solo ajustar los existentes.",
-      );
       return;
     }
 
@@ -620,6 +637,42 @@ export default function CandyMainOrders() {
         if (field === "packages") updated.packages = safeInt(value || 0);
         if (field === "unitsPerPackage")
           updated.unitsPerPackage = safeInt(value || 0);
+        if (field === "remainingPackages") {
+          const maxPackages = Math.max(0, safeInt(updated.packages || 0));
+          const requested = safeInt(value || 0);
+          updated.remainingPackages = Math.min(
+            maxPackages,
+            Math.max(0, requested),
+          );
+        }
+        if (field === "unitPriceRivas" || field === "unitPriceIsla") {
+          const price = Math.max(0, Number(value) || 0);
+          const packagesCount = Math.max(0, safeInt(updated.packages || 0));
+          const subtotal = Number(updated.providerPrice || 0) * packagesCount;
+          const totalFromPrice = packagesCount > 0 ? price * packagesCount : 0;
+
+          if (field === "unitPriceRivas") {
+            updated.unitPriceRivas = price;
+            updated.totalRivas = totalFromPrice;
+            updated.gainRivas = totalFromPrice - subtotal;
+            const derivedMargin =
+              totalFromPrice > 0 ? (1 - subtotal / totalFromPrice) * 100 : 0;
+            updated.marginRivas = Math.min(
+              Math.max(derivedMargin, 0),
+              MAX_MARGIN_PERCENT,
+            );
+          } else {
+            updated.unitPriceIsla = price;
+            updated.totalIsla = totalFromPrice;
+            updated.gainIsla = totalFromPrice - subtotal;
+            const derivedMargin =
+              totalFromPrice > 0 ? (1 - subtotal / totalFromPrice) * 100 : 0;
+            updated.marginIsla = Math.min(
+              Math.max(derivedMargin, 0),
+              MAX_MARGIN_PERCENT,
+            );
+          }
+        }
 
         if (field === "marginRivas") updated.marginRivas = Number(value || 0);
         if (field === "marginIsla") updated.marginIsla = Number(value || 0);
@@ -652,6 +705,12 @@ export default function CandyMainOrders() {
           updated.remainingPackages === null
         ) {
           updated.remainingPackages = updated.packages;
+        } else if (field === "packages") {
+          const currentRemaining = safeInt(updated.remainingPackages);
+          updated.remainingPackages = Math.min(
+            currentRemaining,
+            Math.max(0, updated.packages),
+          );
         }
 
         return updated;
@@ -1032,13 +1091,6 @@ export default function CandyMainOrders() {
           continue;
         }
 
-        if (editingOrderId && !originalItemIdsRef.current.has(catProd.id)) {
-          errors.push(
-            `Fila ${i + 2}: No se permiten productos nuevos en edición ("${catProd.name}").`,
-          );
-          continue;
-        }
-
         const packagesNum = Math.floor(num(packagesVal));
         if (packagesNum <= 0) {
           errors.push(
@@ -1117,7 +1169,7 @@ export default function CandyMainOrders() {
           const deriveMargin = (total: number) => {
             if (!Number.isFinite(total) || total <= 0) return 0;
             const m = (1 - subtotalCalc / total) * 100;
-            return Math.min(Math.max(m, 0), 99.9);
+            return Math.min(Math.max(m, 0), MAX_MARGIN_PERCENT);
           };
 
           if (priceR > 0) finalMR = deriveMargin(totalR);
@@ -1356,17 +1408,6 @@ export default function CandyMainOrders() {
         }
       }
 
-      if (editingOrderId) {
-        const originalIds = originalItemIdsRef.current;
-        const hasNew = orderItems.some((it) => !originalIds.has(it.id));
-        if (hasNew) {
-          setMsg(
-            "⚠️ No se permiten productos nuevos en edición. Eliminá los nuevos para guardar.",
-          );
-          return;
-        }
-      }
-
       // ✅ guardo items con utilidades ya calculadas (para export / auditoría)
       const subtotalTotal = Number(orderSummaryBase.subtotal || 0);
       const itemsToSave = orderItems.map((it) =>
@@ -1425,6 +1466,14 @@ export default function CandyMainOrders() {
             safeInt(it.unitsPerPackage || 1),
           );
           const totalUnitsNew = safeInt(it.packages) * unitsPerPackageLocal;
+          const manualRemainingPackages = Math.min(
+            safeInt(it.remainingPackages ?? it.packages),
+            safeInt(it.packages),
+          );
+          const manualRemainingUnits = Math.max(
+            0,
+            manualRemainingPackages * unitsPerPackageLocal,
+          );
 
           if (invSnap.empty) {
             // si es nuevo producto agregado en edición -> se crea inventario
@@ -1435,10 +1484,10 @@ export default function CandyMainOrders() {
               measurement: "unidad",
 
               quantity: totalUnitsNew,
-              remaining: totalUnitsNew,
+              remaining: manualRemainingUnits,
 
               packages: safeInt(it.packages),
-              remainingPackages: safeInt(it.packages),
+              remainingPackages: manualRemainingPackages,
 
               unitsPerPackage: unitsPerPackageLocal,
               totalUnits: totalUnitsNew,
@@ -1465,18 +1514,6 @@ export default function CandyMainOrders() {
           } else {
             // existe -> ajusto delta sin romper ventas previas
             for (const invDoc of invSnap.docs) {
-              const data = invDoc.data() as any;
-
-              const oldTotalUnits = safeInt(data.totalUnits ?? 0);
-              const oldRemaining = safeInt(data.remaining ?? oldTotalUnits);
-
-              const deltaUnits = totalUnitsNew - oldTotalUnits;
-              const newRemaining = Math.max(0, oldRemaining + deltaUnits);
-              const newRemainingPackages = Math.max(
-                0,
-                Math.floor(newRemaining / unitsPerPackageLocal),
-              );
-
               await updateDoc(doc(db, "inventory_candies", invDoc.id), {
                 productName: it.name,
                 category: it.category,
@@ -1485,9 +1522,9 @@ export default function CandyMainOrders() {
                 totalUnits: totalUnitsNew,
                 quantity: totalUnitsNew,
 
-                remaining: newRemaining,
+                remaining: manualRemainingUnits,
                 packages: safeInt(it.packages),
-                remainingPackages: newRemainingPackages,
+                remainingPackages: manualRemainingPackages,
 
                 providerPrice: it.providerPrice,
                 subtotal: it.subtotal,
@@ -1573,6 +1610,14 @@ export default function CandyMainOrders() {
           safeInt(it.unitsPerPackage || 1),
         );
         const totalUnits = safeInt(it.packages) * unitsPerPackageLocal;
+        const manualRemainingPackages = Math.min(
+          safeInt(it.remainingPackages ?? it.packages),
+          safeInt(it.packages),
+        );
+        const manualRemainingUnits = Math.max(
+          0,
+          manualRemainingPackages * unitsPerPackageLocal,
+        );
 
         const invRef = doc(collection(db, "inventory_candies"));
         batch.set(invRef, {
@@ -1582,10 +1627,10 @@ export default function CandyMainOrders() {
           measurement: "unidad",
 
           quantity: totalUnits,
-          remaining: totalUnits,
+          remaining: manualRemainingUnits,
 
           packages: safeInt(it.packages),
-          remainingPackages: safeInt(it.packages),
+          remainingPackages: manualRemainingPackages,
 
           unitsPerPackage: unitsPerPackageLocal,
           totalUnits,
@@ -1661,10 +1706,6 @@ export default function CandyMainOrders() {
       const itemsFromDoc: CandyOrderItem[] = Array.isArray(orderData.items)
         ? (orderData.items as CandyOrderItem[])
         : [];
-
-      originalItemIdsRef.current = new Set(
-        itemsFromDoc.map((it) => String(it.id || "")),
-      );
 
       // inventario para paquetes restantes por producto (orderId)
       const invSnap = await getDocs(
@@ -2407,9 +2448,49 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-right">
-                                <span className="inline-block min-w-[60px] text-right">
-                                  {safeInt(it.remainingPackages ?? it.packages)}
-                                </span>
+                                {editingRemainingMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={safeInt(
+                                      it.remainingPackages ?? it.packages,
+                                    )}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "remainingPackages",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closeRemainingEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeRemainingEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="numeric"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>
+                                      {safeInt(
+                                        it.remainingPackages ?? it.packages,
+                                      )}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openRemainingEdit(it.id)}
+                                      aria-label="Editar paquetes restantes"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="p-2 text-right">
@@ -2564,10 +2645,90 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-right">
-                                {Number(it.unitPriceRivas || 0)}
+                                {editingUnitPriceRivasMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={Number(it.unitPriceRivas || 0)}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "unitPriceRivas",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() =>
+                                      closeUnitPriceRivasEdit(it.id)
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeUnitPriceRivasEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="decimal"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>
+                                      {Number(it.unitPriceRivas || 0)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() =>
+                                        openUnitPriceRivasEdit(it.id)
+                                      }
+                                      aria-label="Editar precio Rivas"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
                               <td className="p-2 text-right">
-                                {Number(it.unitPriceIsla || 0)}
+                                {editingUnitPriceIslaMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={Number(it.unitPriceIsla || 0)}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "unitPriceIsla",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closeUnitPriceIslaEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeUnitPriceIslaEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="decimal"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>{Number(it.unitPriceIsla || 0)}</span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() =>
+                                        openUnitPriceIslaEdit(it.id)
+                                      }
+                                      aria-label="Editar precio Isla"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="p-2 text-center">
@@ -2720,11 +2881,49 @@ export default function CandyMainOrders() {
                               <label className="text-xs text-gray-600">
                                 Paquetes restantes
                               </label>
-                              <input
-                                className="w-full border p-2 rounded text-right bg-gray-100"
-                                value={it.remainingPackages ?? it.packages}
-                                readOnly
-                              />
+                              {editingRemainingMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  className="w-full border p-2 rounded text-right"
+                                  value={safeInt(
+                                    it.remainingPackages ?? it.packages,
+                                  )}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "remainingPackages",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closeRemainingEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closeRemainingEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="numeric"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {safeInt(
+                                      it.remainingPackages ?? it.packages,
+                                    )}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() => openRemainingEdit(it.id)}
+                                    aria-label="Editar paquetes restantes"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
                             </div>
 
                             <div>
@@ -2937,18 +3136,92 @@ export default function CandyMainOrders() {
                               <div className="text-gray-600">
                                 Precio Rivas (paq)
                               </div>
-                              <div className="font-semibold">
-                                {it.unitPriceRivas}
-                              </div>
+                              {editingUnitPriceRivasMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  className="w-full border rounded p-2 text-right"
+                                  value={Number(it.unitPriceRivas || 0)}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "unitPriceRivas",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closeUnitPriceRivasEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closeUnitPriceRivasEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="decimal"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {it.unitPriceRivas}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() =>
+                                      openUnitPriceRivasEdit(it.id)
+                                    }
+                                    aria-label="Editar precio Rivas"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
                             </div>
 
                             <div className="p-2 rounded bg-blue-50 border">
                               <div className="text-gray-600">
                                 Precio Isla (paq)
                               </div>
-                              <div className="font-semibold">
-                                {it.unitPriceIsla}
-                              </div>
+                              {editingUnitPriceIslaMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  className="w-full border rounded p-2 text-right"
+                                  value={Number(it.unitPriceIsla || 0)}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "unitPriceIsla",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closeUnitPriceIslaEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closeUnitPriceIslaEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="decimal"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {it.unitPriceIsla}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() => openUnitPriceIslaEdit(it.id)}
+                                    aria-label="Editar precio Isla"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>

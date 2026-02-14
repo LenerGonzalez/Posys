@@ -304,6 +304,7 @@ export default function CierreVentasDulces({
 
   // ✅ NUEVO: filtro por vendedor (admin)
   const [vendorFilter, setVendorFilter] = useState<string>("ALL");
+  const [productFilter, setProductFilter] = useState<string>("ALL");
 
   const [editing, setEditing] = useState<null | SaleData>(null);
   const [editQty, setEditQty] = useState<number>(0);
@@ -337,6 +338,14 @@ export default function CierreVentasDulces({
   const [categoryOpenMap, setCategoryOpenMap] = useState<
     Record<string, boolean>
   >({});
+  const productOptions = React.useMemo(() => {
+    const names = new Set<string>();
+    salesV2.forEach((s) => {
+      const name = (s.productName || "").trim();
+      if (name) names.add(name);
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [salesV2]);
 
   // ✅ Ventas por PERIODO (sin importar estado)
   useEffect(() => {
@@ -447,6 +456,10 @@ export default function CierreVentasDulces({
     if (filter === "PROCESADA")
       base = base.filter((s) => s.status === "PROCESADA");
 
+    if (productFilter !== "ALL") {
+      base = base.filter((s) => (s.productName || "").trim() === productFilter);
+    }
+
     // filtro por vendedor (solo admin; en vendedor ya viene filtrado abajo)
     if (isAdmin && vendorFilter !== "ALL") {
       base = base.filter((s) => (s.vendorId || "") === vendorFilter);
@@ -469,6 +482,7 @@ export default function CierreVentasDulces({
   }, [
     filter,
     salesV2,
+    productFilter,
     isAdmin,
     vendorFilter,
     isVendDulces,
@@ -1021,6 +1035,25 @@ export default function CierreVentasDulces({
                 </select>
               </div>
             )}
+
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <label className="text-xs md:text-sm whitespace-nowrap">
+                Producto:
+              </label>
+              <select
+                className="border rounded px-2 py-1 text-xs w-full md:w-48 lg:w-56"
+                value={productFilter}
+                onChange={(e) => setProductFilter(e.target.value)}
+                disabled={productOptions.length === 0}
+              >
+                <option value="ALL">Todos</option>
+                {productOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       </div>

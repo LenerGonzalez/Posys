@@ -39,6 +39,7 @@ interface SaleDoc {
 
   // TOTAL de PAQUETES para UI
   quantity: number;
+  productNames: string[];
 
   customerId?: string;
   customerName?: string;
@@ -70,16 +71,37 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
 
   let quantity = 0; // paquetes
   let total = 0;
+  const itemsArray =
+    Array.isArray(d.items) && d.items.length > 0
+      ? d.items
+      : d.item
+        ? [d.item]
+        : [];
+
+  const productNames = itemsArray.length
+    ? itemsArray
+        .map((it: any) => String(it.productName || it.name || "").trim())
+        .filter(Boolean)
+    : d.productName
+      ? [String(d.productName).trim()]
+      : [];
 
   // Si la venta tiene items[] (multi-producto)
-  if (Array.isArray(d.items) && d.items.length > 0) {
+  if (itemsArray.length > 0) {
     // 👇 Paquetes: usamos campo packages, si no, qty/quantity (fallback)
-    quantity = d.items.reduce(
+    quantity = itemsArray.reduce(
       (acc: number, it: any) =>
         acc + (Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0),
       0,
     );
     total = Number(d.total ?? d.itemsTotal ?? 0) || 0;
+    if (!total) {
+      total = itemsArray.reduce(
+        (acc: number, it: any) =>
+          acc + (Number(it.total ?? it.lineFinal ?? 0) || 0),
+        0,
+      );
+    }
   } else {
     // Estructura legacy / simple
     quantity =
@@ -104,6 +126,7 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     // ✅ HISTÓRICO desde la venta
     vendorCommissionPercent: Number(d.vendorCommissionPercent || 0) || 0,
     vendorCommissionAmount: Number(d.vendorCommissionAmount || 0) || 0,
+    productNames,
   };
 }
 
@@ -206,6 +229,7 @@ export default function TransactionsReportCandies({
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<SaleDoc[]>([]);
+  const [filterProduct, setFilterProduct] = useState<string>("");
 
   // NUEVO: vendedores con comisión (mismo esquema que consolidado)
   const [sellers, setSellers] = useState<Seller[]>([]);
@@ -243,6 +267,14 @@ export default function TransactionsReportCandies({
     });
     return m;
   }, [sellers]);
+
+  const productOptions = useMemo(() => {
+    const set = new Set<string>();
+    sales.forEach((s) => {
+      (s.productNames || []).forEach((name) => set.add(name));
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [sales]);
 
   // ✅ Comisión HISTÓRICA desde la venta (si existe),
   // fallback a cálculo por sellers_candies
@@ -321,9 +353,20 @@ export default function TransactionsReportCandies({
       if (filterType) {
         if (s.type !== filterType) return false;
       }
+      if (filterProduct) {
+        if (!s.productNames || !s.productNames.includes(filterProduct))
+          return false;
+      }
       return true;
     });
-  }, [sales, filterCustomerId, filterType, isVendor, sellerCandyId]);
+  }, [
+    sales,
+    filterCustomerId,
+    filterType,
+    filterProduct,
+    isVendor,
+    sellerCandyId,
+  ]);
 
   // KPIs sobre resultado filtrado (cantidad = paquetes)
   const kpis = useMemo(() => {
@@ -567,7 +610,7 @@ export default function TransactionsReportCandies({
         </button>
         {filtersCardOpen && (
           <div className="p-4 border-t">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end text-sm">
               <div>
                 <label className="block font-semibold">Desde</label>
                 <input
@@ -626,6 +669,26 @@ export default function TransactionsReportCandies({
                   <option value="">Todos</option>
                   <option value="CONTADO">Cash</option>
                   <option value="CREDITO">Crédito</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold">Producto</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={filterProduct}
+                  onChange={(e) => {
+                    setFilterProduct(e.target.value);
+                    setPage(1);
+                  }}
+                  disabled={productOptions.length === 0}
+                >
+                  <option value="">Todos</option>
+                  {productOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
