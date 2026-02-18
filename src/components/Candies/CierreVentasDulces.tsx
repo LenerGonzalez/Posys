@@ -18,6 +18,7 @@ import {
 import { format } from "date-fns";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+import * as XLSX from "xlsx";
 import { restoreCandySaleAndDelete } from "../../Services/inventory_candies";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
@@ -38,6 +39,8 @@ interface SaleDataRaw {
   vendor?: string;
   vendorName?: string;
   vendorId?: string;
+  // suma de margenVendedor por items (para reconciliar con vendorCommissionAmount)
+  commissionFromItems?: number;
   clientName?: string;
   amountReceived?: number;
   change?: string | number;
@@ -52,6 +55,11 @@ interface SaleDataRaw {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
+  // utilidades y márgenes que puede traer la venta (opcional)
+  margenVendedor?: number;
+  uBruta?: number;
+  grossProfit?: number;
+  prorrateo?: number;
   // tipo de venta en sales_candies
   type?: SaleType;
 
@@ -93,6 +101,15 @@ interface SaleData {
 
   // ✅ comisión prorrateada por fila
   vendorCommissionAmount?: number;
+
+  // utilidad del vendedor por fila (margen asignado al vendedor)
+  vendorUtility?: number;
+
+  // utilidad neta del ítem después de prorrateos y resto de descuentos
+  vendorNetUtility?: number;
+
+  // suma de margenVendedor por items (para reconciliar con vendorCommissionAmount)
+  commissionFromItems?: number;
 
   // ✅ fecha de proceso
   processedDate?: string;
@@ -206,6 +223,16 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         );
       }
 
+      const vendorUtil =
+        Number(it?.margenVendedor ?? it?.uBruta ?? it?.grossProfit ?? 0) || 0;
+
+      // prorrateo (puede no existir)
+      const prorrateo = Number(it?.prorrateo ?? 0) || 0;
+
+      // utilidad neta: uBruta - prorrateo - margenVendedor
+      const uBrutaItem = Number(it?.uBruta ?? 0) || 0;
+      const vendorNet = round2(uBrutaItem - prorrateo - vendorUtil);
+
       return {
         id: `${id}#${idx}`,
         productName: String(it?.productName ?? "(sin nombre)"),
@@ -227,6 +254,9 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         type,
         vendorId,
         vendorCommissionAmount: lineCommission,
+        vendorUtility: vendorUtil,
+        vendorNetUtility: vendorNet,
+        commissionFromItems: Number(it?.margenVendedor ?? 0) || 0,
         processedDate: processedDate || "",
       };
     });
@@ -245,6 +275,14 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
     // si existe, lo dejamos pasar para KPI de crédito (sin tocar tu tabla existente)
     commissionFallback = round2(Number(raw.vendorCommissionAmount ?? 0) || 0);
   }
+  const vendorUtilityFallback =
+    Number(raw.margenVendedor ?? raw.uBruta ?? raw.grossProfit ?? 0) || 0;
+
+  const prorrateoFallback = Number(raw.prorrateo ?? 0) || 0;
+  const uBrutaFallback = Number(raw.uBruta ?? 0) || 0;
+  const vendorNetFallback = round2(
+    uBrutaFallback - prorrateoFallback - vendorUtilityFallback,
+  );
 
   return [
     {
@@ -266,6 +304,9 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       type,
       vendorId,
       vendorCommissionAmount: commissionFallback,
+      vendorUtility: vendorUtilityFallback,
+      vendorNetUtility: vendorNetFallback,
+      commissionFromItems: Number(raw.margenVendedor ?? 0) || 0,
       processedDate: processedDate || "",
     },
   ];
@@ -445,6 +486,19 @@ export default function CierreVentasDulces({
   // ✅ helper comisión por venta (YA VIENE EN LA VENTA)
   const getCommissionAmount = (s: SaleData): number => {
     return round2(Number(s.vendorCommissionAmount ?? 0) || 0);
+  };
+
+  // utilidad del vendedor (helper)
+  const getVendorUtility = (s: SaleData): number => {
+    return round2(Number(s.vendorUtility ?? 0) || 0);
+  };
+
+  const getVendorNetUtility = (s: SaleData): number => {
+    return round2(Number(s.vendorNetUtility ?? 0) || 0);
+  };
+
+  const getCommissionFromItems = (s: SaleData): number => {
+    return round2(Number(s.commissionFromItems ?? 0) || 0);
   };
 
   // ✅ Ventas visibles (filtro estado + rol + vendedor) **sobre el período**
@@ -952,6 +1006,81 @@ export default function CierreVentasDulces({
     }
   };
 
+  // Export visible sales as CSV
+  const csvEscape = (v: unknown) => `"${String(v ?? "").replace(/\"/g, '""')}"`;
+
+  const handleExportCSV = () => {
+    const headers = [
+      "id",
+      "productName",
+      "type",
+      "quantity",
+      "amount",
+      "commissionFromItems",
+      "vendorNetUtility",
+
+      "date",
+      "processedDate",
+      "vendor",
+      "status",
+    ];
+
+    const rows = visibleSales.map((s) => [
+      s.id,
+      s.productName,
+      s.type,
+      s.quantity ?? 0,
+      Number(s.amount ?? 0).toFixed(2),
+      Number(s.commissionFromItems ?? 0).toFixed(2),
+      Number(s.vendorNetUtility ?? 0).toFixed(2),
+      s.date,
+      s.processedDate ?? "",
+      s.userEmail ?? "",
+      s.status,
+    ]);
+
+    const csv = [
+      headers.join(","),
+      ...rows.map((r) => r.map(csvEscape).join(",")),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cierre_dulces_${startDate}_a_${endDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Export visible sales as real Excel (.xlsx) using SheetJS
+  const handleExportXLSX = () => {
+    const rows = visibleSales.map((s) => ({
+      id: s.id,
+      productName: s.productName,
+      type: s.type,
+      quantity: s.quantity ?? 0,
+      amount: Number(s.amount ?? 0).toFixed(2),
+      commissionFromItems: Number(s.commissionFromItems ?? 0).toFixed(2),
+      vendorNetUtility: Number(s.vendorNetUtility ?? 0).toFixed(2),
+      date: s.date,
+      processedDate: s.processedDate ?? "",
+      vendor: s.userEmail ?? "",
+      status: s.status,
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Ventas");
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([wbout], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cierre_dulces_${startDate}_a_${endDate}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
       {/* ✅ CSS interno SOLO para alternar vista en PDF (sin tocar tu data) */}
@@ -1076,7 +1205,7 @@ export default function CierreVentasDulces({
         <div
           className={`collapsible-content ${kpiCardOpen ? "block" : "hidden"} border-t p-4`}
         >
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-7 gap-3">
             <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
               <div className="text-xs text-gray-600">Ventas flotantes</div>
               <div className="text-2xl font-bold">{kpiFloCount}</div>
@@ -1104,6 +1233,24 @@ export default function CierreVentasDulces({
             <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
               <div className="text-xs text-gray-600">Ventas cash</div>
               <div className="text-2xl font-bold">{kpiCashCount}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
+
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">Paquetes Cash</div>
+              <div className="text-2xl font-bold">{qty3(totalPacksCash)}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Período: {startDate} → {endDate}
+              </div>
+            </div>
+
+            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
+              <div className="text-xs text-gray-600">Paquetes Crédito</div>
+              <div className="text-2xl font-bold">
+                {qty3(totalPacksCredito)}
+              </div>
               <div className="text-xs text-gray-500 mt-1">
                 Período: {startDate} → {endDate}
               </div>
@@ -1230,7 +1377,8 @@ export default function CierreVentasDulces({
                       <th className="border p-2">Tipo</th>
                       <th className="border p-2">Paquetes</th>
                       <th className="border p-2">Monto</th>
-                      <th className="border p-2">Comisión</th>
+                      <th className="border p-2">U. Vendedor</th>
+                      <th className="border p-2">U. Neta</th>
                       <th className="border p-2">Fecha venta</th>
                       <th className="border p-2">Fecha proceso</th>
                       <th className="border p-2">Vendedor</th>
@@ -1240,6 +1388,7 @@ export default function CierreVentasDulces({
                   <tbody>
                     {cashSales.map((s) => {
                       const commission = getCommissionAmount(s);
+                      const vendUtil = getVendorUtility(s);
                       const processDate = (s.processedDate || "").trim();
 
                       return (
@@ -1260,7 +1409,14 @@ export default function CierreVentasDulces({
                           <td className="border p-1">{qty3(s.quantity)}</td>
                           <td className="border p-1">C${money(s.amount)}</td>
                           <td className="border p-1">
-                            {commission > 0 ? `C$${money(commission)}` : "—"}
+                            {getCommissionFromItems(s) > 0
+                              ? `C$${money(getCommissionFromItems(s))}`
+                              : "—"}
+                          </td>
+                          <td className="border p-1">
+                            {getVendorNetUtility(s) > 0
+                              ? `C$${money(getVendorNetUtility(s))}`
+                              : "—"}
                           </td>
                           <td className="border p-1">{s.date}</td>
                           <td className="border p-1">
@@ -1318,7 +1474,7 @@ export default function CierreVentasDulces({
                     {cashSales.length === 0 && (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={11}
                           className="p-3 text-center text-gray-500"
                         >
                           Sin ventas cash para mostrar.
@@ -1332,6 +1488,7 @@ export default function CierreVentasDulces({
               <div className="pdf-mobile md:hidden space-y-3 mb-4">
                 {cashSales.map((s) => {
                   const commission = getCommissionAmount(s);
+                  const vendUtil = getVendorUtility(s);
                   const processDate = (s.processedDate || "").trim();
 
                   return (
@@ -1365,8 +1522,21 @@ export default function CierreVentasDulces({
 
                       <div className="px-4 pb-4 pt-2 text-sm space-y-2">
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Paquetes</span>
-                          <strong>{qty3(s.quantity)}</strong>
+                          <span className="text-gray-600">U. Vendedor</span>
+                          <strong>
+                            {getCommissionFromItems(s) > 0
+                              ? `C$${money(getCommissionFromItems(s))}`
+                              : "—"}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">U. Neta</span>
+                          <strong>
+                            {getVendorNetUtility(s) > 0
+                              ? `C$${money(getVendorNetUtility(s))}`
+                              : "—"}
+                          </strong>
                         </div>
 
                         <div className="flex justify-between gap-3">
@@ -1473,7 +1643,8 @@ export default function CierreVentasDulces({
                       <th className="border p-2">Tipo</th>
                       <th className="border p-2">Paquetes</th>
                       <th className="border p-2">Monto</th>
-                      <th className="border p-2">Comisión</th>
+                      <th className="border p-2">U. Vendedor</th>
+                      <th className="border p-2">U. Neta</th>
                       <th className="border p-2">Fecha venta</th>
                       <th className="border p-2">Fecha proceso</th>
                       <th className="border p-2">Vendedor</th>
@@ -1483,6 +1654,7 @@ export default function CierreVentasDulces({
                   <tbody>
                     {creditSales.map((s) => {
                       const commission = getCommissionAmount(s);
+                      const vendUtil = getVendorUtility(s);
                       const processDate = (s.processedDate || "").trim();
 
                       return (
@@ -1503,7 +1675,14 @@ export default function CierreVentasDulces({
                           <td className="border p-1">{qty3(s.quantity)}</td>
                           <td className="border p-1">C${money(s.amount)}</td>
                           <td className="border p-1">
-                            {commission > 0 ? `C$${money(commission)}` : "—"}
+                            {getCommissionFromItems(s) > 0
+                              ? `C$${money(getCommissionFromItems(s))}`
+                              : "—"}
+                          </td>
+                          <td className="border p-1">
+                            {getVendorNetUtility(s) > 0
+                              ? `C$${money(getVendorNetUtility(s))}`
+                              : "—"}
                           </td>
                           <td className="border p-1">{s.date}</td>
                           <td className="border p-1">
@@ -1561,7 +1740,7 @@ export default function CierreVentasDulces({
                     {creditSales.length === 0 && (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={12}
                           className="p-3 text-center text-gray-500"
                         >
                           Sin ventas crédito para mostrar.
@@ -1575,6 +1754,7 @@ export default function CierreVentasDulces({
               <div className="pdf-mobile md:hidden space-y-3 mb-4">
                 {creditSales.map((s) => {
                   const commission = getCommissionAmount(s);
+                  const vendUtil = getVendorUtility(s);
                   const processDate = (s.processedDate || "").trim();
 
                   return (
@@ -1613,9 +1793,41 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">U. Vendedor</span>
+                          <strong>
+                            {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">U. Vendedor</span>
+                          <strong>
+                            {getCommissionFromItems(s) > 0
+                              ? `C$${money(getCommissionFromItems(s))}`
+                              : "—"}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">U. Neta</span>
+                          <strong>
+                            {getVendorNetUtility(s) > 0
+                              ? `C$${money(getVendorNetUtility(s))}`
+                              : "—"}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
                           <span className="text-gray-600">Comisión</span>
                           <strong>
                             {commission > 0 ? `C$${money(commission)}` : "—"}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">U. Vendedor</span>
+                          <strong>
+                            {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
                           </strong>
                         </div>
 
@@ -1869,16 +2081,28 @@ export default function CierreVentasDulces({
         {isAdmin && (
           <button
             onClick={handleSaveClosure}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+            className="bg-blue-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-blue-700"
           >
-            Cerrar ventas del período
+            Procesar
           </button>
         )}
         <button
           onClick={handleDownloadPDF}
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+          className="bg-green-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-green-700"
         >
-          Descargar PDF
+          PDF
+        </button>
+        <button
+          onClick={handleExportCSV}
+          className="bg-gray-700 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-gray-800"
+        >
+          CSV
+        </button>
+        <button
+          onClick={handleExportXLSX}
+          className="bg-amber-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-amber-700"
+        >
+           Excel
         </button>
       </div>
 

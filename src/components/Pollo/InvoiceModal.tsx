@@ -8,6 +8,7 @@ import {
   getDocs,
   orderBy,
   query,
+  where,
   Timestamp,
 } from "firebase/firestore";
 import { format } from "date-fns";
@@ -97,19 +98,9 @@ export default function InvoiceModal({
   const [description, setDescription] = useState<string>("");
 
   // ✅ Selección de lotes (FIX: coherencia con filtros)
+  // Nota: reemplazamos la selección de lotes por consolidado de ventas cash
+  // Los datos consolidados por producto se calculan en el efecto más abajo.
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  useEffect(() => {
-    // Mantener solo seleccionados válidos dentro del filtro actual
-    setSelectedIds((prev) => {
-      const valid = prev.filter((id) =>
-        filteredBatches.some((b) => b.id === id),
-      );
-      // Si no hay ninguno seleccionado y hay resultados, auto-selecciona todos (comportamiento útil)
-      return valid.length === 0 && filteredBatches.length > 0
-        ? filteredBatches.map((b) => b.id)
-        : valid;
-    });
-  }, [filteredBatches]);
 
   // ========= Gastos con filtro independiente =========
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -241,6 +232,217 @@ export default function InvoiceModal({
     );
   };
 
+  // ========= Consolidado de ventas CASH y abonos para el rango lotFrom..lotTo =========
+  const [consolidatedRows, setConsolidatedRows] = useState<
+    {
+      productName: string;
+      measurement: string;
+      totalQuantity: number;
+      totalExpected: number;
+      totalInvoiced: number;
+      grossProfit: number;
+    }[]
+  >([]);
+  const [abonosRangeTotal, setAbonosRangeTotal] = useState<number>(0);
+
+  const consolidatedTotals = useMemo(() => {
+    let lbs = 0;
+    let units = 0;
+    let expected = 0;
+    let facturado = 0;
+    for (const r of consolidatedRows) {
+      const q = Number(r.totalQuantity || 0);
+      if (isLB(r.measurement || "")) lbs += q;
+      else units += q;
+      expected += Number(r.totalExpected || 0);
+      facturado += Number(r.totalInvoiced || 0);
+    }
+    return {
+      totalLbs: lbs,
+      totalUnits: units,
+      totalExpected: Number(expected.toFixed(2)),
+      totalFacturado: Number(facturado.toFixed(2)),
+      grossProfit: Number((expected - facturado).toFixed(2)),
+    };
+  }, [consolidatedRows]);
+
+  // Gross profit considering Cash + Abonos as revenue
+  const consolidatedGrossWithAbonos = useMemo(() => {
+    return Number(
+      (
+        (consolidatedTotals.totalExpected || 0) +
+        (abonosRangeTotal || 0) -
+        (consolidatedTotals.totalFacturado || 0)
+      ).toFixed(2),
+    );
+  }, [consolidatedTotals, abonosRangeTotal]);
+
+  useEffect(() => {
+    const loadConsolidated = async () => {
+      if (!lotFrom || !lotTo) {
+        setConsolidatedRows([]);
+        setAbonosRangeTotal(0);
+        return;
+      }
+
+      try {
+        // Ventas (salesV2) por rango
+        const qs = query(
+          collection(db, "salesV2"),
+          where("date", ">=", lotFrom),
+          where("date", "<=", lotTo),
+        );
+        const sSnap = await getDocs(qs);
+        const map: Record<
+          string,
+          {
+            measurement: string;
+            totalQuantity: number;
+            totalExpected: number;
+            totalInvoiced: number;
+          }
+        > = {};
+
+        sSnap.forEach((d) => {
+          const x = d.data() as any;
+          const baseDate = x.date ?? "";
+
+          // Only include cash sales (CONTADO)
+          const saleType = String(x.type ?? "CONTADO").toUpperCase();
+          if (saleType !== "CONTADO") return;
+
+          const pushLine = (
+            prod: string,
+            meas: string,
+            qty: number,
+            expected: number,
+            invoiced: number,
+          ) => {
+            const key = `${prod}||${meas}`;
+            if (!map[key]) {
+              map[key] = {
+                measurement: meas || "",
+                totalQuantity: 0,
+                totalExpected: 0,
+                totalInvoiced: 0,
+              };
+            }
+            map[key].totalQuantity += qty;
+            map[key].totalExpected += expected;
+            map[key].totalInvoiced += invoiced;
+          };
+
+          if (Array.isArray(x.items) && x.items.length > 0) {
+            x.items.forEach((it: any) => {
+              const prod = String(it.productName ?? "(sin nombre)");
+              const qty = Number(it.qty ?? it.quantity ?? 0);
+              const unitPrice = Number(
+                it.unitPrice ?? it.price ?? x.amountSuggested ?? 0,
+              );
+              const lineFinal =
+                Number(it.lineFinal ?? 0) ||
+                Math.max(
+                  0,
+                  Number(unitPrice || 0) * qty - Number(it.discount || 0),
+                );
+              const revenueLine = Number(lineFinal || 0);
+
+              // COGS: prefer allocations' lineCost, fallback to avgUnitCost * qty
+              const allocs = Array.isArray(it.allocations)
+                ? it.allocations
+                : Array.isArray(x.allocations)
+                  ? x.allocations
+                  : [];
+              let costLine = 0;
+              if (allocs && allocs.length) {
+                costLine = allocs.reduce(
+                  (s: number, a: any) => s + Number(a.lineCost || 0),
+                  0,
+                );
+              } else {
+                const avgUnit = Number(it.avgUnitCost ?? x.avgUnitCost ?? 0);
+                costLine = avgUnit * qty;
+              }
+
+              pushLine(
+                prod,
+                it.measurement ?? x.measurement ?? "",
+                qty,
+                revenueLine,
+                costLine,
+              );
+            });
+            return;
+          }
+
+          const prod = String(x.productName ?? "(sin nombre)");
+          const qty = Number(x.quantity ?? 0);
+          const revenueLine =
+            Number(x.amount ?? x.amountCharged ?? 0) ||
+            Number(x.amountSuggested ?? x.unitPrice ?? 0) * qty;
+
+          const allocs = Array.isArray(x.allocations) ? x.allocations : [];
+          let costLine = 0;
+          if (allocs && allocs.length) {
+            costLine = allocs.reduce(
+              (s: number, a: any) => s + Number(a.lineCost || 0),
+              0,
+            );
+          } else {
+            const avgUnit = Number(x.avgUnitCost ?? 0);
+            costLine = avgUnit * qty;
+          }
+
+          pushLine(prod, x.measurement ?? "", qty, revenueLine, costLine);
+        });
+
+        const rows = Object.entries(map).map(([k, v]) => {
+          const [productName] = k.split("||");
+          const gross = Number((v.totalExpected - v.totalInvoiced).toFixed(2));
+          return {
+            productName,
+            measurement: v.measurement,
+            totalQuantity: Number(v.totalQuantity.toFixed(3)),
+            totalExpected: Number(v.totalExpected.toFixed(2)),
+            totalInvoiced: Number(v.totalInvoiced.toFixed(2)),
+            grossProfit: gross,
+          };
+        });
+
+        setConsolidatedRows(
+          rows.sort((a, b) => b.totalInvoiced - a.totalInvoiced),
+        );
+
+        // Recaudado (abonos) por rango — coleccion ar_movements_pollo
+        const movementsSnap = await getDocs(
+          collection(db, "ar_movements_pollo"),
+        );
+        let abonosRangeSum = 0;
+        movementsSnap.forEach((d) => {
+          const m = d.data() as any;
+          const type = String(m.type ?? "").toUpperCase();
+          if (type !== "ABONO") return;
+          const amount = Math.abs(Number(m.amount ?? 0));
+          const moveDate = m?.date
+            ? String(m.date)
+            : m?.createdAt?.toDate
+              ? format(m.createdAt.toDate(), "yyyy-MM-dd")
+              : "";
+          if (moveDate && moveDate >= lotFrom && moveDate <= lotTo) {
+            abonosRangeSum += amount;
+          }
+        });
+        setAbonosRangeTotal(Number(abonosRangeSum.toFixed(2)));
+      } catch (e) {
+        console.error("Error cargando consolidado de ventas/abonos:", e);
+        setConsolidatedRows([]);
+        setAbonosRangeTotal(0);
+      }
+    };
+
+    loadConsolidated();
+  }, [lotFrom, lotTo]);
+
   // ========= Cálculos =========
   const selectedBatches = useMemo(
     () => filteredBatches.filter((b) => selectedIds.includes(b.id)),
@@ -320,12 +522,49 @@ export default function InvoiceModal({
 
   const createInvoice = async () => {
     setMsg("");
-    if (selectedBatches.length === 0) {
-      setMsg("Selecciona al menos 1 lote pagado.");
+    const useConsolidated =
+      Array.isArray(consolidatedRows) && consolidatedRows.length > 0;
+    if (!useConsolidated && selectedBatches.length === 0) {
+      setMsg("Selecciona al menos 1 lote pagado o genera un consolidado.");
       return;
     }
     try {
       setCreating(true);
+
+      // Build payload using consolidated values when available
+      const consolidatedProducts = (consolidatedRows || []).map((r) => ({
+        productName: r.productName,
+        measurement: r.measurement,
+        quantity: Number(qty3(r.totalQuantity)),
+        expectedTotal: Number(r.totalExpected),
+        invoiceTotal: Number(r.totalInvoiced),
+      }));
+
+      const totalLbs = useConsolidated
+        ? Number(qty3(consolidatedTotals.totalLbs))
+        : Number(qty3(totals.totalLbs));
+      const totalUnits = useConsolidated
+        ? Number(qty3(consolidatedTotals.totalUnits))
+        : Number(qty3(totals.totalUnits));
+
+      const totalAmount = useConsolidated
+        ? Number(
+            (consolidatedTotals.totalExpected + abonosRangeTotal).toFixed(2),
+          )
+        : totals.totalExpected;
+
+      const invoiceTotal = useConsolidated
+        ? consolidatedTotals.totalFacturado
+        : totals.totalInvoiced;
+
+      const finalAmount = Number(
+        (
+          (totalAmount || 0) -
+          Number(totals.totalGastos || 0) -
+          Number(totals.debits || 0) +
+          Number(totals.credits || 0)
+        ).toFixed(2),
+      );
 
       const invoicePayload = {
         number: invoiceNumber.trim(),
@@ -334,16 +573,17 @@ export default function InvoiceModal({
         status: "PENDIENTE" as const,
         createdAt: Timestamp.now(),
 
-        totalLbs: Number(qty3(totals.totalLbs)),
-        totalUnits: Number(qty3(totals.totalUnits)),
-        totalAmount: totals.totalExpected,
-        invoiceTotal: totals.totalInvoiced,
+        totalLbs,
+        totalUnits,
+        totalAmount,
+        invoiceTotal,
         totalExpenses: totals.totalGastos,
         totalDebits: totals.debits,
         totalCredits: totals.credits,
-        finalAmount: totals.finalAmount,
+        finalAmount,
 
-        batches: selectedBatches.map((b) => ({
+        // keep legacy `batches` when user selected explicit batches
+        batches: (!useConsolidated ? selectedBatches : []).map((b) => ({
           id: b.id,
           productId: b.productId,
           productName: b.productName,
@@ -368,6 +608,9 @@ export default function InvoiceModal({
             : null,
         })),
 
+        // consolidated products (when using consolidated invoicing)
+        consolidatedProducts: consolidatedProducts,
+
         expenses: filteredExpenses
           .filter((g) => selectedExpenseIds.includes(g.id))
           .map((g) => ({
@@ -385,7 +628,30 @@ export default function InvoiceModal({
         })),
       };
 
-      await addDoc(collection(db, "invoices"), invoicePayload);
+      const invRef = await addDoc(collection(db, "invoices"), invoicePayload);
+
+      // Save consolidated report document when using consolidated invoicing
+      if (useConsolidated) {
+        try {
+          await addDoc(collection(db, "consolidated_reports"), {
+            invoiceId: invRef.id,
+            lotFrom,
+            lotTo,
+            consolidatedProducts,
+            consolidatedTotals: {
+              totalLbs: consolidatedTotals.totalLbs,
+              totalUnits: consolidatedTotals.totalUnits,
+              totalExpected: consolidatedTotals.totalExpected,
+              totalFacturado: consolidatedTotals.totalFacturado,
+              grossProfit: consolidatedTotals.grossProfit,
+            },
+            abonosRangeTotal,
+            createdAt: Timestamp.now(),
+          });
+        } catch (err) {
+          console.error("Error saving consolidated report:", err);
+        }
+      }
 
       setMsg("✅ Factura creada.");
       onCreated();
@@ -496,101 +762,116 @@ export default function InvoiceModal({
           </div>
         </div>
 
-        {/* Selector de lotes */}
+        {/* Consolidado de ventas CASH por producto (Periodo: lotFrom → lotTo) */}
         <div className="mb-4">
           <div className="flex items-center gap-3 mb-2">
-            <h4 className="font-semibold">Lotes pagados</h4>
-            <label className="text-sm flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={
-                  filteredBatches.length > 0 &&
-                  selectedIds.length === filteredBatches.length
-                }
-                onChange={(e) => selectAllBatches(e.target.checked)}
-              />
-              Seleccionar todos (sobre el filtro)
-            </label>
+            <h4 className="font-semibold">Consolidado ventas (CASH)</h4>
+            <div className="text-sm text-gray-600 ml-auto">
+              Periodo: {lotFrom} → {lotTo}
+            </div>
           </div>
 
-          {filteredBatches.length === 0 ? (
+          {/* Totales consolidados */}
+          <div className="flex gap-3 mb-3 items-stretch">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center min-w-[120px]">
+              <div className="text-xs text-blue-700 font-semibold">
+                Total libras
+              </div>
+              <div className="text-xl font-bold text-blue-900">
+                {qty3(consolidatedTotals.totalLbs)}
+              </div>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center min-w-[120px]">
+              <div className="text-xs text-blue-700 font-semibold">
+                Total unidades
+              </div>
+              <div className="text-xl font-bold text-blue-900">
+                {qty3(consolidatedTotals.totalUnits)}
+              </div>
+            </div>
+            <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center min-w-[180px]">
+              <div className="text-xs text-green-700 font-semibold">
+                Total facturado
+              </div>
+              <div className="text-xl font-bold text-green-900">
+                {money(consolidatedTotals.totalFacturado)}
+              </div>
+            </div>
+            <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center min-w-[200px]">
+              <div className="text-xs text-green-700 font-semibold">
+                Total esperado
+              </div>
+              <div className="text-xl font-bold text-green-900">
+                {money(consolidatedTotals.totalExpected)}
+              </div>
+            </div>
+            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-center min-w-[180px]">
+              <div className="text-xs text-yellow-700 font-semibold">
+                Utilidad bruta
+              </div>
+              <div className="text-xl font-bold text-yellow-900">
+                {money(consolidatedGrossWithAbonos)}
+              </div>
+            </div>
+          </div>
+
+          {consolidatedRows.length === 0 ? (
             <p className="text-sm text-gray-500">
-              No hay lotes pagados disponibles en el filtro actual.
+              Sin ventas cash en el periodo.
             </p>
           ) : (
             <div className="border rounded max-h-80 overflow-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-100">
                   <tr>
-                    <th className="p-2 border">Sel</th>
-                    <th className="p-2 border">Fecha lote</th>
                     <th className="p-2 border">Producto</th>
                     <th className="p-2 border">Unidad</th>
-                    <th className="p-2 border">Cantidad</th>
-                    <th className="p-2 border">Precio venta</th>
-                    <th className="p-2 border">Total facturado</th>
-                    <th className="p-2 border">Total esperado</th>
-                    <th className="p-2 border">Ganancia bruta</th>
-                    <th className="p-2 border">Fecha pago</th>
+                    <th className="p-2 border text-right">Cantidad</th>
+                    <th className="p-2 border text-right">Total facturado</th>
+                    <th className="p-2 border text-right">Total esperado</th>
+                    <th className="p-2 border text-right">Ganancia bruta</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredBatches.map((b) => {
-                    const checked = selectedIds.includes(b.id);
-
-                    const expected =
-                      b.expectedTotal ??
-                      Number(
-                        (
-                          Number(b.quantity || 0) * Number(b.salePrice || 0)
-                        ).toFixed(2),
-                      );
-
-                    const facturado =
-                      b.invoiceTotal !== undefined && b.invoiceTotal !== null
-                        ? Number(b.invoiceTotal)
-                        : Number(
-                            (
-                              Number(b.quantity || 0) *
-                              Number(b.purchasePrice || 0)
-                            ).toFixed(2),
-                          );
-
-                    const gross = expected - facturado;
-
-                    return (
-                      <tr key={b.id} className="text-center">
-                        <td className="p-2 border">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) =>
-                              toggleBatch(b.id, e.target.checked)
-                            }
-                          />
-                        </td>
-                        <td className="p-2 border">{b.date}</td>
-                        <td className="p-2 border">{b.productName}</td>
-                        <td className="p-2 border">
-                          {(b.unit || "").toUpperCase()}
-                        </td>
-                        <td className="p-2 border">{qty3(b.quantity)}</td>
-                        <td className="p-2 border">{money(b.salePrice)}</td>
-                        <td className="p-2 border">{money(facturado)}</td>
-                        <td className="p-2 border">{money(expected)}</td>
-                        <td className="p-2 border">{money(gross)}</td>
-                        <td className="p-2 border">
-                          {b.paidAt?.toDate
-                            ? format(b.paidAt.toDate(), "yyyy-MM-dd")
-                            : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {consolidatedRows.map((r) => (
+                    <tr key={r.productName} className="text-center">
+                      <td className="p-2 border text-left">{r.productName}</td>
+                      <td className="p-2 border">{r.measurement || "—"}</td>
+                      <td className="p-2 border text-right">
+                        {qty3(r.totalQuantity)}
+                      </td>
+                      <td className="p-2 border text-right">
+                        {money(r.totalInvoiced)}
+                      </td>
+                      <td className="p-2 border text-right">
+                        {money(r.totalExpected)}
+                      </td>
+                      <td className="p-2 border text-right">
+                        {money(r.grossProfit)}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           )}
+
+          {/* Abonos */}
+          <div className="mt-3">
+            <h4 className="font-semibold">Abonos (Periodo)</h4>
+            <div className="mt-2">
+              <div className="p-3 border rounded bg-white inline-block">
+                <div className="text-sm text-gray-600">Periodo</div>
+                <div className="font-semibold">
+                  {lotFrom} → {lotTo}
+                </div>
+              </div>
+              <div className="p-3 border rounded bg-white inline-block ml-3">
+                <div className="text-sm text-gray-600">Total recaudado</div>
+                <div className="font-semibold">{money(abonosRangeTotal)}</div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Filtro + Tabla de Gastos */}
@@ -835,7 +1116,7 @@ export default function InvoiceModal({
                 Total libras
               </div>
               <div className="text-2xl font-bold text-blue-900">
-                {qty3(totals.totalLbs)}
+                {qty3(consolidatedTotals.totalLbs)}
               </div>
             </div>
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 shadow text-center">
@@ -843,15 +1124,15 @@ export default function InvoiceModal({
                 Total unidades
               </div>
               <div className="text-2xl font-bold text-blue-900">
-                {qty3(totals.totalUnits)}
+                {qty3(consolidatedTotals.totalUnits)}
               </div>
             </div>
             <div className="bg-green-50 border border-green-200 rounded-xl p-4 shadow text-center">
               <div className="text-xs text-green-700 font-semibold mb-1">
-                Total facturado (costo)
+                Total facturado
               </div>
               <div className="text-2xl font-bold text-green-900">
-                {money(totals.totalInvoiced)}
+                {money(consolidatedTotals.totalFacturado)}
               </div>
             </div>
           </div>
@@ -884,10 +1165,10 @@ export default function InvoiceModal({
           <div className="flex flex-col gap-4">
             <div className="bg-green-50 border border-green-200 rounded-xl p-4 shadow text-center">
               <div className="text-xs text-green-700 font-semibold mb-1">
-                Total esperado (ventas)
+                Total Cash + Abonos
               </div>
               <div className="text-2xl font-bold text-green-900">
-                {money(totals.totalExpected)}
+                {money(consolidatedTotals.totalExpected + abonosRangeTotal)}
               </div>
             </div>
             <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow text-center">
@@ -895,7 +1176,7 @@ export default function InvoiceModal({
                 Ganancia bruta
               </div>
               <div className="text-2xl font-bold text-yellow-900">
-                {money(totals.grossProfit)}
+                {money(consolidatedGrossWithAbonos)}
               </div>
             </div>
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 shadow text-center">
@@ -903,7 +1184,11 @@ export default function InvoiceModal({
                 Ganancia neta
               </div>
               <div className="text-2xl font-bold text-purple-900">
-                {money(totals.grossProfit - totals.totalGastos - totals.debits)}
+                {money(
+                  consolidatedGrossWithAbonos -
+                    totals.totalGastos -
+                    totals.debits,
+                )}
               </div>
             </div>
           </div>

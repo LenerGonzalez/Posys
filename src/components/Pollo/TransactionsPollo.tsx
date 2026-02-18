@@ -1006,10 +1006,20 @@ export default function TransactionsPollo({
 
   const renderMobileSaleCard = (s: SaleDoc) => {
     const name = getSaleCustomerName(s, customersById);
-    const productName =
-      s._raw?.productName ||
-      s._raw?.items?.[0]?.productName ||
-      "(sin producto)";
+    // Mostrar todos los productos vendidos en la venta
+    let productName = "(sin producto)";
+    if (Array.isArray(s._raw?.items) && s._raw.items.length > 0) {
+      productName = s._raw.items
+        .map(
+          (it: any) =>
+            it.productName || it.product || it.name || "(sin nombre)",
+        )
+        .join(", ");
+    } else if (s._raw?.productName) {
+      productName = s._raw.productName;
+    } else if (s._raw?.items?.[0]?.productName) {
+      productName = s._raw.items[0].productName;
+    }
     const estadoLabel = getEstadoLabel(s._raw);
 
     return (
@@ -1478,10 +1488,26 @@ export default function TransactionsPollo({
                   ) : (
                     paged.map((s) => {
                       const name = getSaleCustomerName(s, customersById);
-                      const productName =
-                        s._raw?.productName ||
-                        s._raw?.items?.[0]?.productName ||
-                        "(sin producto)";
+                      // Mostrar todos los productos vendidos en la venta
+                      let productName = "(sin producto)";
+                      if (
+                        Array.isArray(s._raw?.items) &&
+                        s._raw.items.length > 0
+                      ) {
+                        productName = s._raw.items
+                          .map(
+                            (it: any) =>
+                              it.productName ||
+                              it.product ||
+                              it.name ||
+                              "(sin nombre)",
+                          )
+                          .join(", ");
+                      } else if (s._raw?.productName) {
+                        productName = s._raw.productName;
+                      } else if (s._raw?.items?.[0]?.productName) {
+                        productName = s._raw.items[0].productName;
+                      }
                       const estadoLabel = getEstadoLabel(s._raw);
 
                       return (

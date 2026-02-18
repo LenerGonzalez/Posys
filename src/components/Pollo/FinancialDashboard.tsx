@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { db } from "../../firebase";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { db, auth } from "../../firebase";
 import {
   collection,
   getDocs,
@@ -8,6 +8,8 @@ import {
   query,
   where,
   Timestamp,
+  addDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 import { endOfMonth, format, parse, startOfMonth } from "date-fns";
 import jsPDF from "jspdf";
@@ -1155,6 +1157,80 @@ export default function FinancialDashboard(): React.ReactElement {
     doc.save(`dashboard_${from}_a_${to}.pdf`);
   };
 
+  const [savingSnapshot, setSavingSnapshot] = useState(false);
+  const initialSavedRef = useRef(false);
+
+  const handleSaveSnapshot = async (silent = false) => {
+    try {
+      setSavingSnapshot(true);
+
+      const user = auth.currentUser;
+      const snapshot = {
+        from,
+        to,
+        createdAt: serverTimestamp(),
+        user: user
+          ? {
+              uid: user.uid,
+              email: user.email ?? null,
+              displayName: user.displayName ?? null,
+            }
+          : null,
+        kpis: {
+          visible: kpisVisible,
+          cash: kpisCashVisible,
+          credit: kpisCreditVisible,
+        },
+        totals: {
+          totalLbs,
+          totalUnits,
+          totalSalesCash,
+          totalSalesCredit,
+          totalPendingBalance,
+          totalAbonos,
+          totalAbonosRange,
+          collectedCashPlusAbonos,
+          grossProfitCashPlusCredit,
+          netProfitCashPlusCredit,
+        },
+        topProducts: topProducts,
+        byProduct: byProduct.map((r) => ({
+          productName: r.productName,
+          units: r.units,
+          revenue: r.revenue,
+          cogs: r.cogs,
+          profit: r.profit,
+        })),
+      };
+
+      await addDoc(collection(db, "financial_snapshots"), snapshot);
+      if (!silent)
+        window.alert("KPIs guardados en la colección 'financial_snapshots'.");
+    } catch (e) {
+      console.error("Error guardando snapshot de KPIs:", e);
+      if (!silent)
+        window.alert("Error guardando snapshot de KPIs. Revisa la consola.");
+    } finally {
+      setSavingSnapshot(false);
+    }
+  };
+
+  // Auto-save when date range changes (debounced).
+  useEffect(() => {
+    // skip first render
+    if (!initialSavedRef.current) {
+      initialSavedRef.current = true;
+      return;
+    }
+
+    const t = setTimeout(() => {
+      handleSaveSnapshot(true);
+    }, 800);
+
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to]);
+
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
       <div className="flex items-center justify-between mb-3 gap-2">
@@ -1166,6 +1242,14 @@ export default function FinancialDashboard(): React.ReactElement {
             className="px-3 py-2 rounded-lg text-sm bg-gray-900 text-white hover:bg-black"
           >
             Exportar PDF
+          </button>
+          <button
+            type="button"
+            onClick={handleSaveSnapshot}
+            disabled={savingSnapshot}
+            className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+          >
+            {savingSnapshot ? "Guardando…" : "Guardar KPIs"}
           </button>
           <RefreshButton onClick={refresh} loading={loading} />
         </div>

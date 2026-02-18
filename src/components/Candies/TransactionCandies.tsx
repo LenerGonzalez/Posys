@@ -1,5 +1,6 @@
 // src/components/Candies/TransactionsReportCandies.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   collection,
   deleteDoc,
@@ -51,6 +52,8 @@ interface SaleDoc {
   // ✅ NUEVO: si viene guardado en la venta, lo usamos para histórico
   vendorCommissionPercent?: number;
   vendorCommissionAmount?: number;
+  // Suma de margenVendedor por ítems (cuando la venta tiene items[])
+  commissionFromItems?: number;
 }
 
 // ----------------- Helpers de fecha / normalización -----------------
@@ -87,6 +90,7 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
       : [];
 
   // Si la venta tiene items[] (multi-producto)
+  let commissionFromItems = 0;
   if (itemsArray.length > 0) {
     // 👇 Paquetes: usamos campo packages, si no, qty/quantity (fallback)
     quantity = itemsArray.reduce(
@@ -102,6 +106,11 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
         0,
       );
     }
+    // Suma de margenVendedor por ítem (si existe)
+    commissionFromItems = itemsArray.reduce(
+      (acc: number, it: any) => acc + (Number(it.margenVendedor || 0) || 0),
+      0,
+    );
   } else {
     // Estructura legacy / simple
     quantity =
@@ -126,6 +135,7 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     // ✅ HISTÓRICO desde la venta
     vendorCommissionPercent: Number(d.vendorCommissionPercent || 0) || 0,
     vendorCommissionAmount: Number(d.vendorCommissionAmount || 0) || 0,
+    commissionFromItems: Number(commissionFromItems || 0) || 0,
     productNames,
   };
 }
@@ -184,6 +194,7 @@ export default function TransactionsReportCandies({
       unitPrice: number; // precio por paquete
       discount?: number;
       total: number;
+      commission?: number;
     }[]
   >([]);
 
@@ -213,6 +224,7 @@ export default function TransactionsReportCandies({
         unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? 0),
         discount: Number(it.discount || 0),
         total: Number(it.total ?? it.lineFinal ?? 0),
+        commission: Number(it.margenVendedor || 0),
       }));
 
       setItemsModalRows(rows);
@@ -240,6 +252,7 @@ export default function TransactionsReportCandies({
   // Filtros: Cliente y Tipo
   const [filterCustomerId, setFilterCustomerId] = useState<string>("");
   const [filterType, setFilterType] = useState<"" | SaleType>("");
+  const [filterSellerId, setFilterSellerId] = useState<string>("");
 
   // kebab menú
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -276,11 +289,92 @@ export default function TransactionsReportCandies({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [sales]);
 
+  // Export: lista (sábana) de todos los productos vendidos en filteredSales
+  const handleExportXLSXAllProducts = async () => {
+    setLoading(true);
+    setMsg("");
+    try {
+      const rows: any[] = [];
+      for (const s of filteredSales) {
+        try {
+          const docSnap = await getDoc(doc(db, "sales_candies", s.id));
+          const data = docSnap.exists() ? (docSnap.data() as any) : null;
+          if (!data) continue;
+
+          const arr = Array.isArray(data.items)
+            ? data.items
+            : data.item
+              ? [data.item]
+              : [];
+
+          if (arr.length > 0) {
+            for (const it of arr) {
+              rows.push({
+                Fecha: s.date,
+                Venta: s.id,
+                Tipo: s.type,
+                Cliente: s.customerName || "",
+                Vendedor: s.vendorName || "",
+                Producto: it.productName || it.name || "",
+                Paquetes: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
+                Precio: Number(it.unitPricePackage ?? it.unitPrice ?? 0),
+                Descuento: Number(it.discount || 0),
+                Monto: Number(it.total ?? it.lineFinal ?? 0),
+                Comision: Number(it.margenVendedor || 0),
+              });
+            }
+          } else {
+            rows.push({
+              Fecha: s.date,
+              Venta: s.id,
+              Tipo: s.type,
+              Cliente: s.customerName || "",
+              Vendedor: s.vendorName || "",
+              Producto:
+                s.productNames && s.productNames[0] ? s.productNames[0] : "",
+              Paquetes: s.quantity,
+              Precio: s.total,
+              Descuento: 0,
+              Monto: s.total,
+              Comision: Number(
+                (s as any).commissionFromItems || s.vendorCommissionAmount || 0,
+              ),
+            });
+          }
+        } catch (e) {
+          console.error("Error leyendo venta", s.id, e);
+        }
+      }
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Productos");
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ventas_productos_${fromDate}_a_${toDate}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMsg(`✅ Exportado ${rows.length} fila(s)`);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error exportando a Excel");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ✅ Comisión HISTÓRICA desde la venta (si existe),
   // fallback a cálculo por sellers_candies
   const getCommissionAmount = (s: SaleDoc): number => {
+    // Prefer item-level commission when available
+    const itemsCommission = Number((s as any).commissionFromItems || 0);
+    if (itemsCommission > 0) return Number(itemsCommission.toFixed(2));
+
     const stored = Number((s as any).vendorCommissionAmount || 0);
-    if (stored > 0) return stored;
+    if (stored > 0) return Number(stored.toFixed(2));
 
     if (!s.vendorId) return 0;
     const v = sellersById[s.vendorId];
@@ -347,6 +441,10 @@ export default function TransactionsReportCandies({
         if (!sellerCandyId) return false;
         if (!s.vendorId || s.vendorId !== sellerCandyId) return false;
       }
+      // Filtro por vendedor desde el selector (admin/visor)
+      if (filterSellerId) {
+        if (!s.vendorId || s.vendorId !== filterSellerId) return false;
+      }
       if (filterCustomerId) {
         if (s.customerId !== filterCustomerId) return false;
       }
@@ -364,6 +462,7 @@ export default function TransactionsReportCandies({
     filterCustomerId,
     filterType,
     filterProduct,
+    filterSellerId,
     isVendor,
     sellerCandyId,
   ]);
@@ -656,6 +755,25 @@ export default function TransactionsReportCandies({
                 </select>
               </div>
 
+              <div className="sm:col-span-2 lg:col-span-2">
+                <label className="block font-semibold">Vendedor</label>
+                <select
+                  className="border rounded px-2 py-1 w-full"
+                  value={filterSellerId}
+                  onChange={(e) => {
+                    setFilterSellerId(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">Todos</option>
+                  {sellers.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block font-semibold">Tipo</label>
                 <select
@@ -693,10 +811,16 @@ export default function TransactionsReportCandies({
               </div>
 
               <button
-                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
+                className="sm:col-span-2 lg:col-span-1 px-2 py-1 text-sm sm:px-3 sm:py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
                 onClick={handleExportPDF}
               >
                 Exportar PDF
+              </button>
+              <button
+                className="sm:col-span-2 lg:col-span-1 px-2 py-1 text-sm sm:px-3 sm:py-2 rounded bg-green-600 text-white hover:bg-green-700 w-full"
+                onClick={handleExportXLSXAllProducts}
+              >
+                Exportar Excel (Sábana)
               </button>
             </div>
           </div>
@@ -1260,18 +1384,19 @@ export default function TransactionsReportCandies({
                     <th className="p-2 border text-right">Precio</th>
                     <th className="p-2 border text-right">Descuento</th>
                     <th className="p-2 border text-right">Monto</th>
+                    <th className="p-2 border text-right">Comisión</th>
                   </tr>
                 </thead>
                 <tbody>
                   {itemsModalLoading ? (
                     <tr>
-                      <td colSpan={5} className="p-4 text-center">
+                      <td colSpan={6} className="p-4 text-center">
                         Cargando…
                       </td>
                     </tr>
                   ) : itemsModalRows.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="p-4 text-center">
+                      <td colSpan={6} className="p-4 text-center">
                         Sin ítems en esta venta.
                       </td>
                     </tr>
@@ -1290,6 +1415,9 @@ export default function TransactionsReportCandies({
                         </td>
                         <td className="p-2 border text-right">
                           {money(it.total)}
+                        </td>
+                        <td className="p-2 border text-right">
+                          {money(it.commission || 0)}
                         </td>
                       </tr>
                     ))
