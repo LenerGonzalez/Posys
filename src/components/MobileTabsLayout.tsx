@@ -98,12 +98,18 @@ export default function MobileTabsLayout({
               label: "Dashboard",
               to: `${base}/financialDashboard`,
             },
+            {
+              key: "statusAccount",
+              label: "Estado de Cuenta",
+              to: `${base}/statusAccount`,
+            },
             { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
             {
               key: "trxs",
               label: "Transacciones",
               to: `${base}/transactionsPollo`,
             },
+
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             { key: "invPag", label: "Factura", to: `${base}/paidBatches` },
             { key: "gastos", label: "Gastos", to: `${base}/expenses` },
@@ -127,6 +133,11 @@ export default function MobileTabsLayout({
               key: "dash",
               label: "Dashboard",
               to: `${base}/financialDashboard`,
+            },
+            {
+              key: "statusAccount",
+              label: "Estado de Cuenta",
+              to: `${base}/statusAccount`,
             },
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             {
@@ -167,6 +178,11 @@ export default function MobileTabsLayout({
               key: "dash",
               label: "Dashboard",
               to: `${base}/financialDashboard`,
+            },
+            {
+              key: "statusAccount",
+              label: "Estado de Cuenta",
+              to: `${base}/statusAccount`,
             },
             { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
             {
@@ -271,6 +287,11 @@ export default function MobileTabsLayout({
             label: "Dashboard",
             to: `${base}/financialDashboard`,
           },
+          {
+            key: "statusAccount",
+            label: "Estado de Cuenta",
+            to: `${base}/statusAccount`,
+          },
           { key: "inv", label: "Inventario", to: `${base}/batches` },
           {
             key: "clientes",
@@ -292,6 +313,11 @@ export default function MobileTabsLayout({
               key: "arqueos",
               label: "Arqueos Caja",
               to: `${base}/polloCashAudits`,
+            },
+            {
+              key: "statusAccount",
+              label: "Estado de Cuenta",
+              to: `${base}/statusAccount`,
             },
           ];
         } else built = supTabs;
@@ -347,6 +373,8 @@ export default function MobileTabsLayout({
       "financialDashboard",
       "polloCashAudits",
       "billing",
+      "statusAccount",
+      "polloCashAudits",
       // DULCES
       "salesCandies",
       "productsVendorsCandies",

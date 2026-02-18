@@ -28,10 +28,11 @@ import Liquidaciones from "../src/components/Pollo/Liquidaciones";
 import FinancialDashboard from "../src/components/Pollo/FinancialDashboard";
 import ExpensesAdmin from "./components/Pollo/ExpensesAdmin";
 import FixBatchesPages from "../src/components/Pollo/FixBatchesPages";
-import TransaciontsPollo from "./components/Pollo/TransactionsPollo";
+import TransactionsPollo from "./components/Pollo/TransactionsPollo";
 import PaidBatches from "../src/components/Pollo/PaidBatches";
 import PolloCashAudits from "./components/Pollo/PolloCashAudits";
 import Billing from "./components/Pollo/Billing";
+import StatusAccount from "./components/Pollo/StatusAccount";
 
 // Módulos ROPA
 import InventoryClothesBatches from "./components/Clothes/InventoryClothesBatches";
@@ -64,7 +65,6 @@ import EntregasCash from "./components/Candies/EntregasCash";
 import PreciosVenta from "./components/Candies/PreciosVenta";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
-import TransactionsPollo from "./components/Pollo/TransactionsPollo";
 
 // Definición de roles
 type Role =
@@ -251,6 +251,14 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin", "contador"]}>
                 <PolloCashAudits />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="statusAccount"
+            element={
+              <PrivateRoute allowedRoles={["admin", "contador"]}>
+                <StatusAccount role={role} roles={roles} />
               </PrivateRoute>
             }
           />

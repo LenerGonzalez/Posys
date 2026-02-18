@@ -21,8 +21,8 @@ export type PathKey =
   | "salesV2"
   | "financialDashboard"
   | "polloCashAudits"
-  | "billing" // <-- AGREGADO
-  // DULCES
+  | "billing" 
+  | "statusAccount"
   | "salesCandies"
   | "productsVendorsCandies"
   | "productsPricesCandies"
@@ -44,6 +44,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     customersPollo: { view: true, edit: false },
     transactionsPollo: { view: true, edit: false },
     batches: { view: true, edit: false },
+    statusAccount: { view: true, edit: true },
   },
 
   contador: {
@@ -55,7 +56,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     bills: { view: true, edit: false },
     expenses: { view: true, edit: true },
     financialDashboard: { view: true, edit: false },
-    polloCashAudits: { view: true, edit: true },
+    statusAccount: { view: true, edit: true },
   },
 
   vendedor_pollo: {
@@ -113,12 +114,14 @@ const FINE_PERMISSIONS: Record<Role, Partial<Record<PathKey, FinePerm>>> = {
   supervisor_pollo: {
     bills: { cerrarVentas: false },
     batches: { create: false, update: false, delete: false, export: false },
+    statusAccount: { update: false }, 
   },
 
   contador: {
     // tu regla: batches "solo crear lote"
     batches: { create: true, update: false, delete: false, export: true },
     bills: { cerrarVentas: false },
+    statusAccount: { update: true },
   },
 
   vendedor_pollo: {
