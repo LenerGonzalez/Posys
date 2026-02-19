@@ -1335,29 +1335,40 @@ export default function VendorCandyOrders({
       const br = seller?.branch;
 
       const packs = floor(it.packages);
-      const pricePerPackage = p ? getPricePerPack(p, br) : Number(it.pricePerPackage || 0);
-      const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
-      const grossProfit = grossPerPack * packs;
+      // Use existing pricePerPackage (do not recalc it)
+      const pricePerPackage = Number(it.pricePerPackage || 0);
       const totalExpected = pricePerPackage * packs;
 
-      // update grossProfit and totalExpected locally
+      // grossProfit is derived from product's gross per pack
+      const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
+      const grossProfit = grossPerPack * packs;
+
+      // update only totalExpected and grossProfit locally
       setOrderItems((prev) =>
-        prev.map((x) =>
-          x.id === id ? { ...x, grossProfit, totalExpected, pricePerPackage } : x,
-        ),
+        prev.map((x) => (x.id === id ? { ...x, totalExpected, grossProfit } : x)),
       );
 
-      // persist grossProfit and totalExpected in Firestore if row exists
+      // update main rows so list reflects change
+      setRows((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, grossProfit } : r)),
+      );
+      if (rowsByIdRef.current && rowsByIdRef.current[id]) {
+        rowsByIdRef.current[id] = {
+          ...rowsByIdRef.current[id],
+          grossProfit,
+        } as any;
+      }
+
+      // persist only totalExpected and grossProfit in Firestore if row exists
       if (!String(id).startsWith("tmp_")) {
         await updateDoc(doc(db, "inventory_candies_sellers", id), {
-          grossProfit,
           totalExpected,
-          pricePerPackage,
+          grossProfit,
           updatedAt: Timestamp.now(),
         });
       }
 
-      showToast("Utilidad bruta recalculada", "success");
+      showToast("Total esperado recalculado", "success");
     } catch (err) {
       console.error(err);
       showToast("Error al recalcular utilidad bruta", "error");
