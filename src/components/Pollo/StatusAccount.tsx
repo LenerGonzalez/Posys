@@ -57,8 +57,9 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const [type, setType] = useState<LedgerType>("GASTO");
   const [description, setDescription] = useState("");
   const [reference, setReference] = useState("");
-  const [inAmount, setInAmount] = useState<number>(0);
-  const [outAmount, setOutAmount] = useState<number>(0);
+  // use string states for inputs so we can keep partial values like '.' while typing
+  const [inAmount, setInAmount] = useState<string>("");
+  const [outAmount, setOutAmount] = useState<string>("");
 
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -174,8 +175,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     // reset form
     setDescription("");
     setReference("");
-    setInAmount(0);
-    setOutAmount(0);
+    setInAmount("");
+    setOutAmount("");
 
     refresh();
     setModalOpen(false);
@@ -450,11 +451,23 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                   Entrada (+)
                 </label>
                 <input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  pattern="^\\d*(\\.\\d{0,2})?$"
                   className="border rounded px-3 py-2 w-full"
                   value={inAmount}
-                  onChange={(e) => setInAmount(Number(e.target.value || 0))}
+                  onChange={(e) => {
+                    let val = e.target.value.replace(/,/g, ".");
+                    // Only allow numbers with up to 2 decimals (allow trailing dot)
+                    if (
+                      /^\d*(\.\d{0,2})?$/.test(val) ||
+                      val === "." ||
+                      val === ""
+                    ) {
+                      setInAmount(val === "." ? "." : val);
+                    }
+                  }}
+                  placeholder="0.00"
                 />
               </div>
 
@@ -463,11 +476,22 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                   Salida (−)
                 </label>
                 <input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
+                  pattern="^\\d*(\\.\\d{0,2})?$"
                   className="border rounded px-3 py-2 w-full"
                   value={outAmount}
-                  onChange={(e) => setOutAmount(Number(e.target.value || 0))}
+                  onChange={(e) => {
+                    let val = e.target.value.replace(/,/g, ".");
+                    if (
+                      /^\d*(\.\d{0,2})?$/.test(val) ||
+                      val === "." ||
+                      val === ""
+                    ) {
+                      setOutAmount(val === "." ? "." : val);
+                    }
+                  }}
+                  placeholder="0.00"
                 />
               </div>
 
@@ -562,8 +586,16 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                             setType(r.type as LedgerType);
                             setDescription(r.description || "");
                             setReference(r.reference || "");
-                            setInAmount(Number(r.inAmount || 0));
-                            setOutAmount(Number(r.outAmount || 0));
+                            const inStr =
+                              Number(r.inAmount || 0) === 0
+                                ? ""
+                                : String(Number(r.inAmount));
+                            const outStr =
+                              Number(r.outAmount || 0) === 0
+                                ? ""
+                                : String(Number(r.outAmount));
+                            setInAmount(inStr);
+                            setOutAmount(outStr);
                             setModalOpen(true);
                             setActionOpenId(null);
                           }}
@@ -655,8 +687,16 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     setType(r.type as LedgerType);
                     setDescription(r.description || "");
                     setReference(r.reference || "");
-                    setInAmount(Number(r.inAmount || 0));
-                    setOutAmount(Number(r.outAmount || 0));
+                    const inStr =
+                      Number(r.inAmount || 0) === 0
+                        ? ""
+                        : String(Number(r.inAmount));
+                    const outStr =
+                      Number(r.outAmount || 0) === 0
+                        ? ""
+                        : String(Number(r.outAmount));
+                    setInAmount(inStr);
+                    setOutAmount(outStr);
                     setModalOpen(true);
                   }}
                   className="px-3 py-1 border rounded text-sm"
