@@ -1335,18 +1335,24 @@ export default function VendorCandyOrders({
       const br = seller?.branch;
 
       const packs = floor(it.packages);
+      const pricePerPackage = p ? getPricePerPack(p, br) : Number(it.pricePerPackage || 0);
       const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
       const grossProfit = grossPerPack * packs;
+      const totalExpected = pricePerPackage * packs;
 
-      // update only grossProfit locally
+      // update grossProfit and totalExpected locally
       setOrderItems((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, grossProfit } : x)),
+        prev.map((x) =>
+          x.id === id ? { ...x, grossProfit, totalExpected, pricePerPackage } : x,
+        ),
       );
 
-      // persist only grossProfit in Firestore if row exists
+      // persist grossProfit and totalExpected in Firestore if row exists
       if (!String(id).startsWith("tmp_")) {
         await updateDoc(doc(db, "inventory_candies_sellers", id), {
           grossProfit,
+          totalExpected,
+          pricePerPackage,
           updatedAt: Timestamp.now(),
         });
       }
@@ -1389,7 +1395,10 @@ export default function VendorCandyOrders({
     );
 
   const getItemActiveFinancials = (it: OrderItem) => {
-    const totalExpected = getItemActiveValue(it, Number(it.totalExpected || 0));
+    // `totalExpected` should reflect price * paquetes asociados (base),
+    // not the active-adjusted value (which considers transfers). Use the
+    // raw stored `totalExpected` for that purpose.
+    const totalExpected = Number(it.totalExpected || 0);
     const grossProfit = getItemActiveValue(it, Number(it.grossProfit || 0));
     const gastos = getItemActiveValue(it, getItemLogisticBase(it));
     const uVendor = getItemActiveValue(it, Number(it.uVendor || 0));
@@ -2088,26 +2097,61 @@ export default function VendorCandyOrders({
         const pid = String(r[idxProductId] || "").trim();
         if (!pid) continue;
 
-        const packs = floor(r[idxPackages]);
-        if (packs <= 0) continue;
-
-        const p = productsAll.find((x) => x.id === pid);
-        if (!p) continue;
-
-        const marginFromFile = idxMargin >= 0 ? clampPercent(r[idxMargin]) : 0;
-        const vendorMarginPercent =
-          idxMargin >= 0 && String(r[idxMargin] ?? "").trim() !== ""
-            ? marginFromFile
-            : fallbackMargin;
-
-        const pricePerPackage = getPricePerPack(p, br);
-        const grossPerPack = getGrossProfitPerPack(p, br);
-
-        const totalExpected = pricePerPackage * packs;
+        const packs = floor(it.packages);
+        const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
         const grossProfit = grossPerPack * packs;
-        const logisticAllocated = p.logisticAllocatedPerPack * packs;
+        const totalExpected = pricePerPackage * packs;
 
-        const uApproxPerPack = getUApproxPerPack(p, br);
+        // totals per branch
+        const totalRivas = (p?.unitPriceRivas || it.unitPriceRivas || 0) * packs;
+        const totalSanJorge = (p?.unitPriceSanJorge || it.unitPriceSanJorge || 0) * packs;
+        const totalIsla = (p?.unitPriceIsla || it.unitPriceIsla || 0) * packs;
+
+        // update orderItems locally
+        setOrderItems((prev) =>
+          prev.map((x) =>
+            x.id === id
+              ? { ...x, grossProfit, totalExpected, pricePerPackage }
+              : x,
+          ),
+        );
+
+        // update rows (main list) locally so UI reflects change outside modal
+        setRows((prev) =>
+          prev.map((r) =>
+            r.id === id
+              ? {
+                  ...r,
+                  grossProfit,
+                  totalRivas,
+                  totalSanJorge,
+                  totalIsla,
+                }
+              : r,
+          ),
+        );
+        if (rowsByIdRef.current && rowsByIdRef.current[id]) {
+          rowsByIdRef.current[id] = {
+            ...rowsByIdRef.current[id],
+            grossProfit,
+            totalRivas,
+            totalSanJorge,
+            totalIsla,
+          } as any;
+        }
+
+        // persist grossProfit and totals in Firestore if row exists
+        if (!String(id).startsWith("tmp_")) {
+          await updateDoc(doc(db, "inventory_candies_sellers", id), {
+            grossProfit,
+            totalExpected,
+            pricePerPackage,
+            totalRivas,
+            totalSanJorge,
+            totalIsla,
+            updatedAt: Timestamp.now(),
+          });
+        }
         const uAproximada = uApproxPerPack * packs;
         const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
 
