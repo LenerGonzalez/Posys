@@ -572,9 +572,9 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
                     {actionOpenId === r.id && (
                       <div
-                        ref={(el) =>
-                          (actionMenuRef.current = el as HTMLDivElement | null)
-                        }
+                        ref={(el) => {
+                          actionMenuRef.current = el as HTMLDivElement | null;
+                        }}
                         className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm"
                       >
                         <button

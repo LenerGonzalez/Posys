@@ -9,11 +9,14 @@ import {
   Timestamp,
   where,
   runTransaction,
+  updateDoc,
+  addDoc,
+  serverTimestamp,
   arrayUnion,
   writeBatch,
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
-import { db } from "../../../firebase";
+import { db, auth } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
 import useManualRefresh from "../../../hooks/useManualRefresh";
 import { hasRole } from "../../../utils/roles";
@@ -343,6 +346,24 @@ export default function VendorCandyOrders({
   const [editingMarginMap, setEditingMarginMap] = useState<
     Record<string, boolean>
   >({});
+  const [editingRemainingMap, setEditingRemainingMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [savingRemainingMap, setSavingRemainingMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [savingCalcMap, setSavingCalcMap] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [toast, setToast] = useState<{
+    msg: string;
+    type: "success" | "error";
+  } | null>(null);
+
+  const showToast = (msg: string, type: "success" | "error" = "success") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   const selectedSeller = useMemo(
     () => sellers.find((s) => s.id === sellerId) || null,
@@ -1226,12 +1247,117 @@ export default function VendorCandyOrders({
     setEditingPackagesMap((prev) => ({ ...prev, [id]: false }));
   };
 
+  const openRemainingEdit = (id: string) => {
+    setEditingRemainingMap((prev) => ({ ...prev, [id]: true }));
+  };
+
+  const closeRemainingEdit = async (id: string) => {
+    setEditingRemainingMap((prev) => ({ ...prev, [id]: false }));
+    // when closing, if this item is persisted in Firestore, save change
+    const orderItem = orderItems.find((it) => it.id === id) || null;
+    if (!orderItem) return;
+
+    const newRem = Number(orderItem.remainingPackages || 0);
+    if (!id || String(id).startsWith("tmp_")) return;
+
+    try {
+      setSavingRemainingMap((prev) => ({ ...prev, [id]: true }));
+      // only update remainingPackages. remainingUnits is informational and
+      // comes from catalog; do not overwrite it here.
+      // capture previous value for audit
+      const prevRow = rowsByIdRef.current ? rowsByIdRef.current[id] : null;
+      const oldRem = Number(prevRow?.remainingPackages ?? 0);
+
+      await updateDoc(doc(db, "inventory_candies_sellers", id), {
+        remainingPackages: newRem,
+      });
+
+      // write audit log
+      try {
+        await addDoc(collection(db, "inventory_candies_sellers_logs"), {
+          vendorRowId: id,
+          productId: orderItem.productId || null,
+          sellerId: prevRow?.sellerId || null,
+          orderId: prevRow?.orderId || null,
+          orderName: prevRow?.orderName || null,
+          oldRemainingPackages: oldRem,
+          newRemainingPackages: newRem,
+          user: auth?.currentUser
+            ? { uid: auth.currentUser.uid, email: auth.currentUser.email }
+            : null,
+          createdAt: serverTimestamp(),
+        });
+      } catch (logErr) {
+        console.warn("No se pudo escribir audit log:", logErr);
+      }
+
+      // update local rows state too (only remainingPackages)
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === id ? { ...r, remainingPackages: newRem } : r,
+        ),
+      );
+
+      // show confirmation message briefly
+      setMsg("✅ Restante actualizado");
+      setTimeout(() => setMsg(""), 3000);
+      rowsByIdRef.current = rowsByIdRef.current || {};
+      if (rowsByIdRef.current[id]) {
+        rowsByIdRef.current[id] = {
+          ...rowsByIdRef.current[id],
+          remainingPackages: newRem,
+        } as any;
+      }
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error guardando restantes.");
+    } finally {
+      setSavingRemainingMap((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
   const openMarginEdit = (id: string) => {
     setEditingMarginMap((prev) => ({ ...prev, [id]: true }));
   };
 
   const closeMarginEdit = (id: string) => {
     setEditingMarginMap((prev) => ({ ...prev, [id]: false }));
+  };
+
+  const recalcItem = async (id: string) => {
+    setSavingCalcMap((prev) => ({ ...prev, [id]: true }));
+    try {
+      const it = orderItems.find((x) => x.id === id);
+      if (!it) return;
+
+      const p = productsAll.find((x) => x.id === it.productId) || null;
+      const seller = sellers.find((s) => s.id === sellerId) || null;
+      const br = seller?.branch;
+
+      const packs = floor(it.packages);
+      const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
+      const grossProfit = grossPerPack * packs;
+
+      // update only grossProfit locally
+      setOrderItems((prev) =>
+        prev.map((x) => (x.id === id ? { ...x, grossProfit } : x)),
+      );
+
+      // persist only grossProfit in Firestore if row exists
+      if (!String(id).startsWith("tmp_")) {
+        await updateDoc(doc(db, "inventory_candies_sellers", id), {
+          grossProfit,
+          updatedAt: Timestamp.now(),
+        });
+      }
+
+      showToast("Utilidad bruta recalculada", "success");
+    } catch (err) {
+      console.error(err);
+      showToast("Error al recalcular utilidad bruta", "error");
+    } finally {
+      setSavingCalcMap((prev) => ({ ...prev, [id]: false }));
+    }
   };
 
   // =========================
@@ -1823,16 +1949,11 @@ export default function VendorCandyOrders({
       "U. Bruta",
       "U. Vendedor",
       "U. Neta",
-      "P. Rivas",
-      "P. San Jorge",
       "P. Isla",
-      "Total Rivas",
-      "Total San Jorge",
       "Total Isla",
       "Unidades x paquete",
       // === PLAN (obligatorio en export): NO eliminar previas, SOLO agregar ===
       "vendorMarginPercent",
-      "uVendor",
     ];
 
     const seller = sellers.find((s) => s.id === sellerId) || null;
@@ -1859,15 +1980,10 @@ export default function VendorCandyOrders({
           Number(grossProfit || 0),
           Number(uVendor || 0),
           Number(uNeta || 0),
-          Number(it.unitPriceRivas || 0),
-          Number(it.unitPriceSanJorge || 0),
           Number(it.unitPriceIsla || 0),
-          Number(it.totalRivas || 0),
-          Number(it.totalSanJorge || 0),
           Number(it.totalIsla || 0),
           Number(it.unitsPerPackage || 0),
           Number(it.vendorMarginPercent || 0),
-          Number(it.uVendor || 0),
         ];
       }),
     ];
@@ -1935,13 +2051,13 @@ export default function VendorCandyOrders({
           .toLowerCase(),
       );
       const idxProductId = header.findIndex(
-        (h) => h === "productid" || h === "producto id" || h === "id",
+        (h: string) => h === "productid" || h === "producto id" || h === "id",
       );
       const idxPackages = header.findIndex(
-        (h) => h === "paquetes" || h === "packages",
+        (h: string) => h === "paquetes" || h === "packages",
       );
       const idxMargin = header.findIndex(
-        (h) =>
+        (h: string) =>
           h === "vendormarginpercent" ||
           h === "vendor_margin_percent" ||
           h === "marginvendorpercent" ||
@@ -2616,6 +2732,19 @@ export default function VendorCandyOrders({
         <div className="mb-3 p-2 rounded border text-sm bg-white">{msg}</div>
       )}
 
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-2 rounded shadow-lg text-sm ${
+            toast.type === "success"
+              ? "bg-green-600 text-white"
+              : "bg-red-600 text-white"
+          }`}
+        >
+          {toast.msg}
+        </div>
+      )}
+
       {/* Loading */}
       {loading ? (
         <div className="p-4 text-sm text-gray-600">Cargando…</div>
@@ -3258,7 +3387,59 @@ export default function VendorCandyOrders({
                             </td>
 
                             <td className="p-2 border-b text-right">
-                              {it.remainingPackages}
+                              {isAdmin ? (
+                                editingRemainingMap[it.id] ? (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <input
+                                      className="w-20 border rounded p-1 text-right"
+                                      value={String(it.remainingPackages)}
+                                      onChange={(e) => {
+                                        const v = Math.max(
+                                          0,
+                                          floor(e.target.value),
+                                        );
+                                        setOrderItems((prev) =>
+                                          prev.map((x) =>
+                                            x.id === it.id
+                                              ? { ...x, remainingPackages: v }
+                                              : x,
+                                          ),
+                                        );
+                                      }}
+                                      onBlur={() => closeRemainingEdit(it.id)}
+                                      onKeyDown={(e) => {
+                                        if (
+                                          e.key === "Enter" ||
+                                          e.key === "Escape"
+                                        ) {
+                                          closeRemainingEdit(it.id);
+                                        }
+                                      }}
+                                      inputMode="numeric"
+                                      autoFocus
+                                    />
+                                    {savingRemainingMap[it.id] && (
+                                      <div className="text-xs text-gray-500">
+                                        Guardando…
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>{it.remainingPackages}</span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() => openRemainingEdit(it.id)}
+                                      aria-label="Editar restantes"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )
+                              ) : (
+                                <span>{it.remainingPackages}</span>
+                              )}
                             </td>
 
                             {isAdmin && (
@@ -3272,7 +3453,24 @@ export default function VendorCandyOrders({
                             </td>
 
                             <td className="p-2 border-b text-right">
-                              {money(totalExpected)}
+                              <div className="flex items-center justify-end gap-2">
+                                <span>{money(totalExpected)}</span>
+                                {isAdmin && (
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={async () => recalcItem(it.id)}
+                                    aria-label="Recalcular total esperado"
+                                  >
+                                    🔁
+                                  </button>
+                                )}
+                                {savingCalcMap[it.id] && (
+                                  <div className="text-xs text-gray-500">
+                                    Calc…
+                                  </div>
+                                )}
+                              </div>
                             </td>
 
                             {isAdmin && (
@@ -3484,7 +3682,68 @@ export default function VendorCandyOrders({
                                         Restantes
                                       </div>
                                       <div className="font-semibold">
-                                        {it.remainingPackages}
+                                        {isAdmin ? (
+                                          editingRemainingMap[it.id] ? (
+                                            <div className="flex items-center justify-end gap-2">
+                                              <input
+                                                className="w-full border rounded p-1 text-right"
+                                                value={String(
+                                                  it.remainingPackages,
+                                                )}
+                                                onChange={(e) => {
+                                                  const v = Math.max(
+                                                    0,
+                                                    floor(e.target.value),
+                                                  );
+                                                  setOrderItems((prev) =>
+                                                    prev.map((x) =>
+                                                      x.id === it.id
+                                                        ? {
+                                                            ...x,
+                                                            remainingPackages:
+                                                              v,
+                                                          }
+                                                        : x,
+                                                    ),
+                                                  );
+                                                }}
+                                                onBlur={() =>
+                                                  closeRemainingEdit(it.id)
+                                                }
+                                                onKeyDown={(e) => {
+                                                  if (
+                                                    e.key === "Enter" ||
+                                                    e.key === "Escape"
+                                                  ) {
+                                                    closeRemainingEdit(it.id);
+                                                  }
+                                                }}
+                                                inputMode="numeric"
+                                                autoFocus
+                                              />
+                                            </div>
+                                          ) : (
+                                            <div className="flex items-center justify-end gap-2">
+                                              <span className="font-semibold">
+                                                {it.remainingPackages}
+                                              </span>
+                                              <button
+                                                type="button"
+                                                className="text-xs text-gray-600 hover:text-gray-900"
+                                                onClick={() =>
+                                                  openRemainingEdit(it.id)
+                                                }
+                                                aria-label="Editar restantes"
+                                              >
+                                                ✏️
+                                              </button>
+                                            </div>
+                                          )
+                                        ) : (
+                                          <div className="font-semibold">
+                                            {it.remainingPackages}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                     <div>
@@ -3499,8 +3758,26 @@ export default function VendorCandyOrders({
                                       <div className="text-gray-600">
                                         Total esperado
                                       </div>
-                                      <div className="font-semibold">
-                                        {money(totalExpected)}
+                                      <div className="font-semibold flex items-center justify-end gap-2">
+                                        <div>{money(totalExpected)}</div>
+                                        {isAdmin && (
+                                          <button
+                                            type="button"
+                                            className="text-xs text-gray-600 hover:text-gray-900"
+                                            onClick={async (e) => {
+                                              e.stopPropagation();
+                                              await recalcItem(it.id);
+                                            }}
+                                            aria-label="Recalcular total esperado"
+                                          >
+                                            🔁
+                                          </button>
+                                        )}
+                                        {savingCalcMap[it.id] && (
+                                          <div className="text-xs text-gray-500">
+                                            Calc…
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                     {isAdmin && (
