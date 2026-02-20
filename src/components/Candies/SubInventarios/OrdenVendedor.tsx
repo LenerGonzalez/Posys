@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   orderBy,
   query,
@@ -387,7 +388,7 @@ export default function VendorCandyOrders({
           ? getPricePerPack(p, br)
           : Number(it.pricePerPackage || 0);
 
-        const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
+        const grossPerPack = computeGrossPerPack(p, it, br);
         const grossProfit = grossPerPack * packs;
 
         const logisticAllocated = p
@@ -973,6 +974,31 @@ export default function VendorCandyOrders({
     return p.grossProfitPerPackIsla || 0;
   };
 
+  // Compute gross per package with sensible fallback: prefer explicit
+  // grossProfitPerPack from product, otherwise compute as
+  // pricePerPackage - providerPrice (both per-package values).
+  const computeGrossPerPack = (
+    p?: ProductCandyFromMain | null,
+    fallbackItem?: any,
+    b?: Branch,
+  ) => {
+    const pricePerPackage = p
+      ? getPricePerPack(p, b)
+      : Number(fallbackItem?.pricePerPackage || 0);
+    const providerPricePerPack = p
+      ? Number(p.providerPrice || fallbackItem?.providerPrice || 0)
+      : Number(fallbackItem?.providerPrice || 0);
+    // if product explicitly provides grossProfitPerPack, prefer it
+    const hasExplicitGross = Boolean(
+      p &&
+      (p.grossProfitPerPackIsla != null ||
+        p.grossProfitPerPackRivas != null ||
+        p.grossProfitPerPackSanJorge != null),
+    );
+    if (hasExplicitGross && p) return getGrossProfitPerPack(p, b);
+    return pricePerPackage - providerPricePerPack;
+  };
+
   const getUApproxPerPack = (p: ProductCandyFromMain, b?: Branch) => {
     if (!b)
       return (
@@ -1113,7 +1139,7 @@ export default function VendorCandyOrders({
       cur.totalExpectedActive += Number(totalExpectedActiveRow || 0);
 
       const grossPerPack = p
-        ? getGrossProfitPerPack(p, br)
+        ? computeGrossPerPack(p, r, br)
         : packages > 0
           ? Number(r.grossProfit || 0) / packages
           : 0;
@@ -1262,17 +1288,54 @@ export default function VendorCandyOrders({
 
     try {
       setSavingRemainingMap((prev) => ({ ...prev, [id]: true }));
-      // only update remainingPackages. remainingUnits is informational and
-      // comes from catalog; do not overwrite it here.
-      // capture previous value for audit
-      const prevRow = rowsByIdRef.current ? rowsByIdRef.current[id] : null;
-      const oldRem = Number(prevRow?.remainingPackages ?? 0);
 
-      await updateDoc(doc(db, "inventory_candies_sellers", id), {
-        remainingPackages: newRem,
+      // determine units per package: prefer the authoritative value in Firestore doc
+      const prevRow = rowsByIdRef.current ? rowsByIdRef.current[id] : null;
+      const docRef = doc(db, "inventory_candies_sellers", id);
+      let docData: any = prevRow || {};
+      try {
+        const snap = await getDoc(docRef);
+        if (snap.exists()) docData = snap.data();
+      } catch (e) {
+        console.warn("Could not read doc before update, using local values", e);
+      }
+
+      const unitsPerPackage = Math.max(
+        1,
+        Math.floor(
+          Number(docData.unitsPerPackage ?? orderItem.unitsPerPackage ?? 1),
+        ),
+      );
+
+      // compute remaining units to keep SalesCandies (which reads remainingUnits)
+      const newRemainingUnits = Math.max(
+        0,
+        Math.floor(newRem * unitsPerPackage),
+      );
+      const oldRem = Number(prevRow?.remainingPackages ?? 0);
+      const oldRemainingUnits = Math.max(
+        0,
+        Math.floor(
+          Number(docData.remainingUnits ?? prevRow?.remainingUnits ?? 0),
+        ),
+      );
+
+      console.debug("[OrdenVendedor] saving remaining", {
+        id,
+        newRem,
+        unitsPerPackage,
+        newRemainingUnits,
+        oldRem,
+        oldRemainingUnits,
       });
 
-      // write audit log
+      // persist both remainingPackages and remainingUnits so sales view sees updates
+      await updateDoc(doc(db, "inventory_candies_sellers", id), {
+        remainingPackages: newRem,
+        remainingUnits: newRemainingUnits,
+      });
+
+      // write audit log (include units delta for transparency)
       try {
         await addDoc(collection(db, "inventory_candies_sellers_logs"), {
           vendorRowId: id,
@@ -1282,6 +1345,9 @@ export default function VendorCandyOrders({
           orderName: prevRow?.orderName || null,
           oldRemainingPackages: oldRem,
           newRemainingPackages: newRem,
+          oldRemainingUnits: oldRemainingUnits,
+          newRemainingUnits: newRemainingUnits,
+          unitsPerPackage,
           user: auth?.currentUser
             ? { uid: auth.currentUser.uid, email: auth.currentUser.email }
             : null,
@@ -1291,26 +1357,47 @@ export default function VendorCandyOrders({
         console.warn("No se pudo escribir audit log:", logErr);
       }
 
-      // update local rows state too (only remainingPackages)
+      // update local rows state (remainingPackages + remainingUnits)
       setRows((prev) =>
         prev.map((r) =>
-          r.id === id ? { ...r, remainingPackages: newRem } : r,
+          r.id === id
+            ? {
+                ...r,
+                remainingPackages: newRem,
+                remainingUnits: newRemainingUnits,
+              }
+            : r,
         ),
       );
 
-      // show confirmation message briefly
+      // show confirmation message briefly + toast
       setMsg("✅ Restante actualizado");
+      showToast("✅ Restante actualizado", "success");
       setTimeout(() => setMsg(""), 3000);
       rowsByIdRef.current = rowsByIdRef.current || {};
       if (rowsByIdRef.current[id]) {
         rowsByIdRef.current[id] = {
           ...rowsByIdRef.current[id],
           remainingPackages: newRem,
+          remainingUnits: newRemainingUnits,
         } as any;
+      }
+      // notify other windows/components that vendor inventory changed
+      try {
+        const sellerIdNotify = prevRow?.sellerId || null;
+        const productIdNotify = orderItem.productId || null;
+        window.dispatchEvent(
+          new CustomEvent("vendorInventoryChanged", {
+            detail: { sellerId: sellerIdNotify, productId: productIdNotify },
+          }),
+        );
+      } catch (e) {
+        // ignore in non-browser environments
       }
     } catch (e) {
       console.error(e);
       setMsg("❌ Error guardando restantes.");
+      showToast("❌ Error guardando restantes.", "error");
     } finally {
       setSavingRemainingMap((prev) => ({ ...prev, [id]: false }));
     }
@@ -1335,17 +1422,39 @@ export default function VendorCandyOrders({
       const br = seller?.branch;
 
       const packs = floor(it.packages);
+      // DEBUG: log pre-recalc values
+      console.log("[OV] recalcItem start", {
+        id,
+        productId: it.productId,
+        packs: it.packages,
+        pricePerPackage: it.pricePerPackage,
+        providerPrice: it.providerPrice,
+        grossProfitStored: it.grossProfit,
+      });
       // Use existing pricePerPackage (do not recalc it)
       const pricePerPackage = Number(it.pricePerPackage || 0);
       const totalExpected = pricePerPackage * packs;
 
-      // grossProfit is derived from product's gross per pack
-      const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
+      // grossProfit is derived from product's gross per pack (fallback to price - provider)
+      const grossPerPack = computeGrossPerPack(p, it, br);
       const grossProfit = grossPerPack * packs;
+
+      // DEBUG: log computed values
+      console.log("[OV] recalcItem computed", {
+        id,
+        productId: it.productId,
+        pricePerPackage,
+        providerPrice: p?.providerPrice ?? it.providerPrice,
+        grossPerPack,
+        grossProfit,
+        totalExpected,
+      });
 
       // update only totalExpected and grossProfit locally
       setOrderItems((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, totalExpected, grossProfit } : x)),
+        prev.map((x) =>
+          x.id === id ? { ...x, totalExpected, grossProfit } : x,
+        ),
       );
 
       // update main rows so list reflects change
@@ -1390,7 +1499,9 @@ export default function VendorCandyOrders({
     const base = Math.max(0, Number(it.packages || 0));
     const active = getItemActivePackages(it);
     if (base === 0) return active > 0 ? 1 : 0;
-    return active / base;
+    // Do not allow active ratio to exceed 1 (prevents doubling when
+    // transferDelta increases activePackages beyond base packages).
+    return Math.min(1, active / base);
   };
 
   const getItemActiveValue = (it: OrderItem, value: number) =>
@@ -1410,10 +1521,22 @@ export default function VendorCandyOrders({
     // not the active-adjusted value (which considers transfers). Use the
     // raw stored `totalExpected` for that purpose.
     const totalExpected = Number(it.totalExpected || 0);
-    const grossProfit = getItemActiveValue(it, Number(it.grossProfit || 0));
+
+    // grossProfitBase: stored grossProfit for the full item
+    const grossProfitBase = Number(it.grossProfit || 0);
+    // grossProfit: active-adjusted grossProfit (reflects transferDelta)
+    const grossProfit = getItemActiveValue(it, grossProfitBase);
+
     const gastos = getItemActiveValue(it, getItemLogisticBase(it));
-    const uVendor = getItemActiveValue(it, Number(it.uVendor || 0));
-    const uNeta = grossProfit - gastos - uVendor;
+
+    // Recompute vendor share from base gross profit and vendor margin,
+    // then apply active ratio so `U. Vendedor` follows active packages.
+    const vendorMarginPercent = clampPercent(it.vendorMarginPercent || 0);
+    const split = calcSplitFromGross(grossProfitBase, vendorMarginPercent);
+    const uVendor = getItemActiveValue(it, Number(split.uVendor || 0));
+
+    const uNeta =
+      Number(grossProfit || 0) - Number(gastos || 0) - Number(uVendor || 0);
     return { totalExpected, grossProfit, gastos, uVendor, uNeta };
   };
 
@@ -1580,6 +1703,22 @@ export default function VendorCandyOrders({
     });
 
     setOrderItems(items);
+    // DEBUG: show items loaded into modal (id, product, packs, prices)
+    try {
+      console.log(
+        "[OV] openOrder modal items",
+        items.map((it) => ({
+          id: it.id,
+          productId: it.productId,
+          packages: it.packages,
+          pricePerPackage: it.pricePerPackage,
+          providerPrice: it.providerPrice,
+          grossProfit: it.grossProfit,
+        })),
+      );
+    } catch (e) {
+      /* ignore */
+    }
     setOpenForm(true);
   };
 
@@ -1606,7 +1745,7 @@ export default function VendorCandyOrders({
     const br = s?.branch;
 
     const pricePerPackage = getPricePerPack(p, br);
-    const grossPerPack = getGrossProfitPerPack(p, br);
+    const grossPerPack = computeGrossPerPack(p, undefined, br);
 
     const uApproxPerPack = getUApproxPerPack(p, br);
     const uAproximada = uApproxPerPack * packs;
@@ -1677,7 +1816,7 @@ export default function VendorCandyOrders({
           ? getPricePerPack(p, br)
           : it.pricePerPackage || 0;
 
-        const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
+        const grossPerPack = computeGrossPerPack(p, it, br);
         const grossProfit = grossPerPack * packs;
 
         const logisticAllocated = p
@@ -1808,7 +1947,7 @@ export default function VendorCandyOrders({
 
         const grossProfit =
           p && packs > 0
-            ? getGrossProfitPerPack(p, br) * packs
+            ? computeGrossPerPack(p, r, br) * packs
             : Number(r.grossProfit || 0);
 
         const logisticAllocated =
@@ -2108,14 +2247,28 @@ export default function VendorCandyOrders({
         const pid = String(r[idxProductId] || "").trim();
         if (!pid) continue;
 
-        const packs = floor(it.packages);
-        const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
+        // find product and existing item (if any)
+        const p = productsAll.find((x) => x.id === pid) || null;
+        const it =
+          orderItems.find((x) => x.productId === pid) || ({} as OrderItem);
+        const id = it?.id || "";
+
+        // determine packages: prefer spreadsheet value, fallback to existing item
+        const packs = floor(Number(r[idxPackages] ?? it.packages ?? 0));
+
+        const pricePerPackage = p
+          ? getPricePerPack(p, br)
+          : Number(it.pricePerPackage || 0);
+
+        const grossPerPack = computeGrossPerPack(p, it, br);
         const grossProfit = grossPerPack * packs;
         const totalExpected = pricePerPackage * packs;
 
         // totals per branch
-        const totalRivas = (p?.unitPriceRivas || it.unitPriceRivas || 0) * packs;
-        const totalSanJorge = (p?.unitPriceSanJorge || it.unitPriceSanJorge || 0) * packs;
+        const totalRivas =
+          (p?.unitPriceRivas || it.unitPriceRivas || 0) * packs;
+        const totalSanJorge =
+          (p?.unitPriceSanJorge || it.unitPriceSanJorge || 0) * packs;
         const totalIsla = (p?.unitPriceIsla || it.unitPriceIsla || 0) * packs;
 
         // update orderItems locally
@@ -2163,7 +2316,21 @@ export default function VendorCandyOrders({
             updatedAt: Timestamp.now(),
           });
         }
+        const logisticAllocated = p
+          ? p.logisticAllocatedPerPack * packs
+          : Number(it.logisticAllocated || 0);
+
+        const uApproxPerPack = p ? getUApproxPerPack(p, br) : 0;
         const uAproximada = uApproxPerPack * packs;
+
+        const vendorMarginPercent =
+          idxMargin >= 0 && String(r[idxMargin] ?? "").trim() !== ""
+            ? Number(r[idxMargin])
+            : it?.vendorMarginPercent != null &&
+                String(it.vendorMarginPercent).trim() !== ""
+              ? clampPercent(it.vendorMarginPercent)
+              : fallbackMargin;
+
         const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
 
         const exists = orderItems.find((x) => x.productId === pid);
@@ -2193,9 +2360,13 @@ export default function VendorCandyOrders({
                     uVendor: recalc.uVendor,
                     uInvestor: recalc.uInvestor,
 
-                    totalRivas: (p.unitPriceRivas || 0) * packs,
-                    totalSanJorge: (p.unitPriceSanJorge || 0) * packs,
-                    totalIsla: (p.unitPriceIsla || 0) * packs,
+                    totalRivas:
+                      (p?.unitPriceRivas || it.unitPriceRivas || 0) * packs,
+                    totalSanJorge:
+                      (p?.unitPriceSanJorge || it.unitPriceSanJorge || 0) *
+                      packs,
+                    totalIsla:
+                      (p?.unitPriceIsla || it.unitPriceIsla || 0) * packs,
                   }
                 : it,
             ),
@@ -2205,11 +2376,11 @@ export default function VendorCandyOrders({
 
         const item: OrderItem = {
           id: `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-          productId: p.id,
-          productName: p.name,
-          category: p.category,
+          productId: p?.id || pid,
+          productName: p?.name || "",
+          category: p?.category || "",
 
-          unitsPerPackage: p.unitsPerPackage,
+          unitsPerPackage: p?.unitsPerPackage || 0,
           packages: packs,
 
           pricePerPackage,
@@ -2219,20 +2390,20 @@ export default function VendorCandyOrders({
 
           logisticAllocated,
 
-          providerPrice: p.providerPrice,
+          providerPrice: p?.providerPrice,
 
           vendorMarginPercent: split.vendorMarginPercent,
           uAproximada,
           uVendor: split.uVendor,
           uInvestor: split.uInvestor,
 
-          totalRivas: (p.unitPriceRivas || 0) * packs,
-          totalSanJorge: (p.unitPriceSanJorge || 0) * packs,
-          totalIsla: (p.unitPriceIsla || 0) * packs,
+          totalRivas: (p?.unitPriceRivas || 0) * packs,
+          totalSanJorge: (p?.unitPriceSanJorge || 0) * packs,
+          totalIsla: (p?.unitPriceIsla || 0) * packs,
 
-          unitPriceRivas: p.unitPriceRivas || 0,
-          unitPriceSanJorge: p.unitPriceSanJorge || 0,
-          unitPriceIsla: p.unitPriceIsla || 0,
+          unitPriceRivas: p?.unitPriceRivas || 0,
+          unitPriceSanJorge: p?.unitPriceSanJorge || 0,
+          unitPriceIsla: p?.unitPriceIsla || 0,
 
           remainingPackages: packs,
         };
@@ -2558,7 +2729,7 @@ export default function VendorCandyOrders({
             ? getPricePerPack(p, br)
             : Number(it.pricePerPackage || 0);
 
-          const grossPerPack = p ? getGrossProfitPerPack(p, br) : 0;
+          const grossPerPack = computeGrossPerPack(p, it, br);
           const grossProfit = grossPerPack * packs;
 
           const logisticAllocated = p
