@@ -33,6 +33,7 @@ import PaidBatches from "../src/components/Pollo/PaidBatches";
 import PolloCashAudits from "./components/Pollo/PolloCashAudits";
 import Billing from "./components/Pollo/Billing";
 import StatusAccount from "./components/Pollo/StatusAccount";
+import StatusInventory from "./components/Pollo/StatusInventory";
 
 // Módulos ROPA
 import InventoryClothesBatches from "./components/Clothes/InventoryClothesBatches";
@@ -259,6 +260,14 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin", "contador"]}>
                 <StatusAccount role={role} roles={roles} />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="statusInventory"
+            element={
+              <PrivateRoute allowedRoles={["admin", "contador"]}>
+                <StatusInventory role={role} roles={roles} />
               </PrivateRoute>
             }
           />

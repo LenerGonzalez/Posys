@@ -47,8 +47,9 @@ export default function MobileTabsLayout({
     canPath(subject, "batches", "view") ||
     canPath(subject, "bills", "view") ||
     canPath(subject, "transactionsPollo", "view") ||
-    canPath(subject, "customersPollo", "view");
-  canPath(subject, "billing", "view");
+    canPath(subject, "customersPollo", "view") ||
+    canPath(subject, "billing", "view") ||
+    canPath(subject, "statusInventory", "view");
 
   const hasDulces =
     canPath(subject, "salesCandies", "view") ||
@@ -101,7 +102,12 @@ export default function MobileTabsLayout({
             {
               key: "statusAccount",
               label: "Estado de Cuenta",
-              to: `${base}/statusAccount`,
+              to: `${base}/statusAccount`, 
+            },
+            {
+              key: "statusInventory",
+              label: "Estado de Inventario",
+              to: `${base}/statusInventory`,
             },
             { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
             {
@@ -138,6 +144,11 @@ export default function MobileTabsLayout({
               key: "statusAccount",
               label: "Estado de Cuenta",
               to: `${base}/statusAccount`,
+            },
+            {
+              key: "statusInventory",
+              label: "Estado de Inventario",
+              to: `${base}/statusInventory`,
             },
             { key: "inv", label: "Inventario", to: `${base}/batches` },
             {
@@ -183,6 +194,11 @@ export default function MobileTabsLayout({
               key: "statusAccount",
               label: "Estado de Cuenta",
               to: `${base}/statusAccount`,
+            },
+            {
+              key: "statusInventory",
+              label: "Estado de Inventario",
+              to: `${base}/statusInventory`,
             },
             { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
             {
@@ -292,6 +308,11 @@ export default function MobileTabsLayout({
             label: "Estado de Cuenta",
             to: `${base}/statusAccount`,
           },
+          {
+            key: "statusInventory",
+            label: "Estado de Inventario",
+            to: `${base}/statusInventory`,
+          },
           { key: "inv", label: "Inventario", to: `${base}/batches` },
           {
             key: "clientes",
@@ -318,6 +339,11 @@ export default function MobileTabsLayout({
               key: "statusAccount",
               label: "Estado de Cuenta",
               to: `${base}/statusAccount`,
+            },
+            {
+              key: "statusInventory",
+              label: "Estado de Inventario",
+              to: `${base}/statusInventory`,
             },
           ];
         } else built = supTabs;
@@ -374,6 +400,7 @@ export default function MobileTabsLayout({
       "polloCashAudits",
       "billing",
       "statusAccount",
+      "statusInventory",
       "polloCashAudits",
       // DULCES
       "salesCandies",

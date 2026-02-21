@@ -23,6 +23,7 @@ export type PathKey =
   | "polloCashAudits"
   | "billing" 
   | "statusAccount"
+  | "statusInventory"
   | "salesCandies"
   | "productsVendorsCandies"
   | "productsPricesCandies"
@@ -34,7 +35,7 @@ type Permission = Partial<Record<Action, boolean>>;
 
 const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
   admin: {
-    billing: { view: true, edit: true },
+    statusInventory: { view: true, edit: true },
   },
 
   // ===== POLLO =====
@@ -45,18 +46,20 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     transactionsPollo: { view: true, edit: false },
     batches: { view: true, edit: false },
     statusAccount: { view: true, edit: true },
+    statusInventory: { view: true, edit: false },
   },
 
   contador: {
     billing: { view: true, edit: true },
     salesV2: { view: true, edit: true },
     customersPollo: { view: true, edit: true },
-    batches: { view: true, edit: true }, // (nota: "solo crear lote" lo resolvemos en pantalla luego)
+    batches: { view: true, edit: true },
     transactionsPollo: { view: true, edit: false },
     bills: { view: true, edit: false },
     expenses: { view: true, edit: true },
     financialDashboard: { view: true, edit: false },
     statusAccount: { view: true, edit: true },
+    statusInventory: { view: true, edit: true },
   },
 
   vendedor_pollo: {
@@ -114,7 +117,8 @@ const FINE_PERMISSIONS: Record<Role, Partial<Record<PathKey, FinePerm>>> = {
   supervisor_pollo: {
     bills: { cerrarVentas: false },
     batches: { create: false, update: false, delete: false, export: false },
-    statusAccount: { update: false }, 
+    statusAccount: { update: false },
+    statusInventory: { update: false},
   },
 
   contador: {
@@ -122,6 +126,7 @@ const FINE_PERMISSIONS: Record<Role, Partial<Record<PathKey, FinePerm>>> = {
     batches: { create: true, update: false, delete: false, export: true },
     bills: { cerrarVentas: false },
     statusAccount: { update: true },
+    statusInventory: { update: true },
   },
 
   vendedor_pollo: {

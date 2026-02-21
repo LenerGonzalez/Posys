@@ -26,6 +26,8 @@ export default function AdminLayout({
   // ====== estados de menús colapsables ======
   // Operaciones Pollo
   const [openPollo, setOpenPollo] = useState(false);
+  const [contadorMenuFinanzas, setContadorMenuFinanzas] = useState(false);
+  const [openPolloVentas, setOpenPolloVentas] = useState(false);
   const [openPolloInv, setOpenPolloInv] = useState(false);
   const [openPolloFin, setOpenPolloFin] = useState(false);
   const [openPolloProd, setOpenPolloProd] = useState(false);
@@ -129,7 +131,8 @@ export default function AdminLayout({
     canPath(subject, "bills", "view") ||
     canPath(subject, "expenses", "view") ||
     canPath(subject, "batches", "view") ||
-    canPath(subject, "statusAccount", "view");
+    canPath(subject, "statusAccount", "view") ||
+    canPath(subject, "statusInventory", "view");
 
   const hasDulcesAccess =
     canPath(subject, "salesCandies", "view") ||
@@ -207,6 +210,12 @@ export default function AdminLayout({
                               className={linkCls}
                             >
                               Estado de Cuenta
+                            </NavLink>
+                            <NavLink
+                              to={`${base}/statusInventory`}
+                              className={linkCls}
+                            >
+                              Evolutivo Libras
                             </NavLink>
                           </div>
                         )}
@@ -613,36 +622,62 @@ export default function AdminLayout({
                           Transacciones
                         </NavLink>
                       )}
-                      {canPath(subject, "billing") && (
-                        <NavLink to={`${base}/billing`} className={linkCls}>
-                          Facturacion
-                        </NavLink>
-                      )}
-                      {canPath(subject, "statusAccount") && (
-                        <NavLink to={`${base}/statusAccount`} className={linkCls}>
-                          Estado de Cuenta
-                        </NavLink>
-                      )}
-                      {canPath(subject, "expenses") && (
-                        <NavLink to={`${base}/expenses`} className={linkCls}>
-                          Gastos
-                        </NavLink>
-                      )}
-                      {hasRole(subject, "contador") && (
-                        <NavLink
-                          to={`${base}/polloCashAudits`}
-                          className={linkCls}
-                        >
-                          Arqueos Caja
-                        </NavLink>
-                      )}
-                      {canPath(subject, "customersPollo") && (
-                        <NavLink
-                          to={`${base}/customersPollo`}
-                          className={linkCls}
-                        >
-                          Saldos Pendientes
-                        </NavLink>
+
+                      {openPollo && (
+                        <div className="pb-2">
+                          <SubSectionBtn
+                            open={contadorMenuFinanzas}
+                            onClick={() => setContadorMenuFinanzas((v) => !v)}
+                            title="Contabilidad"
+                          />
+
+                          {contadorMenuFinanzas && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              {canPath(subject, "billing") && (
+                                <NavLink
+                                  to={`${base}/billing`}
+                                  className={linkCls}
+                                >
+                                  Facturacion
+                                </NavLink>
+                              )}
+
+                              {canPath(subject, "customersPollo") && (
+                                <NavLink
+                                  to={`${base}/customersPollo`}
+                                  className={linkCls}
+                                >
+                                  Saldos Pendientes
+                                </NavLink>
+                              )}
+
+                              {canPath(subject, "statusAccount") && (
+                                <NavLink
+                                  to={`${base}/statusAccount`}
+                                  className={linkCls}
+                                >
+                                  Estado de Cuenta
+                                </NavLink>
+                              )}
+                              {canPath(subject, "statusInventory") && (
+                                <NavLink
+                                  to={`${base}/statusInventory`}
+                                  className={linkCls}
+                                >
+                                  Evolutivo de Libras
+                                </NavLink>
+                              )}
+                              {canPath(subject, "expenses") && (
+                                <NavLink
+                                  to={`${base}/expenses`}
+                                  className={linkCls}
+                                >
+                                  Gastos
+                                </NavLink>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

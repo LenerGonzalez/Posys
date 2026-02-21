@@ -11,6 +11,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import * as XLSX from "xlsx";
 import { hasRole } from "../../utils/roles";
 import { format, isValid, parse } from "date-fns";
 import { restoreSaleAndDelete } from "../../Services/inventory";
@@ -106,6 +107,8 @@ const mStr = (v: unknown) =>
     .trim();
 
 const isLb = (m: unknown) => ["lb", "lbs", "libra", "libras"].includes(mStr(m));
+const isUnit = (m: unknown) =>
+  ["unidad", "unidades", "ud", "uds", "pieza", "piezas"].includes(mStr(m));
 
 const getQty = (x: any) => Number(x?.qty ?? x?.quantity ?? 0) || 0;
 
@@ -776,13 +779,64 @@ export default function TransactionsPollo({
   const kpisUnidades = useMemo(() => {
     let unidadesCash = 0,
       unidadesCredito = 0;
+
     for (const s of filteredSales) {
-      if (s.type === "CONTADO") {
-        unidadesCash += s.quantity;
+      // extraer items robustamente (reusar la función extractItems definida abajo)
+      const itemsArr =
+        s._raw && typeof s._raw === "object"
+          ? ((): any[] => {
+              // inline extractItems logic to avoid ordering issues
+              const raw = s._raw;
+              if (!raw) return [];
+              let arr: any[] = [];
+              if (Array.isArray(raw.items) && raw.items.length > 0)
+                arr = raw.items;
+              else if (raw.items && typeof raw.items === "object") {
+                try {
+                  arr = Object.values(raw.items);
+                } catch (e) {
+                  arr = [];
+                }
+              } else if (raw.item) arr = [raw.item];
+              else if (Array.isArray(raw.products) && raw.products.length > 0)
+                arr = raw.products;
+              else if (Array.isArray(raw.lines) && raw.lines.length > 0)
+                arr = raw.lines;
+              else if (Array.isArray(raw.detalles) && raw.detalles.length > 0)
+                arr = raw.detalles;
+              else if (raw.productName || raw.product) {
+                arr = [
+                  {
+                    qty: raw.qty ?? raw.quantity ?? raw.lbs ?? raw.weight ?? 0,
+                    measurement: raw.measurement ?? "",
+                  },
+                ];
+              }
+              return arr;
+            })()
+          : [];
+
+      // si hay items, sumar solo los que sean unidades
+      if (itemsArr.length > 0) {
+        for (const it of itemsArr) {
+          const measurement = it.measurement ?? s._raw?.measurement ?? null;
+          if (isUnit(measurement)) {
+            const q = Number(it.qty ?? it.quantity ?? 0) || 0;
+            if (s.type === "CONTADO") unidadesCash += Math.round(q);
+            else unidadesCredito += Math.round(q);
+          }
+        }
       } else {
-        unidadesCredito += s.quantity;
+        // fallback: si la venta a nivel raíz está en unidades
+        const measurement = s._raw?.measurement ?? null;
+        if (isUnit(measurement)) {
+          const q = Number(s.quantity ?? 0) || 0;
+          if (s.type === "CONTADO") unidadesCash += Math.round(q);
+          else unidadesCredito += Math.round(q);
+        }
       }
     }
+
     const unidadesTotal = unidadesCash + unidadesCredito;
     return {
       unidadesCash,
@@ -896,9 +950,9 @@ export default function TransactionsPollo({
       <div class="kpis">
 
       
-        <div><b>Unidades Cash:</b> ${qty3(kpisUnidades.unidadesCash)}</div>
-        <div><b>Unidades Crédito:</b> ${qty3(kpisUnidades.unidadesCredito)}</div>
-        <div><b>Total Unidades:</b> ${qty3(kpisUnidades.unidadesTotal)}</div>
+        <div><b>Unidades Cash:</b> ${kpisUnidades.unidadesCash}</div>
+        <div><b>Unidades Crédito:</b> ${kpisUnidades.unidadesCredito}</div>
+        <div><b>Total Unidades:</b> ${kpisUnidades.unidadesTotal}</div>
       </div>
 
       <div class="kpis">
@@ -924,6 +978,224 @@ export default function TransactionsPollo({
     w.document.open();
     w.document.write(html);
     w.document.close();
+  };
+
+  // --------- Exportar Excel (.xlsx) ---------
+  const handleExportExcel = () => {
+    const header = [
+      "Fecha",
+      "SaleId",
+      "ProductId",
+      "BatchId",
+      "ClienteId",
+      "Estado",
+      "Cliente",
+      "Producto",
+      "Tipo",
+      "Unidades",
+      "Libras",
+      "Precio Unitario",
+      "Descuento",
+      "Monto",
+    ];
+
+    const data: any[] = [header];
+
+    const parseNum = (v: any) => {
+      if (v === undefined || v === null) return NaN;
+      if (typeof v === "number") return v;
+      let s = String(v).trim();
+      if (!s) return NaN;
+      s = s.replace(/[^0-9.,-]/g, "");
+      if (s.indexOf(".") > -1 && s.indexOf(",") > -1) {
+        s = s.replace(/,/g, "");
+      } else if (s.indexOf(",") > -1 && s.indexOf(".") === -1) {
+        s = s.replace(/,/g, ".");
+      }
+      const n = Number(s);
+      return isNaN(n) ? NaN : n;
+    };
+
+    const extractItems = (raw: any) => {
+      if (!raw) return [];
+      let arr: any[] = [];
+      if (Array.isArray(raw.items) && raw.items.length > 0) arr = raw.items;
+      else if (raw.items && typeof raw.items === "object") {
+        try {
+          arr = Object.values(raw.items);
+        } catch (e) {
+          arr = [];
+        }
+      } else if (raw.item) arr = [raw.item];
+      else if (Array.isArray(raw.products) && raw.products.length > 0)
+        arr = raw.products;
+      else if (Array.isArray(raw.lines) && raw.lines.length > 0)
+        arr = raw.lines;
+      else if (Array.isArray(raw.detalles) && raw.detalles.length > 0)
+        arr = raw.detalles;
+      else if (raw.productName || raw.product) {
+        arr = [
+          {
+            productName: raw.productName || raw.product || "",
+            qty: raw.qty ?? raw.quantity ?? raw.lbs ?? raw.weight ?? 0,
+            unitPrice: raw.unitPrice ?? raw.price ?? raw.salePrice ?? 0,
+            discount: raw.discount ?? 0,
+            total: raw.total ?? raw.amount ?? 0,
+          },
+        ];
+      }
+      return arr;
+    };
+
+    for (const s of filteredSales) {
+      const name = getSaleCustomerName(s, customersById);
+      const estadoLabel = getEstadoLabel(s._raw);
+      const itemsArr = extractItems(s._raw || {});
+      const clienteId = s.customerId || s._raw?.customerId || "";
+
+      if (itemsArr.length === 0) {
+        // Fallback: show sale-level row when no itemized products
+        const lbsFallback = getLbsFromSaleRaw(s._raw);
+        const unidadesFallback = Number(s.quantity || 0) || 0;
+        data.push([
+          s.date,
+          s.id,
+          "",
+          "",
+          clienteId,
+          estadoLabel,
+          name,
+          "(sin producto)",
+          s.type === "CREDITO" ? "Crédito" : "Cash",
+          unidadesFallback,
+          lbsFallback,
+          0,
+          0,
+          Number(s.total) || 0,
+        ]);
+        continue;
+      }
+
+      for (const it of itemsArr) {
+        const productName =
+          it.productName ||
+          it.product ||
+          it.name ||
+          it.itemName ||
+          "(sin nombre)";
+        const qty =
+          Number(it.qty ?? it.quantity ?? it.lbs ?? it.weight ?? 0) || 0;
+        const measurement =
+          it.measurement ??
+          s._raw?.measurement ??
+          it.unitMeasure ??
+          it.uom ??
+          null;
+        const isMeasurementLb = isLb(measurement);
+        const unidadesVal = isMeasurementLb ? 0 : qty || 0;
+        const librasVal = isMeasurementLb ? qty || 0 : 0;
+
+        const productId = String(
+          it.productId ||
+            it.product_id ||
+            it.id ||
+            (it.product && it.product.id) ||
+            "",
+        ).trim();
+
+        // buscar batchId en allocations (primer allocation) o en campos comunes
+        let batchId = "";
+        const firstAlloc = Array.isArray(it?.allocations)
+          ? it.allocations[0]
+          : it?.allocations && typeof it.allocations === "object"
+            ? Object.values(it.allocations)[0]
+            : null;
+        if (firstAlloc)
+          batchId = String(
+            firstAlloc?.batchId || firstAlloc?.batch_id || firstAlloc?.id || "",
+          ).trim();
+        if (!batchId)
+          batchId = String(
+            it.batchId || it.batch_id || it.allocationBatchId || "",
+          ).trim();
+
+        const priceCandidates = [
+          it.unitPrice,
+          it.unitPricePackage,
+          it.salePrice,
+          it.sale_price,
+          it.price,
+          it.unit_price,
+          it.pricePerUnit,
+          it.price_per_unit,
+        ];
+        let unitPrice = NaN;
+        for (const p of priceCandidates) {
+          const n = parseNum(p);
+          if (!isNaN(n) && n !== 0) {
+            unitPrice = n;
+            break;
+          }
+        }
+
+        const totalCandidate = parseNum(
+          it.total ?? it.lineFinal ?? it.amount ?? it.monto ?? it.line_total,
+        );
+        const discount = parseNum(it.discount ?? it.desc ?? 0) || 0;
+
+        if (
+          (isNaN(unitPrice) || unitPrice === 0) &&
+          !isNaN(totalCandidate) &&
+          qty > 0
+        ) {
+          unitPrice = totalCandidate / qty;
+        }
+
+        const total = !isNaN(totalCandidate)
+          ? totalCandidate
+          : !isNaN(unitPrice)
+            ? unitPrice * qty
+            : 0;
+
+        const unitPriceVal = isNaN(unitPrice) ? 0 : Number(unitPrice);
+        const discountVal = discount ? Number(discount) : 0;
+        const totalVal = Number(total) || 0;
+
+        data.push([
+          s.date,
+          s.id,
+          productId,
+          batchId,
+          clienteId,
+          estadoLabel,
+          name,
+          productName,
+          s.type === "CREDITO" ? "Crédito" : "Cash",
+          unidadesVal,
+          librasVal,
+          unitPriceVal,
+          discountVal,
+          totalVal,
+        ]);
+      }
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Ventas por Producto");
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([wbout], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const fname = `ventas_por_producto_${fromDate}_a_${toDate}.xlsx`;
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.download = fname;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // --------- Paginador ---------
@@ -1279,6 +1551,12 @@ export default function TransactionsPollo({
               </div>
 
               <button
+                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 w-full"
+                onClick={handleExportExcel}
+              >
+                Exportar Excel
+              </button>
+              <button
                 className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
                 onClick={handleExportPDF}
               >
@@ -1313,48 +1591,48 @@ export default function TransactionsPollo({
         {kpisCardOpen && (
           <div className="p-4 border-t">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {/* <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Unidades Cash</div>
-                <div className="text-xl font-semibold">
-                  {qty3(kpisUnidades.unidadesCash)}
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Unidades Crédito</div>
-                <div className="text-xl font-semibold">
-                  {qty3(kpisUnidades.unidadesCredito)}
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Total Unidades</div>
-                <div className="text-xl font-semibold">
-                  {qty3(kpisUnidades.unidadesTotal)}
-                </div>
-              </div> */}
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Libras Cash</div>
                 <div className="text-xl font-semibold">
                   {qty3(kpis.packsCash)}
                 </div>
               </div>
+
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Libras Crédito</div>
                 <div className="text-xl font-semibold">
                   {qty3(kpis.packsCredito)}
                 </div>
               </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Unidades Cash</div>
+                <div className="text-xl font-semibold">
+                  {kpisUnidades.unidadesCash}
+                </div>
+              </div>
+
+              <div className="p-3 border rounded bg-gray-50">
+                <div className="text-xs text-gray-600">Unidades Crédito</div>
+                <div className="text-xl font-semibold">
+                  {kpisUnidades.unidadesCredito}
+                </div>
+              </div>
+
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Ventas Cash</div>
                 <div className="text-xl font-semibold">
                   {money(kpis.montoCash)}
                 </div>
               </div>
+
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Ventas Crédito</div>
                 <div className="text-xl font-semibold">
                   {money(kpis.montoCredito)}
                 </div>
               </div>
+
               <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Ventas Total</div>
                 <div className="text-xl font-semibold">
