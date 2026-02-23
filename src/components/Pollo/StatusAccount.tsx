@@ -21,7 +21,10 @@ import {
   type BaseSummary,
 } from "../../Services/baseSummaryPollo";
 
-const money = (n: unknown) => `C$${Number(n ?? 0).toFixed(2)}`;
+const money = (n: unknown) => {
+  const v = Number(n ?? 0) || 0;
+  return `C$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 const today = () => format(new Date(), "yyyy-MM-dd");
 
@@ -31,7 +34,11 @@ type LedgerType =
   | "GASTO"
   | "REABASTECIMIENTO"
   | "RETIRO"
-  | "AJUSTE";
+  | "AJUSTE"
+  | "DEPOSITO"
+  | "PERDIDA"
+  | "PRESTAMO A NEGOCIO POR DUENO"
+  | "DEVOLUCION A DUENO POR PRESTAMO";
 
 type LedgerRow = {
   id: string;
@@ -159,7 +166,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   }, [ledger, saldoBase]);
 
   const saldoFinal = ledgerWithBalance.length
-    ? ledgerWithBalance[ledgerWithBalance.length - 1].balance
+    ? (ledgerWithBalance[ledgerWithBalance.length - 1] as any).balance
     : saldoBase;
 
   const totals = useMemo(() => {
@@ -168,7 +175,31 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     return { inSum, outSum };
   }, [ledger]);
 
-  const downloadExcelFile = (filename: string, rows: (string | number)[][], sheetName = "Hoja1") => {
+  // KPI: deuda del negocio con el dueño (prestamo - devolucion)
+  const deudaDueno = useMemo(() => {
+    const prestado = ledger.reduce((a, r) => {
+      if (r.type !== "PRESTAMO A NEGOCIO POR DUENO") return a;
+      return a + Number(r.inAmount || 0) - Number(r.outAmount || 0);
+    }, 0);
+
+    const devuelto = ledger.reduce((a, r) => {
+      if (r.type !== "DEVOLUCION A DUENO POR PRESTAMO") return a;
+      return a + Number(r.outAmount || 0) - Number(r.inAmount || 0);
+    }, 0);
+
+    // deuda = lo prestado - lo devuelto
+    return Math.max(0, Number(prestado || 0) - Number(devuelto || 0));
+  }, [ledger]);
+
+  const affectsOwnerDebt = (t: LedgerType) =>
+    t === "PRESTAMO A NEGOCIO POR DUENO" ||
+    t === "DEVOLUCION A DUENO POR PRESTAMO";
+
+  const downloadExcelFile = (
+    filename: string,
+    rows: (string | number)[][],
+    sheetName = "Hoja1",
+  ) => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(rows);
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
@@ -187,22 +218,26 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       "Saldo",
       "Fuente",
       "Creado por",
+      "Afecta deuda dueño",
     ];
     rows.push(headers);
 
     // use ledgerWithBalance for calculated balance
     (ledgerWithBalance || []).forEach((r: any) => {
-      const createdBy = r.createdBy ? `${r.createdBy.email || r.createdBy.uid || ""}` : "";
+      const createdBy = r.createdBy
+        ? `${r.createdBy.email || r.createdBy.uid || ""}`
+        : "";
       rows.push([
         r.date || "",
         r.type || "",
         r.description || "",
         r.reference || "",
-        (r.inAmount || 0),
-        (r.outAmount || 0),
-        (r.balance || 0),
-        (r.source || "ledger"),
+        r.inAmount || 0,
+        r.outAmount || 0,
+        r.balance || 0,
+        r.source || "ledger",
         createdBy,
+        affectsOwnerDebt(r.type as LedgerType) ? "SI" : "",
       ]);
     });
 
@@ -296,9 +331,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
       <div className="flex items-center justify-between mb-3 gap-2">
-        <h2 className="text-xl sm:text-2xl font-bold">
-          Estado de Cuenta (Pollo)
-        </h2>
+        <h2 className="text-xl sm:text-2xl font-bold">Estado de Cuenta</h2>
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
           <button
@@ -337,62 +370,60 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       {/* Desktop grid */}
       <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Libras Cash</div>
+          <div className="text-xs text-gray-600">Libras vendidas Cash</div>
           <div className="text-2xl font-bold">{qty3(base?.lbsCash ?? 0)}</div>
         </div>
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Libras Crédito</div>
+          <div className="text-xs text-gray-600">Libras vendidas Crédito</div>
           <div className="text-2xl font-bold">{qty3(base?.lbsCredit ?? 0)}</div>
         </div>
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Total Libras</div>
+          <div className="text-xs text-gray-600">
+            Total Libras Cash + Crédito
+          </div>
           <div className="text-2xl font-bold">
             {qty3((base?.lbsCash ?? 0) + (base?.lbsCredit ?? 0))}
           </div>
         </div>
 
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Unidades Cash</div>
+          <div className="text-xs text-gray-600">Unidades vendidas Cash</div>
           <div className="text-2xl font-bold">{qty3(base?.unitsCash ?? 0)}</div>
         </div>
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Unidades Crédito</div>
+          <div className="text-xs text-gray-600">Unidades vendidas Crédito</div>
           <div className="text-2xl font-bold">
             {qty3(base?.unitsCredit ?? 0)}
           </div>
         </div>
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Total Unidades</div>
+          <div className="text-xs text-gray-600">
+            Total Unidades Cash + Crédito
+          </div>
           <div className="text-2xl font-bold">
             {qty3((base?.unitsCash ?? 0) + (base?.unitsCredit ?? 0))}
           </div>
         </div>
 
         <div className="border rounded-2xl p-3 bg-white">
-          <div className="text-xs text-gray-600">Ventas Cash</div>
+          <div className="text-xs text-gray-600">Ventas Cash $</div>
           <div className="text-2xl font-bold">
             {money(base?.salesCash ?? 0)}
           </div>
         </div>
         <div className="border rounded-2xl p-3 bg-white">
-          <div className="text-xs text-gray-600">Ventas Crédito</div>
+          <div className="text-xs text-gray-600">Ventas Crédito $</div>
           <div className="text-2xl font-bold">
             {money(base?.salesCredit ?? 0)}
           </div>
         </div>
         <div className="border rounded-2xl p-3 bg-white">
-          <div className="text-xs text-gray-600">Abonado al periodo</div>
+          <div className="text-xs text-gray-600">Abonos al periodo $</div>
           <div className="text-2xl font-bold">
             {money(base?.abonosPeriodo ?? 0)}
           </div>
         </div>
 
-        <div className="border rounded-2xl p-3 bg-indigo-50">
-          <div className="text-xs text-gray-600">
-            Saldo base (Ventas Cash + Abonos)
-          </div>
-          <div className="text-2xl font-bold">{money(saldoBase)}</div>
-        </div>
         <div className="border rounded-2xl p-3 bg-green-50">
           <div className="text-xs text-gray-600">Entradas manuales</div>
           <div className="text-2xl font-bold">{money(totals.inSum)}</div>
@@ -401,10 +432,25 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           <div className="text-xs text-gray-600">Salidas manuales</div>
           <div className="text-2xl font-bold">{money(totals.outSum)}</div>
         </div>
+        <div className="border rounded-2xl p-3 bg-amber-50">
+          <div className="text-xs text-gray-600">Deuda a Dueño</div>
+          <div className="text-2xl font-bold">{money(deudaDueno)}</div>
+        </div>
 
-        <div className="border rounded-2xl p-3 bg-gray-900 text-white sm:col-span-2 lg:col-span-3">
-          <div className="text-xs opacity-80">Saldo final (corriente)</div>
-          <div className="text-3xl font-extrabold">{money(saldoFinal)}</div>
+        <div className="sm:col-span-2 lg:col-span-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div className="border rounded-2xl p-3 bg-indigo-50">
+              <div className="text-xs text-gray-600">
+                Saldo base (Ventas Cash + Abonos)
+              </div>
+              <div className="text-2xl font-bold">{money(saldoBase)}</div>
+            </div>
+
+            <div className="border rounded-2xl p-3 bg-gray-900 text-white">
+              <div className="text-xs opacity-80">Saldo final (corriente)</div>
+              <div className="text-3xl font-extrabold">{money(saldoFinal)}</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -421,6 +467,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <div className="text-xs text-gray-600">Saldo base</div>
               <div className="font-semibold">{money(saldoBase)}</div>
             </div>
+
             <div className="border rounded p-2 bg-gray-50">
               <div className="text-xs text-gray-600">Entradas manuales</div>
               <div className="font-semibold">{money(totals.inSum)}</div>
@@ -430,11 +477,16 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <div className="font-semibold">{money(totals.outSum)}</div>
             </div>
             <div className="border rounded p-2 bg-gray-50">
+              <div className="text-xs text-gray-600">Deuda a Dueño</div>
+              <div className="font-semibold">{money(deudaDueno)}</div>
+            </div>
+
+            <div className="border rounded p-2 bg-gray-50">
               <div className="text-xs text-gray-600">Ventas Cash</div>
               <div className="font-semibold">{money(base?.salesCash ?? 0)}</div>
             </div>
             <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Abonado al periodo</div>
+              <div className="text-xs text-gray-600">Abonos al periodo $</div>
               <div className="font-semibold">
                 {money(base?.abonosPeriodo ?? 0)}
               </div>
@@ -503,7 +555,19 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                   <option value="RETIRO">Retiro</option>
                   <option value="DEPOSITO">Deposito a Carmen Ortiz</option>
                   <option value="PERDIDA">Perdida por robo</option>
+                  <option value="PRESTAMO A NEGOCIO POR DUENO">
+                    Préstamo a negocio por dueño
+                  </option>
+                  <option value="DEVOLUCION A DUENO POR PRESTAMO">
+                    Devolución a dueño por préstamo
+                  </option>
                 </select>
+
+                {affectsOwnerDebt(type) && (
+                  <div className="mt-1 text-xs text-amber-700">
+                    Este movimiento afecta la deuda del negocio con el dueño.
+                  </div>
+                )}
               </div>
 
               <div>
@@ -629,21 +693,29 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <td className="border p-1">{money(saldoBase)}</td>
               <td className="border p-1">{money(0)}</td>
               <td className="border p-1 font-semibold">{money(saldoBase)}</td>
+              <td className="border p-1">—</td>
             </tr>
 
-            {ledgerWithBalance.map((r) => (
+            {ledgerWithBalance.map((r: any) => (
               <tr key={r.id} className="text-center">
                 <td className="border p-1">{r.date}</td>
-                <td className="border p-1">{r.type}</td>
+                <td className="border p-1">
+                  <div className="flex items-center justify-center gap-2">
+                    <span>{r.type}</span>
+                    {affectsOwnerDebt(r.type as LedgerType) && (
+                      <span className="text-[11px] px-2 py-[2px] rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                        Afecta deuda dueño
+                      </span>
+                    )}
+                  </div>
+                </td>
                 <td className="border p-1 text-left">{r.description}</td>
                 <td className="border p-1">{r.reference || "—"}</td>
                 <td className="border p-1">{money(r.inAmount)}</td>
                 <td className="border p-1">{money(r.outAmount)}</td>
-                <td className="border p-1 font-semibold">
-                  {money((r as any).balance)}
-                </td>
+                <td className="border p-1 font-semibold">{money(r.balance)}</td>
                 <td className="border p-1 relative">
-                  {(r as any).source === "expenses" ? (
+                  {r.source === "expenses" ? (
                     <div className="text-xs text-gray-400">
                       Gasto registrado
                     </div>
@@ -725,7 +797,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
             {ledgerWithBalance.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-3 text-center text-gray-500">
+                <td colSpan={8} className="p-3 text-center text-gray-500">
                   No hay movimientos manuales en este rango.
                 </td>
               </tr>
@@ -741,7 +813,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             Sin movimientos manuales en este rango.
           </div>
         ) : (
-          ledgerWithBalance.map((r) => (
+          ledgerWithBalance.map((r: any) => (
             <div
               key={r.id}
               className="border rounded-xl p-3 bg-white shadow-sm"
@@ -749,8 +821,15 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <div className="flex justify-between items-start">
                 <div>
                   <div className="text-sm font-semibold">{r.description}</div>
-                  <div className="text-xs text-gray-500">
-                    {r.date} • {r.type}
+                  <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
+                    <span>
+                      {r.date} • {r.type}
+                    </span>
+                    {affectsOwnerDebt(r.type as LedgerType) && (
+                      <span className="text-[11px] px-2 py-[2px] rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                        Afecta deuda dueño
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
@@ -766,14 +845,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Saldo</div>
-                  <div className="font-semibold">
-                    {money((r as any).balance)}
-                  </div>
+                  <div className="font-semibold">{money(r.balance)}</div>
                 </div>
               </div>
 
               <div className="mt-3 flex justify-end gap-2">
-                {(r as any).source === "expenses" ? null : (
+                {r.source === "expenses" ? null : (
                   <>
                     <button
                       onClick={() => {
