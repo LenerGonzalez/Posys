@@ -74,7 +74,17 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [actionOpenId, setActionOpenId] = useState<string | null>(null);
+  const [collapseLibras, setCollapseLibras] = useState(false);
+  const [collapseUnidades, setCollapseUnidades] = useState(false);
+  const [collapseVentas, setCollapseVentas] = useState(false);
   const modalRef = useRef<HTMLDivElement | null>(null);
+  const allCollapsed = collapseLibras && collapseUnidades && collapseVentas;
+  const toggleAllKpis = () => {
+    const next = !allCollapsed; // if all collapsed -> expand(next=false), else collapse(next=true)
+    setCollapseLibras(next);
+    setCollapseUnidades(next);
+    setCollapseVentas(next);
+  };
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const [movementTypeFilter, setMovementTypeFilter] = useState<string>("ALL");
 
@@ -198,7 +208,13 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       return r.type === "REABASTECIMIENTO" ? a + Number(r.outAmount || 0) : a;
     }, 0);
 
-    return { inSum, outSumNonGastos, gastosSum, abonoDueno, reabastecimientoSum };
+    return {
+      inSum,
+      outSumNonGastos,
+      gastosSum,
+      abonoDueno,
+      reabastecimientoSum,
+    };
   }, [ledger]);
 
   // Movement types available for filter (derived from loaded ledger)
@@ -246,7 +262,13 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     const reabastecimientoSum = rows.reduce((a, r) => {
       return r.type === "REABASTECIMIENTO" ? a + Number(r.outAmount || 0) : a;
     }, 0);
-    return { inSum, outSumNonGastos, gastosSum, abonoDueno, reabastecimientoSum };
+    return {
+      inSum,
+      outSumNonGastos,
+      gastosSum,
+      abonoDueno,
+      reabastecimientoSum,
+    };
   }, [ledger, movementTypeFilter, totals]);
 
   // KPI: deuda del negocio con el dueño (prestamo - devolucion)
@@ -484,59 +506,94 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       {/* KPIs */}
       {/* Desktop grid */}
       <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-        <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Libras vendidas Cash</div>
-          <div className="text-2xl font-bold">{qty3(base?.lbsCash ?? 0)}</div>
+        <div className="sm:col-span-3 flex justify-end">
+          <button
+            type="button"
+            onClick={toggleAllKpis}
+            className={`text-sm px-3 py-1 border rounded ${allCollapsed ? "bg-blue-600 text-white" : "bg-red-600 text-white"} hover:opacity-90`}
+          >
+            {allCollapsed ? "Ver Indicadores" : "Ocultar Indicadores"}
+          </button>
         </div>
+        {/* Libras group (collapsible) */}
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Libras vendidas Crédito</div>
-          <div className="text-2xl font-bold">{qty3(base?.lbsCredit ?? 0)}</div>
-        </div>
-        <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">
-            Total Libras Cash + Crédito
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold">Libras</div>
           </div>
-          <div className="text-2xl font-bold">
-            {qty3((base?.lbsCash ?? 0) + (base?.lbsCredit ?? 0))}
-          </div>
+          {!collapseLibras && (
+            <div className="mt-3 space-y-2">
+              <div className="text-xs text-gray-600">Libras vendidas Cash</div>
+              <div className="text-2xl font-bold">
+                {qty3(base?.lbsCash ?? 0)}
+              </div>
+              <div className="text-xs text-gray-600 mt-2">
+                Libras vendidas Crédito
+              </div>
+              <div className="text-2xl font-bold">
+                {qty3(base?.lbsCredit ?? 0)}
+              </div>
+              <div className="text-xs text-gray-600 mt-2">
+                Total Libras Cash + Crédito
+              </div>
+              <div className="text-2xl font-bold">
+                {qty3((base?.lbsCash ?? 0) + (base?.lbsCredit ?? 0))}
+              </div>
+            </div>
+          )}
         </div>
 
+        {/* Unidades group (collapsible) */}
         <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Unidades vendidas Cash</div>
-          <div className="text-2xl font-bold">{qty3(base?.unitsCash ?? 0)}</div>
-        </div>
-        <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">Unidades vendidas Crédito</div>
-          <div className="text-2xl font-bold">
-            {qty3(base?.unitsCredit ?? 0)}
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold">Unidades</div>
           </div>
-        </div>
-        <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="text-xs text-gray-600">
-            Total Unidades Cash + Crédito
-          </div>
-          <div className="text-2xl font-bold">
-            {qty3((base?.unitsCash ?? 0) + (base?.unitsCredit ?? 0))}
-          </div>
+          {!collapseUnidades && (
+            <div className="mt-3 space-y-2">
+              <div className="text-xs text-gray-600">
+                Unidades vendidas Cash
+              </div>
+              <div className="text-2xl font-bold">
+                {qty3(base?.unitsCash ?? 0)}
+              </div>
+              <div className="text-xs text-gray-600 mt-2">
+                Unidades vendidas Crédito
+              </div>
+              <div className="text-2xl font-bold">
+                {qty3(base?.unitsCredit ?? 0)}
+              </div>
+              <div className="text-xs text-gray-600 mt-2">
+                Total Unidades Cash + Crédito
+              </div>
+              <div className="text-2xl font-bold">
+                {qty3((base?.unitsCash ?? 0) + (base?.unitsCredit ?? 0))}
+              </div>
+            </div>
+          )}
         </div>
 
+        {/* Ventas & Abonos group (collapsible) */}
         <div className="border rounded-2xl p-3 bg-white">
-          <div className="text-xs text-gray-600">Ventas Cash $</div>
-          <div className="text-2xl font-bold">
-            {money(base?.salesCash ?? 0)}
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold">Ventas / Abonos</div>
           </div>
-        </div>
-        <div className="border rounded-2xl p-3 bg-white">
-          <div className="text-xs text-gray-600">Ventas Crédito $</div>
-          <div className="text-2xl font-bold">
-            {money(base?.salesCredit ?? 0)}
-          </div>
-        </div>
-        <div className="border rounded-2xl p-3 bg-white">
-          <div className="text-xs text-gray-600">Abonos al periodo $</div>
-          <div className="text-2xl font-bold">
-            {money(base?.abonosPeriodo ?? 0)}
-          </div>
+          {!collapseVentas && (
+            <div className="mt-3 space-y-2">
+              <div className="text-xs text-gray-600">Ventas Cash $</div>
+              <div className="text-2xl font-bold">
+                {money(base?.salesCash ?? 0)}
+              </div>
+              <div className="text-xs text-gray-600 mt-2">Ventas Crédito $</div>
+              <div className="text-2xl font-bold">
+                {money(base?.salesCredit ?? 0)}
+              </div>
+              <div className="text-xs text-gray-600 mt-2">
+                Abonos al periodo $
+              </div>
+              <div className="text-2xl font-bold">
+                {money(base?.abonosPeriodo ?? 0)}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="sm:col-span-2 lg:col-span-3">
@@ -605,57 +662,106 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         <div className="border rounded-2xl p-3 bg-white shadow-sm space-y-2">
           <div className="flex items-center justify-between">
             <div className="text-xs text-gray-600">Saldo final (corriente)</div>
-            <div className="text-lg font-bold">{money(saldoFinal)}</div>
+            <div className="flex items-center gap-3">
+              <div className="text-lg font-bold">{money(saldoFinal)}</div>
+              <button
+                type="button"
+                onClick={toggleAllKpis}
+                className={`text-xs px-2 py-1 border rounded ${allCollapsed ? "bg-blue-600 text-white" : "bg-red-600 text-white"} hover:opacity-90`}
+              >
+                {allCollapsed ? "Ver Indicadores" : "Colapsar todo"}
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Saldo Inicial</div>
-              <div className="font-semibold">{money(saldoBase)}</div>
+            {/* Mobile: Libras (collapsible) */}
+            <div className="border rounded p-2 bg-gray-50 col-span-2">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-gray-600">Libras</div>
+              </div>
+              {!collapseLibras && (
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Lbs Cash</div>
+                    <div className="font-semibold">
+                      {qty3(base?.lbsCash ?? 0)}
+                    </div>
+                  </div>
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Lbs Crédito</div>
+                    <div className="font-semibold">
+                      {qty3(base?.lbsCredit ?? 0)}
+                    </div>
+                  </div>
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Total Lbs</div>
+                    <div className="font-semibold">
+                      {qty3((base?.lbsCash ?? 0) + (base?.lbsCredit ?? 0))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Entradas manuales</div>
-              <div className="font-semibold">{money(displayTotals.inSum)}</div>
-            </div>
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Reabastecimiento</div>
-              <div className="font-semibold">
-                {money(displayTotals.reabastecimientoSum || 0)}
+            {/* Mobile: Unidades (collapsible) */}
+            <div className="border rounded p-2 bg-gray-50 col-span-2">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-gray-600">Unidades</div>
               </div>
-            </div>
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Abono a Dueño</div>
-              <div className="font-semibold">
-                {money(displayTotals.abonoDueno)}
-              </div>
-            </div>
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Deuda a Dueño</div>
-              <div className="font-semibold">{money(deudaDueno)}</div>
-            </div>
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Gastos del periodo</div>
-              <div className="font-semibold">
-                {money(displayTotals.gastosSum)}
-              </div>
-            </div>
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Salidas manuales</div>
-              <div className="font-semibold">
-                {money(displayTotals.outSumNonGastos)}
-              </div>
+              {!collapseUnidades && (
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Unid Cash</div>
+                    <div className="font-semibold">
+                      {qty3(base?.unitsCash ?? 0)}
+                    </div>
+                  </div>
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Unid Crédito</div>
+                    <div className="font-semibold">
+                      {qty3(base?.unitsCredit ?? 0)}
+                    </div>
+                  </div>
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Total Unid</div>
+                    <div className="font-semibold">
+                      {qty3((base?.unitsCash ?? 0) + (base?.unitsCredit ?? 0))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Ventas Cash</div>
-              <div className="font-semibold">{money(base?.salesCash ?? 0)}</div>
-            </div>
-            <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Abonos al periodo $</div>
-              <div className="font-semibold">
-                {money(base?.abonosPeriodo ?? 0)}
+            {/* Mobile: Ventas / Abonos (collapsible) */}
+            <div className="border rounded p-2 bg-gray-50 col-span-2">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-gray-600">Ventas / Abonos</div>
               </div>
+              {!collapseVentas && (
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Ventas Cash</div>
+                    <div className="font-semibold">
+                      {money(base?.salesCash ?? 0)}
+                    </div>
+                  </div>
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">Ventas Crédito</div>
+                    <div className="font-semibold">
+                      {money(base?.salesCredit ?? 0)}
+                    </div>
+                  </div>
+                  <div className="border rounded p-2 bg-gray-50">
+                    <div className="text-xs text-gray-600">
+                      Abonos al periodo
+                    </div>
+                    <div className="font-semibold">
+                      {money(base?.abonosPeriodo ?? 0)}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -797,26 +903,22 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     }
                   }}
                   placeholder="0.00"
-                  disabled={
-                    [
-                      "GASTO",
-                      "REABASTECIMIENTO",
-                      "RETIRO",
-                      "DEPOSITO",
-                      "PERDIDA",
-                      "DEVOLUCION A DUENO POR PRESTAMO",
-                    ].includes(String(type))
-                  }
-                  aria-disabled={
-                    [
-                      "GASTO",
-                      "REABASTECIMIENTO",
-                      "RETIRO",
-                      "DEPOSITO",
-                      "PERDIDA",
-                      "DEVOLUCION A DUENO POR PRESTAMO",
-                    ].includes(String(type))
-                  }
+                  disabled={[
+                    "GASTO",
+                    "REABASTECIMIENTO",
+                    "RETIRO",
+                    "DEPOSITO",
+                    "PERDIDA",
+                    "DEVOLUCION A DUENO POR PRESTAMO",
+                  ].includes(String(type))}
+                  aria-disabled={[
+                    "GASTO",
+                    "REABASTECIMIENTO",
+                    "RETIRO",
+                    "DEPOSITO",
+                    "PERDIDA",
+                    "DEVOLUCION A DUENO POR PRESTAMO",
+                  ].includes(String(type))}
                 />
               </div>
 
@@ -841,8 +943,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     }
                   }}
                   placeholder="0.00"
-                  disabled={['PRESTAMO A NEGOCIO POR DUENO'].includes(String(type))}
-                  aria-disabled={['PRESTAMO A NEGOCIO POR DUENO'].includes(String(type))}
+                  disabled={["PRESTAMO A NEGOCIO POR DUENO"].includes(
+                    String(type),
+                  )}
+                  aria-disabled={["PRESTAMO A NEGOCIO POR DUENO"].includes(
+                    String(type),
+                  )}
                 />
               </div>
 
