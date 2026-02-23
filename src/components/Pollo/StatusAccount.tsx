@@ -76,6 +76,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const [actionOpenId, setActionOpenId] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement | null>(null);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
+  const [movementTypeFilter, setMovementTypeFilter] = useState<string>("ALL");
 
   // 1) cargar KPIs base (ventas + abonos)
   useEffect(() => {
@@ -171,9 +172,82 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
   const totals = useMemo(() => {
     const inSum = ledger.reduce((a, r) => a + Number(r.inAmount || 0), 0);
-    const outSum = ledger.reduce((a, r) => a + Number(r.outAmount || 0), 0);
-    return { inSum, outSum };
+
+    // gastos: sum of outAmount for rows marked as GASTO (includes expenses collection items)
+    const gastosSum = ledger.reduce((a, r) => {
+      return r.type === "GASTO" ? a + Number(r.outAmount || 0) : a;
+    }, 0);
+
+    // salidas manuales: exclude GASTO and DEVOLUCION A DUENO POR PRESTAMO
+    // (DEVOLUCIONs are reported in 'Abono a Dueño')
+    const outSumNonGastos = ledger.reduce((a, r) => {
+      return r.type === "GASTO" || r.type === "DEVOLUCION A DUENO POR PRESTAMO"
+        ? a
+        : a + Number(r.outAmount || 0);
+    }, 0);
+
+    // Abono a Dueño: sum of outAmount for DEVOLUCION A DUENO POR PRESTAMO
+    const abonoDueno = ledger.reduce((a, r) => {
+      return r.type === "DEVOLUCION A DUENO POR PRESTAMO"
+        ? a + Number(r.outAmount || 0)
+        : a;
+    }, 0);
+
+    // Reabastecimiento: sum of outAmount for REABASTECIMIENTO movements
+    const reabastecimientoSum = ledger.reduce((a, r) => {
+      return r.type === "REABASTECIMIENTO" ? a + Number(r.outAmount || 0) : a;
+    }, 0);
+
+    return { inSum, outSumNonGastos, gastosSum, abonoDueno, reabastecimientoSum };
   }, [ledger]);
+
+  // Movement types available for filter (derived from loaded ledger)
+  const movementTypes = useMemo(() => {
+    const s = new Set<string>();
+    s.add("ALL");
+    for (const r of ledger) {
+      if (r && r.type) s.add(String(r.type));
+    }
+    return Array.from(s);
+  }, [ledger]);
+
+  // Filtered ledger used for display (does not affect KPI totals)
+  const filteredLedgerWithBalance = useMemo(() => {
+    if (!movementTypeFilter || movementTypeFilter === "ALL")
+      return ledgerWithBalance;
+    return (ledgerWithBalance || []).filter(
+      (r: any) => String(r.type || "") === movementTypeFilter,
+    );
+  }, [ledgerWithBalance, movementTypeFilter]);
+
+  // Display totals depend on the selected movement type filter; when ALL, use global totals
+  const displayTotals = useMemo(() => {
+    if (!movementTypeFilter || movementTypeFilter === "ALL") return totals;
+    const rows = (ledger || []).filter(
+      (r) => String(r.type || "") === movementTypeFilter,
+    );
+    const inSum = rows.reduce((a, r) => a + Number(r.inAmount || 0), 0);
+    const gastosSum = rows.reduce(
+      (a, r) => (r.type === "GASTO" ? a + Number(r.outAmount || 0) : a),
+      0,
+    );
+    const outSumNonGastos = rows.reduce(
+      (a, r) =>
+        r.type === "GASTO" || r.type === "DEVOLUCION A DUENO POR PRESTAMO"
+          ? a
+          : a + Number(r.outAmount || 0),
+      0,
+    );
+    const abonoDueno = rows.reduce((a, r) => {
+      return r.type === "DEVOLUCION A DUENO POR PRESTAMO"
+        ? a + Number(r.outAmount || 0)
+        : a;
+    }, 0);
+    const reabastecimientoSum = rows.reduce((a, r) => {
+      return r.type === "REABASTECIMIENTO" ? a + Number(r.outAmount || 0) : a;
+    }, 0);
+    return { inSum, outSumNonGastos, gastosSum, abonoDueno, reabastecimientoSum };
+  }, [ledger, movementTypeFilter, totals]);
 
   // KPI: deuda del negocio con el dueño (prestamo - devolucion)
   const deudaDueno = useMemo(() => {
@@ -249,12 +323,31 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     const inVal = Number(inAmount || 0);
     const outVal = Number(outAmount || 0);
 
+    const onlyOutTypes = [
+      "GASTO",
+      "REABASTECIMIENTO",
+      "RETIRO",
+      "DEPOSITO",
+      "PERDIDA",
+      "DEVOLUCION A DUENO POR PRESTAMO",
+    ];
+    const onlyInTypes = ["PRESTAMO A NEGOCIO POR DUENO"];
+    const isOnlyOut = onlyOutTypes.includes(String(type));
+    const isOnlyIn = onlyInTypes.includes(String(type));
+
     if (!date) return window.alert("Poné una fecha.");
     if (!description.trim()) return window.alert("Poné una descripción.");
-    if (inVal <= 0 && outVal <= 0)
-      return window.alert("Poné una entrada o una salida.");
-    if (inVal > 0 && outVal > 0)
-      return window.alert("Usá solo entrada o salida, no ambos.");
+
+    if (isOnlyIn) {
+      if (inVal <= 0) return window.alert("Poné una entrada para este tipo.");
+    } else if (isOnlyOut) {
+      if (outVal <= 0) return window.alert("Poné una salida para este tipo.");
+    } else {
+      if (inVal <= 0 && outVal <= 0)
+        return window.alert("Poné una entrada o una salida.");
+      if (inVal > 0 && outVal > 0)
+        return window.alert("Usá solo entrada o salida, no ambos.");
+    }
 
     const user = auth.currentUser;
 
@@ -294,6 +387,28 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     setModalOpen(false);
     setEditingId(null);
   };
+
+  // When the selected type changes, clear the input that should be disabled
+  useEffect(() => {
+    const onlyOutTypes = [
+      "GASTO",
+      "REABASTECIMIENTO",
+      "RETIRO",
+      "DEPOSITO",
+      "PERDIDA",
+      "DEVOLUCION A DUENO POR PRESTAMO",
+    ];
+    const onlyInTypes = ["PRESTAMO A NEGOCIO POR DUENO"];
+    const isOnlyOut = onlyOutTypes.includes(String(type));
+    const isOnlyIn = onlyInTypes.includes(String(type));
+
+    if (isOnlyOut) {
+      setInAmount("");
+    }
+    if (isOnlyIn) {
+      setOutAmount("");
+    }
+  }, [type]);
 
   // close modal/menu on outside click or Escape
   useEffect(() => {
@@ -424,24 +539,55 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           </div>
         </div>
 
-        <div className="border rounded-2xl p-3 bg-green-50">
-          <div className="text-xs text-gray-600">Entradas manuales</div>
-          <div className="text-2xl font-bold">{money(totals.inSum)}</div>
-        </div>
-        <div className="border rounded-2xl p-3 bg-red-50">
-          <div className="text-xs text-gray-600">Salidas manuales</div>
-          <div className="text-2xl font-bold">{money(totals.outSum)}</div>
-        </div>
-        <div className="border rounded-2xl p-3 bg-amber-50">
-          <div className="text-xs text-gray-600">Deuda a Dueño</div>
-          <div className="text-2xl font-bold">{money(deudaDueno)}</div>
-        </div>
-
         <div className="sm:col-span-2 lg:col-span-3">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="border rounded-2xl p-3 bg-green-50">
+              <div className="text-xs text-gray-600">Prestamos a negocio</div>
+              <div className="text-2xl font-bold">
+                {money(displayTotals.inSum)}
+              </div>
+            </div>
+
+            <div className="border rounded-2xl p-3 bg-emerald-50">
+              <div className="text-xs text-gray-600">Abonos a Prestamos</div>
+              <div className="text-2xl font-bold">
+                {money(displayTotals.abonoDueno)}
+              </div>
+            </div>
+
+            <div className="border rounded-2xl p-3 bg-amber-50">
+              <div className="text-xs text-gray-600">Deuda a Prestamos</div>
+              <div className="text-2xl font-bold">{money(deudaDueno)}</div>
+            </div>
+
+            <div className="border rounded-2xl p-3 bg-red-50">
+              <div className="text-xs text-gray-600">Gastos del periodo</div>
+              <div className="text-2xl font-bold">
+                {money(displayTotals.gastosSum)}
+              </div>
+            </div>
+
+            <div className="border rounded-2xl p-3 bg-red-50">
+              <div className="text-xs text-gray-600">
+                Salidas (Retiros, Depositos, Perdidas)
+              </div>
+              <div className="text-2xl font-bold">
+                {money(displayTotals.outSumNonGastos)}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="border rounded-2xl p-3 bg-blue-50">
+              <div className="text-xs text-gray-600">Reabastecimiento</div>
+              <div className="text-2xl font-bold">
+                {money(displayTotals.reabastecimientoSum || 0)}
+              </div>
+            </div>
+
             <div className="border rounded-2xl p-3 bg-indigo-50">
               <div className="text-xs text-gray-600">
-                Saldo base (Ventas Cash + Abonos)
+                Saldo Inicial (Ventas Cash + Abonos)
               </div>
               <div className="text-2xl font-bold">{money(saldoBase)}</div>
             </div>
@@ -464,21 +610,41 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
           <div className="grid grid-cols-2 gap-2">
             <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Saldo base</div>
+              <div className="text-xs text-gray-600">Saldo Inicial</div>
               <div className="font-semibold">{money(saldoBase)}</div>
             </div>
 
             <div className="border rounded p-2 bg-gray-50">
               <div className="text-xs text-gray-600">Entradas manuales</div>
-              <div className="font-semibold">{money(totals.inSum)}</div>
+              <div className="font-semibold">{money(displayTotals.inSum)}</div>
             </div>
             <div className="border rounded p-2 bg-gray-50">
-              <div className="text-xs text-gray-600">Salidas manuales</div>
-              <div className="font-semibold">{money(totals.outSum)}</div>
+              <div className="text-xs text-gray-600">Reabastecimiento</div>
+              <div className="font-semibold">
+                {money(displayTotals.reabastecimientoSum || 0)}
+              </div>
+            </div>
+            <div className="border rounded p-2 bg-gray-50">
+              <div className="text-xs text-gray-600">Abono a Dueño</div>
+              <div className="font-semibold">
+                {money(displayTotals.abonoDueno)}
+              </div>
             </div>
             <div className="border rounded p-2 bg-gray-50">
               <div className="text-xs text-gray-600">Deuda a Dueño</div>
               <div className="font-semibold">{money(deudaDueno)}</div>
+            </div>
+            <div className="border rounded p-2 bg-gray-50">
+              <div className="text-xs text-gray-600">Gastos del periodo</div>
+              <div className="font-semibold">
+                {money(displayTotals.gastosSum)}
+              </div>
+            </div>
+            <div className="border rounded p-2 bg-gray-50">
+              <div className="text-xs text-gray-600">Salidas manuales</div>
+              <div className="font-semibold">
+                {money(displayTotals.outSumNonGastos)}
+              </div>
             </div>
 
             <div className="border rounded p-2 bg-gray-50">
@@ -496,7 +662,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       </div>
 
       {/* Formulario dentro de modal: botón disparador */}
-      <div className="mb-4">
+      <div className="mb-4 flex items-center gap-3">
         <button
           type="button"
           onClick={() => setModalOpen(true)}
@@ -504,6 +670,21 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         >
           Agregar movimiento
         </button>
+
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-700">Tipo:</label>
+          <select
+            className="border rounded px-2 py-2 text-sm"
+            value={movementTypeFilter}
+            onChange={(e) => setMovementTypeFilter(e.target.value)}
+          >
+            {movementTypes.map((t) => (
+              <option key={t} value={t}>
+                {t === "ALL" ? "Todos" : t}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {modalOpen && (
@@ -602,7 +783,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                   type="text"
                   inputMode="decimal"
                   pattern="^\\d*(\\.\\d{0,2})?$"
-                  className="border rounded px-3 py-2 w-full"
+                  className={`border rounded px-3 py-2 w-full`}
                   value={inAmount}
                   onChange={(e) => {
                     let val = e.target.value.replace(/,/g, ".");
@@ -616,6 +797,26 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     }
                   }}
                   placeholder="0.00"
+                  disabled={
+                    [
+                      "GASTO",
+                      "REABASTECIMIENTO",
+                      "RETIRO",
+                      "DEPOSITO",
+                      "PERDIDA",
+                      "DEVOLUCION A DUENO POR PRESTAMO",
+                    ].includes(String(type))
+                  }
+                  aria-disabled={
+                    [
+                      "GASTO",
+                      "REABASTECIMIENTO",
+                      "RETIRO",
+                      "DEPOSITO",
+                      "PERDIDA",
+                      "DEVOLUCION A DUENO POR PRESTAMO",
+                    ].includes(String(type))
+                  }
                 />
               </div>
 
@@ -627,7 +828,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                   type="text"
                   inputMode="decimal"
                   pattern="^\\d*(\\.\\d{0,2})?$"
-                  className="border rounded px-3 py-2 w-full"
+                  className={`border rounded px-3 py-2 w-full`}
                   value={outAmount}
                   onChange={(e) => {
                     let val = e.target.value.replace(/,/g, ".");
@@ -640,6 +841,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     }
                   }}
                   placeholder="0.00"
+                  disabled={['PRESTAMO A NEGOCIO POR DUENO'].includes(String(type))}
+                  aria-disabled={['PRESTAMO A NEGOCIO POR DUENO'].includes(String(type))}
                 />
               </div>
 
@@ -685,7 +888,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <td className="border p-1">
                 {from} → {to}
               </td>
-              <td className="border p-1">SALDO_BASE</td>
+              <td className="border p-1">SALDO_INICIAL</td>
               <td className="border p-1 text-left">
                 Ventas Cash + Abonos del periodo
               </td>
@@ -696,16 +899,21 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <td className="border p-1">—</td>
             </tr>
 
-            {ledgerWithBalance.map((r: any) => (
+            {filteredLedgerWithBalance.map((r: any) => (
               <tr key={r.id} className="text-center">
                 <td className="border p-1">{r.date}</td>
                 <td className="border p-1">
-                  <div className="flex items-center justify-center gap-2">
-                    <span>{r.type}</span>
-                    {affectsOwnerDebt(r.type as LedgerType) && (
-                      <span className="text-[11px] px-2 py-[2px] rounded-full bg-amber-100 text-amber-800 border border-amber-200">
-                        Afecta deuda dueño
+                  <div className="flex items-center justify-center gap-2 whitespace-nowrap">
+                    {r.type === "PRESTAMO A NEGOCIO POR DUENO" ? (
+                      <span className="text-[11px] px-2 py-[2px] rounded-full bg-red-100 text-red-800 border border-red-200 whitespace-nowrap">
+                        PRESTAMO
                       </span>
+                    ) : r.type === "DEVOLUCION A DUENO POR PRESTAMO" ? (
+                      <span className="text-[11px] px-2 py-[2px] rounded-full bg-green-100 text-green-800 border border-green-200 whitespace-nowrap">
+                        PAGO A PRESTAMO
+                      </span>
+                    ) : (
+                      <span className="truncate">{r.type}</span>
                     )}
                   </div>
                 </td>
@@ -795,7 +1003,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               </tr>
             ))}
 
-            {ledgerWithBalance.length === 0 && (
+            {filteredLedgerWithBalance.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-3 text-center text-gray-500">
                   No hay movimientos manuales en este rango.
@@ -808,12 +1016,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
       {/* Mobile: ledger as cards */}
       <div className="md:hidden space-y-3">
-        {ledgerWithBalance.length === 0 ? (
+        {filteredLedgerWithBalance.length === 0 ? (
           <div className="text-center text-gray-500 text-sm py-6">
             Sin movimientos manuales en este rango.
           </div>
         ) : (
-          ledgerWithBalance.map((r: any) => (
+          filteredLedgerWithBalance.map((r: any) => (
             <div
               key={r.id}
               className="border rounded-xl p-3 bg-white shadow-sm"
@@ -821,15 +1029,28 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <div className="flex justify-between items-start">
                 <div>
                   <div className="text-sm font-semibold">{r.description}</div>
-                  <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
-                    <span>
-                      {r.date} • {r.type}
+                  <div className="text-xs text-gray-500 flex items-center gap-2 whitespace-nowrap">
+                    <span className="truncate">
+                      {r.date} •
+                      {r.type === "PRESTAMO A NEGOCIO POR DUENO" ? (
+                        <span className="text-[11px] px-2 py-[2px] rounded-full bg-red-100 text-red-800 border border-red-200 whitespace-nowrap">
+                          PRESTAMO
+                        </span>
+                      ) : r.type === "DEVOLUCION A DUENO POR PRESTAMO" ? (
+                        <span className="text-[11px] px-2 py-[2px] rounded-full bg-green-100 text-green-800 border border-green-200 whitespace-nowrap">
+                          PAGO A PRESTAMO
+                        </span>
+                      ) : (
+                        <span className="truncate">{r.type}</span>
+                      )}
                     </span>
-                    {affectsOwnerDebt(r.type as LedgerType) && (
-                      <span className="text-[11px] px-2 py-[2px] rounded-full bg-amber-100 text-amber-800 border border-amber-200">
-                        Afecta deuda dueño
-                      </span>
-                    )}
+                    {affectsOwnerDebt(r.type as LedgerType) &&
+                      r.type !== "PRESTAMO A NEGOCIO POR DUENO" &&
+                      r.type !== "DEVOLUCION A DUENO POR PRESTAMO" && (
+                        <span className="text-[11px] px-2 py-[2px] rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                          Afecta deuda dueño
+                        </span>
+                      )}
                   </div>
                 </div>
                 <div className="text-right">
