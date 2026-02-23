@@ -1072,7 +1072,7 @@ export default function EvolutivoInventarioPollo({
 
       {/* listado evolutivo */}
       {/* Desktop table (hidden on mobile) */}
-      <div className="hidden sm:overflow-x-auto">
+      <div className="hidden sm:block sm:overflow-x-auto">
         <table className="min-w-full border text-sm">
           <thead className="bg-gray-100">
             <tr>
