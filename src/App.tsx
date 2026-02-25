@@ -64,6 +64,7 @@ import ReporteCierres from "./components/Candies/ReporteCierres";
 import DataCenterCandies from "./components/Candies/DataCenter";
 import EntregasCash from "./components/Candies/EntregasCash";
 import PreciosVenta from "./components/Candies/PreciosVenta";
+import EstadoCuentaCandies from "./components/Candies/EstadoCuentaCandies";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
 
@@ -436,6 +437,19 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
                 <BillingCandies />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="estadoCuentaCandies"
+            element={
+              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+                <EstadoCuentaCandies
+                  role={role}
+                  roles={roles}
+                  currentUserEmail={currentUserEmail}
+                  sellerCandyId={sellerCandyId}
+                />
               </PrivateRoute>
             }
           />

@@ -57,7 +57,8 @@ export default function MobileTabsLayout({
     canPath(subject, "customersCandies", "view") ||
     canPath(subject, "productsPricesCandies", "view") ||
     canPath(subject, "transactionCandies", "view") ||
-    canPath(subject, "cierreVentasCandies", "view");
+    canPath(subject, "cierreVentasCandies", "view") ||
+    canPath(subject, "estadoCuentaCandies", "view");
 
   // Mostrar selector cuando el usuario tenga acceso a ambos rubros
   const hasBoth = hasPollo && hasDulces;
@@ -102,7 +103,7 @@ export default function MobileTabsLayout({
             {
               key: "statusAccount",
               label: "Estado de Cuenta",
-              to: `${base}/statusAccount`, 
+              to: `${base}/statusAccount`,
             },
             {
               key: "statusInventory",
@@ -263,6 +264,11 @@ export default function MobileTabsLayout({
               to: `${base}/productsPricesCandies`,
             },
             {
+              key: "estadoCuenta",
+              label: "Estado Cuenta",
+              to: `${base}/estadoCuentaCandies`,
+            },
+            {
               key: "gonper",
               label: "Productos Gonper",
               to: `${base}/notebooksInventory`,
@@ -285,6 +291,11 @@ export default function MobileTabsLayout({
               key: "cli",
               label: "Saldos Pendientes",
               to: `${base}/customersCandies`,
+            },
+            {
+              key: "estadoCuenta",
+              label: "Estado Cuenta",
+              to: `${base}/estadoCuentaCandies`,
             },
             { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
             { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
@@ -409,6 +420,7 @@ export default function MobileTabsLayout({
       "transactionCandies",
       "cierreVentasCandies",
       "customersCandies",
+      "estadoCuentaCandies",
     ]);
 
     const filtered = built.filter((t) => {

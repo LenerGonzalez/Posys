@@ -21,7 +21,7 @@ export type PathKey =
   | "salesV2"
   | "financialDashboard"
   | "polloCashAudits"
-  | "billing" 
+  | "billing"
   | "statusAccount"
   | "statusInventory"
   | "salesCandies"
@@ -29,7 +29,8 @@ export type PathKey =
   | "productsPricesCandies"
   | "transactionCandies"
   | "cierreVentasCandies"
-  | "customersCandies";
+  | "customersCandies"
+  | "estadoCuentaCandies";
 
 type Permission = Partial<Record<Action, boolean>>;
 
@@ -60,6 +61,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     financialDashboard: { view: true, edit: false },
     statusAccount: { view: true, edit: true },
     statusInventory: { view: true, edit: true },
+    estadoCuentaCandies: { view: true, edit: true },
   },
 
   vendedor_pollo: {
@@ -78,6 +80,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     transactionCandies: { view: true, edit: false },
     cierreVentasCandies: { view: true, edit: false },
     customersCandies: { view: true, edit: true },
+    estadoCuentaCandies: { view: true, edit: false },
   },
 
   vendedor_ropa: {},
@@ -118,7 +121,7 @@ const FINE_PERMISSIONS: Record<Role, Partial<Record<PathKey, FinePerm>>> = {
     bills: { cerrarVentas: false },
     batches: { create: false, update: false, delete: false, export: false },
     statusAccount: { update: false },
-    statusInventory: { update: false},
+    statusInventory: { update: false },
   },
 
   contador: {

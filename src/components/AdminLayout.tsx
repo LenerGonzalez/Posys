@@ -140,7 +140,8 @@ export default function AdminLayout({
     canPath(subject, "customersCandies", "view") ||
     canPath(subject, "productsPricesCandies", "view") ||
     canPath(subject, "transactionCandies", "view") ||
-    canPath(subject, "cierreVentasCandies", "view");
+    canPath(subject, "cierreVentasCandies", "view") ||
+    canPath(subject, "estadoCuentaCandies", "view");
 
   return (
     <div className="min-h-screen flex">
@@ -528,6 +529,16 @@ export default function AdminLayout({
                         {openDulcesFin && (
                           <div className="ml-4 mt-1 space-y-1">
                             <NavLink
+                              to={`${base}/estadoCuentaCandies`}
+                              className={linkCls}
+                            >
+                              Estado de Cuenta
+                            </NavLink>
+                          </div>
+                        )}
+                        {openDulcesFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
                               to={`${base}/vendorsCandies`}
                               className={linkCls}
                             >
@@ -735,6 +746,17 @@ export default function AdminLayout({
                         className={linkCls}
                       >
                         Clientes
+                      </NavLink>
+                    )}
+                  </div>
+
+                  <div className="ml-4 mt-1 space-y-1">
+                    {canPath(subject, "estadoCuentaCandies") && (
+                      <NavLink
+                        to={`${base}/estadoCuentaCandies`}
+                        className={linkCls}
+                      >
+                        Estado de Cuenta
                       </NavLink>
                     )}
                   </div>
