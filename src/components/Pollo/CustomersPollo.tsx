@@ -1978,8 +1978,8 @@ export default function CustomersPollo({
                   </div>
                 </div>
 
-                {/* Tabla */}
-                <div className="bg-white rounded border overflow-x-auto">
+                {/* Tabla (desktop) + Tarjetas (móvil) */}
+                <div className="hidden md:block bg-white rounded border overflow-x-auto">
                   <table className="min-w-full text-sm">
                     <thead className="bg-gray-100">
                       <tr>
@@ -2051,10 +2051,6 @@ export default function CustomersPollo({
                                   </span>
                                 )}
                               </td>
-
-                              {/* <td className="p-2 border">
-                                {m.ref?.saleId ? `Venta #${m.ref.saleId}` : "—"}
-                              </td> */}
 
                               <td className="p-2 border">
                                 {m.type === "CARGO" ? (
@@ -2163,6 +2159,139 @@ export default function CustomersPollo({
                     </tbody>
                   </table>
                 </div>
+
+                {/* Mobile: cards */}
+                <div className="md:hidden space-y-3">
+                  {stLoading ? (
+                    <div className="p-4 text-center text-sm">Cargando…</div>
+                  ) : stRows.length === 0 ? (
+                    <div className="p-4 text-center text-sm">
+                      Sin movimientos
+                    </div>
+                  ) : (
+                    stRows.map((m) => {
+                      const isEditing = editMovId === m.id;
+                      const normalizedDebt = normalizeDebtStatus(m.debtStatus);
+                      return (
+                        <div
+                          key={m.id}
+                          className="bg-white border rounded-lg p-3 shadow-sm"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-sm font-semibold">
+                                {m.date || "—"}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                {m.amount >= 0 ? (
+                                  m.ref?.saleId ? (
+                                    <button
+                                      type="button"
+                                      className="text-xs text-yellow-700 underline"
+                                      onClick={() =>
+                                        openItemsModal(m.ref!.saleId!)
+                                      }
+                                    >
+                                      Compra — ver detalle
+                                    </button>
+                                  ) : (
+                                    <span className="text-xs text-yellow-700">
+                                      Compra
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="text-xs text-green-700">
+                                    Abono
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="text-right">
+                              <div className="text-sm font-semibold">
+                                {money(m.amount)}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                {m.type === "CARGO" ? (
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                                  >
+                                    {normalizedDebt === "PAGADA"
+                                      ? "Pagada"
+                                      : "Pendiente"}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs">—</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 text-sm text-gray-700">
+                            {isEditing ? (
+                              <input
+                                className="w-full border p-2 rounded"
+                                value={eMovComment}
+                                onChange={(e) => setEMovComment(e.target.value)}
+                              />
+                            ) : (
+                              <div className="text-sm">
+                                {(m.comment || "").length > 120
+                                  ? (m.comment || "").slice(0, 120) + "…"
+                                  : m.comment || "—"}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex gap-2 flex-wrap justify-end">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  className="px-3 py-1 rounded bg-blue-600 text-white"
+                                  onClick={saveEditMovement}
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  className="px-3 py-1 rounded bg-gray-200"
+                                  onClick={cancelEditMovement}
+                                >
+                                  Cancelar
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className="px-3 py-1 rounded bg-yellow-600 text-white text-sm"
+                                  onClick={() => startEditMovement(m)}
+                                >
+                                  Editar
+                                </button>
+                                {m.type === "CARGO" && (
+                                  <button
+                                    className={`px-3 py-1 rounded text-sm text-white ${normalizedDebt === "PAGADA" ? "bg-gray-600" : "bg-emerald-600"}`}
+                                    onClick={() => toggleDebtStatus(m)}
+                                    disabled={updatingDebtStatusId === m.id}
+                                  >
+                                    {normalizedDebt === "PAGADA"
+                                      ? "Marcar pendiente"
+                                      : "Marcar pagada"}
+                                  </button>
+                                )}
+                                <button
+                                  className="px-3 py-1 rounded bg-red-600 text-white text-sm"
+                                  onClick={() => deleteMovement(m)}
+                                >
+                                  Borrar
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             </div>
 
@@ -2185,7 +2314,8 @@ export default function CustomersPollo({
                       Cerrar
                     </button>
                   </div>
-                  <div className="bg-white rounded border overflow-x-auto">
+                  {/* Desktop table */}
+                  <div className="hidden md:block bg-white rounded border overflow-x-auto">
                     <table className="min-w-full text-sm">
                       <thead className="bg-gray-100">
                         <tr>
@@ -2224,7 +2354,7 @@ export default function CustomersPollo({
                               <td className="p-2 border text-right">
                                 {money(it.discount || 0)}
                               </td>
-                              <td className="p-2 border text-right">
+                              <td className="p-2 border text-right font-semibold">
                                 {money(it.total)}
                               </td>
                             </tr>
@@ -2232,6 +2362,51 @@ export default function CustomersPollo({
                         )}
                       </tbody>
                     </table>
+                  </div>
+
+                  {/* Mobile: cards */}
+                  <div className="md:hidden space-y-3">
+                    {itemsModalLoading ? (
+                      <div className="p-4 text-center text-sm">Cargando…</div>
+                    ) : itemsModalRows.length === 0 ? (
+                      <div className="p-4 text-center text-sm">
+                        Sin ítems en esta venta.
+                      </div>
+                    ) : (
+                      itemsModalRows.map((it, idx) => (
+                        <div
+                          key={idx}
+                          className="bg-white border rounded-lg p-3 shadow-sm"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="text-sm font-medium">
+                              {it.productName}
+                            </div>
+                            <div className="text-sm font-semibold">
+                              {money(it.total)}
+                            </div>
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-600">
+                            <div>
+                              <div className="text-[11px]">Cantidad</div>
+                              <div className="font-medium">{it.qty}</div>
+                            </div>
+                            <div>
+                              <div className="text-[11px]">Precio</div>
+                              <div className="font-medium">
+                                {money(it.unitPrice)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[11px]">Descuento</div>
+                              <div className="font-medium">
+                                {it.discount ? money(it.discount) : "—"}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               </div>

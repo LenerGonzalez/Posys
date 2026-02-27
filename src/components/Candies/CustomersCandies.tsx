@@ -2509,7 +2509,8 @@ export default function CustomersCandy({
               </button>
             </div>
 
-            <div className="bg-white rounded border overflow-x-auto">
+            {/* Desktop table */}
+            <div className="hidden md:block bg-white rounded border overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-gray-100">
                   <tr>
@@ -2546,7 +2547,7 @@ export default function CustomersCandy({
                         <td className="p-2 border text-right">
                           {money(it.discount || 0)}
                         </td>
-                        <td className="p-2 border text-right">
+                        <td className="p-2 border text-right font-semibold">
                           {money(it.total)}
                         </td>
                       </tr>
@@ -2554,6 +2555,49 @@ export default function CustomersCandy({
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile: product cards */}
+            <div className="md:hidden space-y-3">
+              {itemsModalLoading ? (
+                <div className="p-4 text-center text-sm">Cargando…</div>
+              ) : itemsModalRows.length === 0 ? (
+                <div className="p-4 text-center text-sm">
+                  Sin ítems en esta venta.
+                </div>
+              ) : (
+                itemsModalRows.map((it, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white border rounded-lg p-3 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="text-sm font-medium">
+                        {it.productName}
+                      </div>
+                      <div className="text-sm font-semibold">
+                        {money(it.total)}
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-600">
+                      <div>
+                        <div className="text-[11px]">Cantidad</div>
+                        <div className="font-medium">{it.qty}</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]">Precio</div>
+                        <div className="font-medium">{money(it.unitPrice)}</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]">Descuento</div>
+                        <div className="font-medium">
+                          {it.discount ? money(it.discount) : "—"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

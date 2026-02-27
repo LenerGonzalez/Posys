@@ -6,6 +6,7 @@ import {
   getDocs,
   orderBy,
   query,
+  where,
   updateDoc,
   deleteDoc,
   doc,
@@ -21,6 +22,7 @@ import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -172,7 +174,6 @@ export default function InventoryBatches({
   // confirmar pago
   const [showPayDialog, setShowPayDialog] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<GroupRow | null>(null);
-
   // acordeón móvil: id del grupo expandido (null = ninguno)
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const toggleGroupExpand = (groupId: string) =>
@@ -311,6 +312,15 @@ export default function InventoryBatches({
       0,
     );
 
+    const totalExistenciasMonetarias = Number(
+      filteredBatches
+        .reduce(
+          (acc, b) => acc + Number(b.remaining || 0) * Number(b.salePrice || 0),
+          0,
+        )
+        .toFixed(2),
+    );
+
     let lbsIng = 0,
       lbsRem = 0,
       udsIng = 0,
@@ -338,8 +348,168 @@ export default function InventoryBatches({
       rem,
       totalFacturado,
       totalEsperado,
+      totalExistenciasMonetarias,
     };
   }, [filteredBatches]);
+
+  const [ventasRealizadas, setVentasRealizadas] = useState<number>(0);
+  const [ventasCount, setVentasCount] = useState<number>(0);
+  const [abonosFecha, setAbonosFecha] = useState<number>(0);
+  const [cuentasPorCobrar, setCuentasPorCobrar] = useState<number>(0);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setVentasRealizadas(0);
+        setAbonosFecha(0);
+
+        if (!fromDate || !toDate) return;
+
+        // 1) Ventas (salesV2) en rango — expand items into rows like FinancialDashboard
+        const qs = query(
+          collection(db, "salesV2"),
+          // date is stored as yyyy-MM-dd
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          where("date", ">=", fromDate),
+          // @ts-ignore
+          where("date", "<=", toDate),
+        );
+        const sSnap = await getDocs(qs);
+        const sRows: Array<any> = [];
+        sSnap.forEach((d) => {
+          const x = d.data() as any;
+          const baseDate = x.date ?? "";
+
+          // If sale has items[], create ONE row per item
+          if (Array.isArray(x.items) && x.items.length > 0) {
+            x.items.forEach((it: any, idx: number) => {
+              const prod = String(it.productName ?? "(sin nombre)");
+              const qty = Number(it.qty ?? 0);
+              const lineFinal =
+                Number(it.lineFinal ?? 0) ||
+                Math.max(
+                  0,
+                  Number(it.unitPrice || 0) * qty - Number(it.discount || 0),
+                );
+              sRows.push({
+                id: `${d.id}#${idx}`,
+                date: baseDate,
+                productName: prod,
+                quantity: qty,
+                amount: lineFinal,
+                allocations: Array.isArray(it.allocations)
+                  ? it.allocations
+                  : x.allocations,
+                avgUnitCost: Number(it.avgUnitCost ?? x.avgUnitCost ?? 0),
+                measurement: it.measurement ?? x.measurement ?? "",
+                type: x.type ?? "CONTADO",
+              });
+            });
+            return;
+          }
+
+          // Fallback to old shape
+          sRows.push({
+            id: d.id,
+            date: baseDate,
+            productName: x.productName ?? "(sin nombre)",
+            quantity: Number(x.quantity ?? 0),
+            amount: Number(x.amount ?? x.amountCharged ?? 0),
+            allocations: Array.isArray(x.allocations) ? x.allocations : [],
+            avgUnitCost: Number(x.avgUnitCost ?? 0),
+            measurement: x.measurement ?? "",
+            type: x.type ?? "CONTADO",
+          });
+        });
+
+        // Sum only cash rows to match FinancialDashboard (type === 'CONTADO')
+        let ventasSum = 0;
+        let ventasDocsCount = 0;
+        sRows.forEach((r) => {
+          if (String(r.type ?? "").toUpperCase() === "CONTADO") {
+            ventasSum += Number(r.amount || 0);
+            // count unique sale ids (by splitting id before #)
+            const saleId = String(r.id || "").split("#")[0];
+            ventasDocsCount = ventasDocsCount || 0; // keep as number
+          }
+        });
+        // For ventasDocsCount, count unique sale ids among cash rows
+        const cashSaleIds = new Set<string>();
+        sRows.forEach((r) => {
+          if (String(r.type ?? "").toUpperCase() === "CONTADO") {
+            const saleId = String(r.id || "").split("#")[0];
+            if (saleId) cashSaleIds.add(saleId);
+          }
+        });
+        ventasDocsCount = cashSaleIds.size;
+
+        // 2) Abonos (ar_movements_pollo) - fetch all and resolve date (like FinancialDashboard)
+        const aSnap = await getDocs(collection(db, "ar_movements_pollo"));
+        let abonosSum = 0;
+        const resolveMovementDate = (m: any) => {
+          if (m?.date) return String(m.date);
+          if (m?.createdAt?.toDate)
+            return format(m.createdAt.toDate(), "yyyy-MM-dd");
+          return "";
+        };
+
+        // accumulate balances and last movement date per customer
+        const balanceByCustomer: Record<string, number> = {};
+        const lastMoveByCustomer: Record<string, string> = {};
+
+        aSnap.forEach((d) => {
+          const m = d.data() as any;
+          const amount = Number(m.amount || 0);
+          const customerId = String(m.customerId ?? "").trim();
+          if (customerId) {
+            balanceByCustomer[customerId] =
+              (balanceByCustomer[customerId] || 0) + amount;
+            const md = resolveMovementDate(m);
+            if (md) {
+              const prev = lastMoveByCustomer[customerId] || "";
+              if (!prev || md > prev) lastMoveByCustomer[customerId] = md;
+            }
+          }
+
+          const type = String(m.type ?? "").toUpperCase();
+          if (type !== "ABONO") return;
+          const moveDate = resolveMovementDate(m);
+          if (!moveDate) return;
+          if (moveDate >= fromDate && moveDate <= toDate) {
+            abonosSum += Math.abs(amount);
+          }
+        });
+
+        // cuentas por cobrar: sum positive balances whose last movement falls in the period
+        let cuentasSum = 0;
+        Object.keys(balanceByCustomer).forEach((cid) => {
+          const bal = Number(balanceByCustomer[cid] || 0);
+          const last = lastMoveByCustomer[cid] || "";
+          if (bal > 0 && last && last >= fromDate && last <= toDate) {
+            cuentasSum += bal;
+          }
+        });
+
+        if (!mounted) return;
+        setVentasRealizadas(Number(ventasSum.toFixed(2)));
+        setVentasCount(ventasDocsCount);
+        setAbonosFecha(Number(abonosSum.toFixed(2)));
+        setCuentasPorCobrar(Number(cuentasSum.toFixed(2)));
+      } catch (e) {
+        console.error("Error cargando ventas/abonos para KPIs:", e);
+        if (mounted) {
+          setVentasRealizadas(0);
+          setAbonosFecha(0);
+          setCuentasPorCobrar(0);
+        }
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [fromDate, toDate, refreshKey]);
 
   // ===== Agrupar en pedidos/lotes =====
   const groupedRows = useMemo<GroupRow[]>(() => {
@@ -902,6 +1072,7 @@ export default function InventoryBatches({
           "Ganancia sin gastos",
           money(totals.totalEsperado - totals.totalFacturado),
         ],
+        ["Existencias monetarias", money(totals.totalExistenciasMonetarias)],
         ["Cantidad de lotes", filteredBatches.length.toString()],
       ],
       styles: { fontSize: 9 },
@@ -998,6 +1169,153 @@ export default function InventoryBatches({
     );
   };
 
+  const handleExportInventoryCsv = () => {
+    try {
+      const headers = [
+        "batchId",
+        "batchGroupId",
+        "orderName",
+        "date",
+        "productId",
+        "productName",
+        "category",
+        "unit",
+        "quantity",
+        "remaining",
+        "purchasePrice",
+        "salePrice",
+        "invoiceTotal",
+        "expectedTotal",
+        "utilidadBruta",
+        "status",
+        "notes",
+        "paidAmount",
+        "paidAt",
+      ];
+
+      const csvEscape = (v: any) => {
+        if (v == null) return "";
+        const s = String(v);
+        return `"${s.replace(/"/g, '""')}"`;
+      };
+
+      const rows = filteredBatches.map((b) => {
+        const paidAtStr = (b as any).paidAt
+          ? typeof (b as any).paidAt?.toDate === "function"
+            ? (b as any).paidAt.toDate().toISOString()
+            : String((b as any).paidAt)
+          : "";
+
+        const utilidad = Number(
+          (Number(b.expectedTotal || 0) - Number(b.invoiceTotal || 0)).toFixed(
+            2,
+          ),
+        );
+
+        return [
+          b.id,
+          b.batchGroupId || "",
+          b.orderName || "",
+          b.date || "",
+          b.productId || "",
+          b.productName || "",
+          b.category || "",
+          b.unit || "",
+          b.quantity ?? "",
+          b.remaining ?? "",
+          b.purchasePrice ?? "",
+          b.salePrice ?? "",
+          b.invoiceTotal ?? "",
+          b.expectedTotal ?? "",
+          utilidad,
+          b.status || "",
+          b.notes || "",
+          b.paidAmount ?? "",
+          paidAtStr,
+        ]
+          .map(csvEscape)
+          .join(",");
+      });
+
+      const csvContent = `\uFEFF${headers.map(csvEscape).join(",")}\r\n${rows.join("\r\n")}`;
+
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const filename = `inventario_pollo_${fromDate || "sin_desde"}_a_${toDate || "sin_hasta"}.csv`;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg(`✅ CSV exportado: ${filename}`);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al exportar CSV");
+    }
+  };
+
+  const handleExportInventoryXlsx = () => {
+    try {
+      const rows: any[] = [];
+
+      // Flatten groupedRows -> each item inside a group becomes one row
+      groupedRows.forEach((g) => {
+        for (const b of g.items) {
+          const utilidad = Number(
+            (
+              Number(b.expectedTotal || 0) - Number(b.invoiceTotal || 0)
+            ).toFixed(2),
+          );
+
+          const paidAtStr = (b as any).paidAt
+            ? typeof (b as any).paidAt?.toDate === "function"
+              ? (b as any).paidAt.toDate().toISOString()
+              : String((b as any).paidAt)
+            : "";
+
+          rows.push({
+            groupId: g.groupId,
+            orderName: g.orderName,
+            groupDate: g.date,
+            productId: b.productId,
+            productName: b.productName,
+            category: b.category,
+            unit: b.unit,
+            quantity: b.quantity,
+            remaining: b.remaining,
+            purchasePrice: b.purchasePrice,
+            salePrice: b.salePrice,
+            invoiceTotal: b.invoiceTotal,
+            expectedTotal: b.expectedTotal,
+            utilidadBruta: utilidad,
+            status: b.status,
+            notes: b.notes || "",
+            paidAmount: b.paidAmount || "",
+            paidAt: paidAtStr,
+          });
+        }
+      });
+
+      if (!rows.length) {
+        setMsg("Sin datos para exportar XLSX.");
+        return;
+      }
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Inventario");
+
+      const filename = `inventario_pollo_sabana_${fromDate || "sin_desde"}_a_${toDate || "sin_hasta"}.xlsx`;
+      XLSX.writeFile(wb, filename);
+      setMsg(`✅ XLSX exportado: ${filename}`);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al exportar XLSX");
+    }
+  };
+
   // ===== UI =====
   return (
     <div className="max-w-6xl mx-auto">
@@ -1012,6 +1330,23 @@ export default function InventoryBatches({
             disabled={loading}
           >
             Exportar PDF
+          </button>
+
+          <button
+            className="px-3 py-2 rounded-2xl bg-green-600 text-white hover:bg-green-700"
+            type="button"
+            onClick={handleExportInventoryCsv}
+            disabled={loading}
+          >
+            Exportar Productos
+          </button>
+          <button
+            className="px-3 py-2 rounded-2xl bg-amber-600 text-white hover:bg-amber-700"
+            type="button"
+            onClick={handleExportInventoryXlsx}
+            disabled={loading}
+          >
+            Exportar Lotes
           </button>
 
           {canCreateBatch && (
@@ -1083,69 +1418,158 @@ export default function InventoryBatches({
         </div>
       </div>
 
-      {/* KPIs (igual que tu grid, pero mobile-first) */}
-      <div className="bg-gray-50 p-3 rounded-2xl shadow-2xl border mb-3 text-base">
-        <div
-          className="flex items-center justify-between cursor-pointer"
-          onClick={toggleKpis}
-          role="button"
-          aria-expanded={kpisExpanded}
-        >
-          <div className="flex gap-6 items-center">
-            <div>
-              <span className="font-semibold">Libras ingresadas:</span>{" "}
-              {totals.lbsIng.toFixed(3)}
-            </div>
-            <div>
-              <span className="font-semibold">Libras restantes:</span>{" "}
-              {totals.lbsRem.toFixed(3)}
+      {/* KPIs: 3 tarjetas */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+        <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl p-4 shadow-md">
+          <div className="flex items-center gap-3">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="w-6 h-6"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              <path
+                d="M21 16V8a2 2 0 0 0-2-2h-3V4a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v2H5a2 2 0 0 0-2 2v8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <rect
+                x="3"
+                y="12"
+                width="18"
+                height="8"
+                rx="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <div className="text-sm font-semibold opacity-90">
+              Resumen cantidades
             </div>
           </div>
-          <div className="text-sm text-gray-500">
-            {kpisExpanded ? "Cerrar" : "Ver más"}
+          <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+            <div className="flex justify-between">
+              <span>Libras ingresadas</span>
+              <span className="font-semibold">{totals.lbsIng.toFixed(3)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Libras restantes</span>
+              <span className="font-semibold">{totals.lbsRem.toFixed(3)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Unidades ingresadas</span>
+              <span className="font-semibold">{totals.udsIng.toFixed(3)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Unidades restantes</span>
+              <span className="font-semibold">{totals.udsRem.toFixed(3)}</span>
+            </div>
+            <div className="flex justify-between pt-2 border-t border-white/30">
+              <span>Cantidad de lotes (filtro)</span>
+              <span className="font-semibold">
+                {filteredBatches.length.toLocaleString()}
+              </span>
+            </div>
           </div>
         </div>
 
-        {kpisExpanded && (
-          <div className="mt-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2 gap-x-8">
-              <div>
-                <span className="font-semibold">Libras ingresadas:</span>{" "}
-                {totals.lbsIng.toFixed(3)}
-              </div>
-              <div>
-                <span className="font-semibold">Libras restantes:</span>{" "}
-                {totals.lbsRem.toFixed(3)}
-              </div>
-              <div>
-                <span className="font-semibold">Unidades ingresadas:</span>{" "}
-                {totals.udsIng.toFixed(3)}
-              </div>
-              <div>
-                <span className="font-semibold">Unidades restantes:</span>{" "}
-                {totals.udsRem.toFixed(3)}
-              </div>
-              <div>
-                <span className="font-semibold">Total esperado en ventas:</span>{" "}
-                C$ {totals.totalEsperado.toFixed(2)}
-              </div>
-              <div>
-                <span className="font-semibold">Total facturado:</span> C${" "}
-                {totals.totalFacturado.toFixed(2)}
-              </div>
-              <div>
-                <span className="font-semibold">Ganancia sin gastos:</span> C${" "}
-                {(totals.totalEsperado - totals.totalFacturado).toFixed(2)}
-              </div>
-              <div>
-                <span className="font-semibold">
-                  Cantidad de Lotes (por filtro):
-                </span>{" "}
-                {filteredBatches.length.toLocaleString()}
-              </div>
+        <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-2xl p-4 shadow-md">
+          <div className="flex items-center gap-3">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="w-6 h-6"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              <path
+                d="M12 1v4M17 7H7a4 4 0 0 0 0 8h10a4 4 0 0 0 0-8z"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path d="M12 11v6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div className="text-sm font-semibold opacity-90">Finanzas</div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+            <div className="flex justify-between">
+              <span>Total esperado (ventas)</span>
+              <span className="font-semibold">
+                {money(totals.totalEsperado)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>Total facturado</span>
+              <span className="font-semibold">
+                {money(totals.totalFacturado)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>Utilidad bruta</span>
+              <span className="font-semibold">
+                {money(totals.totalEsperado - totals.totalFacturado)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>Existencias monetarias</span>
+              <span className="font-semibold">
+                {money(totals.totalExistenciasMonetarias)}
+              </span>
             </div>
           </div>
-        )}
+        </div>
+
+        <div className="bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-2xl p-4 shadow-md">
+          <div className="flex items-center gap-3">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="w-6 h-6"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              <path
+                d="M21 12v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M7 12V8a5 5 0 0 1 10 0v4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M12 17v.01"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <div className="text-sm font-semibold opacity-90">Cobros</div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+            <div className="flex flex-col">
+              <div className="flex justify-between items-baseline">
+                <span>Ventas realizadas</span>
+                <span className="font-semibold">{money(ventasRealizadas)}</span>
+              </div>
+              <div className="text-xs opacity-90 mt-1">
+                Ventas (cash): {ventasCount}
+              </div>
+            </div>
+            <div className="flex justify-between">
+              <span>Abonos a la fecha</span>
+              <span className="font-semibold">{money(abonosFecha)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Cuentas por cobrar</span>
+              <span className="font-semibold">{money(cuentasPorCobrar)}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ===================== */}
@@ -1234,6 +1658,19 @@ export default function InventoryBatches({
                               </div>
                               <div className="text-xs text-gray-500 truncate">
                                 Nombre: {g.orderName}
+                              </div>
+                              <div className="text-[11px] text-gray-400 mt-1 truncate">
+                                {Array.from(
+                                  new Set(
+                                    g.items.map((it) =>
+                                      String(it.productName || "").trim(),
+                                    ),
+                                  ),
+                                )
+                                  .filter(Boolean)
+                                  .slice(0, 6)
+                                  .join(", ")}
+                                {g.items.length > 6 ? "…" : ""}
                               </div>
                             </div>
 
@@ -1430,7 +1867,7 @@ export default function InventoryBatches({
             ) : (
               groupedRows.map((g) => (
                 <tr key={g.groupId} className="text-center whitespace-nowrap">
-                  <td className="p-2 border">
+                  <td className="p-2 border text-left">
                     <button
                       className="underline text-blue-700 hover:text-blue-900"
                       onClick={() => openDetail(g)}
@@ -1440,6 +1877,19 @@ export default function InventoryBatches({
                     </button>
                     <div className="text-[11px] text-gray-500">
                       {g.orderName}
+                    </div>
+                    <div className="text-[11px] text-gray-400 mt-1">
+                      {Array.from(
+                        new Set(
+                          g.items.map((it) =>
+                            String(it.productName || "").trim(),
+                          ),
+                        ),
+                      )
+                        .filter(Boolean)
+                        .slice(0, 6)
+                        .join(", ")}
+                      {g.items.length > 6 ? "…" : ""}
                     </div>
                   </td>
                   <td className="p-2 border">{g.typeLabel}</td>

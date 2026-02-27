@@ -78,7 +78,7 @@ export default function ExpensesCandies() {
       setLoading(true);
       try {
         const qE = query(
-          collection(db, "expenses_candies"),
+          collection(db, "  "),
           orderBy("date", "desc")
         );
         const snap = await getDocs(qE);

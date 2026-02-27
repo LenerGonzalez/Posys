@@ -106,6 +106,10 @@ export default function FinancialDashboard(): React.ReactElement {
   const [inventoryByProduct, setInventoryByProduct] = useState<
     Record<string, { incomingQty: number; remainingQty: number }>
   >({});
+  const [totalExpectedVentas, setTotalExpectedVentas] = useState<number>(0);
+  const [totalInversion, setTotalInversion] = useState<number>(0);
+  const [totalExistenciasMonetarias, setTotalExistenciasMonetarias] =
+    useState<number>(0);
   const [priceVenta, setPriceVenta] = useState<Record<string, number>>({});
 
   const { refreshKey, refresh } = useManualRefresh();
@@ -760,6 +764,9 @@ export default function FinancialDashboard(): React.ReactElement {
           string,
           { incomingQty: number; remainingQty: number }
         > = {};
+        let totalExpected = 0;
+        let totalInversionLocal = 0;
+        let totalExistenciasLocal = 0;
 
         batchesSnap.forEach((d) => {
           const b = d.data() as any;
@@ -774,14 +781,36 @@ export default function FinancialDashboard(): React.ReactElement {
           if (!summary[productName]) {
             summary[productName] = { incomingQty: 0, remainingQty: 0 };
           }
-          if (inMonth) summary[productName].incomingQty += qty;
+          const expected = Number(
+            b.expectedTotal != null
+              ? b.expectedTotal
+              : Number(b.quantity ?? 0) * Number(b.salePrice ?? 0),
+          );
+          const invoiced = Number(
+            b.invoiceTotal != null
+              ? b.invoiceTotal
+              : Number(b.quantity ?? 0) * Number(b.purchasePrice ?? 0),
+          );
+          if (inMonth) {
+            summary[productName].incomingQty += qty;
+            totalExpected += expected;
+            totalInversionLocal += invoiced;
+          }
           summary[productName].remainingQty += remaining;
+          // accumulate monetary value of remaining stock using salePrice
+          const saleP = Number(b.salePrice ?? 0);
+          totalExistenciasLocal += Number((remaining * saleP).toFixed(2));
         });
 
         setInventoryByProduct(summary);
+        setTotalExpectedVentas(Number(totalExpected.toFixed(2)));
+        setTotalInversion(Number(totalInversionLocal.toFixed(2)));
+        setTotalExistenciasMonetarias(Number(totalExistenciasLocal.toFixed(2)));
       } catch (e) {
         console.error("Error cargando inventario:", e);
         setInventoryByProduct({});
+        setTotalExpectedVentas(0);
+        setTotalInversion(0);
       }
     };
 
@@ -840,6 +869,16 @@ export default function FinancialDashboard(): React.ReactElement {
   const collectedCashPlusAbonos = useMemo(
     () => totalSalesCash + totalAbonosRange,
     [totalSalesCash, totalAbonosRange],
+  );
+
+  const porRecolectar = useMemo(
+    () => Number((totalExpectedVentas - collectedCashPlusAbonos).toFixed(2)),
+    [totalExpectedVentas, collectedCashPlusAbonos],
+  );
+
+  const utilidadBruta = useMemo(
+    () => Number((totalExpectedVentas - totalInversion).toFixed(2)),
+    [totalExpectedVentas, totalInversion],
   );
 
   const grossProfitCashPlusCredit = useMemo(
@@ -1038,6 +1077,7 @@ export default function FinancialDashboard(): React.ReactElement {
       ["CxC", money(totalPendingBalance)],
       ["Recaudación (Abonos)", money(totalAbonos)],
       ["Recaudación a la fecha", money(totalAbonosRange)],
+      ["Existencias Monetarias", money(totalExistenciasMonetarias)],
       ["Recolectado Cash + Abonos", money(collectedCashPlusAbonos)],
       ["Utilidad Neta Crédito (Caja)", money(creditGrossProfitCashRange)],
       ["Utilidad Bruta Cash + Crédito", money(grossProfitCashPlusCredit)],
@@ -1245,7 +1285,7 @@ export default function FinancialDashboard(): React.ReactElement {
           </button>
           <button
             type="button"
-            onClick={handleSaveSnapshot}
+            onClick={() => handleSaveSnapshot()}
             disabled={savingSnapshot}
             className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
           >
@@ -1334,41 +1374,41 @@ export default function FinancialDashboard(): React.ReactElement {
                       </span>
                     </button>
                     {salesKpiCardOpen && (
-                      <>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                          <Kpi
-                            title="Ventas"
-                            subtitle="Ventas cash"
-                            value={money(cashRevenueWithAbonos)}
-                            valueClass="text-[#1E4D2B]"
-                          />
-                          <Kpi
-                            title="Costo"
-                            value={money(kpisCashVisible.cogsReal)}
-                          />
-                          <Kpi
-                            title="Utilidad Bruta Cash"
-                            value={money(kpisCashVisible.grossProfit)}
-                            positive
-                          />
+                      <div className="space-y-2">
+                        <div className="text-sm text-gray-600">Ventas Cash</div>
+                        <div className="text-lg font-bold">
+                          {money(cashRevenueWithAbonos)}
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                          <Kpi
-                            title="Ventas Crédito"
-                            value={money(kpisCreditVisible.revenue)}
-                          />
-                          <Kpi
-                            title="Costo"
-                            value={money(kpisCreditVisible.cogsReal)}
-                            negative
-                          />
-                          <Kpi
-                            title="Utilidad Bruta Crédito"
-                            value={money(kpisCreditVisible.grossProfit)}
-                            positive
-                          />
+                        <div className="text-sm text-gray-500">Costo</div>
+                        <div className="text-base">
+                          {money(kpisCashVisible.cogsReal)}
                         </div>
-                      </>
+                        <div className="text-sm text-gray-500">
+                          Utilidad Bruta Cash
+                        </div>
+                        <div className="text-base font-medium">
+                          {money(kpisCashVisible.grossProfit)}
+                        </div>
+
+                        <hr className="my-2" />
+
+                        <div className="text-sm text-gray-600">
+                          Ventas Crédito
+                        </div>
+                        <div className="text-lg">
+                          {money(kpisCreditVisible.revenue)}
+                        </div>
+                        <div className="text-sm text-gray-500">Costo</div>
+                        <div className="text-base">
+                          {money(kpisCreditVisible.cogsReal)}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Utilidad Bruta Crédito
+                        </div>
+                        <div className="text-base font-medium">
+                          {money(kpisCreditVisible.grossProfit)}
+                        </div>
+                      </div>
                     )}
                   </div>
 
@@ -1389,50 +1429,85 @@ export default function FinancialDashboard(): React.ReactElement {
                       </span>
                     </button>
                     {fundsKpiCardOpen && (
-                      <>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <Kpi title="CxC" value={money(totalPendingBalance)} />
-                          <Kpi
-                            title="Recaudación Global(Abonos)"
-                            value={money(totalAbonos)}
-                          />
-                          <Kpi
-                            title="Recaudación a la fecha"
-                            value={money(totalAbonosRange)}
-                          />
-                          <Kpi
-                            title="Recolectado Cash + Abonos"
-                            value={money(collectedCashPlusAbonos)}
-                            positive
-                          />
+                      <div className="space-y-2">
+                        <div className="text-sm text-gray-600">CxC</div>
+                        <div className="text-lg font-bold">
+                          {money(totalPendingBalance)}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Recaudación Global(Abonos)
+                        </div>
+                        <div className="text-base">{money(totalAbonos)}</div>
+                        <div className="text-sm text-gray-500">
+                          Recaudación a la fecha
+                        </div>
+                        <div className="text-base">
+                          {money(totalAbonosRange)}
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <Kpi
-                            title="Utilidad Neta Crédito (Caja)"
-                            value={money(creditGrossProfitCashRange)}
-                            valueClass="text-[#BF5700]"
-                          />
-                          <Kpi
-                            title="Utilidad Bruta Cash + Crédito"
-                            value={money(grossProfitCashPlusCredit)}
-                            positive
-                          />
+                        <hr className="my-2" />
+
+                        <div className="text-sm text-gray-500">
+                          Total esperado ventas
+                        </div>
+                        <div className="text-lg">
+                          {money(totalExpectedVentas)}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Existencias Monetarias
+                        </div>
+                        <div className="text-lg">
+                          {money(totalExistenciasMonetarias)}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Recolectado Cash + Abonos
+                        </div>
+                        <div className="text-lg">
+                          {money(collectedCashPlusAbonos)}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Por Recolectar
+                        </div>
+                        <div
+                          className={`text-lg font-medium ${porRecolectar < 0 ? "text-red-600" : ""}`}
+                        >
+                          {money(porRecolectar)}
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <Kpi
-                            title="Gastos"
-                            value={money(kpisCashVisible.expensesSum)}
-                            negative
-                          />
-                          <Kpi
-                            title="Utilidad Neta Cash + Crédito"
-                            value={money(netProfitCashPlusCredit)}
-                            positive
-                          />
+                        <hr className="my-2" />
+
+                        <div className="text-sm text-gray-500">Inversion</div>
+                        <div className="text-lg">{money(totalInversion)}</div>
+                        <div className="text-sm text-gray-500">
+                          Utilidad bruta
                         </div>
-                      </>
+                        <div className="text-lg">{money(utilidadBruta)}</div>
+
+                        <hr className="my-2" />
+
+                        <div className="text-sm text-gray-500">
+                          Utilidad Neta Crédito (Caja)
+                        </div>
+                        <div className="text-base">
+                          {money(creditGrossProfitCashRange)}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Utilidad Bruta Cash + Crédito
+                        </div>
+                        <div className="text-base">
+                          {money(grossProfitCashPlusCredit)}
+                        </div>
+                        <div className="text-sm text-gray-500">Gastos</div>
+                        <div className="text-base">
+                          {money(kpisCashVisible.expensesSum)}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Utilidad Neta Cash + Crédito
+                        </div>
+                        <div className="text-base font-medium">
+                          {money(netProfitCashPlusCredit)}
+                        </div>
+                      </div>
                     )}
                   </div>
 
@@ -1455,161 +1530,254 @@ export default function FinancialDashboard(): React.ReactElement {
                       </span>
                     </button>
                     {detailsKpiCardOpen && (
-                      <>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                          <KpiCompact
-                            title="Ventas Cash"
-                            value={money(totalSalesCashWithAbonos)}
-                          />
-                          <KpiCompact
-                            title="Ventas Crédito"
-                            value={money(totalSalesCredit)}
-                          />
-                          <KpiCompact
-                            title="Libras Cash"
-                            value={qty3(totalLbsCash)}
-                          />
-                          <KpiCompact
-                            title="Libras Crédito"
-                            value={qty3(totalLbsCredit)}
-                          />
-                          <KpiCompact
-                            title="Unidades Cash"
-                            value={qty3(totalUnitsCash)}
-                          />
-                          <KpiCompact
-                            title="Unidades Crédito"
-                            value={qty3(totalUnitsCredit)}
-                          />
+                      <div className="space-y-2">
+                        <div className="text-sm text-gray-500">Ventas Cash</div>
+                        <div className="text-base font-bold">
+                          {money(totalSalesCashWithAbonos)}
                         </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
-                          <KpiCompact
-                            title="Libras Cash + Credito"
-                            value={qty3(totalLbsCash + totalLbsCredit)}
-                          />
-                          <KpiCompact
-                            title="Unidades Cash + Credito"
-                            value={qty3(totalUnitsCash + totalUnitsCredit)}
-                          />
-                          <KpiList
-                            title="Productos más vendidos"
-                            items={topProducts.map((t) => ({
-                              key: `${t.idx}`,
-                              label: `${t.idx}. ${t.name}`,
-                              value: `(${qty3(t.units)})`,
-                            }))}
-                          />
+                        <div className="text-sm text-gray-500">
+                          Ventas Crédito
                         </div>
-                      </>
+                        <div className="text-base">
+                          {money(totalSalesCredit)}
+                        </div>
+                        <div className="text-sm text-gray-500">Libras Cash</div>
+                        <div className="text-base">{qty3(totalLbsCash)}</div>
+                        <div className="text-sm text-gray-500">
+                          Libras Crédito
+                        </div>
+                        <div className="text-base">{qty3(totalLbsCredit)}</div>
+                        <div className="text-sm text-gray-500">
+                          Unidades Cash
+                        </div>
+                        <div className="text-base">{qty3(totalUnitsCash)}</div>
+                        <div className="text-sm text-gray-500">
+                          Unidades Crédito
+                        </div>
+                        <div className="text-base">
+                          {qty3(totalUnitsCredit)}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </div>
 
-                <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                  <Kpi
-                    title="Ventas Cash"
-                    value={money(cashRevenueWithAbonos)}
-                    positive
-                  />
-                  <Kpi
-                    title="Costo"
-                    value={money(kpisCashVisible.cogsReal)}
-                    negative
-                  />
-                  <Kpi
-                    title="Utilidad Bruta Cash"
-                    value={money(kpisCashVisible.grossProfit)}
-                    positive
-                  />
+                {/* legacy KPI grids removed — using vertical card layout below */}
+
+                <div className="md:hidden space-y-3 mb-3">
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-700">
+                      Ventas Cash
+                    </h4>
+                    <div className="text-xl font-bold">
+                      {money(cashRevenueWithAbonos)}
+                    </div>
+                    <div className="text-sm text-gray-500">Costo</div>
+                    <div className="text-base">
+                      {money(kpisCashVisible.cogsReal)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Bruta Cash
+                    </div>
+                    <div className="text-base font-medium">
+                      {money(kpisCashVisible.grossProfit)}
+                    </div>
+                    <hr className="my-2" />
+                    <div className="text-sm text-gray-500">Ventas Crédito</div>
+                    <div className="text-base">
+                      {money(kpisCreditVisible.revenue)}
+                    </div>
+                    <div className="text-sm text-gray-500">Costo</div>
+                    <div className="text-base">
+                      {money(kpisCreditVisible.cogsReal)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Bruta Crédito
+                    </div>
+                    <div className="text-base font-medium">
+                      {money(kpisCreditVisible.grossProfit)}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-700">CxC</h4>
+                    <div className="text-xl font-bold">
+                      {money(totalPendingBalance)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Recaudación Global(Abonos)
+                    </div>
+                    <div className="text-base">{money(totalAbonos)}</div>
+                    <div className="text-sm text-gray-500">
+                      Recaudación a la fecha
+                    </div>
+                    <div className="text-base">{money(totalAbonosRange)}</div>
+                    <hr className="my-2" />
+                    <div className="text-sm text-gray-500">
+                      Total esperado ventas
+                    </div>
+                    <div className="text-base">
+                      {money(totalExpectedVentas)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Existencias Monetarias
+                    </div>
+                    <div className="text-base">
+                      {money(totalExistenciasMonetarias)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Recolectado Cash + Abonos
+                    </div>
+                    <div className="text-base">
+                      {money(collectedCashPlusAbonos)}
+                    </div>
+                    <div className="text-sm text-gray-500">Por Recolectar</div>
+                    <div
+                      className={`text-base font-medium ${porRecolectar < 0 ? "text-red-600" : ""}`}
+                    >
+                      {money(porRecolectar)}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-700">
+                      Inversion
+                    </h4>
+                    <div className="text-xl font-bold">
+                      {money(totalInversion)}
+                    </div>
+                    <div className="text-sm text-gray-500">Utilidad bruta</div>
+                    <div className="text-base">{money(utilidadBruta)}</div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Neta Crédito (Caja)
+                    </div>
+                    <div className="text-base">
+                      {money(creditGrossProfitCashRange)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Bruta Cash + Crédito
+                    </div>
+                    <div className="text-base">
+                      {money(grossProfitCashPlusCredit)}
+                    </div>
+                    <div className="text-sm text-gray-500">Gastos</div>
+                    <div className="text-base">
+                      {money(kpisCashVisible.expensesSum)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Neta Cash + Crédito
+                    </div>
+                    <div className="text-base font-medium">
+                      {money(netProfitCashPlusCredit)}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                  <Kpi
-                    title="Ventas Crédito"
-                    value={money(kpisCreditVisible.revenue)}
-                    positive
-                  />
-                  <Kpi
-                    title="Costo"
-                    value={money(kpisCreditVisible.cogsReal)}
-                    negative
-                  />
-                  <Kpi
-                    title="Utilidad Bruta Crédito"
-                    value={money(kpisCreditVisible.grossProfit)}
-                    positive
-                  />
-                </div>
+                <div className="hidden md:grid grid-cols-3 gap-3 mb-3">
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-4 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-700">
+                      Ventas Cash
+                    </h4>
+                    <div className="text-2xl font-bold">
+                      {money(cashRevenueWithAbonos)}
+                    </div>
+                    <div className="text-sm text-gray-500">Costo</div>
+                    <div className="text-lg">
+                      {money(kpisCashVisible.cogsReal)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Bruta Cash
+                    </div>
+                    <div className="text-lg font-medium">
+                      {money(kpisCashVisible.grossProfit)}
+                    </div>
+                    <hr className="my-2" />
+                    <div className="text-sm text-gray-500">Ventas Crédito</div>
+                    <div className="text-lg">
+                      {money(kpisCreditVisible.revenue)}
+                    </div>
+                    <div className="text-sm text-gray-500">Costo</div>
+                    <div className="text-lg">
+                      {money(kpisCreditVisible.cogsReal)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Bruta Crédito
+                    </div>
+                    <div className="text-lg font-medium">
+                      {money(kpisCreditVisible.grossProfit)}
+                    </div>
+                  </div>
 
-                <div className="hidden md:grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                  <Kpi
-                    title="CxC"
-                    value={money(totalPendingBalance)}
-                    negative
-                  />
-                  <Kpi
-                    title="Recaudación Global(Abonos)"
-                    value={money(totalAbonos)}
-                    positive
-                  />
-                  <Kpi
-                    title="Recaudación a la fecha"
-                    value={money(totalAbonosRange)}
-                    positive
-                  />
-                  <Kpi
-                    title="Recolectado Cash + Abonos"
-                    value={money(collectedCashPlusAbonos)}
-                    positive
-                  />
-                </div>
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-4 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-700">CxC</h4>
+                    <div className="text-2xl font-bold">
+                      {money(totalPendingBalance)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Recaudación Global(Abonos)
+                    </div>
+                    <div className="text-lg">{money(totalAbonos)}</div>
+                    <div className="text-sm text-gray-500">
+                      Recaudación a la fecha
+                    </div>
+                    <div className="text-lg">{money(totalAbonosRange)}</div>
+                    <hr className="my-2" />
+                    <div className="text-sm text-gray-500">
+                      Total esperado ventas
+                    </div>
+                    <div className="text-lg">{money(totalExpectedVentas)}</div>
+                    <div className="text-sm text-gray-500">
+                      Existencias Monetarias
+                    </div>
+                    <div className="text-lg">
+                      {money(totalExistenciasMonetarias)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Recolectado Cash + Abonos
+                    </div>
+                    <div className="text-lg">
+                      {money(collectedCashPlusAbonos)}
+                    </div>
+                    <div className="text-sm text-gray-500">Por Recolectar</div>
+                    <div
+                      className={`text-lg font-medium ${porRecolectar < 0 ? "text-red-600" : ""}`}
+                    >
+                      {money(porRecolectar)}
+                    </div>
+                  </div>
 
-                <div className="hidden md:grid grid-cols-1 sm:grid-cols-4 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                  <Kpi
-                    title="Utilidad Neta Crédito (Caja)"
-                    value={money(creditGrossProfitCashRange)}
-                    valueClass="text-[#BF5700]"
-                  />
-                  <Kpi
-                    title="Utilidad Bruta Cash + Crédito"
-                    value={money(grossProfitCashPlusCredit)}
-                    positive
-                  />
-                  <Kpi
-                    title="Gastos"
-                    value={money(kpisCashVisible.expensesSum)}
-                    negative
-                  />
-                  <Kpi
-                    title="Utilidad Neta Cash + Crédito"
-                    value={money(netProfitCashPlusCredit)}
-                    positive
-                  />
-                </div>
-
-                <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3 rounded-2xl shadow-lg p-3 sm:p-4 bg-gray-50">
-                  <KpiCompact
-                    title="Ventas Cash"
-                    value={money(totalSalesCashWithAbonos)}
-                  />
-                  <KpiCompact
-                    title="Ventas Crédito"
-                    value={money(totalSalesCredit)}
-                  />
-                  <KpiCompact title="Libras Cash" value={qty3(totalLbsCash)} />
-                  <KpiCompact
-                    title="Libras Crédito"
-                    value={qty3(totalLbsCredit)}
-                  />
-                  <KpiCompact
-                    title="Unidades Cash"
-                    value={qty3(totalUnitsCash)}
-                  />
-                  <KpiCompact
-                    title="Unidades Crédito"
-                    value={qty3(totalUnitsCredit)}
-                  />
+                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-4 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-700">
+                      Inversion
+                    </h4>
+                    <div className="text-2xl font-bold">
+                      {money(totalInversion)}
+                    </div>
+                    <div className="text-sm text-gray-500">Utilidad bruta</div>
+                    <div className="text-lg">{money(utilidadBruta)}</div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Neta Crédito (Caja)
+                    </div>
+                    <div className="text-lg">
+                      {money(creditGrossProfitCashRange)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Bruta Cash + Crédito
+                    </div>
+                    <div className="text-lg">
+                      {money(grossProfitCashPlusCredit)}
+                    </div>
+                    <div className="text-sm text-gray-500">Gastos</div>
+                    <div className="text-lg">
+                      {money(kpisCashVisible.expensesSum)}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      Utilidad Neta Cash + Crédito
+                    </div>
+                    <div className="text-lg font-medium">
+                      {money(netProfitCashPlusCredit)}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="hidden md:grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
