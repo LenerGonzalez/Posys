@@ -1323,17 +1323,10 @@ export default function InventoryBatches({
         <h2 className="text-2xl font-bold">Inventario</h2>
 
         <div className="flex items-center gap-2">
-          <button
-            className="px-3 py-2 rounded-2xl bg-gray-900 text-white hover:bg-black"
-            type="button"
-            onClick={handleExportInventoryPdf}
-            disabled={loading}
-          >
-            Exportar PDF
-          </button>
+          {/* Exportar PDF hidden per request */}
 
           <button
-            className="px-3 py-2 rounded-2xl bg-green-600 text-white hover:bg-green-700"
+            className="px-2 py-1 rounded-xl text-sm md:px-3 md:py-2 md:rounded-2xl md:text-base bg-green-600 text-white hover:bg-green-700"
             type="button"
             onClick={handleExportInventoryCsv}
             disabled={loading}
@@ -1341,7 +1334,7 @@ export default function InventoryBatches({
             Exportar Productos
           </button>
           <button
-            className="px-3 py-2 rounded-2xl bg-amber-600 text-white hover:bg-amber-700"
+            className="px-2 py-1 rounded-xl text-sm md:px-3 md:py-2 md:rounded-2xl md:text-base bg-amber-600 text-white hover:bg-amber-700"
             type="button"
             onClick={handleExportInventoryXlsx}
             disabled={loading}
@@ -1351,7 +1344,7 @@ export default function InventoryBatches({
 
           {canCreateBatch && (
             <button
-              className="px-3 py-2 rounded-2xl bg-blue-600 text-white hover:bg-blue-700"
+              className="px-2 py-1 rounded-xl text-sm md:px-3 md:py-2 md:rounded-2xl md:text-base bg-blue-600 text-white hover:bg-blue-700"
               type="button"
               onClick={() => {
                 resetOrderModal();
@@ -1445,11 +1438,11 @@ export default function InventoryBatches({
                 strokeLinejoin="round"
               />
             </svg>
-            <div className="text-sm font-semibold opacity-90">
+            <div className="text-xl font-semibold opacity-90">
               Resumen cantidades
             </div>
           </div>
-          <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+          <div className="mt-3 grid grid-cols-1 gap-2 text-[16px]">
             <div className="flex justify-between">
               <span>Libras ingresadas</span>
               <span className="font-semibold">{totals.lbsIng.toFixed(3)}</span>
@@ -1492,9 +1485,9 @@ export default function InventoryBatches({
               />
               <path d="M12 11v6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <div className="text-sm font-semibold opacity-90">Finanzas</div>
+            <div className="text-xl font-semibold opacity-90">Finanzas</div>
           </div>
-          <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+          <div className="mt-3 grid grid-cols-1 gap-2 text-[16px]">
             <div className="flex justify-between">
               <span>Total esperado (ventas)</span>
               <span className="font-semibold">
@@ -1548,9 +1541,11 @@ export default function InventoryBatches({
                 strokeLinejoin="round"
               />
             </svg>
-            <div className="text-sm font-semibold opacity-90">Cobros</div>
+            <div className="text-xl font-semibold opacity-90">
+              Cobros y Abonos
+            </div>
           </div>
-          <div className="mt-3 grid grid-cols-1 gap-2 text-sm">
+          <div className="mt-3 grid grid-cols-1 gap-2 text-[16px]">
             <div className="flex flex-col">
               <div className="flex justify-between items-baseline">
                 <span>Ventas realizadas</span>
@@ -1656,21 +1651,23 @@ export default function InventoryBatches({
                                   Producto: {g.typeLabel}
                                 </div>
                               </div>
-                              <div className="text-xs text-gray-500 truncate">
-                                Nombre: {g.orderName}
-                              </div>
-                              <div className="text-[11px] text-gray-400 mt-1 truncate">
-                                {Array.from(
-                                  new Set(
-                                    g.items.map((it) =>
-                                      String(it.productName || "").trim(),
+                              <div className="text-sm text-gray-400 mt-1 truncate">
+                                <span className="text-sm text-gray-500 mr-1">
+                                  {g.orderName}
+                                </span>
+                                <span className="text-sm text-gray-500">
+                                  {Array.from(
+                                    new Set(
+                                      g.items.map((it) =>
+                                        String(it.productName || "").trim(),
+                                      ),
                                     ),
-                                  ),
-                                )
-                                  .filter(Boolean)
-                                  .slice(0, 6)
-                                  .join(", ")}
-                                {g.items.length > 6 ? "…" : ""}
+                                  )
+                                    .filter(Boolean)
+                                    .slice(0, 6)
+                                    .join(", ")}
+                                  {g.items.length > 6 ? "…" : ""}
+                                </span>
                               </div>
                             </div>
 
@@ -1833,41 +1830,60 @@ export default function InventoryBatches({
       {/* ===================== */}
       {/* DESKTOP (md+): TU TABLA */}
       {/* ===================== */}
-      <div className="hidden md:block bg-white p-2 rounded shadow border w-full overflow-x-auto">
-        <table className="min-w-[1100px] w-full text-sm shadow-2xl">
-          <thead className="bg-gray-100">
+      <div className="hidden md:block bg-white p-4 rounded-lg shadow-lg border w-full overflow-x-auto">
+        <table className="min-w-[1100px] w-full text-sm bg-white divide-y divide-gray-200">
+          <thead>
             <tr className="whitespace-nowrap">
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">Tipo</th>
-              <th className="p-2 border">Libras ingresadas</th>
-              <th className="p-2 border">Libras restantes</th>
-              <th className="p-2 border">Unidades ingresadas</th>
-              <th className="p-2 border">Unidades restantes</th>
-              <th className="p-2 border">Total Facturado</th>
-              <th className="p-2 border">Total esperado</th>
-              <th className="p-2 border">Utilidad bruta</th>
-              <th className="p-2 border">Estado</th>
-              <th className="p-2 border">Acciones</th>
+              <th className="p-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 min-w-[320px]">
+                Fecha
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Libras ingresadas
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Libras restantes
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Unidades ingresadas
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Unidades restantes
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Total Facturado
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Total esperado
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Utilidad bruta
+              </th>
+              <th className="p-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Estado
+              </th>
+              <th className="p-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Acciones
+              </th>
             </tr>
           </thead>
 
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={11} className="p-4 text-center">
+                <td colSpan={10} className="p-4 text-center">
                   Cargando…
                 </td>
               </tr>
             ) : groupedRows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="p-4 text-center">
+                <td colSpan={10} className="p-4 text-center">
                   Sin lotes
                 </td>
               </tr>
             ) : (
               groupedRows.map((g) => (
-                <tr key={g.groupId} className="text-center whitespace-nowrap">
-                  <td className="p-2 border text-left">
+                <tr key={g.groupId} className="group hover:bg-gray-50">
+                  <td className="p-3 align-middle text-left min-w-0">
                     <button
                       className="underline text-blue-700 hover:text-blue-900"
                       onClick={() => openDetail(g)}
@@ -1875,32 +1891,48 @@ export default function InventoryBatches({
                     >
                       {g.date}
                     </button>
-                    <div className="text-[11px] text-gray-500">
-                      {g.orderName}
-                    </div>
-                    <div className="text-[11px] text-gray-400 mt-1">
-                      {Array.from(
-                        new Set(
-                          g.items.map((it) =>
-                            String(it.productName || "").trim(),
+                    <div className="text-sm text-gray-400 mt-1 truncate">
+                      <span className="text-gray-600 font-medium mr-1 text-sm">
+                        {g.orderName}
+                      </span>
+                      <span className="text-gray-500 text-sm">
+                        {Array.from(
+                          new Set(
+                            g.items.map((it) =>
+                              String(it.productName || "").trim(),
+                            ),
                           ),
-                        ),
-                      )
-                        .filter(Boolean)
-                        .slice(0, 6)
-                        .join(", ")}
-                      {g.items.length > 6 ? "…" : ""}
+                        )
+                          .filter(Boolean)
+                          .slice(0, 6)
+                          .join(", ")}
+                        {g.items.length > 6 ? "…" : ""}
+                      </span>
                     </div>
                   </td>
-                  <td className="p-2 border">{g.typeLabel}</td>
-                  <td className="p-2 border">{g.lbsIn.toFixed(3)}</td>
-                  <td className="p-2 border">{g.lbsRem.toFixed(3)}</td>
-                  <td className="p-2 border">{g.udsIn.toFixed(3)}</td>
-                  <td className="p-2 border">{g.udsRem.toFixed(3)}</td>
-                  <td className="p-2 border">{money(g.totalFacturado)}</td>
-                  <td className="p-2 border">{money(g.totalEsperado)}</td>
-                  <td className="p-2 border">{money(g.utilidadBruta)}</td>
-                  <td className="p-2 border">
+                  {/* Tipo column hidden for now - removed to give Fecha more space */}
+                  <td className="p-3 align-middle text-right">
+                    {g.lbsIn.toFixed(3)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {g.lbsRem.toFixed(3)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {g.udsIn.toFixed(3)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {g.udsRem.toFixed(3)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {money(g.totalFacturado)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {money(g.totalEsperado)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {money(g.utilidadBruta)}
+                  </td>
+                  <td className="p-3 align-middle text-center">
                     <span
                       className={`px-2 py-0.5 rounded text-xs ${
                         g.status === "PAGADO"
@@ -1911,7 +1943,7 @@ export default function InventoryBatches({
                       {g.status}
                     </span>
                   </td>
-                  <td className="p-2 border">
+                  <td className="p-3 align-middle text-center">
                     {isAdmin ? (
                       <div className="flex gap-2 justify-center">
                         {g.status === "PENDIENTE" && (

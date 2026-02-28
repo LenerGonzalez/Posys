@@ -805,7 +805,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           <div className="mt-3 grid grid-cols-1 lg:grid-cols-5 gap-3">
             <div className="border rounded-2xl p-3 bg-blue-50">
               <div className="text-xs text-gray-600">
-                Reabastecimiento (pagado caja)
+                Reabastecimiento (pagado con caja)
               </div>
               <div className="text-2xl font-bold">
                 {money(displayTotals.reabastecimientoSum || 0)}
@@ -813,7 +813,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             </div>
 
             <div className="border rounded-2xl p-3 bg-amber-50">
-              <div className="text-xs text-gray-600">Existencias</div>
+              <div className="text-xs text-gray-600">Existencias </div>
               <div className="text-sm text-gray-600">
                 Libras: {qty3(invLbsRem)}
               </div>
@@ -845,7 +845,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             {/* ✅ SALDO FINAL = CAJA ESPERADA */}
             <div className="border rounded-2xl p-3 bg-gray-900 text-white">
               <div className="text-xs opacity-80">
-                Saldo final (caja esperada)
+                Saldo final (Debe - Haber)
               </div>
               <div className="text-3xl font-extrabold">{money(saldoFinal)}</div>
             </div>
@@ -1046,7 +1046,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                 >
                   <option value="GASTO">Gasto</option>
                   <option value="REABASTECIMIENTO">
-                    Reabastecimiento (pagado caja)
+                    Reabastecimiento (pagado con caja)
                   </option>
                   <option value="RETIRO">Retiro</option>
                   <option value="DEPOSITO">Deposito a Carmen Ortiz</option>
