@@ -750,7 +750,7 @@ export default function AdminLayout({
                     )}
                   </div>
 
-                  <div className="ml-4 mt-1 space-y-1">
+                  {/* <div className="ml-4 mt-1 space-y-1">
                     {canPath(subject, "estadoCuentaCandies") && (
                       <NavLink
                         to={`${base}/estadoCuentaCandies`}
@@ -759,7 +759,7 @@ export default function AdminLayout({
                         Estado de Cuenta
                       </NavLink>
                     )}
-                  </div>
+                  </div> */}
 
                   <div className="ml-4 mt-1 space-y-1">
                     {canPath(subject, "productsPricesCandies") && (
