@@ -23,6 +23,7 @@ import { backfillCandyInventoryFromMainOrder } from "../../Services/inventory_ca
 // Small helpers used in this file
 const safeInt = (v: any) => Math.max(0, Math.floor(Number(v) || 0));
 const roundToInt = (n: number) => Math.round(n || 0);
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const MAX_MARGIN_PERCENT = 99.999;
 
 // Helpers consistentes con inventory_candies.ts / InventoryCandyBatches
@@ -318,6 +319,7 @@ export default function CandyMainOrders() {
 
   // items de la orden
   const [orderItems, setOrderItems] = useState<CandyOrderItem[]>([]);
+  const originalOrderSnapshotRef = useRef<string>("");
 
   // ===== Edición inline (lápiz) =====
   const [editingPackagesMap, setEditingPackagesMap] = useState<
@@ -327,6 +329,9 @@ export default function CandyMainOrders() {
     Record<string, boolean>
   >({});
   const [editingRemainingMap, setEditingRemainingMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingProviderPriceMap, setEditingProviderPriceMap] = useState<
     Record<string, boolean>
   >({});
   const [editingUnitPriceRivasMap, setEditingUnitPriceRivasMap] = useState<
@@ -355,6 +360,10 @@ export default function CandyMainOrders() {
     setEditingRemainingMap((prev) => ({ ...prev, [id]: true }));
   const closeRemainingEdit = (id: string) =>
     setEditingRemainingMap((prev) => ({ ...prev, [id]: false }));
+  const openProviderPriceEdit = (id: string) =>
+    setEditingProviderPriceMap((prev) => ({ ...prev, [id]: true }));
+  const closeProviderPriceEdit = (id: string) =>
+    setEditingProviderPriceMap((prev) => ({ ...prev, [id]: false }));
   const openUnitPriceRivasEdit = (id: string) =>
     setEditingUnitPriceRivasMap((prev) => ({ ...prev, [id]: true }));
   const closeUnitPriceRivasEdit = (id: string) =>
@@ -387,6 +396,48 @@ export default function CandyMainOrders() {
   const [mobileTab, setMobileTab] = useState<MobileTab>("DATOS");
 
   const [itemSearch, setItemSearch] = useState("");
+
+  const serializeOrderState = (items: CandyOrderItem[]) => {
+    const normalizedItems = items
+      .map((it) => ({
+        id: it.id,
+        providerPrice: Number(it.providerPrice || 0),
+        packages: safeInt(it.packages),
+        unitsPerPackage: safeInt(it.unitsPerPackage),
+        remainingPackages: safeInt(it.remainingPackages ?? it.packages),
+        marginRivas: Number(it.marginRivas || 0),
+        marginSanJorge: Number(it.marginSanJorge || 0),
+        marginIsla: Number(it.marginIsla || 0),
+        unitPriceRivas: Number(it.unitPriceRivas || 0),
+        unitPriceIsla: Number(it.unitPriceIsla || 0),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    return JSON.stringify({
+      orderName: String(orderName || "").trim(),
+      orderDate: String(orderDate || ""),
+      marginRivas: Number(marginRivas || 0),
+      marginSanJorge: Number(marginSanJorge || 0),
+      marginIsla: Number(marginIsla || 0),
+      logisticsCost: Number(logisticsCost || 0),
+      items: normalizedItems,
+    });
+  };
+
+  const parseOrderSnapshot = (snapshot: string) => {
+    try {
+      const parsed = JSON.parse(snapshot);
+      const items = Array.isArray(parsed?.items) ? parsed.items : [];
+      const itemMap = new Map<string, any>();
+      items.forEach((it: any) => {
+        if (!it?.id) return;
+        itemMap.set(String(it.id), it);
+      });
+      return { ...parsed, itemMap };
+    } catch {
+      return { itemMap: new Map<string, any>() };
+    }
+  };
 
   // Paginado tabla (desktop)
   const [page, setPage] = useState<number>(1);
@@ -485,6 +536,7 @@ export default function CandyMainOrders() {
     setEditingPackagesMap({});
     setEditingUnitsMap({});
     setEditingRemainingMap({});
+    setEditingProviderPriceMap({});
     setEditingUnitPriceRivasMap({});
     setEditingUnitPriceIslaMap({});
     setEditingMarginRivasMap({});
@@ -637,6 +689,9 @@ export default function CandyMainOrders() {
         if (field === "packages") updated.packages = safeInt(value || 0);
         if (field === "unitsPerPackage")
           updated.unitsPerPackage = safeInt(value || 0);
+        if (field === "providerPrice") {
+          updated.providerPrice = Math.max(0, Number(value) || 0);
+        }
         if (field === "remainingPackages") {
           const maxPackages = Math.max(0, safeInt(updated.packages || 0));
           const requested = safeInt(value || 0);
@@ -683,6 +738,7 @@ export default function CandyMainOrders() {
 
         if (
           field === "packages" ||
+          field === "providerPrice" ||
           field === "marginRivas" ||
           field === "marginIsla" ||
           field === "marginSanJorge"
@@ -1371,6 +1427,7 @@ export default function CandyMainOrders() {
 
     if (!orderItems.length) {
       setMsg("Agrega al menos un producto a la orden.");
+      setSavingOrder(false);
       return;
     }
 
@@ -1406,6 +1463,47 @@ export default function CandyMainOrders() {
           );
           return;
         }
+      }
+
+      let editedItemsSummary: Array<{ name: string; fields: string[] }> = [];
+      if (editingOrderId) {
+        const currentSnapshot = serializeOrderState(orderItems);
+        if (currentSnapshot === originalOrderSnapshotRef.current) {
+          setMsg("ℹ️ No hay cambios para guardar.");
+          setSavingOrder(false);
+          return;
+        }
+
+        const prevSnap = parseOrderSnapshot(originalOrderSnapshotRef.current);
+        const currSnap = parseOrderSnapshot(currentSnapshot);
+
+        const fieldLabelMap: Record<string, string> = {
+          providerPrice: "Precio prov",
+          packages: "Paquetes",
+          unitsPerPackage: "Und x Paq",
+          remainingPackages: "Restantes",
+          marginRivas: "MV Rivas",
+          marginSanJorge: "MV SJ",
+          marginIsla: "MV Isla",
+          unitPriceRivas: "Precio Rivas",
+          unitPriceIsla: "Precio Isla",
+        };
+
+        const detectItemChanges = (id: string) => {
+          const prevItem = prevSnap.itemMap.get(id) || {};
+          const currItem = currSnap.itemMap.get(id) || {};
+          const fields = Object.keys(fieldLabelMap).filter(
+            (key) => Number(prevItem[key] || 0) !== Number(currItem[key] || 0),
+          );
+          return fields.map((f) => fieldLabelMap[f]);
+        };
+
+        editedItemsSummary = orderItems
+          .map((it) => ({
+            name: String(it.name || it.id),
+            fields: detectItemChanges(String(it.id)),
+          }))
+          .filter((x) => x.fields.length > 0);
       }
 
       // ✅ guardo items con utilidades ya calculadas (para export / auditoría)
@@ -1446,6 +1544,97 @@ export default function CandyMainOrders() {
       };
 
       if (editingOrderId) {
+        const clampVendorPercent = (v: any) =>
+          Math.min(Math.max(Number(v) || 0, 0), MAX_MARGIN_PERCENT);
+        const pickVendorPricePerPack = (data: any) => {
+          const direct = Number(data?.pricePerPackage || 0);
+          if (direct > 0) return direct;
+          const branch = String(data?.branch || "");
+          if (branch === "RIVAS") return Number(data?.unitPriceRivas || 0);
+          if (branch === "SAN_JORGE")
+            return Number(data?.unitPriceSanJorge || 0);
+          return Number(data?.unitPriceIsla || 0);
+        };
+        const updateVendorOrdersFromMaster = async (
+          orderId: string,
+          items: CandyOrderItem[],
+        ) => {
+          let batch = writeBatch(db);
+          let pending = 0;
+          let updated = 0;
+
+          for (const it of items) {
+            const vendSnap = await getDocs(
+              query(
+                collection(db, "inventory_candies_sellers"),
+                where("productId", "==", it.id),
+              ),
+            );
+
+            for (const d of vendSnap.docs) {
+              const v = d.data() as any;
+              const allocs = Array.isArray(v.masterAllocations)
+                ? v.masterAllocations
+                : [];
+              const fromAlloc = allocs.some(
+                (a: any) =>
+                  String(a?.masterOrderId || a?.orderId || "") === orderId,
+              );
+              const fromOrderId = String(v.orderId || "") === orderId;
+              if (!fromAlloc && !fromOrderId) continue;
+
+              const packs = safeInt(v.packages || 0);
+              const pricePerPackage = pickVendorPricePerPack(v);
+              const providerPrice = Number(it.providerPrice || 0);
+              const grossPerPack = pricePerPackage - providerPrice;
+              const grossProfit = grossPerPack * packs;
+
+              const vendorMarginPercent = clampVendorPercent(
+                v.vendorMarginPercent,
+              );
+              const uVendor =
+                Number(grossProfit || 0) * (vendorMarginPercent / 100);
+              const uInvestor = Number(grossProfit || 0) - Number(uVendor || 0);
+
+              const logisticAllocated = Number(
+                v.logisticAllocated ?? v.gastos ?? 0,
+              );
+              const uNeta =
+                Number(grossProfit || 0) -
+                Number(logisticAllocated || 0) -
+                Number(uVendor || 0);
+
+              const upaquete =
+                packs > 0 ? round2(Number(grossProfit || 0) / packs) : 0;
+              const uvXpaq =
+                packs > 0 ? round2(Number(uVendor || 0) / packs) : 0;
+
+              batch.update(doc(db, "inventory_candies_sellers", d.id), {
+                providerPrice,
+                grossProfit,
+                uVendor,
+                uInvestor,
+                uNeta,
+                vendorProfit: uVendor,
+                upaquete,
+                uvXpaq,
+                updatedAt: Timestamp.now(),
+              });
+
+              pending += 1;
+              updated += 1;
+              if (pending >= 400) {
+                await batch.commit();
+                batch = writeBatch(db);
+                pending = 0;
+              }
+            }
+          }
+
+          if (pending > 0) await batch.commit();
+          return updated;
+        };
+
         // 1) actualizar pedido
         await updateDoc(doc(db, "candy_main_orders", editingOrderId), {
           ...header,
@@ -1563,6 +1752,11 @@ export default function CandyMainOrders() {
           }
         }
 
+        const vendorUpdated = await updateVendorOrdersFromMaster(
+          editingOrderId,
+          itemsToSave,
+        );
+
         // 4) refrescar listado en memoria (sin recargar todo)
         setOrders((prev) =>
           prev.map((o) =>
@@ -1585,7 +1779,42 @@ export default function CandyMainOrders() {
           ),
         );
 
-        setMsg("✅ Orden maestra actualizada (pedido + inventario).");
+        if (editedItemsSummary.length > 0) {
+          const details = editedItemsSummary
+            .slice(0, 6)
+            .map((x) => `${x.name}: ${x.fields.join(", ")}`)
+            .join(" | ");
+          const extra =
+            editedItemsSummary.length > 6
+              ? ` (+${editedItemsSummary.length - 6} más)`
+              : "";
+          setMsg(
+            `✅ Orden maestra actualizada (pedido + inventario). ` +
+              `Items: ${itemsToSave.length}.` +
+              (vendorUpdated
+                ? ` Vendedor: ${vendorUpdated} filas actualizadas.`
+                : "") +
+              `\nEditados: ${details}${extra}`,
+          );
+
+          await addDoc(collection(db, "candy_main_orders_logs"), {
+            orderId: editingOrderId,
+            orderName: header.name,
+            orderDate: header.date,
+            changes: editedItemsSummary,
+            updatedAt: Timestamp.now(),
+            type: "update_items",
+          });
+        } else {
+          setMsg(
+            `✅ Orden maestra actualizada (pedido + inventario). ` +
+              `Items: ${itemsToSave.length}.` +
+              (vendorUpdated
+                ? ` Vendedor: ${vendorUpdated} filas actualizadas.`
+                : ""),
+          );
+        }
+        originalOrderSnapshotRef.current = serializeOrderState(orderItems);
         resetOrderForm();
         setOpenOrderModal(false);
         refresh();
@@ -1658,7 +1887,10 @@ export default function CandyMainOrders() {
 
       await batch.commit();
 
-      setMsg("✅ Orden maestra creada y registrada en inventario.");
+      setMsg(
+        `✅ Orden maestra creada y registrada en inventario. Items: ${itemsToSave.length}.`,
+      );
+      originalOrderSnapshotRef.current = "";
       resetOrderForm();
       setOpenOrderModal(false);
       refresh();
@@ -1731,11 +1963,11 @@ export default function CandyMainOrders() {
         const cat = catalog.find((c) => c.id === it.id);
 
         const providerPrice = Number(
-          cat?.providerPrice ?? it.providerPrice ?? 0,
+          it.providerPrice ?? cat?.providerPrice ?? 0,
         );
         const unitsPerPackage = Math.max(
           1,
-          safeInt(cat?.unitsPerPackage ?? it.unitsPerPackage ?? 1),
+          safeInt(it.unitsPerPackage ?? cat?.unitsPerPackage ?? 1),
         );
 
         const mR = Number(it.marginRivas ?? 0);
@@ -1773,6 +2005,7 @@ export default function CandyMainOrders() {
       });
 
       setOrderItems(normalized);
+      originalOrderSnapshotRef.current = serializeOrderState(normalized);
       setOpenOrderModal(true);
     } catch (e) {
       console.error(e);
@@ -1940,67 +2173,40 @@ export default function CandyMainOrders() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="p-3 md:p-6">
       {/* Header / acciones */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold">Ordenes Maestras</h2>
+      <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-3">
+        <div className="flex-1">
+          <h2 className="text-lg md:text-2xl font-semibold">
+            Ordenes Maestras
+          </h2>
+          <p className="text-xs md:text-sm text-gray-600">
+            Listado de pedidos de compra con costos, totales y gastos
+            prorrateados.
+          </p>
         </div>
 
-        <div className="mt-3 flex items-center justify-between">
-          <div />
+        <div className="flex flex-wrap gap-2">
+          <RefreshButton onClick={refresh} loading={loading || catalogLoading} />
 
-          <div className="flex items-center gap-2">
-            <RefreshButton
-              onClick={refresh}
-              loading={loading || catalogLoading}
-            />
-
-            <button
-              className="inline-flex items-center gap-2 bg-gray-200 text-gray-800 px-2 md:px-3 py-2 rounded-2xl hover:bg-gray-300 disabled:opacity-60"
-              onClick={backfillMainOrdersLogistics}
-              disabled={isBackfillingMain}
-            >
-              {isBackfillingMain
-                ? "Actualizando prorrateo..."
-                : "Actualizar prorrateo"}
-            </button>
-
-            <button
-              className="inline-flex items-center gap-2 bg-indigo-600 text-white px-2 md:px-3 py-2 rounded-2xl hover:bg-indigo-700 w-full md:w-auto max-w-[220px] justify-center"
-              onClick={() => {
-                resetOrderForm();
-                setOpenOrderModal(true);
-              }}
-            >
-              <span className="items-center gap-4 inline-block bg-indigo-700/40 rounded-full p-1">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 4v16m8-8H4"
-                  />
-                </svg>
-              </span>
-              Orden
-            </button>
-          </div>
+          <button
+            className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+            onClick={() => {
+              resetOrderForm();
+              setOpenOrderModal(true);
+            }}
+          >
+            + Nueva orden
+          </button>
         </div>
-
-        {msg && <p className="mt-2 text-sm">{msg}</p>}
       </div>
+
+      {msg && <div className="mb-3 p-2 rounded border text-sm bg-white">{msg}</div>}
 
       {/* MODAL ORDEN MAESTRA */}
       {openOrderModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-3">
-          <div className="relative bg-white p-4 md:p-6 rounded shadow-lg w-full max-w-6xl max-h-[90vh] overflow-y-auto text-sm">
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-2 md:p-6">
+          <div className="relative bg-white p-4 md:p-6 rounded shadow-lg w-[98vw] max-w-none max-h-[96vh] overflow-y-auto text-sm">
             {savingOrder && (
               <div className="absolute inset-0 bg-white/70 z-50 flex items-center justify-center">
                 <div className="bg-white border rounded-xl px-4 py-3 shadow flex items-center gap-3">
@@ -2534,7 +2740,47 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-right">
-                                {Number(it.providerPrice || 0).toFixed(2)}
+                                {editingProviderPriceMap[it.id] ? (
+                                  <input
+                                    type="number"
+                                    className="w-20 border rounded p-1 text-right"
+                                    value={Number(it.providerPrice || 0)}
+                                    onChange={(e) =>
+                                      handleItemFieldChange(
+                                        it.id,
+                                        "providerPrice",
+                                        e.target.value,
+                                      )
+                                    }
+                                    onBlur={() => closeProviderPriceEdit(it.id)}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" ||
+                                        e.key === "Escape"
+                                      ) {
+                                        closeProviderPriceEdit(it.id);
+                                      }
+                                    }}
+                                    inputMode="decimal"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>
+                                      {Number(it.providerPrice || 0).toFixed(2)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      onClick={() =>
+                                        openProviderPriceEdit(it.id)
+                                      }
+                                      aria-label="Editar precio proveedor"
+                                    >
+                                      ✏️
+                                    </button>
+                                  </div>
+                                )}
                               </td>
 
                               <td className="p-2 text-right">
@@ -3132,6 +3378,51 @@ export default function CandyMainOrders() {
                           </div>
 
                           <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
+                            <div className="p-2 rounded bg-gray-50 border">
+                              <div className="text-gray-600">
+                                Precio proveedor (paq)
+                              </div>
+                              {editingProviderPriceMap[it.id] ? (
+                                <input
+                                  type="number"
+                                  className="w-full border rounded p-2 text-right"
+                                  value={Number(it.providerPrice || 0)}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      it.id,
+                                      "providerPrice",
+                                      e.target.value,
+                                    )
+                                  }
+                                  onBlur={() => closeProviderPriceEdit(it.id)}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === "Escape"
+                                    ) {
+                                      closeProviderPriceEdit(it.id);
+                                    }
+                                  }}
+                                  inputMode="decimal"
+                                  autoFocus
+                                />
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="font-semibold">
+                                    {Number(it.providerPrice || 0).toFixed(2)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    onClick={() => openProviderPriceEdit(it.id)}
+                                    aria-label="Editar precio proveedor"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
                             <div className="p-2 rounded bg-blue-50 border">
                               <div className="text-gray-600">
                                 Precio Rivas (paq)
@@ -3473,23 +3764,42 @@ export default function CandyMainOrders() {
         </div>
 
         {/* DESKTOP: tabla */}
-        <div className="hidden md:block bg-white p-2 rounded shadow border w-full overflow-x-auto">
-          <table className="min-w-[1100px] text-xs md:text-sm">
-            <thead className="bg-gray-100">
-              <tr className="whitespace-nowrap">
-                <th className="p-2 border">Fecha</th>
-                <th className="p-2 border">Nombre</th>
-                <th className="p-2 border">Paquetes totales</th>
-                <th className="p-2 border">Paquetes restantes</th>
-                <th className="p-2 border">Precio Proveedor</th>
-                <th className="p-2 border">Subtotal</th>
-                <th className="p-2 border">Esperado Rivas</th>
-                <th className="p-2 border">Esperado Isla</th>
-                <th className="p-2 border">Gastos log.</th>
-                <th className="p-2 border">U. Bruta (est)</th>
-                <th className="p-2 border">Acciones</th>
-              </tr>
-            </thead>
+        <div className="hidden md:block bg-white border rounded">
+          <div className="p-3 border-b flex items-center justify-between">
+            <div className="text-sm text-gray-700">
+              Total pedidos: <b>{orders.length}</b>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                onClick={backfillMainOrdersLogistics}
+                disabled={isBackfillingMain}
+              >
+                {isBackfillingMain
+                  ? "Actualizando prorrateo..."
+                  : "Actualizar prorrateo"}
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-[1100px] w-full text-xs">
+              <thead className="bg-gray-50">
+                <tr className="whitespace-nowrap">
+                  <th className="text-left p-2 border-b">Fecha</th>
+                  <th className="text-left p-2 border-b">Nombre</th>
+                  <th className="text-right p-2 border-b">P. Totales</th>
+                  <th className="text-right p-2 border-b">P. Restantes</th>
+                  <th className="text-right p-2 border-b">P. Proveedor</th>
+                  <th className="text-right p-2 border-b">Subtotal</th>
+                  <th className="text-right p-2 border-b">Esperado Rivas</th>
+                  <th className="text-right p-2 border-b">Esperado Isla</th>
+                  <th className="text-right p-2 border-b">Gastos log.</th>
+                  <th className="text-right p-2 border-b">U. Bruta (est)</th>
+                  <th className="text-left p-2 border-b">Acciones</th>
+                </tr>
+              </thead>
             <tbody>
               {loading ? (
                 <tr>
@@ -3518,26 +3828,34 @@ export default function CandyMainOrders() {
                     Number(o.totalRivas || 0) - Number(o.subtotal || 0);
 
                   return (
-                    <tr key={o.id} className="text-center whitespace-nowrap">
-                      <td className="p-2 border">{fecha}</td>
-                      <td className="p-2 border text-left">{o.name}</td>
-                      <td className="p-2 border">{o.totalPackages}</td>
-                      <td className="p-2 border">
+                    <tr key={o.id} className="hover:bg-gray-50 whitespace-nowrap">
+                      <td className="p-2 border-b">{fecha}</td>
+                      <td className="p-2 border-b">{o.name}</td>
+                      <td className="p-2 border-b text-right">
+                        {o.totalPackages}
+                      </td>
+                      <td className="p-2 border-b text-right">
                         {agg ? agg.remainingPackages : 0}
                       </td>
-                      <td className="p-2 border">{precioProveedor}</td>
-                      <td className="p-2 border">
+                      <td className="p-2 border-b text-right">
+                        {precioProveedor}
+                      </td>
+                      <td className="p-2 border-b text-right">
                         {Number(o.subtotal || 0).toFixed(2)}
                       </td>
-                      <td className="p-2 border">
+                      <td className="p-2 border-b text-right">
                         {Number(o.totalRivas || 0).toFixed(2)}
                       </td>
-                      <td className="p-2 border">
+                      <td className="p-2 border-b text-right">
                         {Number(o.totalIsla || 0).toFixed(2)}
                       </td>
-                      <td className="p-2 border">{logi.toFixed(2)}</td>
-                      <td className="p-2 border">{grossEst.toFixed(2)}</td>
-                      <td className="p-2 border">
+                      <td className="p-2 border-b text-right">
+                        {logi.toFixed(2)}
+                      </td>
+                      <td className="p-2 border-b text-right">
+                        {grossEst.toFixed(2)}
+                      </td>
+                      <td className="p-2 border-b">
                         <div className="flex gap-1 justify-center">
                           <button
                             className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
@@ -3558,7 +3876,8 @@ export default function CandyMainOrders() {
                 })
               )}
             </tbody>
-          </table>
+            </table>
+          </div>
           {/* Paginación (desktop) */}
           <div className="mt-2 flex items-center justify-between">
             <div className="text-sm text-gray-600">

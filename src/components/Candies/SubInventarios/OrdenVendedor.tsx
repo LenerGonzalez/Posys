@@ -318,6 +318,8 @@ export default function VendorCandyOrders({
 
   const [isSaving, setIsSaving] = useState(false);
   const [isBackfilling, setIsBackfilling] = useState(false);
+  const [isSyncingMaster, setIsSyncingMaster] = useState(false);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
 
   // ===== Mobile collapse (filtros + KPIs) =====
   const [mobileMetaOpen, setMobileMetaOpen] = useState(false);
@@ -359,10 +361,12 @@ export default function VendorCandyOrders({
   const [savingCalcMap, setSavingCalcMap] = useState<Record<string, boolean>>(
     {},
   );
+  const [bulkMarginPercent, setBulkMarginPercent] = useState<string>("");
   const [toast, setToast] = useState<{
     msg: string;
     type: "success" | "error";
   } | null>(null);
+  const [syncMsg, setSyncMsg] = useState<string>("");
 
   const showToast = (msg: string, type: "success" | "error" = "success") => {
     setToast({ msg, type });
@@ -1472,21 +1476,68 @@ export default function VendorCandyOrders({
         totalExpected,
       });
 
-      // update only totalExpected and grossProfit locally
+      const vendorMarginPercent =
+        it.vendorMarginPercent != null &&
+        String(it.vendorMarginPercent).trim() !== ""
+          ? clampPercent(it.vendorMarginPercent)
+          : getSellerMarginPercent(sellerId);
+      const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+      const uVendor = Number(split.uVendor || 0);
+      const uInvestor = Number(split.uInvestor || 0);
+      const vendorProfit = uVendor;
+      const gastosBase = Number(
+        it.logisticAllocated ??
+          (it as any).logisticAllocated ??
+          (it as any).gastos ??
+          (it as any).gasto ??
+          0,
+      );
+      const uNeta = Number(grossProfit || 0) - gastosBase - uVendor;
+
+      // update totals and vendor split locally
       setOrderItems((prev) =>
         prev.map((x) =>
-          x.id === id ? { ...x, totalExpected, grossProfit } : x,
+          x.id === id
+            ? {
+                ...x,
+                totalExpected,
+                grossProfit,
+                vendorMarginPercent,
+                uVendor,
+                uInvestor,
+                vendorProfit,
+              }
+            : x,
         ),
       );
 
       // update main rows so list reflects change
       setRows((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, grossProfit } : r)),
+        prev.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                totalExpected,
+                grossProfit,
+                vendorMarginPercent,
+                uVendor,
+                uInvestor,
+                vendorProfit,
+                uNeta,
+              }
+            : r,
+        ),
       );
       if (rowsByIdRef.current && rowsByIdRef.current[id]) {
         rowsByIdRef.current[id] = {
           ...rowsByIdRef.current[id],
+          totalExpected,
           grossProfit,
+          vendorMarginPercent,
+          uVendor,
+          uInvestor,
+          vendorProfit,
+          uNeta,
         } as any;
       }
 
@@ -1494,16 +1545,16 @@ export default function VendorCandyOrders({
       if (!String(id).startsWith("tmp_")) {
         const uPaquete =
           packs > 0 ? round2(Number(grossProfit || 0) / packs) : 0;
-        const vendorMarginPercent =
-          it.vendorMarginPercent != null
-            ? it.vendorMarginPercent
-            : getSellerMarginPercent(sellerId);
-        const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
         const uvXpaq =
           packs > 0 ? round2(Number(split.uVendor || 0) / packs) : 0;
         await updateDoc(doc(db, "inventory_candies_sellers", id), {
           totalExpected,
           grossProfit,
+          vendorMarginPercent,
+          uVendor,
+          uInvestor,
+          vendorProfit,
+          uNeta,
           upaquete: uPaquete,
           uvXpaq,
           updatedAt: Timestamp.now(),
@@ -1555,8 +1606,16 @@ export default function VendorCandyOrders({
     // raw stored `totalExpected` for that purpose.
     const totalExpected = Number(it.totalExpected || 0);
 
-    // grossProfitBase: stored grossProfit for the full item
-    const grossProfitBase = Number(it.grossProfit || 0);
+    const p = productsAll.find((x) => x.id === it.productId) || null;
+    const s = sellers.find((x) => x.id === sellerId) || null;
+    const br = s?.branch;
+    const packs = Math.max(0, Number(it.packages || 0));
+    const grossPerPack = computeGrossPerPack(p, it, br);
+    // grossProfitBase: recomputed when possible to avoid stale values
+    const grossProfitBase =
+      packs > 0 && Number.isFinite(grossPerPack)
+        ? grossPerPack * packs
+        : Number(it.grossProfit || 0);
     // grossProfit: active-adjusted grossProfit (reflects transferDelta)
     const grossProfit = getItemActiveValue(it, grossProfitBase);
 
@@ -1564,7 +1623,12 @@ export default function VendorCandyOrders({
 
     // Recompute vendor share from base gross profit and vendor margin,
     // then apply active ratio so `U. Vendedor` follows active packages.
-    const vendorMarginPercent = clampPercent(it.vendorMarginPercent || 0);
+    // Fallback to seller margin when item margin is missing/empty.
+    const vendorMarginPercent =
+      it.vendorMarginPercent != null &&
+      String(it.vendorMarginPercent).trim() !== ""
+        ? clampPercent(it.vendorMarginPercent)
+        : getSellerMarginPercent(sellerId);
     const split = calcSplitFromGross(grossProfitBase, vendorMarginPercent);
     const uVendor = getItemActiveValue(it, Number(split.uVendor || 0));
 
@@ -1618,6 +1682,7 @@ export default function VendorCandyOrders({
     setItemsPage(1);
     setEditingPackagesMap({});
     setEditingMarginMap({});
+    setSyncMsg("");
   };
 
   const openNewOrder = () => {
@@ -1641,7 +1706,579 @@ export default function VendorCandyOrders({
     setOpenForm(false);
   };
 
-  const openEditOrder = (orderKey: string) => {
+  const syncAllOrdersFromMaster = async () => {
+    if (!isAdmin) return;
+    if (isSyncingAll) return;
+
+    try {
+      setIsSyncingAll(true);
+      setMsg("");
+
+      const list = rows;
+      if (!list.length) {
+        setMsg("⚠️ No hay documentos para sincronizar.");
+        return;
+      }
+
+      const sellerById = new Map(sellers.map((s) => [s.id, s]));
+      const productById = new Map(productsAll.map((p) => [p.id, p]));
+
+      const masterItemsMap = new Map<
+        string,
+        {
+          providerPrice: number;
+          unitPriceRivas: number;
+          unitPriceSanJorge: number;
+          unitPriceIsla: number;
+        }
+      >();
+
+      const masterOrderIds = new Set<string>();
+      list.forEach((r) => {
+        const p = productById.get(String(r.productId || "")) || null;
+        const mid = String((p as any)?.masterOrderId || "");
+        if (mid) masterOrderIds.add(mid);
+      });
+
+      await Promise.all(
+        Array.from(masterOrderIds).map(async (mid) => {
+          const masterSnap = await getDoc(doc(db, "candy_main_orders", mid));
+          if (!masterSnap.exists()) return;
+          const data = masterSnap.data() as any;
+          const items = Array.isArray(data.items) ? data.items : [];
+          items.forEach((it: any) => {
+            const pid = String(it.id || it.productId || "");
+            if (!pid) return;
+            if (masterItemsMap.has(pid)) return;
+            masterItemsMap.set(pid, {
+              providerPrice: Number(
+                it.providerPrice ??
+                  it.provider_price ??
+                  it.priceProvider ??
+                  it.costProvider ??
+                  0,
+              ),
+              unitPriceRivas: Number(it.unitPriceRivas || 0),
+              unitPriceSanJorge: Number(it.unitPriceSanJorge || 0),
+              unitPriceIsla: Number(it.unitPriceIsla || 0),
+            });
+          });
+        }),
+      );
+
+      const updates: Array<{
+        id: string;
+        providerPrice: number;
+        subtotal: number;
+        totalRivas: number;
+        totalSanJorge: number;
+        totalIsla: number;
+        unitPriceRivas: number;
+        unitPriceSanJorge: number;
+        unitPriceIsla: number;
+        totalExpected: number;
+        grossProfit: number;
+        logisticAllocated: number;
+        vendorMarginPercent: number;
+        uVendor: number;
+        uInvestor: number;
+        uNeta: number;
+        uvXpaq: number;
+        upaquete: number;
+      }> = [];
+
+      list.forEach((r) => {
+        const productId = String(r.productId || "");
+        const p = productById.get(productId) || null;
+        const masterItem = masterItemsMap.get(productId) || null;
+        const seller = sellerById.get(r.sellerId || "") || null;
+        const br = seller?.branch;
+        const packs = Number(r.packages || 0);
+
+        const unitPriceRivas = Number(
+          masterItem?.unitPriceRivas || r.unitPriceRivas || p?.unitPriceRivas || 0,
+        );
+        const unitPriceSanJorge = Number(
+          masterItem?.unitPriceSanJorge ||
+            r.unitPriceSanJorge ||
+            p?.unitPriceSanJorge ||
+            0,
+        );
+        const unitPriceIsla = Number(
+          masterItem?.unitPriceIsla || r.unitPriceIsla || p?.unitPriceIsla || 0,
+        );
+
+        const pricePerPackage =
+          br === "RIVAS"
+            ? unitPriceRivas
+            : br === "SAN_JORGE"
+              ? unitPriceSanJorge
+              : unitPriceIsla;
+
+        const providerPriceRow = Number((r as any).providerPrice || 0);
+        const providerPriceFromMaster = Number(masterItem?.providerPrice || 0);
+        const providerPriceFromProduct = Number(p?.providerPrice || 0);
+        const providerPrice =
+          providerPriceFromMaster > 0
+            ? providerPriceFromMaster
+            : providerPriceFromProduct > 0
+              ? providerPriceFromProduct
+              : providerPriceRow;
+
+        const grossPerPack = computeGrossPerPack(
+          p,
+          { pricePerPackage, providerPrice },
+          br,
+        );
+        const grossProfit = grossPerPack * packs;
+        const totalExpected = pricePerPackage * packs;
+
+        const totalRivas = unitPriceRivas * packs;
+        const totalSanJorge = unitPriceSanJorge * packs;
+        const totalIsla = unitPriceIsla * packs;
+        const subtotal = providerPrice * packs;
+
+        const logisticAllocated =
+          Number((r as any).logisticAllocated ?? (r as any).gastos ?? 0) ||
+          (p ? p.logisticAllocatedPerPack * packs : 0);
+
+        const vendorMarginPercent = clampPercent(
+          r.vendorMarginPercent ?? getSellerMarginPercent(r.sellerId),
+        );
+        const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+        const uVendor = Number(split.uVendor || 0);
+        const uInvestor = Number(split.uInvestor || 0);
+        const uNeta = grossProfit - logisticAllocated - uVendor;
+        const uvXpaq = packs > 0 ? round2(uVendor / packs) : 0;
+        const upaquete = packs > 0 ? round2(grossProfit / packs) : 0;
+
+        updates.push({
+          id: r.id,
+          providerPrice,
+          subtotal,
+          totalRivas,
+          totalSanJorge,
+          totalIsla,
+          unitPriceRivas,
+          unitPriceSanJorge,
+          unitPriceIsla,
+          totalExpected,
+          grossProfit,
+          logisticAllocated,
+          vendorMarginPercent,
+          uVendor,
+          uInvestor,
+          uNeta,
+          uvXpaq,
+          upaquete,
+        });
+      });
+
+      const updatesMap = new Map(updates.map((u) => [u.id, u]));
+      setRows((prev) =>
+        prev.map((row) => {
+          const u = updatesMap.get(row.id);
+          return u
+            ? {
+                ...row,
+                providerPrice: u.providerPrice,
+                subtotal: u.subtotal,
+                totalRivas: u.totalRivas,
+                totalSanJorge: u.totalSanJorge,
+                totalIsla: u.totalIsla,
+                unitPriceRivas: u.unitPriceRivas,
+                unitPriceSanJorge: u.unitPriceSanJorge,
+                unitPriceIsla: u.unitPriceIsla,
+                totalExpected: u.totalExpected,
+                grossProfit: u.grossProfit,
+                logisticAllocated: u.logisticAllocated,
+                vendorMarginPercent: u.vendorMarginPercent,
+                uVendor: u.uVendor,
+                uInvestor: u.uInvestor,
+                uNeta: u.uNeta,
+                uvXpaq: u.uvXpaq,
+                upaquete: u.upaquete,
+                vendorProfit: u.uVendor,
+              }
+            : row;
+        }),
+      );
+
+      rowsByIdRef.current = rowsByIdRef.current || {};
+      updates.forEach((u) => {
+        const existing = rowsByIdRef.current[u.id];
+        if (!existing) return;
+        rowsByIdRef.current[u.id] = {
+          ...existing,
+          providerPrice: u.providerPrice,
+          subtotal: u.subtotal,
+          totalRivas: u.totalRivas,
+          totalSanJorge: u.totalSanJorge,
+          totalIsla: u.totalIsla,
+          unitPriceRivas: u.unitPriceRivas,
+          unitPriceSanJorge: u.unitPriceSanJorge,
+          unitPriceIsla: u.unitPriceIsla,
+          totalExpected: u.totalExpected,
+          grossProfit: u.grossProfit,
+          logisticAllocated: u.logisticAllocated,
+          vendorMarginPercent: u.vendorMarginPercent,
+          uVendor: u.uVendor,
+          uInvestor: u.uInvestor,
+          uNeta: u.uNeta,
+          uvXpaq: u.uvXpaq,
+          upaquete: u.upaquete,
+          vendorProfit: u.uVendor,
+        } as any;
+      });
+
+      let batch = writeBatch(db);
+      let pending = 0;
+      let updated = 0;
+
+      for (const u of updates) {
+        if (String(u.id).startsWith("tmp_")) continue;
+        batch.update(doc(db, "inventory_candies_sellers", u.id), {
+          providerPrice: u.providerPrice,
+          subtotal: u.subtotal,
+          totalRivas: u.totalRivas,
+          totalSanJorge: u.totalSanJorge,
+          totalIsla: u.totalIsla,
+          unitPriceRivas: u.unitPriceRivas,
+          unitPriceSanJorge: u.unitPriceSanJorge,
+          unitPriceIsla: u.unitPriceIsla,
+          totalExpected: u.totalExpected,
+          grossProfit: u.grossProfit,
+          logisticAllocated: u.logisticAllocated,
+          vendorMarginPercent: u.vendorMarginPercent,
+          uVendor: u.uVendor,
+          uInvestor: u.uInvestor,
+          uNeta: u.uNeta,
+          uvXpaq: u.uvXpaq,
+          upaquete: u.upaquete,
+          vendorProfit: u.uVendor,
+          updatedAt: Timestamp.now(),
+        });
+        pending += 1;
+        updated += 1;
+        if (pending >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          pending = 0;
+        }
+      }
+
+      if (pending > 0) await batch.commit();
+
+      setMsg(`✅ Sincronizados ${updated} registros con Orden Maestra.`);
+      showToast(`✅ Sincronizados ${updated} registros`, "success");
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error sincronizando todos los pedidos.");
+      showToast("❌ Error sincronizando todos los pedidos", "error");
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
+  const syncOrderFromMaster = async () => {
+    if (!isAdmin) return;
+    if (!editingOrderKey) return;
+    if (isSyncingMaster) return;
+
+    try {
+      setIsSyncingMaster(true);
+      setSyncMsg("");
+
+      const orderRows = rowsByRole.filter(
+        (r) => getRowOrderKey(r) === editingOrderKey,
+      );
+      if (!orderRows.length) {
+        setSyncMsg("⚠️ No hay filas para sincronizar.");
+        return;
+      }
+
+      const [sid] = editingOrderKey.split("__");
+      const seller = sellers.find((s) => s.id === sid) || null;
+      const br = seller?.branch;
+
+      const masterItemsMap = new Map<
+        string,
+        {
+          providerPrice: number;
+          unitPriceRivas: number;
+          unitPriceSanJorge: number;
+          unitPriceIsla: number;
+        }
+      >();
+      try {
+        const masterOrderIds = new Set<string>();
+        orderRows.forEach((r) => {
+          const p =
+            productsAll.find((x) => x.id === String(r.productId)) || null;
+          const mid = String((p as any)?.masterOrderId || "");
+          if (mid) masterOrderIds.add(mid);
+        });
+
+        await Promise.all(
+          Array.from(masterOrderIds).map(async (mid) => {
+            const masterSnap = await getDoc(doc(db, "candy_main_orders", mid));
+            if (!masterSnap.exists()) return;
+            const data = masterSnap.data() as any;
+            const items = Array.isArray(data.items) ? data.items : [];
+            items.forEach((it: any) => {
+              const pid = String(it.id || it.productId || "");
+              if (!pid) return;
+              if (masterItemsMap.has(pid)) return;
+              masterItemsMap.set(pid, {
+                providerPrice: Number(
+                  it.providerPrice ??
+                    it.provider_price ??
+                    it.priceProvider ??
+                    it.costProvider ??
+                    0,
+                ),
+                unitPriceRivas: Number(it.unitPriceRivas || 0),
+                unitPriceSanJorge: Number(it.unitPriceSanJorge || 0),
+                unitPriceIsla: Number(it.unitPriceIsla || 0),
+              });
+            });
+          }),
+        );
+      } catch (e) {
+        console.warn("[OV] sync master read failed", e);
+      }
+
+      const updates: Array<{
+        id: string;
+        providerPrice: number;
+        subtotal: number;
+        totalRivas: number;
+        totalSanJorge: number;
+        totalIsla: number;
+        unitPriceRivas: number;
+        unitPriceSanJorge: number;
+        unitPriceIsla: number;
+        totalExpected: number;
+        grossProfit: number;
+        logisticAllocated: number;
+        vendorMarginPercent: number;
+        uVendor: number;
+        uInvestor: number;
+        uNeta: number;
+        uvXpaq: number;
+        upaquete: number;
+      }> = [];
+
+      orderRows.forEach((r) => {
+        const productId = String(r.productId || "");
+        const p = productsAll.find((x) => x.id === productId) || null;
+        const masterItem = masterItemsMap.get(productId) || null;
+        const packs = Number(r.packages || 0);
+
+        const unitPriceRivas = Number(
+          masterItem?.unitPriceRivas ||
+            r.unitPriceRivas ||
+            p?.unitPriceRivas ||
+            0,
+        );
+        const unitPriceSanJorge = Number(
+          masterItem?.unitPriceSanJorge ||
+            r.unitPriceSanJorge ||
+            p?.unitPriceSanJorge ||
+            0,
+        );
+        const unitPriceIsla = Number(
+          masterItem?.unitPriceIsla || r.unitPriceIsla || p?.unitPriceIsla || 0,
+        );
+
+        const pricePerPackage =
+          br === "RIVAS"
+            ? unitPriceRivas
+            : br === "SAN_JORGE"
+              ? unitPriceSanJorge
+              : unitPriceIsla;
+
+        const providerPriceRow = Number((r as any).providerPrice || 0);
+        const providerPriceFromMaster = Number(masterItem?.providerPrice || 0);
+        const providerPriceFromProduct = Number(p?.providerPrice || 0);
+        const providerPrice =
+          providerPriceFromMaster > 0
+            ? providerPriceFromMaster
+            : providerPriceFromProduct > 0
+              ? providerPriceFromProduct
+              : providerPriceRow;
+
+        const grossPerPack = computeGrossPerPack(
+          p,
+          { pricePerPackage, providerPrice },
+          br,
+        );
+        const grossProfit = grossPerPack * packs;
+        const totalExpected = pricePerPackage * packs;
+
+        const totalRivas = unitPriceRivas * packs;
+        const totalSanJorge = unitPriceSanJorge * packs;
+        const totalIsla = unitPriceIsla * packs;
+        const subtotal = providerPrice * packs;
+
+        const logisticAllocated =
+          Number((r as any).logisticAllocated ?? (r as any).gastos ?? 0) ||
+          (p ? p.logisticAllocatedPerPack * packs : 0);
+
+        const vendorMarginPercent = clampPercent(
+          r.vendorMarginPercent ?? getSellerMarginPercent(sid),
+        );
+        const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+        const uVendor = Number(split.uVendor || 0);
+        const uInvestor = Number(split.uInvestor || 0);
+        const uNeta = grossProfit - logisticAllocated - uVendor;
+        const uvXpaq = packs > 0 ? round2(uVendor / packs) : 0;
+        const upaquete = packs > 0 ? round2(grossProfit / packs) : 0;
+
+        updates.push({
+          id: r.id,
+          providerPrice,
+          subtotal,
+          totalRivas,
+          totalSanJorge,
+          totalIsla,
+          unitPriceRivas,
+          unitPriceSanJorge,
+          unitPriceIsla,
+          totalExpected,
+          grossProfit,
+          logisticAllocated,
+          vendorMarginPercent,
+          uVendor,
+          uInvestor,
+          uNeta,
+          uvXpaq,
+          upaquete,
+        });
+      });
+
+      const updatesMap = new Map(updates.map((u) => [u.id, u]));
+      setOrderItems((prev) =>
+        prev.map((it) => {
+          const u = updatesMap.get(it.id);
+          return u
+            ? {
+                ...it,
+                providerPrice: u.providerPrice,
+                totalRivas: u.totalRivas,
+                totalSanJorge: u.totalSanJorge,
+                totalIsla: u.totalIsla,
+                unitPriceRivas: u.unitPriceRivas,
+                unitPriceSanJorge: u.unitPriceSanJorge,
+                unitPriceIsla: u.unitPriceIsla,
+                totalExpected: u.totalExpected,
+                grossProfit: u.grossProfit,
+                logisticAllocated: u.logisticAllocated,
+                vendorMarginPercent: u.vendorMarginPercent,
+                uVendor: u.uVendor,
+                uInvestor: u.uInvestor,
+              }
+            : it;
+        }),
+      );
+
+      setRows((prev) =>
+        prev.map((row) => {
+          const u = updatesMap.get(row.id);
+          return u
+            ? {
+                ...row,
+                providerPrice: u.providerPrice,
+                subtotal: u.subtotal,
+                totalRivas: u.totalRivas,
+                totalSanJorge: u.totalSanJorge,
+                totalIsla: u.totalIsla,
+                unitPriceRivas: u.unitPriceRivas,
+                unitPriceSanJorge: u.unitPriceSanJorge,
+                unitPriceIsla: u.unitPriceIsla,
+                totalExpected: u.totalExpected,
+                grossProfit: u.grossProfit,
+                logisticAllocated: u.logisticAllocated,
+                vendorMarginPercent: u.vendorMarginPercent,
+                uVendor: u.uVendor,
+                uInvestor: u.uInvestor,
+                uNeta: u.uNeta,
+                uvXpaq: u.uvXpaq,
+                upaquete: u.upaquete,
+                vendorProfit: u.uVendor,
+              }
+            : row;
+        }),
+      );
+
+      rowsByIdRef.current = rowsByIdRef.current || {};
+      updates.forEach((u) => {
+        const existing = rowsByIdRef.current[u.id];
+        if (!existing) return;
+        rowsByIdRef.current[u.id] = {
+          ...existing,
+          providerPrice: u.providerPrice,
+          subtotal: u.subtotal,
+          totalRivas: u.totalRivas,
+          totalSanJorge: u.totalSanJorge,
+          totalIsla: u.totalIsla,
+          unitPriceRivas: u.unitPriceRivas,
+          unitPriceSanJorge: u.unitPriceSanJorge,
+          unitPriceIsla: u.unitPriceIsla,
+          totalExpected: u.totalExpected,
+          grossProfit: u.grossProfit,
+          logisticAllocated: u.logisticAllocated,
+          vendorMarginPercent: u.vendorMarginPercent,
+          uVendor: u.uVendor,
+          uInvestor: u.uInvestor,
+          uNeta: u.uNeta,
+          uvXpaq: u.uvXpaq,
+          upaquete: u.upaquete,
+          vendorProfit: u.uVendor,
+        } as any;
+      });
+
+      const batch = writeBatch(db);
+      updates.forEach((u) => {
+        if (String(u.id).startsWith("tmp_")) return;
+        batch.update(doc(db, "inventory_candies_sellers", u.id), {
+          providerPrice: u.providerPrice,
+          subtotal: u.subtotal,
+          totalRivas: u.totalRivas,
+          totalSanJorge: u.totalSanJorge,
+          totalIsla: u.totalIsla,
+          unitPriceRivas: u.unitPriceRivas,
+          unitPriceSanJorge: u.unitPriceSanJorge,
+          unitPriceIsla: u.unitPriceIsla,
+          totalExpected: u.totalExpected,
+          grossProfit: u.grossProfit,
+          logisticAllocated: u.logisticAllocated,
+          vendorMarginPercent: u.vendorMarginPercent,
+          uVendor: u.uVendor,
+          uInvestor: u.uInvestor,
+          uNeta: u.uNeta,
+          uvXpaq: u.uvXpaq,
+          upaquete: u.upaquete,
+          vendorProfit: u.uVendor,
+          updatedAt: Timestamp.now(),
+        });
+      });
+      await batch.commit();
+
+      setSyncMsg(`✅ Sincronizados ${updates.length} productos en BD`);
+      showToast(`✅ Sincronizados ${updates.length} productos`, "success");
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setSyncMsg("❌ Error sincronizando con Orden Maestra");
+      showToast("❌ Error sincronizando con Orden Maestra", "error");
+    } finally {
+      setIsSyncingMaster(false);
+    }
+  };
+
+  const openEditOrder = async (orderKey: string) => {
     setMsg("");
     resetForm();
     setEditingOrderKey(orderKey);
@@ -1656,6 +2293,20 @@ export default function VendorCandyOrders({
 
     const seller = sellers.find((s) => s.id === sid) || null;
     const br = seller?.branch;
+
+    const syncUpdates: Array<{
+      id: string;
+      providerPrice: number;
+      totalExpected: number;
+      grossProfit: number;
+      logisticAllocated: number;
+      vendorMarginPercent: number;
+      uVendor: number;
+      uInvestor: number;
+      uNeta: number;
+      uvXpaq: number;
+      upaquete: number;
+    }> = [];
 
     const items: OrderItem[] = orderRows.map((r) => {
       const p = productsAll.find((x) => x.id === String(r.productId)) || null;
@@ -1675,6 +2326,22 @@ export default function VendorCandyOrders({
             ? unitPriceSanJorge
             : unitPriceIsla;
 
+      const providerPriceRow = Number((r as any).providerPrice || 0);
+      const providerPriceFromProduct = Number(p?.providerPrice || 0);
+      const providerPrice =
+        providerPriceFromProduct > 0 &&
+        (providerPriceRow <= 0 ||
+          Math.abs(providerPriceRow - providerPriceFromProduct) > 0.01)
+          ? providerPriceFromProduct
+          : providerPriceRow;
+
+      const grossPerPack = computeGrossPerPack(
+        p,
+        { pricePerPackage, providerPrice },
+        br,
+      );
+      const grossProfit = grossPerPack * packs;
+
       const totalRivas = Number(r.totalRivas || 0);
       const totalSanJorge = Number(r.totalSanJorge || 0);
       const totalIsla = Number(r.totalIsla || 0);
@@ -1690,14 +2357,49 @@ export default function VendorCandyOrders({
         r.vendorMarginPercent ?? getSellerMarginPercent(sid),
       );
 
-      const split = calcSplitFromGross(
-        Number(r.grossProfit || 0),
-        vendorMarginPercent,
-      );
-
       const logisticAllocated =
         Number((r as any).logisticAllocated ?? (r as any).gastos ?? 0) ||
         (p ? p.logisticAllocatedPerPack * packs : 0);
+
+      const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+
+      const uVendor = Number(split.uVendor || 0);
+      const uInvestor = Number(split.uInvestor || 0);
+      const uNeta = grossProfit - logisticAllocated - uVendor;
+      const uvXpaq = packs > 0 ? round2(uVendor / packs) : 0;
+      const upaquete = packs > 0 ? round2(grossProfit / packs) : 0;
+
+      const shouldSync =
+        Number.isFinite(grossProfit) &&
+        (Math.abs(Number(r.grossProfit || 0) - grossProfit) > 0.01 ||
+          Math.abs(providerPriceRow - providerPrice) > 0.01 ||
+          Math.abs(Number(r.logisticAllocated || 0) - logisticAllocated) >
+            0.01 ||
+          Math.abs(Number(r.uVendor || 0) - uVendor) > 0.01 ||
+          Math.abs(Number(r.uInvestor || 0) - uInvestor) > 0.01 ||
+          Math.abs(Number((r as any).uNeta || 0) - uNeta) > 0.01);
+      if (shouldSync) {
+        syncUpdates.push({
+          id: r.id,
+          providerPrice,
+          totalExpected,
+          grossProfit,
+          logisticAllocated,
+          vendorMarginPercent: split.vendorMarginPercent,
+          uVendor,
+          uInvestor,
+          uNeta,
+          uvXpaq,
+          upaquete,
+        });
+      }
+
+      const nextUVendor =
+        shouldSync || r.uVendor == null ? uVendor : Number(r.uVendor || 0);
+      const nextUInvestor =
+        shouldSync || r.uInvestor == null
+          ? uInvestor
+          : Number(r.uInvestor || 0);
 
       return {
         id: r.id,
@@ -1711,14 +2413,14 @@ export default function VendorCandyOrders({
         totalExpected,
         pricePerPackage,
 
-        grossProfit: Number(r.grossProfit || 0),
+        grossProfit,
 
         logisticAllocated,
 
         vendorMarginPercent: split.vendorMarginPercent,
         uAproximada: Number(r.uAproximada || 0),
-        uVendor: Number(r.uVendor ?? split.uVendor ?? 0),
-        uInvestor: Number(r.uInvestor ?? split.uInvestor ?? 0),
+        uVendor: nextUVendor,
+        uInvestor: nextUInvestor,
 
         totalRivas,
         totalSanJorge,
@@ -1728,7 +2430,7 @@ export default function VendorCandyOrders({
         unitPriceSanJorge,
         unitPriceIsla,
 
-        providerPrice: Number((r as any).providerPrice || 0),
+        providerPrice,
 
         remainingPackages: Number(r.remainingPackages || 0),
         transferDelta: getRowTransferDelta(r),
@@ -1753,6 +2455,81 @@ export default function VendorCandyOrders({
       /* ignore */
     }
     setOpenForm(true);
+
+    if (syncUpdates.length > 0) {
+      const updatesMap = new Map(syncUpdates.map((u) => [u.id, u]));
+      setRows((prev) =>
+        prev.map((row) => {
+          const u = updatesMap.get(row.id);
+          return u
+            ? {
+                ...row,
+                providerPrice: u.providerPrice,
+                totalExpected: u.totalExpected,
+                grossProfit: u.grossProfit,
+                logisticAllocated: u.logisticAllocated,
+                vendorMarginPercent: u.vendorMarginPercent,
+                uVendor: u.uVendor,
+                uInvestor: u.uInvestor,
+                uNeta: u.uNeta,
+                uvXpaq: u.uvXpaq,
+                upaquete: u.upaquete,
+                vendorProfit: u.uVendor,
+              }
+            : row;
+        }),
+      );
+      rowsByIdRef.current = rowsByIdRef.current || {};
+      syncUpdates.forEach((u) => {
+        const existing = rowsByIdRef.current[u.id];
+        if (!existing) return;
+        rowsByIdRef.current[u.id] = {
+          ...existing,
+          providerPrice: u.providerPrice,
+          totalExpected: u.totalExpected,
+          grossProfit: u.grossProfit,
+          logisticAllocated: u.logisticAllocated,
+          vendorMarginPercent: u.vendorMarginPercent,
+          uVendor: u.uVendor,
+          uInvestor: u.uInvestor,
+          uNeta: u.uNeta,
+          uvXpaq: u.uvXpaq,
+          upaquete: u.upaquete,
+          vendorProfit: u.uVendor,
+        } as any;
+      });
+      try {
+        const batch = writeBatch(db);
+        syncUpdates.forEach((u) => {
+          if (String(u.id).startsWith("tmp_")) return;
+          batch.update(doc(db, "inventory_candies_sellers", u.id), {
+            providerPrice: u.providerPrice,
+            totalExpected: u.totalExpected,
+            grossProfit: u.grossProfit,
+            logisticAllocated: u.logisticAllocated,
+            vendorMarginPercent: u.vendorMarginPercent,
+            uVendor: u.uVendor,
+            uInvestor: u.uInvestor,
+            uNeta: u.uNeta,
+            uvXpaq: u.uvXpaq,
+            upaquete: u.upaquete,
+            vendorProfit: u.uVendor,
+            updatedAt: Timestamp.now(),
+          });
+        });
+        await batch.commit();
+        showToast(
+          `✅ Sincronizados ${syncUpdates.length} productos`,
+          "success",
+        );
+        setSyncMsg(`✅ Sincronizados ${syncUpdates.length} productos en BD`);
+        refresh();
+      } catch (syncErr) {
+        console.warn("[OV] openOrder sync failed", syncErr);
+        showToast("❌ No se pudo sincronizar en Firestore", "error");
+        setSyncMsg("❌ No se pudo sincronizar en Firestore");
+      }
+    }
   };
 
   // =========================
@@ -1929,6 +2706,31 @@ export default function VendorCandyOrders({
     );
   };
 
+  const applyBulkMarginPercent = () => {
+    const pctNum = clampPercent(bulkMarginPercent);
+    if (!isFinite(pctNum)) {
+      setMsg("⚠️ Ingresa un margen válido.");
+      return;
+    }
+
+    setOrderItems((prev) =>
+      prev.map((it) => {
+        const grossProfit = Number(it.grossProfit || 0);
+        const split = calcSplitFromGross(grossProfit, pctNum);
+        return {
+          ...it,
+          vendorMarginPercent: pctNum,
+          uVendor: split.uVendor,
+          uInvestor: split.uInvestor,
+        };
+      }),
+    );
+
+    // Limpiar input después de aplicar
+    setBulkMarginPercent("");
+    setMsg("✅ Margen aplicado a todas las filas del pedido (en borrador)");
+  };
+
   // =========================
   // BACKFILL CAMPOS CALCULADOS
   // =========================
@@ -1992,7 +2794,8 @@ export default function VendorCandyOrders({
         const uAproximada = packs > 0 ? uApproxPerPack * packs : 0;
 
         const vendorMarginPercent =
-          r.vendorMarginPercent != null
+          r.vendorMarginPercent != null &&
+          String(r.vendorMarginPercent).trim() !== ""
             ? clampPercent(r.vendorMarginPercent)
             : getSellerMarginPercent(r.sellerId);
 
@@ -3094,12 +3897,13 @@ export default function VendorCandyOrders({
   // Solo admin puede cambiar el vendedor en el selector
   const disableSellerSelect = !isAdmin;
   const desktopColumns = isAdmin ? 12 : 9;
+  const zeroClass = (v: number) => (Number(v) <= 0 ? "text-red-500" : "");
 
   // =========================
   // RENDER
   // =========================
   return (
-    <div className="p-3 md:p-6 overflow-x-hidden">
+    <div className="p-3 md:p-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-3">
         <div className="flex-1">
@@ -3183,6 +3987,27 @@ export default function VendorCandyOrders({
                 {isAdmin && (
                   <>
                     <button
+                      className={`px-3 py-2 rounded border text-sm ${
+                        isSyncingAll
+                          ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                          : "bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600"
+                      }`}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            "¿Sincronizar todos los pedidos con Orden Maestra?",
+                          )
+                        ) {
+                          syncAllOrdersFromMaster();
+                        }
+                      }}
+                      disabled={isSyncingAll}
+                    >
+                      {isSyncingAll
+                        ? "Sincronizando..."
+                        : "Sincronizar todo"}
+                    </button>
+                    <button
                       className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
                       onClick={backfillCalculatedFields}
                       disabled={isBackfilling}
@@ -3203,10 +4028,10 @@ export default function VendorCandyOrders({
               </div>
             </div>
 
-            <div>
-              <table className="w-full text-sm table-auto">
+            <div className="overflow-x-auto">
+              <table className="min-w-[1100px] w-full text-xs">
                 <thead className="bg-gray-50">
-                  <tr>
+                  <tr className="whitespace-nowrap">
                     <th className="text-left p-2 border-b">Nombre</th>
                     <th className="text-left p-2 border-b">Fecha</th>
                     <th className="text-left p-2 border-b">Vendedor</th>
@@ -3231,69 +4056,100 @@ export default function VendorCandyOrders({
                   </tr>
                 </thead>
                 <tbody>
-                  {pagedOrders.map((o) => (
-                    <tr key={o.orderKey} className="hover:bg-gray-50">
-                      <td className="p-2 border-b">{o.orderName || "—"}</td>
-                      <td className="p-2 border-b">{o.date}</td>
-                      <td className="p-2 border-b">{o.sellerName}</td>
-                      <td className="p-2 border-b text-right">
-                        {o.totalPackages}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {o.totalRemainingPackages}
-                      </td>
-                      {isAdmin && (
-                        <td className="p-2 border-b text-right">
-                          {money(o.totalExpectedActive ?? o.totalExpected)}
-                        </td>
-                      )}
-                      {isAdmin && (
-                        <td className="p-2 border-b text-right">
-                          {money(o.grossProfitActive ?? o.grossProfit)}
-                        </td>
-                      )}
-                      {isAdmin && (
-                        <td className="p-2 border-b text-right">
-                          {money((o.gastosActive ?? o.gastos) || 0)}
-                        </td>
-                      )}
+                  {pagedOrders.map((o) => {
+                    const totalExpectedVal = Number(
+                      o.totalExpectedActive ?? o.totalExpected ?? 0,
+                    );
+                    const grossProfitVal = Number(
+                      o.grossProfitActive ?? o.grossProfit ?? 0,
+                    );
+                    const vendorProfitVal = Number(
+                      o.vendorProfitActive ?? o.vendorProfit ?? 0,
+                    );
+                    const transferredOutVal = Number(o.transferredOut || 0);
+                    const transferredInVal = Number(o.transferredIn || 0);
 
-                      <td className="p-2 border-b text-right">
-                        {money(o.vendorProfitActive ?? o.vendorProfit)}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {o.transferredOut}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {o.transferredIn}
-                      </td>
-                      <td className="p-2 border-b">
-                        <div className="flex gap-2">
-                          <button
-                            className="px-3 py-1.5 rounded bg-gray-900 text-white text-xs hover:bg-black"
-                            onClick={() => openEditOrder(o.orderKey)}
-                          >
-                            Ver / Editar
-                          </button>
-                          {/* recalc button removed per request */}
-                          {isAdmin && (
+                    return (
+                      <tr
+                        key={o.orderKey}
+                        className="hover:bg-gray-50 whitespace-nowrap"
+                      >
+                        <td className="p-2 border-b">{o.orderName || "—"}</td>
+                        <td className="p-2 border-b">{o.date}</td>
+                        <td className="p-2 border-b">{o.sellerName}</td>
+                        <td className="p-2 border-b text-right">
+                          <span className={zeroClass(o.totalPackages)}>
+                            {o.totalPackages}
+                          </span>
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          <span className={zeroClass(o.totalRemainingPackages)}>
+                            {o.totalRemainingPackages}
+                          </span>
+                        </td>
+                        {isAdmin && (
+                          <td className="p-2 border-b text-right">
+                            <span className={zeroClass(totalExpectedVal)}>
+                              {money(totalExpectedVal)}
+                            </span>
+                          </td>
+                        )}
+                        {isAdmin && (
+                          <td className="p-2 border-b text-right">
+                            <span className={zeroClass(grossProfitVal)}>
+                              {money(grossProfitVal)}
+                            </span>
+                          </td>
+                        )}
+                        {isAdmin && (
+                          <td className="p-2 border-b text-right">
+                            {money((o.gastosActive ?? o.gastos) || 0)}
+                          </td>
+                        )}
+
+                        <td className="p-2 border-b text-right">
+                          <span className={zeroClass(vendorProfitVal)}>
+                            {money(vendorProfitVal)}
+                          </span>
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          <span className={zeroClass(transferredOutVal)}>
+                            {o.transferredOut}
+                          </span>
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          <span className={zeroClass(transferredInVal)}>
+                            {o.transferredIn}
+                          </span>
+                        </td>
+                        <td className="p-2 border-b">
+                          <div className="flex gap-2">
                             <button
-                              className="px-3 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-700"
-                              onClick={() => {
-                                if (
-                                  confirm("¿Eliminar este pedido completo?")
-                                ) {
-                                  deleteOrder(o.orderKey);
-                                }
-                              }}
+                              className="px-3 py-1.5 rounded bg-gray-900 text-white text-xs hover:bg-black"
+                              onClick={() => openEditOrder(o.orderKey)}
                             >
-                              Eliminar
+                              Ver / Editar
                             </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                            {/* recalc button removed per request */}
+                            {isAdmin && (
+                              <button
+                                className="px-3 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-700"
+                                onClick={() => {
+                                  if (
+                                    confirm("¿Eliminar este pedido completo?")
+                                  ) {
+                                    deleteOrder(o.orderKey);
+                                  }
+                                }}
+                              >
+                                Eliminar
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
 
                   {!pagedOrders.length && (
                     <tr>
@@ -3385,25 +4241,41 @@ export default function VendorCandyOrders({
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="border rounded p-2">
                       <div className="text-gray-600">P. Agregados</div>
-                      <div className="font-semibold">{o.totalPackages}</div>
+                      <div
+                        className={`font-semibold ${zeroClass(o.totalPackages)}`}
+                      >
+                        {o.totalPackages}
+                      </div>
                     </div>
                     <div className="border rounded p-2">
                       <div className="text-gray-600">P. Restantes</div>
-                      <div className="font-semibold">
+                      <div
+                        className={`font-semibold ${zeroClass(o.totalRemainingPackages)}`}
+                      >
                         {o.totalRemainingPackages}
                       </div>
                     </div>
                     {isAdmin && (
                       <div className="border rounded p-2">
                         <div className="text-gray-600">Total esperado</div>
-                        <div className="font-semibold">
+                        <div
+                          className={`font-semibold ${zeroClass(
+                            Number(
+                              o.totalExpectedActive ?? o.totalExpected ?? 0,
+                            ),
+                          )}`}
+                        >
                           {money(o.totalExpectedActive ?? o.totalExpected)}
                         </div>
                       </div>
                     )}
                     <div className="border rounded p-2">
                       <div className="text-gray-600">U. Vendedor</div>
-                      <div className="font-semibold">
+                      <div
+                        className={`font-semibold ${zeroClass(
+                          Number(o.vendorProfitActive ?? o.vendorProfit ?? 0),
+                        )}`}
+                      >
                         {money(o.vendorProfitActive ?? o.vendorProfit)}
                       </div>
                     </div>
@@ -3463,6 +4335,21 @@ export default function VendorCandyOrders({
               </div>
 
               <div className="flex gap-2">
+                {isAdmin && editingOrderKey && (
+                  <button
+                    className={`px-3 py-2 rounded text-sm border ${
+                      isSyncingMaster
+                        ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                        : "bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600"
+                    }`}
+                    onClick={syncOrderFromMaster}
+                    disabled={isSyncingMaster}
+                  >
+                    {isSyncingMaster
+                      ? "Sincronizando..."
+                      : "Sincronizar con Orden Maestra"}
+                  </button>
+                )}
                 <button
                   className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
                   onClick={closeForm}
@@ -3536,14 +4423,14 @@ export default function VendorCandyOrders({
 
                   <div className="flex items-end gap-2">
                     <button
-                      className="flex-1 px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                      className="flex-1 px-3 py-2 rounded text-sm border border-amber-600 bg-amber-600 text-white hover:bg-amber-700"
                       onClick={downloadTemplateFromMainOrders}
                     >
                       Plantilla
                     </button>
 
                     <button
-                      className="flex-1 px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                      className="flex-1 px-3 py-2 rounded text-sm border border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
                       onClick={triggerImport}
                     >
                       Importar Excel
@@ -3561,49 +4448,69 @@ export default function VendorCandyOrders({
 
                 {/* KPIs */}
                 <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-                  <div className="border rounded p-2">
+                  <div className="border rounded p-2 bg-sky-50 border-sky-200">
                     <div className="text-xs text-gray-600">
                       Paquetes Agregados
                     </div>
-                    <div className="text-lg font-semibold">
+                    <div
+                      className={`text-lg font-semibold ${zeroClass(
+                        Number(kpiTotals.totalPackages || 0),
+                      )}`}
+                    >
                       {kpiTotals.totalPackages}
                     </div>
                   </div>
 
                   {isAdmin && (
                     <>
-                      <div className="border rounded p-2">
+                      <div className="border rounded p-2 bg-blue-50 border-blue-200">
                         <div className="text-xs text-gray-600">
                           Total esperado
                         </div>
-                        <div className="text-lg font-semibold">
+                        <div
+                          className={`text-lg font-semibold ${zeroClass(
+                            Number(kpiTotals.totalExpected || 0),
+                          )}`}
+                        >
                           {money(kpiTotals.totalExpected)}
                         </div>
                       </div>
-                      <div className="border rounded p-2">
+                      <div className="border rounded p-2 bg-amber-50 border-amber-200">
                         <div className="text-xs text-gray-600">
                           Utilidad Bruta
                         </div>
-                        <div className="text-lg font-semibold">
+                        <div
+                          className={`text-lg font-semibold ${zeroClass(
+                            Number(kpiTotals.grossProfit || 0),
+                          )}`}
+                        >
                           {money(kpiTotals.grossProfit)}
                         </div>
                       </div>
                     </>
                   )}
 
-                  <div className="border rounded p-2">
+                  <div className="border rounded p-2 bg-emerald-50 border-emerald-200">
                     <div className="text-xs text-gray-600">
                       Utilidad. Vendedor
                     </div>
-                    <div className="text-lg font-semibold">
+                    <div
+                      className={`text-lg font-semibold ${zeroClass(
+                        Number(kpiTotals.uVendor || 0),
+                      )}`}
+                    >
                       {money(kpiTotals.uVendor)}
                     </div>
                   </div>
 
                   {isAdmin && (
-                    <div className="border rounded p-2">
+                    <div className="border rounded p-2 bg-indigo-50 border-indigo-200">
                       <div className="text-xs text-gray-600">Utilidad Neta</div>
-                      <div className="text-lg font-semibold">
+                      <div
+                        className={`text-lg font-semibold ${zeroClass(
+                          Number(kpiUNeta || 0),
+                        )}`}
+                      >
                         {money(kpiUNeta)}
                       </div>
                     </div>
@@ -3675,7 +4582,11 @@ export default function VendorCandyOrders({
 
                     <div className="flex items-end">
                       <button
-                        className="w-full px-3 py-2 rounded bg-gray-900 text-white text-sm hover:bg-black"
+                        className={`w-full px-3 py-2 rounded text-sm ${
+                          !selectedProduct
+                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                            : "bg-indigo-600 text-white hover:bg-indigo-700"
+                        }`}
                         onClick={addItemToOrder}
                         disabled={!selectedProduct}
                       >
@@ -3693,7 +4604,7 @@ export default function VendorCandyOrders({
                     Productos asociados ({orderItems.length})
                   </div>
 
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2 items-center">
                     <input
                       className="border rounded px-2 py-1 text-sm"
                       placeholder="Buscar producto"
@@ -3703,9 +4614,37 @@ export default function VendorCandyOrders({
                         setItemsPage(1);
                       }}
                     />
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="border rounded px-2 py-1 text-sm w-24"
+                        placeholder="Margen %"
+                        value={bulkMarginPercent}
+                        onChange={(e) => setBulkMarginPercent(e.target.value)}
+                        inputMode="decimal"
+                      />
+                      <button
+                        className={`px-3 py-2 rounded text-sm border ${
+                          !orderItems.length ||
+                          !String(bulkMarginPercent).trim()
+                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                            : "bg-blue-600 text-white hover:bg-blue-700 border-blue-600"
+                        }`}
+                        onClick={applyBulkMarginPercent}
+                        disabled={
+                          !orderItems.length ||
+                          !String(bulkMarginPercent).trim()
+                        }
+                      >
+                        Aplicar a todos
+                      </button>
+                    </div>
                     {isAdmin && (
                       <button
-                        className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
+                        className={`px-3 py-2 rounded text-sm border ${
+                          !orderItems.length
+                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                            : "bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600"
+                        }`}
                         onClick={exportAssociatedItemsToExcel}
                         disabled={!orderItems.length}
                       >
@@ -3717,7 +4656,7 @@ export default function VendorCandyOrders({
 
                 {/* Desktop table */}
                 <div className="hidden md:block overflow-x-auto">
-                  <table className="min-w-full w-full text-sm table-auto divide-y divide-gray-100">
+                  <table className="min-w-full w-full text-xs table-auto divide-y divide-gray-100">
                     <thead className="bg-gray-50">
                       <tr className="sticky top-0 z-10 whitespace-nowrap">
                         <th className="text-left p-2 border-b">Tipo</th>
@@ -3763,7 +4702,18 @@ export default function VendorCandyOrders({
                           uNeta,
                         } = getItemActiveFinancials(it);
 
-                        const grossProfitBase = Number(it.grossProfit || 0);
+                        const p =
+                          productsAll.find((x) => x.id === it.productId) ||
+                          null;
+                        const s =
+                          sellers.find((x) => x.id === sellerId) || null;
+                        const br = s?.branch;
+                        const packs = Math.max(0, Number(it.packages || 0));
+                        const grossPerPackBase = computeGrossPerPack(p, it, br);
+                        const grossProfitBase =
+                          packs > 0 && Number.isFinite(grossPerPackBase)
+                            ? grossPerPackBase * packs
+                            : Number(it.grossProfit || 0);
                         const paquetesAsociados = Math.max(
                           0,
                           Number(it.packages || 0),
@@ -3781,6 +4731,12 @@ export default function VendorCandyOrders({
                           grossProfitBase,
                           vendorMarginPercentDisplay,
                         );
+                        const uVendorDisplay = Number(splitFull.uVendor || 0);
+                        const gastosBase = getItemLogisticBase(it);
+                        const uNetaDisplay =
+                          Number(grossProfitBase || 0) -
+                          Number(gastosBase || 0) -
+                          Number(uVendorDisplay || 0);
                         const uvXpaq =
                           paquetesAsociados > 0
                             ? Number(splitFull.uVendor || 0) / paquetesAsociados
@@ -3817,7 +4773,9 @@ export default function VendorCandyOrders({
                                   />
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>{it.packages}</span>
+                                    <span className={zeroClass(it.packages)}>
+                                      {it.packages}
+                                    </span>
                                     <button
                                       type="button"
                                       className="text-xs text-gray-600 hover:text-gray-900"
@@ -3829,10 +4787,11 @@ export default function VendorCandyOrders({
                                   </div>
                                 )
                               ) : (
-                                <span>{it.packages}</span>
+                                <span className={zeroClass(it.packages)}>
+                                  {it.packages}
+                                </span>
                               )}
                             </td>
-
                             <td className="p-2 border-b text-right">
                               {isAdmin ? (
                                 editingRemainingMap[it.id] ? (
@@ -3873,7 +4832,13 @@ export default function VendorCandyOrders({
                                   </div>
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>{it.remainingPackages}</span>
+                                    <span
+                                      className={zeroClass(
+                                        it.remainingPackages,
+                                      )}
+                                    >
+                                      {it.remainingPackages}
+                                    </span>
                                     <button
                                       type="button"
                                       className="text-xs text-gray-600 hover:text-gray-900"
@@ -3885,23 +4850,41 @@ export default function VendorCandyOrders({
                                   </div>
                                 )
                               ) : (
-                                <span>{it.remainingPackages}</span>
+                                <span
+                                  className={zeroClass(it.remainingPackages)}
+                                >
+                                  {it.remainingPackages}
+                                </span>
                               )}
                             </td>
 
                             {isAdmin && (
                               <td className="p-2 border-b text-right">
-                                {money((it as any).providerPrice || 0)}
+                                <span
+                                  className={zeroClass(
+                                    Number((it as any).providerPrice || 0),
+                                  )}
+                                >
+                                  {money((it as any).providerPrice || 0)}
+                                </span>
                               </td>
                             )}
 
                             <td className="p-2 border-b text-right">
-                              {money(it.pricePerPackage)}
+                              <span
+                                className={zeroClass(
+                                  Number(it.pricePerPackage || 0),
+                                )}
+                              >
+                                {money(it.pricePerPackage)}
+                              </span>
                             </td>
 
                             <td className="p-2 border-b text-right">
                               <div className="flex items-center justify-end gap-2">
-                                <span>{money(totalExpected)}</span>
+                                <span className={zeroClass(totalExpected)}>
+                                  {money(totalExpected)}
+                                </span>
                                 {isAdmin && (
                                   <button
                                     type="button"
@@ -3924,7 +4907,11 @@ export default function VendorCandyOrders({
                               <>
                                 <td className="p-2 border-b text-right">
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>{money(grossProfitBase)}</span>
+                                    <span
+                                      className={zeroClass(grossProfitBase)}
+                                    >
+                                      {money(grossProfitBase)}
+                                    </span>
                                     {isAdmin && (
                                       <button
                                         type="button"
@@ -3946,24 +4933,32 @@ export default function VendorCandyOrders({
                                 </td>
 
                                 <td className="p-2 border-b text-right">
-                                  {money(uXpaq)}
+                                  <span className={zeroClass(uXpaq)}>
+                                    {money(uXpaq)}
+                                  </span>
                                 </td>
 
                                 <td className="p-2 border-b text-right">
                                   {money(gastos)}
                                 </td>
                                 <td className="p-2 border-b text-right">
-                                  {money(round2(Number(uvXpaq || 0)))}
+                                  <span className={zeroClass(uvXpaq)}>
+                                    {money(round2(Number(uvXpaq || 0)))}
+                                  </span>
                                 </td>
                               </>
                             )}
 
                             <td className="p-2 border-b text-right">
-                              {money(uVendor)}
+                              <span className={zeroClass(uVendorDisplay)}>
+                                {money(uVendorDisplay)}
+                              </span>
                             </td>
                             {isAdmin && (
                               <td className="p-2 border-b text-right">
-                                {money(uNeta)}
+                                <span className={zeroClass(uNetaDisplay)}>
+                                  {money(uNetaDisplay)}
+                                </span>
                               </td>
                             )}
 
@@ -3999,7 +4994,14 @@ export default function VendorCandyOrders({
                                   />
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>
+                                    <span
+                                      className={zeroClass(
+                                        Number(
+                                          it.vendorMarginPercent ??
+                                            getSellerMarginPercent(sellerId),
+                                        ),
+                                      )}
+                                    >
                                       {Number(
                                         it.vendorMarginPercent ??
                                           getSellerMarginPercent(sellerId),
@@ -4017,7 +5019,14 @@ export default function VendorCandyOrders({
                                   </div>
                                 )
                               ) : (
-                                <span>
+                                <span
+                                  className={zeroClass(
+                                    Number(
+                                      it.vendorMarginPercent ??
+                                        getSellerMarginPercent(sellerId),
+                                    ),
+                                  )}
+                                >
                                   {Number(
                                     it.vendorMarginPercent ??
                                       getSellerMarginPercent(sellerId),
@@ -4088,6 +5097,42 @@ export default function VendorCandyOrders({
                                 uVendor,
                                 uNeta,
                               } = getItemActiveFinancials(it);
+                              const p =
+                                productsAll.find(
+                                  (x) => x.id === it.productId,
+                                ) || null;
+                              const s =
+                                sellers.find((x) => x.id === sellerId) || null;
+                              const br = s?.branch;
+                              const packs = Math.max(
+                                0,
+                                Number(it.packages || 0),
+                              );
+                              const grossPerPackBase = computeGrossPerPack(
+                                p,
+                                it,
+                                br,
+                              );
+                              const grossProfitBase =
+                                packs > 0 && Number.isFinite(grossPerPackBase)
+                                  ? grossPerPackBase * packs
+                                  : Number(it.grossProfit || 0);
+                              const vendorMarginPercentDisplay = clampPercent(
+                                it.vendorMarginPercent ??
+                                  getSellerMarginPercent(sellerId),
+                              );
+                              const splitDisplay = calcSplitFromGross(
+                                grossProfitBase,
+                                vendorMarginPercentDisplay,
+                              );
+                              const uVendorDisplay = Number(
+                                splitDisplay.uVendor || 0,
+                              );
+                              const gastosBase = getItemLogisticBase(it);
+                              const uNetaDisplay =
+                                Number(grossProfitBase || 0) -
+                                Number(gastosBase || 0) -
+                                Number(uVendorDisplay || 0);
 
                               return (
                                 <div
@@ -4130,7 +5175,9 @@ export default function VendorCandyOrders({
                                           />
                                         ) : (
                                           <div className="flex items-center justify-end gap-2">
-                                            <span className="font-semibold">
+                                            <span
+                                              className={`font-semibold ${zeroClass(it.packages)}`}
+                                            >
                                               {it.packages}
                                             </span>
                                             <button
@@ -4146,7 +5193,9 @@ export default function VendorCandyOrders({
                                           </div>
                                         )
                                       ) : (
-                                        <div className="font-semibold">
+                                        <div
+                                          className={`font-semibold ${zeroClass(it.packages)}`}
+                                        >
                                           {it.packages}
                                         </div>
                                       )}
@@ -4198,7 +5247,9 @@ export default function VendorCandyOrders({
                                             </div>
                                           ) : (
                                             <div className="flex items-center justify-end gap-2">
-                                              <span className="font-semibold">
+                                              <span
+                                                className={`font-semibold ${zeroClass(it.remainingPackages)}`}
+                                              >
                                                 {it.remainingPackages}
                                               </span>
                                               <button
@@ -4214,7 +5265,9 @@ export default function VendorCandyOrders({
                                             </div>
                                           )
                                         ) : (
-                                          <div className="font-semibold">
+                                          <div
+                                            className={`font-semibold ${zeroClass(it.remainingPackages)}`}
+                                          >
                                             {it.remainingPackages}
                                           </div>
                                         )}
@@ -4224,7 +5277,9 @@ export default function VendorCandyOrders({
                                       <div className="text-gray-600">
                                         Precio/paq
                                       </div>
-                                      <div className="font-semibold">
+                                      <div
+                                        className={`font-semibold ${zeroClass(Number(it.pricePerPackage || 0))}`}
+                                      >
                                         {money(it.pricePerPackage)}
                                       </div>
                                     </div>
@@ -4233,7 +5288,11 @@ export default function VendorCandyOrders({
                                         Total esperado
                                       </div>
                                       <div className="font-semibold flex items-center justify-end gap-2">
-                                        <div>{money(totalExpected)}</div>
+                                        <div
+                                          className={zeroClass(totalExpected)}
+                                        >
+                                          {money(totalExpected)}
+                                        </div>
                                         {isAdmin && (
                                           <button
                                             type="button"
@@ -4261,9 +5320,13 @@ export default function VendorCandyOrders({
                                             U. Bruta
                                           </div>
                                           <div className="font-semibold flex items-center justify-end gap-2">
-                                            <div>
+                                            <div
+                                              className={zeroClass(
+                                                Number(grossProfitBase || 0),
+                                              )}
+                                            >
                                               {money(
-                                                Number(it.grossProfit || 0),
+                                                Number(grossProfitBase || 0),
                                               )}
                                             </div>
                                             {isAdmin && (
@@ -4300,8 +5363,12 @@ export default function VendorCandyOrders({
                                       <div className="text-gray-600">
                                         U. Vendedor
                                       </div>
-                                      <div className="font-semibold">
-                                        {money(uVendor)}
+                                      <div
+                                        className={`font-semibold ${zeroClass(
+                                          uVendorDisplay,
+                                        )}`}
+                                      >
+                                        {money(uVendorDisplay)}
                                       </div>
                                     </div>
                                     {isAdmin && (
@@ -4309,8 +5376,12 @@ export default function VendorCandyOrders({
                                         <div className="text-gray-600">
                                           U. Neta
                                         </div>
-                                        <div className="font-semibold">
-                                          {money(uNeta)}
+                                        <div
+                                          className={`font-semibold ${zeroClass(
+                                            uNetaDisplay,
+                                          )}`}
+                                        >
+                                          {money(uNetaDisplay)}
                                         </div>
                                       </div>
                                     )}
@@ -4356,7 +5427,16 @@ export default function VendorCandyOrders({
                                           />
                                         ) : (
                                           <div className="flex items-center justify-end gap-2">
-                                            <span className="font-semibold">
+                                            <span
+                                              className={`font-semibold ${zeroClass(
+                                                Number(
+                                                  it.vendorMarginPercent ??
+                                                    getSellerMarginPercent(
+                                                      sellerId,
+                                                    ),
+                                                ),
+                                              )}`}
+                                            >
                                               {Number(
                                                 it.vendorMarginPercent ??
                                                   getSellerMarginPercent(
@@ -4378,7 +5458,16 @@ export default function VendorCandyOrders({
                                           </div>
                                         )
                                       ) : (
-                                        <div className="font-semibold">
+                                        <div
+                                          className={`font-semibold ${zeroClass(
+                                            Number(
+                                              it.vendorMarginPercent ??
+                                                getSellerMarginPercent(
+                                                  sellerId,
+                                                ),
+                                            ),
+                                          )}`}
+                                        >
                                           {Number(
                                             it.vendorMarginPercent ??
                                               getSellerMarginPercent(sellerId),
@@ -4476,6 +5565,9 @@ export default function VendorCandyOrders({
 
               {/* msg inside modal */}
               {msg && <div className="text-sm text-gray-700">{msg}</div>}
+              {syncMsg && (
+                <div className="text-sm text-gray-700">{syncMsg}</div>
+              )}
             </div>
           </div>
         </div>

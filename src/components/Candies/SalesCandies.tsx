@@ -911,40 +911,44 @@ export default function SalesCandiesPOS({
     );
   }, [branch, products]);
 
-  async function getPricePerPackageFromVendorOrder(args: {
-    productId: string;
-    vendorId: string;
-    branch: Branch;
-  }): Promise<number> {
-    const { productId, vendorId, branch } = args;
-    if (!productId || !vendorId) return 0;
-
+  const pickBestVendorOrderData = async (
+    productId: string,
+    vendorId: string,
+  ) => {
+    if (!productId || !vendorId) return null;
     const qRef = query(
       collection(db, "inventory_candies_sellers"),
       where("sellerId", "==", vendorId),
       where("productId", "==", productId),
     );
-
     const snap = await getDocs(qRef);
-    if (snap.empty) return 0;
+    if (snap.empty) return null;
 
-    // tomamos el primero (para precio da igual, todos vienen del master)
-    const x = snap.docs[0].data() as any;
+    let best: any = null;
+    let bestKey = "";
+    snap.forEach((d) => {
+      const data = d.data() as any;
+      const dateStr = String(data.date || "");
+      const updatedAtSec = Number(
+        data.updatedAt?.seconds ?? data.createdAt?.seconds ?? 0,
+      );
+      const remainingUnits = Number(
+        data.remainingUnits ?? data.remaining ?? data.totalUnits ?? 0,
+      );
+      const remainingPacks = Number(data.remainingPackages ?? 0);
+      const hasStock = remainingUnits > 0 || remainingPacks > 0 ? "1" : "0";
+      const key = `${hasStock}#${dateStr}#${String(updatedAtSec).padStart(
+        10,
+        "0",
+      )}`;
+      if (!best || key > bestKey) {
+        best = data;
+        bestKey = key;
+      }
+    });
 
-    // ✅ prioridad: precio específico del vendedor si existe
-    const pVendor = Number(x.unitPriceVendor ?? 0);
-    if (pVendor > 0) return pVendor;
-
-    // ✅ si no hay vendor price, usamos por sucursal
-    const p =
-      branch === "RIVAS"
-        ? Number(x.unitPriceRivas ?? 0)
-        : branch === "SAN_JORGE"
-          ? Number(x.unitPriceSanJorge ?? 0)
-          : Number(x.unitPriceIsla ?? 0);
-
-    return Number(p || 0);
-  }
+    return best || (snap.docs[0]?.data() as any) || null;
+  };
 
   const calcVendorMarginFromUBruta = (uBruta: number) => {
     const percent = Number(vendorCommissionPercent || 0);
@@ -981,78 +985,19 @@ export default function SalesCandiesPOS({
     const effectiveBranch =
       vendors.find((v) => v.id === vendorId)?.branch ?? branch;
 
-    const price = await getPricePerPackageFromVendorOrder({
-      productId: pid,
-      vendorId,
-      branch: effectiveBranch,
-    });
+    const orderData = await pickBestVendorOrderData(pid, vendorId);
+    const price = (() => {
+      if (!orderData) return 0;
+      const pVendor = Number(orderData.unitPriceVendor ?? 0);
+      if (pVendor > 0) return pVendor;
+      if (effectiveBranch === "RIVAS")
+        return Number(orderData.unitPriceRivas ?? 0);
+      if (effectiveBranch === "SAN_JORGE")
+        return Number(orderData.unitPriceSanJorge ?? 0);
+      return Number(orderData.unitPriceIsla ?? 0);
+    })();
 
-    // provider price (costo) por paquete: tomar de inventory_candies_sellers (primer doc)
-    const getProviderPricePerPackageFromVendorOrder = async (args: {
-      productId: string;
-      vendorId: string;
-    }): Promise<number> => {
-      const { productId, vendorId } = args;
-      if (!productId || !vendorId) return 0;
-      try {
-        const qRef = query(
-          collection(db, "inventory_candies_sellers"),
-          where("sellerId", "==", vendorId),
-          where("productId", "==", productId),
-        );
-        const snap = await getDocs(qRef);
-        if (snap.empty) return 0;
-        const x = snap.docs[0].data() as any;
-        return Number(x.providerPrice ?? 0);
-      } catch (e) {
-        return 0;
-      }
-    };
-
-    const getUvXpaqFromVendorOrder = async (args: {
-      productId: string;
-      vendorId: string;
-    }): Promise<number | null> => {
-      const { productId, vendorId } = args;
-      if (!productId || !vendorId) return null;
-      try {
-        const qRef = query(
-          collection(db, "inventory_candies_sellers"),
-          where("sellerId", "==", vendorId),
-          where("productId", "==", productId),
-        );
-        const snap = await getDocs(qRef);
-        if (snap.empty) return null;
-        const x = snap.docs[0].data() as any;
-        // Try several possible field names for "UV x PAQ" as it exists in vendor orders
-        const candidates = [
-          x.uvXpaq,
-          x.uv_x_paq,
-          x["UV x PAQ"],
-          x["UV x Paq"],
-          x["UV x paq"],
-          x.upaquete,
-          x.uPaquete,
-          x.u_per_package,
-        ];
-        for (const c of candidates) {
-          if (c === undefined || c === null) continue;
-          const num = Number(c);
-          if (!Number.isNaN(num) && Number.isFinite(num)) return round2(num);
-        }
-        const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
-        const packs = Math.max(1, Number(x.packages ?? 0));
-        return packs > 0 ? gross / packs : null;
-      } catch (e) {
-        return null;
-      }
-    };
-
-    const providerPriceFromOrder =
-      await getProviderPricePerPackageFromVendorOrder({
-        productId: pid,
-        vendorId,
-      });
+    const providerPriceFromOrder = Number(orderData?.providerPrice ?? 0);
 
     const providerPriceFromCatalog = (() => {
       const perPackage = Number(prod.providerPrice || 0);
@@ -1067,10 +1012,32 @@ export default function SalesCandiesPOS({
         ? Number(providerPriceFromOrder || 0)
         : Number(providerPriceFromCatalog || 0);
 
-    const uvXpaqFromOrder = await getUvXpaqFromVendorOrder({
-      productId: pid,
-      vendorId,
-    });
+    const uvXpaqFromOrder = (() => {
+      if (!orderData) return null;
+      const candidates = [
+        orderData.uvXpaq,
+        orderData.uv_x_paq,
+        orderData["UV x PAQ"],
+        orderData["UV x Paq"],
+        orderData["UV x paq"],
+      ];
+      for (const c of candidates) {
+        if (c === undefined || c === null) continue;
+        const num = Number(c);
+        if (!Number.isNaN(num) && Number.isFinite(num)) return round2(num);
+      }
+      const packs = Math.max(1, Number(orderData.packages ?? 0));
+      const uVendor = Number(
+        orderData.uVendor ??
+          orderData.vendorProfit ??
+          orderData.gainVendor ??
+          0,
+      );
+      if (Number.isFinite(uVendor) && packs > 0) {
+        return round2(uVendor / packs);
+      }
+      return null;
+    })();
 
     const newItem: SelectedItem = {
       productId: pid,
