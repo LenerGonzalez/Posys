@@ -376,6 +376,10 @@ export default function CierreVentasDulces({
   const [productCategoryMap, setProductCategoryMap] = useState<
     Record<string, string>
   >({});
+  // mapa upaquete por vendedor -> producto (normalizado)
+  const [upaqueteMap, setUpaqueteMap] = useState<
+    Record<string, Record<string, number>>
+  >({});
   const [categoryOpenMap, setCategoryOpenMap] = useState<
     Record<string, boolean>
   >({});
@@ -543,6 +547,69 @@ export default function CierreVentasDulces({
     sellerCandyId,
     currentEmailNorm,
   ]);
+
+  // Cargar U. Paquete desde órdenes de vendedor (inventory_candies_sellers)
+  useEffect(() => {
+    (async () => {
+      try {
+        const vendorIds = Array.from(
+          new Set(
+            visibleSales.map((s) => (s.vendorId || "").trim()).filter(Boolean),
+          ),
+        );
+        if (!vendorIds.length) {
+          setUpaqueteMap({});
+          return;
+        }
+
+        // Firestore 'in' accepts max 10 items; chunk vendorIds
+        const chunk = (arr: string[], size = 10) => {
+          const out: string[][] = [];
+          for (let i = 0; i < arr.length; i += size)
+            out.push(arr.slice(i, i + size));
+          return out;
+        };
+
+        const map: Record<string, Record<string, number>> = {};
+        const chunks = chunk(vendorIds, 10);
+        for (const c of chunks) {
+          const q = query(
+            collection(db, "inventory_candies_sellers"),
+            where("sellerId", "in", c),
+          );
+          const snap = await getDocs(q);
+          snap.forEach((d) => {
+            const x = d.data() as any;
+            const sid = String(x.sellerId || "").trim();
+            if (!sid) return;
+            map[sid] = map[sid] || {};
+            // Normalize product key: prefer productName, fallback to productId
+            const pname = String(
+              x.productName || x.productName?.toString() || "",
+            );
+            const key = pname ? normKey(pname) : String(x.productId || "");
+            // prefer explicit field `upaquete` if exists
+            const explicit = Number(
+              x.upaquete ?? x.uPaquete ?? x.u_per_package ?? NaN,
+            );
+            let val = NaN as number;
+            if (Number.isFinite(explicit)) val = explicit;
+            else {
+              const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
+              const packs = Math.max(1, Number(x.packages ?? 0));
+              val = packs > 0 ? gross / packs : 0;
+            }
+            map[sid][key] = Number(val || 0);
+          });
+        }
+        setUpaqueteMap(map);
+      } catch (e) {
+        console.error("Error cargando U. Paquete:", e);
+        setUpaqueteMap({});
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleSales]);
 
   const cashSales = React.useMemo(
     () => visibleSales.filter((s) => s.type !== "CREDITO"),
@@ -1068,7 +1135,45 @@ export default function CierreVentasDulces({
       status: s.status,
     }));
 
-    const ws = XLSX.utils.json_to_sheet(rows);
+    // añadir U. Paquete (si está disponible en cache)
+    const getUpaqueteForSale = (s: SaleData | undefined): number | null => {
+      if (!s) return null;
+      const key = normKey(s.productName || "");
+
+      // Prefer explicit uvXpaq stored on the sale item (newer sales)
+      try {
+        if (Array.isArray((s as any).items) && (s as any).items.length > 0) {
+          const it = (s as any).items[0];
+          const fromItem = Number(it?.uvXpaq ?? it?.upaquete ?? NaN);
+          if (Number.isFinite(fromItem)) return Number(fromItem || 0);
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      // Candidate vendor ids to look up (prefer the current seller context)
+      const candidates = [s.vendorId || "", sellerCandyId || ""].filter(
+        Boolean,
+      );
+      for (const cid of candidates) {
+        const vmap = upaqueteMap[cid || ""];
+        const val = vmap ? vmap[key] : undefined;
+        if (val !== undefined && val !== null) return Number(val || 0);
+      }
+
+      return null;
+    };
+
+    const rowsWithUpa = rows.map((r) => {
+      const matching = visibleSales.find((s) => s.id === r.id);
+      const u = getUpaqueteForSale(matching);
+      return {
+        ...r,
+        uPaquete: u !== null && u !== undefined ? round2(Number(u)) : "",
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rowsWithUpa);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ventas");
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
@@ -1377,10 +1482,12 @@ export default function CierreVentasDulces({
                       <th className="border p-2">Tipo</th>
                       <th className="border p-2">Paquetes</th>
                       <th className="border p-2">Monto</th>
+                      {isAdmin && <th className="border p-2">U. Paquete</th>}
+                      {isAdmin && <th className="border p-2">UV x Paq</th>}
                       <th className="border p-2">U. Vendedor</th>
                       <th className="border p-2">U. Neta</th>
                       <th className="border p-2">Fecha venta</th>
-                      <th className="border p-2">Fecha proceso</th>
+
                       <th className="border p-2">Vendedor</th>
                       <th className="border p-2">Acciones</th>
                     </tr>
@@ -1408,6 +1515,31 @@ export default function CierreVentasDulces({
                           <td className="border p-1">Cash</td>
                           <td className="border p-1">{qty3(s.quantity)}</td>
                           <td className="border p-1">C${money(s.amount)}</td>
+                          {isAdmin && (
+                            <td className="border p-1">
+                              {(() => {
+                                const key = normKey(s.productName || "");
+                                const u = upaqueteMap[s.vendorId || ""]?.[key];
+                                return u && Number(u) !== 0
+                                  ? `C$${money(round2(Number(u)))}`
+                                  : "—";
+                              })()}
+                            </td>
+                          )}
+                          {isAdmin && (
+                            <td className="border p-1">
+                              {(() => {
+                                const qty = Math.max(
+                                  1,
+                                  Number(s.quantity || 0),
+                                );
+                                const uv = Number(s.vendorUtility || 0) || 0;
+                                return uv > 0
+                                  ? `C$${money(round2(uv / qty))}`
+                                  : "—";
+                              })()}
+                            </td>
+                          )}
                           <td className="border p-1">
                             {getCommissionFromItems(s) > 0
                               ? `C$${money(getCommissionFromItems(s))}`
@@ -1419,9 +1551,7 @@ export default function CierreVentasDulces({
                               : "—"}
                           </td>
                           <td className="border p-1">{s.date}</td>
-                          <td className="border p-1">
-                            {processDate ? processDate : "—"}
-                          </td>
+
                           <td className="border p-1">{s.userEmail}</td>
                           <td className="border p-1">
                             {s.status === "FLOTANTE" ? (
@@ -1474,7 +1604,7 @@ export default function CierreVentasDulces({
                     {cashSales.length === 0 && (
                       <tr>
                         <td
-                          colSpan={11}
+                          colSpan={isAdmin ? 12 : 11}
                           className="p-3 text-center text-gray-500"
                         >
                           Sin ventas cash para mostrar.
@@ -1544,11 +1674,6 @@ export default function CierreVentasDulces({
                           <strong>
                             {commission > 0 ? `C$${money(commission)}` : "—"}
                           </strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Fecha proceso</span>
-                          <strong>{processDate || "—"}</strong>
                         </div>
 
                         <div className="flex justify-between gap-3">
@@ -1643,10 +1768,12 @@ export default function CierreVentasDulces({
                       <th className="border p-2">Tipo</th>
                       <th className="border p-2">Paquetes</th>
                       <th className="border p-2">Monto</th>
+                      {isAdmin && <th className="border p-2">U. Paquete</th>}
+                      {isAdmin && <th className="border p-2">UV x Paq</th>}
                       <th className="border p-2">U. Vendedor</th>
                       <th className="border p-2">U. Neta</th>
                       <th className="border p-2">Fecha venta</th>
-                      <th className="border p-2">Fecha proceso</th>
+
                       <th className="border p-2">Vendedor</th>
                       <th className="border p-2">Acciones</th>
                     </tr>
@@ -1674,6 +1801,31 @@ export default function CierreVentasDulces({
                           <td className="border p-1">Crédito</td>
                           <td className="border p-1">{qty3(s.quantity)}</td>
                           <td className="border p-1">C${money(s.amount)}</td>
+                          {isAdmin && (
+                            <td className="border p-1">
+                              {(() => {
+                                const key = normKey(s.productName || "");
+                                const u = upaqueteMap[s.vendorId || ""]?.[key];
+                                return u && Number(u) !== 0
+                                  ? `C$${money(round2(Number(u)))}`
+                                  : "—";
+                              })()}
+                            </td>
+                          )}
+                          {isAdmin && (
+                            <td className="border p-1">
+                              {(() => {
+                                const qty = Math.max(
+                                  1,
+                                  Number(s.quantity || 0),
+                                );
+                                const uv = Number(s.vendorUtility || 0) || 0;
+                                return uv > 0
+                                  ? `C$${money(round2(uv / qty))}`
+                                  : "—";
+                              })()}
+                            </td>
+                          )}
                           <td className="border p-1">
                             {getCommissionFromItems(s) > 0
                               ? `C$${money(getCommissionFromItems(s))}`
@@ -1685,9 +1837,7 @@ export default function CierreVentasDulces({
                               : "—"}
                           </td>
                           <td className="border p-1">{s.date}</td>
-                          <td className="border p-1">
-                            {processDate ? processDate : "—"}
-                          </td>
+
                           <td className="border p-1">{s.userEmail}</td>
                           <td className="border p-1">
                             {s.status === "FLOTANTE" ? (
@@ -1740,7 +1890,7 @@ export default function CierreVentasDulces({
                     {creditSales.length === 0 && (
                       <tr>
                         <td
-                          colSpan={12}
+                          colSpan={isAdmin ? 12 : 11}
                           className="p-3 text-center text-gray-500"
                         >
                           Sin ventas crédito para mostrar.
@@ -1829,11 +1979,6 @@ export default function CierreVentasDulces({
                           <strong>
                             {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
                           </strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Fecha proceso</span>
-                          <strong>{processDate || "—"}</strong>
                         </div>
 
                         <div className="flex justify-between gap-3">
@@ -2102,7 +2247,7 @@ export default function CierreVentasDulces({
           onClick={handleExportXLSX}
           className="bg-amber-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-amber-700"
         >
-           Excel
+          Excel
         </button>
       </div>
 

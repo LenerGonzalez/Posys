@@ -28,6 +28,9 @@ type SellerBranchLabel = "Rivas" | "Isla Ometepe" | "San Jorge";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
+// helper: round 2 decimals
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
 const PLACES = [
   "Altagracia",
   "Taguizapa",
@@ -105,6 +108,7 @@ interface SelectedItem {
   providerPricePerPackage?: number; // precio proveedor por paquete (referencia)
   margenVendedor?: number; // comisión calculada sobre la ganancia bruta
   uBruta?: number; // utilidad bruta por ítem
+  uvXpaq?: number; // utilidad por paquete desde orden de vendedor (si existe)
 }
 
 interface VoucherItem {
@@ -1005,6 +1009,45 @@ export default function SalesCandiesPOS({
       }
     };
 
+    const getUvXpaqFromVendorOrder = async (args: {
+      productId: string;
+      vendorId: string;
+    }): Promise<number | null> => {
+      const { productId, vendorId } = args;
+      if (!productId || !vendorId) return null;
+      try {
+        const qRef = query(
+          collection(db, "inventory_candies_sellers"),
+          where("sellerId", "==", vendorId),
+          where("productId", "==", productId),
+        );
+        const snap = await getDocs(qRef);
+        if (snap.empty) return null;
+        const x = snap.docs[0].data() as any;
+        // Try several possible field names for "UV x PAQ" as it exists in vendor orders
+        const candidates = [
+          x.uvXpaq,
+          x.uv_x_paq,
+          x["UV x PAQ"],
+          x["UV x Paq"],
+          x["UV x paq"],
+          x.upaquete,
+          x.uPaquete,
+          x.u_per_package,
+        ];
+        for (const c of candidates) {
+          if (c === undefined || c === null) continue;
+          const num = Number(c);
+          if (!Number.isNaN(num) && Number.isFinite(num)) return round2(num);
+        }
+        const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
+        const packs = Math.max(1, Number(x.packages ?? 0));
+        return packs > 0 ? gross / packs : null;
+      } catch (e) {
+        return null;
+      }
+    };
+
     const providerPriceFromOrder =
       await getProviderPricePerPackageFromVendorOrder({
         productId: pid,
@@ -1024,6 +1067,11 @@ export default function SalesCandiesPOS({
         ? Number(providerPriceFromOrder || 0)
         : Number(providerPriceFromCatalog || 0);
 
+    const uvXpaqFromOrder = await getUvXpaqFromVendorOrder({
+      productId: pid,
+      vendorId,
+    });
+
     const newItem: SelectedItem = {
       productId: pid,
       productName: prod.name || "",
@@ -1036,6 +1084,7 @@ export default function SalesCandiesPOS({
       providerPricePerPackage: Number(providerPricePerPackage) || 0,
       margenVendedor: 0,
       uBruta: 0,
+      uvXpaq: uvXpaqFromOrder ?? undefined,
     };
     setItems((prev) => [...prev, newItem]);
     setProductId("");
@@ -1064,7 +1113,12 @@ export default function SalesCandiesPOS({
         const facturadoCosto =
           Number(it.providerPricePerPackage || 0) * finalQty;
         const uBruta = monto - facturadoCosto;
-        const margenVendedor = calcVendorMarginFromUBruta(uBruta);
+
+        // If we have uvXpaq from the vendor order, compute margen as qtyPackages * uvXpaq
+        const margenVendedor =
+          Number.isFinite(Number(it.uvXpaq)) && it.uvXpaq !== undefined
+            ? round2(finalQty * Number(it.uvXpaq || 0))
+            : calcVendorMarginFromUBruta(uBruta);
 
         return {
           ...it,
@@ -1180,7 +1234,11 @@ export default function SalesCandiesPOS({
           );
           const facturadoCosto = providerPricePerPackage * qtyPaq;
           const uBruta = lineGross - facturadoCosto;
-          const margenVendedor = calcVendorMarginFromUBruta(uBruta);
+          // Prefer uvXpaq if available for per-item commission
+          const margenVendedor =
+            Number.isFinite(Number(it.uvXpaq)) && it.uvXpaq !== undefined
+              ? round2((it.qtyPackages || 0) * Number(it.uvXpaq || 0))
+              : calcVendorMarginFromUBruta(uBruta);
 
           return {
             productId: it.productId,
@@ -1195,6 +1253,11 @@ export default function SalesCandiesPOS({
             total: Math.floor(lineNet * 100) / 100,
             providerPricePerPackage,
             margenVendedor,
+            // Persist vendor utility per package for later use
+            uvXpaq:
+              it.uvXpaq !== undefined && it.uvXpaq !== null
+                ? Number(it.uvXpaq)
+                : null,
             uBruta,
           };
         });
