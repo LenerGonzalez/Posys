@@ -62,6 +62,11 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     statusAccount: { view: true, edit: true },
     statusInventory: { view: true, edit: true },
     estadoCuentaCandies: { view: true, edit: true },
+    customersCandies: { view: true, edit: true },
+    salesCandies: { view: true, edit: false },
+    productsVendorsCandies: { view: true, edit: false },
+    transactionCandies: { view: true, edit: false },
+    cierreVentasCandies: { view: true, edit: false },
   },
 
   vendedor_pollo: {

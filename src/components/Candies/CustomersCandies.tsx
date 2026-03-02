@@ -1151,6 +1151,23 @@ export default function CustomersCandy({
     });
   }, [orderedRows, fClient, fStatus, fMin, fMax]);
 
+  const totalPendingBalance = useMemo(() => {
+    return filteredRows.reduce((acc, row) => acc + Number(row.balance || 0), 0);
+  }, [filteredRows]);
+
+  const activeCustomersCount = useMemo(() => {
+    return filteredRows.filter((row) => row.status === "ACTIVO").length;
+  }, [filteredRows]);
+
+  const totalCustomersCount = filteredRows.length;
+
+  const handleResetFilters = () => {
+    setFClient("");
+    setFStatus("");
+    setFMin("");
+    setFMax("");
+  };
+
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const pagedRows = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -1223,78 +1240,101 @@ export default function CustomersCandy({
         </button>
       </div>
 
-      {/* ===== Lista ===== */}
-      {/* ===== Filtros (web + mobile, colapsable) ===== */}
-      <div className="mb-3">
-        <button
-          type="button"
-          className="px-3 py-2 rounded bg-gray-100 hover:bg-gray-200 border w-full md:w-auto"
-          onClick={() => setFiltersOpen((v) => !v)}
-        >
-          {filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
-        </button>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <div className="p-4 border rounded-lg bg-white shadow-sm">
+          <div className="text-xs uppercase tracking-wide text-gray-600">
+            Saldo pendiente
+          </div>
+          <div className="text-2xl font-semibold">
+            {money(totalPendingBalance)}
+          </div>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Calculado sobre los clientes filtrados
+          </p>
+        </div>
+        <div className="p-4 border rounded-lg bg-white shadow-sm">
+          <div className="text-xs uppercase tracking-wide text-gray-600">
+            Clientes activos
+          </div>
+          <div className="text-2xl font-semibold">{activeCustomersCount}</div>
+          <p className="text-[11px] text-gray-500 mt-1">
+            De un total de {totalCustomersCount}
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded shadow-sm p-4 mb-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end">
+          <div className="flex-1">
+            <label className="block text-sm font-semibold">
+              Filtrar cliente
+            </label>
+            <input
+              className="w-full border rounded px-3 py-2"
+              placeholder="Nombre, telefono o nota"
+              value={fClient}
+              onChange={(e) => setFClient(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="px-3 py-2 rounded border bg-gray-50 hover:bg-gray-100"
+              onClick={() => setFiltersOpen((prev) => !prev)}
+            >
+              {filtersOpen ? "Ocultar filtros" : "Mas filtros"}
+            </button>
+            <button
+              type="button"
+              className="px-3 py-2 rounded border bg-white hover:bg-gray-50"
+              onClick={handleResetFilters}
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
 
         {filtersOpen && (
-          <div className="mt-2 bg-white border rounded-xl p-3 grid grid-cols-1 md:grid-cols-4 gap-3">
-            <div className="md:col-span-2">
-              <div className="text-xs text-gray-500 mb-1">Cliente</div>
-              <input
-                className="w-full border p-2 rounded"
-                value={fClient}
-                onChange={(e) => setFClient(e.target.value)}
-                placeholder="Buscar por nombre…"
-              />
-            </div>
-
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <div className="text-xs text-gray-500 mb-1">Estado</div>
+              <label className="block text-sm font-semibold">Estado</label>
               <select
-                className="w-full border p-2 rounded"
+                className="w-full border rounded px-3 py-2"
                 value={fStatus}
-                onChange={(e) => setFStatus((e.target.value as any) || "")}
+                onChange={(e) => setFStatus(e.target.value as Status | "")}
               >
                 <option value="">Todos</option>
-                <option value="ACTIVO">ACTIVO</option>
-                <option value="BLOQUEADO">BLOQUEADO</option>
+                <option value="ACTIVO">Activo</option>
+                <option value="BLOQUEADO">Bloqueado</option>
               </select>
             </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Monto mín.</div>
-                <input
-                  className="w-full border p-2 rounded text-right"
-                  inputMode="decimal"
-                  value={fMin}
-                  onChange={(e) => setFMin(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Monto máx.</div>
-                <input
-                  className="w-full border p-2 rounded text-right"
-                  inputMode="decimal"
-                  value={fMax}
-                  onChange={(e) => setFMax(e.target.value)}
-                  placeholder="∞"
-                />
-              </div>
+            <div>
+              <label className="block text-sm font-semibold">
+                Saldo minimo
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                className="w-full border rounded px-3 py-2"
+                value={fMin}
+                onChange={(e) => setFMin(e.target.value)}
+                placeholder="0.00"
+              />
             </div>
-
-            <div className="md:col-span-4 flex flex-wrap gap-2 justify-end">
-              <button
-                type="button"
-                className="px-3 py-2 rounded bg-gray-100 hover:bg-gray-200 border"
-                onClick={() => {
-                  setFClient("");
-                  setFStatus("");
-                  setFMin("");
-                  setFMax("");
-                }}
-              >
-                Limpiar
-              </button>
+            <div>
+              <label className="block text-sm font-semibold">
+                Saldo maximo
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                className="w-full border rounded px-3 py-2"
+                value={fMax}
+                onChange={(e) => setFMax(e.target.value)}
+                placeholder="0.00"
+              />
             </div>
           </div>
         )}

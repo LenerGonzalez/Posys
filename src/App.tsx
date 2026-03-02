@@ -443,7 +443,9 @@ export default function App() {
           <Route
             path="estadoCuentaCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <EstadoCuentaCandies
                   role={role}
                   roles={roles}
@@ -464,7 +466,9 @@ export default function App() {
           <Route
             path="customersCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <CustomersCandies
                   role={role}
                   roles={roles}
@@ -477,7 +481,9 @@ export default function App() {
           <Route
             path="salesCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <SalesCandies
                   role={role}
                   roles={roles}
@@ -506,7 +512,9 @@ export default function App() {
           <Route
             path="transactionCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <TransactionCandies
                   role={role}
                   roles={roles}
@@ -527,7 +535,9 @@ export default function App() {
           <Route
             path="productsVendorsCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <OrdenVendedor
                   role={role}
                   roles={roles}
@@ -540,7 +550,9 @@ export default function App() {
           <Route
             path="cierreVentasCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <CierreVentasDulces
                   role={role}
                   roles={roles}

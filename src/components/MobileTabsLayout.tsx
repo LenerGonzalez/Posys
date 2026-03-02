@@ -310,6 +310,59 @@ export default function MobileTabsLayout({
             { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
             { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
           ];
+        } else if (hasDulces) {
+          const dulcesTabs = [] as Array<{
+            key: string;
+            label: string;
+            to: string;
+          }>;
+
+          if (canPath(subject, "salesCandies", "view")) {
+            dulcesTabs.push({
+              key: "venta",
+              label: "Ventas",
+              to: `${base}/salesCandies`,
+            });
+          }
+          if (canPath(subject, "productsVendorsCandies", "view")) {
+            dulcesTabs.push({
+              key: "inv",
+              label: "Inventario",
+              to: `${base}/productsVendorsCandies`,
+            });
+          }
+          if (canPath(subject, "transactionCandies", "view")) {
+            dulcesTabs.push({
+              key: "trx",
+              label: "Transacciones",
+              to: `${base}/transactionCandies`,
+            });
+          }
+          if (canPath(subject, "customersCandies", "view")) {
+            dulcesTabs.push({
+              key: "cli",
+              label: "Saldos pendientes",
+              to: `${base}/customersCandies`,
+            });
+          }
+          if (canPath(subject, "estadoCuentaCandies", "view")) {
+            dulcesTabs.push({
+              key: "estado",
+              label: "Estado Cuenta",
+              to: `${base}/estadoCuentaCandies`,
+            });
+          }
+          if (canPath(subject, "cierreVentasCandies", "view")) {
+            dulcesTabs.push({
+              key: "cier",
+              label: "Cierre Ventas",
+              to: `${base}/cierreVentasCandies`,
+            });
+          }
+
+          built = dulcesTabs.length
+            ? dulcesTabs
+            : [{ key: "home", label: "Inicio", to: `${base}` }];
         } else {
           built = [{ key: "home", label: "Inicio", to: `${base}` }];
         }
@@ -504,21 +557,33 @@ export default function MobileTabsLayout({
     }
   };
 
-  const tabCls = ({ isActive }: { isActive: boolean }) =>
-    cn(
-      "flex-1 text-center text-[11px] py-1.5 rounded-lg",
-      "leading-none select-none",
-      isActive ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-gray-100",
-    );
+  const tabCls =
+    (to: string) =>
+    ({ isActive }: { isActive: boolean }) => {
+      const meta = tabMeta(to);
+      return cn(
+        "flex-1 text-center text-[11px] py-1.5 rounded-lg",
+        "leading-none select-none",
+        isActive
+          ? `${meta.activeBg} ${meta.activeText}`
+          : "text-gray-700 hover:bg-gray-100",
+      );
+    };
 
   // ✅ Regla: si hay muchos tabs, ocultamos barra de abajo y usamos Drawer
   const showBottomTabs = tabs.length <= 2;
 
-  const drawerLinkCls = ({ isActive }: { isActive: boolean }) =>
-    cn(
-      "w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border",
-      "bg-white text-gray-800 border-gray-200 hover:bg-slate-50",
-    );
+  const drawerLinkCls =
+    (to: string) =>
+    ({ isActive }: { isActive: boolean }) => {
+      const meta = tabMeta(to);
+      return cn(
+        "w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-l-4",
+        isActive
+          ? `${meta.activeBg} ${meta.activeBorder} ${meta.activeText}`
+          : "bg-white text-gray-800 border-gray-200 hover:bg-slate-50",
+      );
+    };
 
   const storedUserName =
     typeof window !== "undefined" ? localStorage.getItem("user_name") : null;
@@ -764,13 +829,7 @@ export default function MobileTabsLayout({
                   <NavLink
                     key={t.key}
                     to={t.to}
-                    className={(args) =>
-                      `${drawerLinkCls(args)} border-l-4 ${meta.border} ${
-                        args.isActive
-                          ? `${meta.activeBg} ${meta.activeBorder} ${meta.activeText}`
-                          : ""
-                      }`
-                    }
+                    className={drawerLinkCls(t.to)}
                   >
                     <span className="flex items-center gap-3">
                       <span
@@ -845,7 +904,7 @@ export default function MobileTabsLayout({
         <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-md pb-[env(safe-area-inset-bottom)]">
           <div className="max-w-3xl mx-auto px-2 py-1.5 flex gap-1.5">
             {tabs.map((t) => (
-              <NavLink key={t.key} to={t.to} className={tabCls}>
+              <NavLink key={t.key} to={t.to} className={tabCls(t.to)}>
                 {t.label}
               </NavLink>
             ))}
