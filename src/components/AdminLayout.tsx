@@ -3,6 +3,15 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { useState } from "react";
+import {
+  FaBook,
+  FaCandyCane,
+  FaDrumstickBite,
+  FaChevronLeft,
+  FaChevronRight,
+  FaSignOutAlt,
+  FaTools,
+} from "react-icons/fa";
 import { hasRole } from "../utils/roles";
 import { canPath } from "../utils/access";
 
@@ -15,8 +24,10 @@ export default function AdminLayout({
 }) {
   const base = "/admin";
   const linkCls = ({ isActive }: { isActive: boolean }) =>
-    `block rounded px-3 py-2 text-sm ${
-      isActive ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-gray-100"
+    `block rounded-lg px-3 py-2 text-sm transition ${
+      isActive
+        ? "bg-slate-900 text-white shadow-sm"
+        : "text-slate-700 hover:bg-slate-100"
     }`;
 
   // Sidebar ancho/colapsado
@@ -73,6 +84,65 @@ export default function AdminLayout({
     }
   };
 
+  const closePolloMenus = () => {
+    setOpenPollo(false);
+    setContadorMenuFinanzas(false);
+    setOpenPolloVentas(false);
+    setOpenPolloInv(false);
+    setOpenPolloFin(false);
+    setOpenPolloProd(false);
+    setOpenPolloOperaciones(false);
+  };
+
+  const closeRopaMenus = () => {
+    setOpenRopa(false);
+    setOpenRopaInv(false);
+    setOpenRopaProd(false);
+    setOpenClients(false);
+    setOpenRopaFin(false);
+    setOpenDashboardClothes(false);
+  };
+
+  const closeDulcesMenus = () => {
+    setOpenDulces(false);
+    setOpenDulcesInv(false);
+    setOpenDulcesVendors(false);
+    setOpenDulcesFin(false);
+  };
+
+  const closeOtrasMenus = () => {
+    setOpenOtras(false);
+  };
+
+  const toggleModule = (module: "pollo" | "ropa" | "dulces" | "otras") => {
+    const isOpen =
+      module === "pollo"
+        ? openPollo
+        : module === "ropa"
+          ? openRopa
+          : module === "dulces"
+            ? openDulces
+            : openOtras;
+
+    if (isOpen) {
+      if (module === "pollo") closePolloMenus();
+      if (module === "ropa") closeRopaMenus();
+      if (module === "dulces") closeDulcesMenus();
+      if (module === "otras") closeOtrasMenus();
+      return;
+    }
+
+    closePolloMenus();
+    closeRopaMenus();
+    closeDulcesMenus();
+    closeOtrasMenus();
+
+    if (module === "pollo") setOpenPollo(true);
+    if (module === "ropa") setOpenRopa(true);
+    if (module === "dulces") setOpenDulces(true);
+    if (module === "otras") setOpenOtras(true);
+  };
+
   // Helpers visuales
   const SectionBtn = ({
     open,
@@ -86,7 +156,11 @@ export default function AdminLayout({
     <button
       type="button"
       onClick={onClick}
-      className="w-full flex items-center justify-between px-3 py-2 text-left text-sm font-semibold rounded hover:bg-gray-100"
+      className={`w-full flex items-center justify-between px-3 py-2 text-left text-sm font-semibold rounded-lg transition ${
+        open
+          ? "bg-slate-100 text-slate-900"
+          : "text-slate-800 hover:bg-slate-100"
+      }`}
     >
       <span>{children}</span>
       <span className="text-xs">{open ? "▾" : "▸"}</span>
@@ -105,9 +179,13 @@ export default function AdminLayout({
     <button
       type="button"
       onClick={onClick}
-      className="ml-2 w-[calc(100%-0.5rem)] flex items-center justify-between px-3 py-2 text-left text-sm rounded hover:bg-gray-100"
+      className={`ml-2 w-[calc(100%-0.5rem)] flex items-center justify-between px-3 py-2 text-left text-sm rounded-lg transition ${
+        open
+          ? "bg-slate-100 text-slate-900"
+          : "text-slate-700 hover:bg-slate-100"
+      }`}
     >
-      <span className="text-blue-500 font-medium ">{title}</span>
+      <span className="text-slate-700 font-medium">{title}</span>
       <span className="text-xs">{open ? "▾" : "▸"}</span>
     </button>
   );
@@ -143,40 +221,93 @@ export default function AdminLayout({
     canPath(subject, "cierreVentasCandies", "view") ||
     canPath(subject, "estadoCuentaCandies", "view");
 
+  const storedUserName =
+    typeof window !== "undefined" ? localStorage.getItem("user_name") : null;
+  const storedUserEmail =
+    typeof window !== "undefined" ? localStorage.getItem("user_email") : null;
+  const displayName = storedUserName || storedUserEmail || "Usuario";
+  const getInitials = (value: string) => {
+    const cleaned = value.trim();
+    if (!cleaned) return "U";
+    let parts = cleaned.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      const alt = cleaned.split(/[._-]+/).filter(Boolean);
+      if (alt.length >= 2) parts = alt;
+    }
+    const first = parts[0]?.[0] ?? "U";
+    const second = parts[1]?.[0] ?? "";
+    return `${first}${second}`.toUpperCase();
+  };
+  const avatarInitials = getInitials(displayName);
+  const roleLabels: Record<string, string> = {
+    admin: "Administrador",
+    supervisor_pollo: "Supervisor Pollo",
+    contador: "Contador",
+    vendedor_pollo: "Vendedor Pollo",
+    vendedor_ropa: "Vendedor Ropa",
+    vendedor_dulces: "Vendedor Dulces",
+    vendedor: "Vendedor Pollo",
+  };
+  const roleList = Array.isArray(subject)
+    ? subject.map(String)
+    : subject
+      ? [String(subject)]
+      : [];
+  const roleLabel = roleList.length
+    ? roleList.map((r) => roleLabels[r] || r).join("\n")
+    : "Sin rol";
+
   return (
     <div className="min-h-screen flex">
       <aside
         className={`${
           isCollapsed
-            ? "w-15 bg-gray-50 border-r p-3 transition-all duration-300 flex flex-col items-center"
+            ? "w-15 bg-slate-50 border-r p-3 transition-all duration-300 flex flex-col items-center"
             : "w-55"
-        } bg-[#f1f3f7] border-r p-3 transition-all duration-300 flex flex-col`}
+        } bg-gradient-to-b from-slate-50 via-white to-slate-50 border-r border-slate-200 p-3 transition-all duration-300 flex flex-col relative`}
       >
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="mb-2 p-2 rounded-2xl shadow-2xl bg-gray-300 hover:bg-gray-400"
+          className={`absolute top-2 z-20 inline-flex min-w-[104px] items-center justify-between gap-2 rounded-full border border-slate-300 bg-white/95 px-3 py-2.5 text-sm font-semibold text-slate-700 shadow-lg ring-1 ring-white/70 backdrop-blur transition hover:bg-slate-50 ${
+            isCollapsed ? "left-full translate-x-1" : "right-0 translate-x-1/2"
+          }`}
           aria-label={isCollapsed ? "Expandir menú" : "Colapsar menú"}
+          title={isCollapsed ? "Expandir menú" : "Colapsar menú"}
         >
-          {isCollapsed ? (
-            <span title="Expandir menú">Menu ▶</span>
-          ) : (
-            <span title="Colapsar menú">Cerrar ◀</span>
-          )}
+          <span
+            className={`whitespace-nowrap text-[10px] font-semibold tracking-[0.12em] text-slate-600 ${
+              isCollapsed ? "px-1" : ""
+            }`}
+          >
+            PANEL
+          </span>
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-white">
+            {isCollapsed ? (
+              <FaChevronRight className="h-4.5 w-4.5" />
+            ) : (
+              <FaChevronLeft className="h-4.5 w-4.5" />
+            )}
+          </span>
         </button>
 
         {!isCollapsed && (
           <>
-            <nav className="space-y-1">
+            <nav className="space-y-2 pt-14">
               {/* ================== ADMIN ================== */}
               {isAdmin && (
                 <>
                   {/* -------- Operaciones Pollo -------- */}
-                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
+                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-amber-400">
                     <SectionBtn
                       open={openPollo}
-                      onClick={() => setOpenPollo((v) => !v)}
+                      onClick={() => toggleModule("pollo")}
                     >
-                      Pollos Bea
+                      <span className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white">
+                          <FaDrumstickBite className="h-3.5 w-3.5" />
+                        </span>
+                        <span>Pollos Bea</span>
+                      </span>
                     </SectionBtn>
 
                     {openPollo && (
@@ -309,12 +440,17 @@ export default function AdminLayout({
                   </div>
 
                   {/* -------- Operaciones Ropa -------- */}
-                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
+                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-indigo-400">
                     <SectionBtn
                       open={openRopa}
-                      onClick={() => setOpenRopa((v) => !v)}
+                      onClick={() => toggleModule("ropa")}
                     >
-                      Gonper
+                      <span className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white">
+                          <FaBook className="h-3.5 w-3.5" />
+                        </span>
+                        <span>Gonper</span>
+                      </span>
                     </SectionBtn>
 
                     {openRopa && (
@@ -339,12 +475,17 @@ export default function AdminLayout({
                   </div>
 
                   {/* -------- Operaciones Dulces -------- */}
-                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
+                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-pink-400">
                     <SectionBtn
                       open={openDulces}
-                      onClick={() => setOpenDulces((v) => !v)}
+                      onClick={() => toggleModule("dulces")}
                     >
-                      CandyShop
+                      <span className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-pink-500 text-white">
+                          <FaCandyCane className="h-3.5 w-3.5" />
+                        </span>
+                        <span>CandyShop</span>
+                      </span>
                     </SectionBtn>
 
                     {openDulces && (
@@ -561,12 +702,17 @@ export default function AdminLayout({
                   </div>
 
                   {/* -------- Operaciones Otras -------- */}
-                  <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
+                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-slate-400">
                     <SectionBtn
                       open={openOtras}
-                      onClick={() => setOpenOtras((v) => !v)}
+                      onClick={() => toggleModule("otras")}
                     >
-                      Operaciones Otras
+                      <span className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white">
+                          <FaTools className="h-3.5 w-3.5" />
+                        </span>
+                        <span>Operaciones</span>
+                      </span>
                     </SectionBtn>
 
                     {openOtras && (
@@ -591,12 +737,17 @@ export default function AdminLayout({
 
               {/* ================== POLLO (supervisor/contador/vendedor o multi-rol) ================== */}
               {!isAdmin && hasPolloAccess && (
-                <div className="border rounded mb-1 rounded-2xl shadow-2xl bg-white">
+                <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-amber-400">
                   <SectionBtn
                     open={openPollo}
-                    onClick={() => setOpenPollo((v) => !v)}
+                    onClick={() => toggleModule("pollo")}
                   >
-                    Pollos Bea
+                    <span className="flex items-center gap-2">
+                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white">
+                        <FaDrumstickBite className="h-3.5 w-3.5" />
+                      </span>
+                      <span>Pollos Bea</span>
+                    </span>
                   </SectionBtn>
 
                   {openPollo && (
@@ -697,91 +848,115 @@ export default function AdminLayout({
 
               {/* ================== DULCES (vendedor_dulces o multi-rol) ================== */}
               {!isAdmin && hasDulcesAccess && (
-                <div className="border rounded">
-                  <div className="pb-2 ml-4 mt-1 space-y-1">
-                    {canPath(subject, "salesCandies") && (
-                      <NavLink to={`${base}/salesCandies`} className={linkCls}>
-                        Venta
-                      </NavLink>
-                    )}
-                  </div>
+                <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-pink-400">
+                  <SectionBtn
+                    open={openDulces}
+                    onClick={() => toggleModule("dulces")}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-pink-500 text-white">
+                        <FaCandyCane className="h-3.5 w-3.5" />
+                      </span>
+                      <span>CandyShop</span>
+                    </span>
+                  </SectionBtn>
 
-                  <div className="pb-2 ml-4 mt-1 space-y-1">
-                    {canPath(subject, "transactionCandies") && (
-                      <NavLink
-                        to={`${base}/transactionCandies`}
-                        className={linkCls}
-                      >
-                        Ventas del dia
-                      </NavLink>
-                    )}
-                  </div>
+                  {openDulces && (
+                    <>
+                      <div className="pb-2 ml-4 mt-1 space-y-1">
+                        {canPath(subject, "salesCandies") && (
+                          <NavLink
+                            to={`${base}/salesCandies`}
+                            className={linkCls}
+                          >
+                            Venta
+                          </NavLink>
+                        )}
+                      </div>
 
-                  <div className="pb-2 ml-4 mt-1 space-y-1">
-                    {canPath(subject, "cierreVentasCandies") && (
-                      <NavLink
-                        to={`${base}/cierreVentasCandies`}
-                        className={linkCls}
-                      >
-                        Cierre de Ventas
-                      </NavLink>
-                    )}
-                  </div>
+                      <div className="pb-2 ml-4 mt-1 space-y-1">
+                        {canPath(subject, "transactionCandies") && (
+                          <NavLink
+                            to={`${base}/transactionCandies`}
+                            className={linkCls}
+                          >
+                            Ventas del dia
+                          </NavLink>
+                        )}
+                      </div>
 
-                  <div className="ml-4 mt-1 space-y-1">
-                    {canPath(subject, "productsVendorsCandies") && (
-                      <NavLink
-                        to={`${base}/productsVendorsCandies`}
-                        className={linkCls}
-                      >
-                        Pedidos
-                      </NavLink>
-                    )}
-                  </div>
+                      <div className="pb-2 ml-4 mt-1 space-y-1">
+                        {canPath(subject, "cierreVentasCandies") && (
+                          <NavLink
+                            to={`${base}/cierreVentasCandies`}
+                            className={linkCls}
+                          >
+                            Cierre de Ventas
+                          </NavLink>
+                        )}
+                      </div>
 
-                  <div className="ml-4 mt-1 space-y-1">
-                    {canPath(subject, "customersCandies") && (
-                      <NavLink
-                        to={`${base}/customersCandies`}
-                        className={linkCls}
-                      >
-                        Clientes
-                      </NavLink>
-                    )}
-                  </div>
+                      <div className="ml-4 mt-1 space-y-1">
+                        {canPath(subject, "productsVendorsCandies") && (
+                          <NavLink
+                            to={`${base}/productsVendorsCandies`}
+                            className={linkCls}
+                          >
+                            Pedidos
+                          </NavLink>
+                        )}
+                      </div>
 
-                  {/* <div className="ml-4 mt-1 space-y-1">
-                    {canPath(subject, "estadoCuentaCandies") && (
-                      <NavLink
-                        to={`${base}/estadoCuentaCandies`}
-                        className={linkCls}
-                      >
-                        Estado de Cuenta
-                      </NavLink>
-                    )}
-                  </div> */}
+                      <div className="ml-4 mt-1 space-y-1">
+                        {canPath(subject, "customersCandies") && (
+                          <NavLink
+                            to={`${base}/customersCandies`}
+                            className={linkCls}
+                          >
+                            Clientes
+                          </NavLink>
+                        )}
+                      </div>
 
-                  <div className="ml-4 mt-1 space-y-1">
-                    {canPath(subject, "productsPricesCandies") && (
-                      <NavLink
-                        to={`${base}/productsPricesCandies`}
-                        className={linkCls}
-                      >
-                        Precios Venta
-                      </NavLink>
-                    )}
-                  </div>
+                      {/* <div className="ml-4 mt-1 space-y-1">
+                        {canPath(subject, "estadoCuentaCandies") && (
+                          <NavLink
+                            to={`${base}/estadoCuentaCandies`}
+                            className={linkCls}
+                          >
+                            Estado de Cuenta
+                          </NavLink>
+                        )}
+                      </div> */}
+
+                      <div className="ml-4 mt-1 space-y-1">
+                        {canPath(subject, "productsPricesCandies") && (
+                          <NavLink
+                            to={`${base}/productsPricesCandies`}
+                            className={linkCls}
+                          >
+                            Precios Venta
+                          </NavLink>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
               {/* ================== VENDEDOR ROPA ================== */}
               {isVendRopa && (
-                <div className="border rounded">
+                <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-indigo-400">
                   <SectionBtn
                     open={openRopa}
-                    onClick={() => setOpenRopa((v) => !v)}
+                    onClick={() => toggleModule("ropa")}
                   >
-                    Operaciones Ropa
+                    <span className="flex items-center gap-2">
+                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white">
+                        <FaBook className="h-3.5 w-3.5" />
+                      </span>
+                      <span>Operaciones Ropa</span>
+                    </span>
                   </SectionBtn>
 
                   {openRopa && (
@@ -845,18 +1020,37 @@ export default function AdminLayout({
               )}
             </nav>
 
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                Conectado como
+              </div>
+              <div className="mt-2 flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-slate-900 text-white flex items-center justify-center font-semibold">
+                  {avatarInitials}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-base font-semibold text-slate-800 truncate">
+                    {displayName}
+                  </div>
+                  <div className="text-xs text-slate-500 whitespace-pre-line">
+                    {roleLabel}
+                  </div>
+                  {storedUserName && storedUserEmail && (
+                    <div className="text-xs text-slate-500 truncate">
+                      {storedUserEmail}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
             <button
               onClick={handleLogout}
-              className="mt-4 bg-red-500 text-white px-3 py-2 rounded-2xl shadow-2xl hover:bg-red-600"
+              className="mt-3 w-full inline-flex items-center justify-center gap-2 bg-red-500 text-white px-3 py-2 rounded-2xl shadow-2xl hover:bg-red-600"
             >
-              Cerrar sesión
+              <FaSignOutAlt className="h-4 w-4" />
+              <span>Cerrar sesión</span>
             </button>
-
-            <div className="mt-2 text-[20px] text-gray-700">
-              {typeof window !== "undefined" &&
-                (localStorage.getItem("user_name") ||
-                  localStorage.getItem("user_email"))}
-            </div>
 
             {confirmLogoutOpen && (
               <div className="fixed inset-0 z-[120] flex items-center justify-center">

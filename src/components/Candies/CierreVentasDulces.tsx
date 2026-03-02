@@ -60,6 +60,8 @@ interface SaleDataRaw {
   uBruta?: number;
   grossProfit?: number;
   prorrateo?: number;
+  uvXpaq?: number;
+  upaquete?: number;
   // tipo de venta en sales_candies
   type?: SaleType;
 
@@ -111,6 +113,12 @@ interface SaleData {
   // suma de margenVendedor por items (para reconciliar con vendorCommissionAmount)
   commissionFromItems?: number;
 
+  // uvxpaq calculado en la venta (si existe)
+  uvXpaq?: number;
+
+  // fallback legacy
+  upaquete?: number;
+
   // ✅ fecha de proceso
   processedDate?: string;
 }
@@ -151,10 +159,61 @@ const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
+const maybeMoney = (n: unknown) =>
+  Number.isFinite(Number(n)) ? `C$${money(n)}` : "—";
 const normKey = (v: unknown) =>
   String(v ?? "")
     .trim()
     .toLowerCase();
+const UVXPAQ_CUTOFF_DATE = "2026-02-25";
+
+function pickAmountAR(x: any): number {
+  const n = Number(x?.amount ?? 0);
+  if (Number.isFinite(n) && n !== 0) return Math.abs(n);
+
+  const candidates = [
+    x.amountPaid,
+    x.paidAmount,
+    x.paymentAmount,
+    x.value,
+    x.total,
+    x.inAmount,
+  ];
+
+  for (const c of candidates) {
+    const v = Number(c);
+    if (Number.isFinite(v) && v !== 0) return Math.abs(v);
+  }
+
+  return 0;
+}
+
+function getARKind(x: any): "ABONO" | "CARGO" | "OTHER" {
+  const raw = String(
+    x.kind ?? x.type ?? x.movement ?? x.movementType ?? x.action ?? "",
+  )
+    .trim()
+    .toUpperCase();
+
+  if (raw === "ABONO" || raw === "PAGO" || raw === "PAYMENT") return "ABONO";
+  if (raw === "CARGO" || raw === "CHARGE") return "CARGO";
+  return "OTHER";
+}
+
+interface AbonoRow {
+  id: string;
+  date: string;
+  customerId?: string;
+  customerName?: string;
+  amount: number;
+  saleId?: string;
+  vendorId?: string;
+  balanceBefore?: number;
+  balanceAfter?: number;
+  saleRemainingBefore?: number;
+  saleRemainingAfter?: number;
+  comment?: string;
+}
 
 async function deleteARMovesBySaleId(saleId: string) {
   if (!saleId) return;
@@ -232,6 +291,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       // utilidad neta: uBruta - prorrateo - margenVendedor
       const uBrutaItem = Number(it?.uBruta ?? 0) || 0;
       const vendorNet = round2(uBrutaItem - prorrateo - vendorUtil);
+      const uvXpaqFromItem = Number(it?.uvXpaq ?? it?.upaquete ?? NaN);
 
       return {
         id: `${id}#${idx}`,
@@ -257,6 +317,9 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         vendorUtility: vendorUtil,
         vendorNetUtility: vendorNet,
         commissionFromItems: Number(it?.margenVendedor ?? 0) || 0,
+        uvXpaq: Number.isFinite(uvXpaqFromItem)
+          ? Number(uvXpaqFromItem)
+          : undefined,
         processedDate: processedDate || "",
       };
     });
@@ -283,6 +346,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const vendorNetFallback = round2(
     uBrutaFallback - prorrateoFallback - vendorUtilityFallback,
   );
+  const uvXpaqFallback = Number(raw.uvXpaq ?? raw.upaquete ?? NaN);
 
   return [
     {
@@ -307,6 +371,9 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       vendorUtility: vendorUtilityFallback,
       vendorNetUtility: vendorNetFallback,
       commissionFromItems: Number(raw.margenVendedor ?? 0) || 0,
+      uvXpaq: Number.isFinite(uvXpaqFallback)
+        ? Number(uvXpaqFallback)
+        : undefined,
       processedDate: processedDate || "",
     },
   ];
@@ -361,6 +428,8 @@ export default function CierreVentasDulces({
   const [cashCardOpen, setCashCardOpen] = useState(false);
   const [creditCardOpen, setCreditCardOpen] = useState(false);
   const [productCardOpen, setProductCardOpen] = useState(false);
+  const [abonosCardOpen, setAbonosCardOpen] = useState(false);
+  const [isBackfillingUv, setIsBackfillingUv] = useState(false);
 
   const pdfRef = useRef<HTMLDivElement>(null);
 
@@ -372,12 +441,21 @@ export default function CierreVentasDulces({
   // vendedores para KPI listado + filtro
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
 
+  const [customersById, setCustomersById] = useState<Record<string, string>>(
+    {},
+  );
+  const [abonosRows, setAbonosRows] = useState<AbonoRow[]>([]);
+  const [abonosLoading, setAbonosLoading] = useState(false);
+
   // catálogo de productos (para mapear categoría)
   const [productCategoryMap, setProductCategoryMap] = useState<
     Record<string, string>
   >({});
   // mapa upaquete por vendedor -> producto (normalizado)
   const [upaqueteMap, setUpaqueteMap] = useState<
+    Record<string, Record<string, number>>
+  >({});
+  const [uvxpaqMap, setUvxpaqMap] = useState<
     Record<string, Record<string, number>>
   >({});
   const [categoryOpenMap, setCategoryOpenMap] = useState<
@@ -466,6 +544,24 @@ export default function CierreVentasDulces({
     fetchSellers();
   }, []);
 
+  // cargar clientes (para nombre en abonos)
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "customers_candies"));
+        const map: Record<string, string> = {};
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          map[d.id] = String(data?.name || "");
+        });
+        setCustomersById(map);
+      } catch (e) {
+        console.error("Error cargando customers_candies", e);
+        setCustomersById({});
+      }
+    })();
+  }, []);
+
   // cargar catálogo productos (para consolidado por categoría)
   useEffect(() => {
     const fetchProducts = async () => {
@@ -548,7 +644,7 @@ export default function CierreVentasDulces({
     currentEmailNorm,
   ]);
 
-  // Cargar U. Paquete desde órdenes de vendedor (inventory_candies_sellers)
+  // Cargar U. Paquete y UVxPaq desde órdenes de vendedor (inventory_candies_sellers)
   useEffect(() => {
     (async () => {
       try {
@@ -559,6 +655,7 @@ export default function CierreVentasDulces({
         );
         if (!vendorIds.length) {
           setUpaqueteMap({});
+          setUvxpaqMap({});
           return;
         }
 
@@ -570,7 +667,8 @@ export default function CierreVentasDulces({
           return out;
         };
 
-        const map: Record<string, Record<string, number>> = {};
+        const mapUpa: Record<string, Record<string, number>> = {};
+        const mapUv: Record<string, Record<string, number>> = {};
         const chunks = chunk(vendorIds, 10);
         for (const c of chunks) {
           const q = query(
@@ -582,34 +680,345 @@ export default function CierreVentasDulces({
             const x = d.data() as any;
             const sid = String(x.sellerId || "").trim();
             if (!sid) return;
-            map[sid] = map[sid] || {};
+            mapUpa[sid] = mapUpa[sid] || {};
+            mapUv[sid] = mapUv[sid] || {};
             // Normalize product key: prefer productName, fallback to productId
             const pname = String(
               x.productName || x.productName?.toString() || "",
             );
             const key = pname ? normKey(pname) : String(x.productId || "");
             // prefer explicit field `upaquete` if exists
-            const explicit = Number(
+            const explicitUpa = Number(
               x.upaquete ?? x.uPaquete ?? x.u_per_package ?? NaN,
             );
-            let val = NaN as number;
-            if (Number.isFinite(explicit)) val = explicit;
+            let valUpa = NaN as number;
+            if (Number.isFinite(explicitUpa)) valUpa = explicitUpa;
             else {
               const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
               const packs = Math.max(1, Number(x.packages ?? 0));
-              val = packs > 0 ? gross / packs : 0;
+              valUpa = packs > 0 ? gross / packs : 0;
             }
-            map[sid][key] = Number(val || 0);
+            mapUpa[sid][key] = Number(valUpa || 0);
+
+            const explicitUv = Number(
+              x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? x.u_vxpaq ?? NaN,
+            );
+            let valUv = NaN as number;
+            if (Number.isFinite(explicitUv)) valUv = explicitUv;
+            else {
+              const uVend = Number(x.uVendor ?? x.vendorProfit ?? 0);
+              const packs = Math.max(1, Number(x.packages ?? 0));
+              valUv = packs > 0 ? uVend / packs : 0;
+            }
+            mapUv[sid][key] = Number(valUv || 0);
           });
         }
-        setUpaqueteMap(map);
+        setUpaqueteMap(mapUpa);
+        setUvxpaqMap(mapUv);
       } catch (e) {
         console.error("Error cargando U. Paquete:", e);
         setUpaqueteMap({});
+        setUvxpaqMap({});
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleSales]);
+
+  useEffect(() => {
+    if (!startDate || !endDate) return;
+
+    (async () => {
+      try {
+        setAbonosLoading(true);
+
+        const qAr = query(
+          collection(db, "ar_movements"),
+          where("date", ">=", startDate),
+          where("date", "<=", endDate),
+          orderBy("date", "asc"),
+        );
+        const snap = await getDocs(qAr);
+
+        const rows: AbonoRow[] = [];
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          if (getARKind(x) !== "ABONO") return;
+
+          const amount = pickAmountAR(x);
+          if (!(amount > 0)) return;
+
+          const vendorId = String(x.vendorId || "");
+          if (isAdmin && vendorFilter !== "ALL" && vendorId !== vendorFilter) {
+            return;
+          }
+          if (isVendDulces && sellerCandyId && vendorId !== sellerCandyId) {
+            return;
+          }
+
+          const custId = String(x.customerId || "").trim();
+          const customerName = customersById[custId] || "";
+          const saleId = String(
+            x?.ref?.saleId || x?.ref?.id || x?.saleId || x?.reference || "",
+          ).trim();
+
+          rows.push({
+            id: d.id,
+            date: String(x.date || ""),
+            customerId: custId || undefined,
+            customerName,
+            amount,
+            saleId: saleId || undefined,
+            vendorId: vendorId || undefined,
+            balanceBefore: Number(x.balanceBefore ?? NaN),
+            balanceAfter: Number(x.balanceAfter ?? NaN),
+            saleRemainingBefore: Number(x.saleRemainingBefore ?? NaN),
+            saleRemainingAfter: Number(x.saleRemainingAfter ?? NaN),
+            comment: String(x.comment || ""),
+          });
+        });
+
+        setAbonosRows(
+          rows.sort((a, b) => (a.date || "").localeCompare(b.date || "")),
+        );
+      } catch (e) {
+        console.error("Error cargando abonos:", e);
+        setAbonosRows([]);
+      } finally {
+        setAbonosLoading(false);
+      }
+    })();
+  }, [
+    startDate,
+    endDate,
+    vendorFilter,
+    isAdmin,
+    isVendDulces,
+    sellerCandyId,
+    customersById,
+  ]);
+
+  const getUpaqueteForSale = (s: SaleData | undefined): number | null => {
+    if (!s) return null;
+    const key = normKey(s.productName || "");
+
+    // Prefer explicit upaquete stored on the sale item (if exists)
+    try {
+      if (Array.isArray((s as any).items) && (s as any).items.length > 0) {
+        const it = (s as any).items[0];
+        const fromItem = Number(it?.upaquete ?? NaN);
+        if (Number.isFinite(fromItem)) return Number(fromItem || 0);
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const candidates = [s.vendorId || "", sellerCandyId || ""].filter(Boolean);
+    for (const cid of candidates) {
+      const vmap = upaqueteMap[cid || ""];
+      const val = vmap ? vmap[key] : undefined;
+      if (val !== undefined && val !== null) return Number(val || 0);
+    }
+
+    return null;
+  };
+
+  const getUvXpaqForSale = (s: SaleData | undefined): number => {
+    if (!s) return 0;
+    const key = normKey(s.productName || "");
+    const candidates = [s.vendorId || "", sellerCandyId || ""].filter(Boolean);
+    const isHistoric = String(s.date || "") <= UVXPAQ_CUTOFF_DATE;
+    if (isHistoric) {
+      for (const cid of candidates) {
+        const vmap = uvxpaqMap[cid || ""];
+        const val = vmap ? vmap[key] : undefined;
+        if (val !== undefined && val !== null) return round2(Number(val || 0));
+      }
+    } else {
+      const explicit = Number(s.uvXpaq ?? NaN);
+      if (Number.isFinite(explicit)) return round2(Number(explicit || 0));
+    }
+
+    const qty = Math.max(1, Number(s.quantity || 0));
+    const uVend = Number(getCommissionFromItems(s) || 0);
+    return uVend > 0 ? round2(uVend / qty) : 0;
+  };
+
+  const buildUpaqueteMap = async (vendorIds: string[]) => {
+    const chunk = (arr: string[], size = 10) => {
+      const out: string[][] = [];
+      for (let i = 0; i < arr.length; i += size)
+        out.push(arr.slice(i, i + size));
+      return out;
+    };
+
+    const map: Record<string, Record<string, number>> = {};
+    const chunks = chunk(vendorIds, 10);
+    for (const c of chunks) {
+      const q = query(
+        collection(db, "inventory_candies_sellers"),
+        where("sellerId", "in", c),
+      );
+      const snap = await getDocs(q);
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        const sid = String(x.sellerId || "").trim();
+        if (!sid) return;
+        map[sid] = map[sid] || {};
+        const pname = String(x.productName || x.productName?.toString() || "");
+        const key = pname ? normKey(pname) : String(x.productId || "");
+        const explicit = Number(
+          x.upaquete ?? x.uPaquete ?? x.u_per_package ?? NaN,
+        );
+        let val = NaN as number;
+        if (Number.isFinite(explicit)) val = explicit;
+        else {
+          const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
+          const packs = Math.max(1, Number(x.packages ?? 0));
+          val = packs > 0 ? gross / packs : 0;
+        }
+        map[sid][key] = Number(val || 0);
+      });
+    }
+    return map;
+  };
+
+  const buildUvxpaqMap = async (vendorIds: string[]) => {
+    const chunk = (arr: string[], size = 10) => {
+      const out: string[][] = [];
+      for (let i = 0; i < arr.length; i += size)
+        out.push(arr.slice(i, i + size));
+      return out;
+    };
+
+    const map: Record<string, Record<string, number>> = {};
+    const chunks = chunk(vendorIds, 10);
+    for (const c of chunks) {
+      const q = query(
+        collection(db, "inventory_candies_sellers"),
+        where("sellerId", "in", c),
+      );
+      const snap = await getDocs(q);
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        const sid = String(x.sellerId || "").trim();
+        if (!sid) return;
+        map[sid] = map[sid] || {};
+        const pname = String(x.productName || x.productName?.toString() || "");
+        const key = pname ? normKey(pname) : String(x.productId || "");
+        const explicit = Number(
+          x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? x.u_vxpaq ?? NaN,
+        );
+        let val = NaN as number;
+        if (Number.isFinite(explicit)) val = explicit;
+        else {
+          const uVend = Number(x.uVendor ?? x.vendorProfit ?? 0);
+          const packs = Math.max(1, Number(x.packages ?? 0));
+          val = packs > 0 ? uVend / packs : 0;
+        }
+        map[sid][key] = Number(val || 0);
+      });
+    }
+    return map;
+  };
+
+  const backfillUvXpaqInSales = async () => {
+    if (!isAdmin) return;
+    if (isBackfillingUv) return;
+
+    if (
+      !window.confirm(
+        "¿Actualizar UVxPaq en las ventas del periodo seleccionado?",
+      )
+    )
+      return;
+
+    try {
+      setIsBackfillingUv(true);
+      setMessage("");
+
+      const qSales = query(
+        collection(db, "sales_candies"),
+        where("date", ">=", startDate),
+        where("date", "<=", endDate),
+        orderBy("date", "asc"),
+      );
+      const snap = await getDocs(qSales);
+
+      const vendorIds = Array.from(
+        new Set(
+          snap.docs
+            .map((d) => String((d.data() as any)?.vendorId || "").trim())
+            .filter(Boolean),
+        ),
+      );
+
+      const map = vendorIds.length ? await buildUvxpaqMap(vendorIds) : {};
+
+      let batch = writeBatch(db);
+      let pending = 0;
+      let updatedDocs = 0;
+      let updatedItems = 0;
+
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const vendorId = String(data?.vendorId || "").trim();
+        const items = Array.isArray(data?.items) ? data.items : [];
+
+        if (items.length > 0) {
+          let changed = false;
+          const nextItems = items.map((it: any) => {
+            const pname = String(it?.productName || data?.productName || "");
+            const key = normKey(pname);
+            const val = map?.[vendorId]?.[key];
+            if (!Number.isFinite(Number(val))) return it;
+            const current = Number(it?.uvXpaq ?? NaN);
+            if (Number.isFinite(current)) return it;
+            changed = true;
+            updatedItems += 1;
+            return { ...it, uvXpaq: round2(Number(val || 0)) };
+          });
+
+          if (changed) {
+            batch.update(doc(db, "sales_candies", d.id), {
+              items: nextItems,
+              uvxpaqUpdatedAt: Timestamp.now(),
+            });
+            pending += 1;
+            updatedDocs += 1;
+          }
+        } else {
+          const pname = String(data?.productName || "");
+          const key = normKey(pname);
+          const val = map?.[vendorId]?.[key];
+          if (Number.isFinite(Number(val))) {
+            batch.update(doc(db, "sales_candies", d.id), {
+              uvXpaq: round2(Number(val || 0)),
+              uvxpaqUpdatedAt: Timestamp.now(),
+            });
+            pending += 1;
+            updatedDocs += 1;
+          }
+        }
+
+        if (pending >= 400) {
+          batch.commit();
+          batch = writeBatch(db);
+          pending = 0;
+        }
+      });
+
+      if (pending > 0) await batch.commit();
+
+      setMessage(
+        `✅ UVxPaq actualizado. Docs: ${updatedDocs}. Items: ${updatedItems}.`,
+      );
+    } catch (e) {
+      console.error(e);
+      setMessage("❌ Error actualizando UVxPaq.");
+    } finally {
+      setIsBackfillingUv(false);
+    }
+  };
 
   const cashSales = React.useMemo(
     () => visibleSales.filter((s) => s.type !== "CREDITO"),
@@ -686,6 +1095,11 @@ export default function CierreVentasDulces({
   totalCommission = round2(totalCommission);
   totalCommissionCash = round2(totalCommissionCash);
   totalCommissionCredito = round2(totalCommissionCredito);
+
+  const totalAbonos = round2(
+    abonosRows.reduce((sum, r) => sum + Number(r.amount || 0), 0),
+  );
+  const totalCobrado = round2(totalCobradoCash + totalAbonos);
 
   // ✅ KPI: comisiones por vendedor en el periodo (CASH / CRÉDITO separados)
   const vendorCommissionRowsCash = React.useMemo(() => {
@@ -1135,41 +1549,17 @@ export default function CierreVentasDulces({
       status: s.status,
     }));
 
-    // añadir U. Paquete (si está disponible en cache)
-    const getUpaqueteForSale = (s: SaleData | undefined): number | null => {
-      if (!s) return null;
-      const key = normKey(s.productName || "");
-
-      // Prefer explicit uvXpaq stored on the sale item (newer sales)
-      try {
-        if (Array.isArray((s as any).items) && (s as any).items.length > 0) {
-          const it = (s as any).items[0];
-          const fromItem = Number(it?.uvXpaq ?? it?.upaquete ?? NaN);
-          if (Number.isFinite(fromItem)) return Number(fromItem || 0);
-        }
-      } catch (e) {
-        // ignore
-      }
-
-      // Candidate vendor ids to look up (prefer the current seller context)
-      const candidates = [s.vendorId || "", sellerCandyId || ""].filter(
-        Boolean,
-      );
-      for (const cid of candidates) {
-        const vmap = upaqueteMap[cid || ""];
-        const val = vmap ? vmap[key] : undefined;
-        if (val !== undefined && val !== null) return Number(val || 0);
-      }
-
-      return null;
-    };
-
     const rowsWithUpa = rows.map((r) => {
       const matching = visibleSales.find((s) => s.id === r.id);
       const u = getUpaqueteForSale(matching);
+      const uv = getUvXpaqForSale(matching);
+      const qty = Number(matching?.quantity || 0);
+      const comision = uv > 0 ? round2(uv * qty) : 0;
       return {
         ...r,
         uPaquete: u !== null && u !== undefined ? round2(Number(u)) : "",
+        uvXpaq: uv > 0 ? round2(uv) : "",
+        comision: comision > 0 ? round2(comision) : "",
       };
     });
 
@@ -1484,6 +1874,7 @@ export default function CierreVentasDulces({
                       <th className="border p-2">Monto</th>
                       {isAdmin && <th className="border p-2">U. Paquete</th>}
                       {isAdmin && <th className="border p-2">UV x Paq</th>}
+                      {isAdmin && <th className="border p-2">Comision</th>}
                       <th className="border p-2">U. Vendedor</th>
                       <th className="border p-2">U. Neta</th>
                       <th className="border p-2">Fecha venta</th>
@@ -1533,9 +1924,19 @@ export default function CierreVentasDulces({
                                   1,
                                   Number(s.quantity || 0),
                                 );
-                                const uv = Number(s.vendorUtility || 0) || 0;
-                                return uv > 0
-                                  ? `C$${money(round2(uv / qty))}`
+                                const uv = getUvXpaqForSale(s);
+                                return uv > 0 ? `C$${money(round2(uv))}` : "—";
+                              })()}
+                            </td>
+                          )}
+                          {isAdmin && (
+                            <td className="border p-1">
+                              {(() => {
+                                const qty = Number(s.quantity || 0);
+                                const uv = getUvXpaqForSale(s);
+                                const total = Number(uv || 0) * qty;
+                                return uv && total > 0
+                                  ? `C$${money(round2(total))}`
                                   : "—";
                               })()}
                             </td>
@@ -1677,6 +2078,20 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Comision</span>
+                          <strong>
+                            {(() => {
+                              const qty = Number(s.quantity || 0);
+                              const uv = getUvXpaqForSale(s);
+                              const total = Number(uv || 0) * qty;
+                              return uv && total > 0
+                                ? `C$${money(round2(total))}`
+                                : "—";
+                            })()}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
                           <span className="text-gray-600">Vendedor</span>
                           <strong className="text-right break-all">
                             {s.userEmail}
@@ -1770,6 +2185,7 @@ export default function CierreVentasDulces({
                       <th className="border p-2">Monto</th>
                       {isAdmin && <th className="border p-2">U. Paquete</th>}
                       {isAdmin && <th className="border p-2">UV x Paq</th>}
+                      {isAdmin && <th className="border p-2">Comision</th>}
                       <th className="border p-2">U. Vendedor</th>
                       <th className="border p-2">U. Neta</th>
                       <th className="border p-2">Fecha venta</th>
@@ -1819,9 +2235,19 @@ export default function CierreVentasDulces({
                                   1,
                                   Number(s.quantity || 0),
                                 );
-                                const uv = Number(s.vendorUtility || 0) || 0;
-                                return uv > 0
-                                  ? `C$${money(round2(uv / qty))}`
+                                const uv = getUvXpaqForSale(s);
+                                return uv > 0 ? `C$${money(round2(uv))}` : "—";
+                              })()}
+                            </td>
+                          )}
+                          {isAdmin && (
+                            <td className="border p-1">
+                              {(() => {
+                                const qty = Number(s.quantity || 0);
+                                const uv = getUvXpaqForSale(s);
+                                const total = Number(uv || 0) * qty;
+                                return uv && total > 0
+                                  ? `C$${money(round2(total))}`
                                   : "—";
                               })()}
                             </td>
@@ -1975,6 +2401,20 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Comision</span>
+                          <strong>
+                            {(() => {
+                              const qty = Number(s.quantity || 0);
+                              const uv = getUvXpaqForSale(s);
+                              const total = Number(uv || 0) * qty;
+                              return uv && total > 0
+                                ? `C$${money(round2(total))}`
+                                : "—";
+                            })()}
+                          </strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
                           <span className="text-gray-600">U. Vendedor</span>
                           <strong>
                             {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
@@ -2047,23 +2487,206 @@ export default function CierreVentasDulces({
             </div>
           </div>
 
-          {/* Bloque de totales (igual) */}
+          <div className="bg-white border rounded shadow-sm mb-4">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              onClick={() => setAbonosCardOpen((v) => !v)}
+              aria-expanded={abonosCardOpen}
+            >
+              <span>Abonos (período)</span>
+              <span
+                className={`transition-transform ${abonosCardOpen ? "rotate-180" : ""}`}
+              >
+                ▼
+              </span>
+            </button>
+            <div
+              className={`collapsible-content ${abonosCardOpen ? "block" : "hidden"} border-t p-4`}
+            >
+              {abonosLoading ? (
+                <div className="text-sm text-gray-500">Cargando abonos...</div>
+              ) : (
+                <>
+                  <div className="pdf-desktop hidden md:block">
+                    <table className="min-w-full border text-sm mb-4 shadow-2xl">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="border p-2">Fecha</th>
+                          <th className="border p-2">Cliente</th>
+                          <th className="border p-2">Venta</th>
+                          <th className="border p-2">Saldo pendiente</th>
+                          <th className="border p-2">Abono</th>
+                          <th className="border p-2">Saldo final</th>
+                          <th className="border p-2">Comentario</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {abonosRows.map((r) => {
+                          const pending = Number.isFinite(
+                            Number(r.saleRemainingBefore),
+                          )
+                            ? r.saleRemainingBefore
+                            : Number.isFinite(Number(r.balanceBefore))
+                              ? r.balanceBefore
+                              : undefined;
+                          const after = Number.isFinite(
+                            Number(r.saleRemainingAfter),
+                          )
+                            ? r.saleRemainingAfter
+                            : Number.isFinite(Number(r.balanceAfter))
+                              ? r.balanceAfter
+                              : undefined;
+
+                          return (
+                            <tr key={r.id} className="text-center">
+                              <td className="border p-1">{r.date}</td>
+                              <td className="border p-1">
+                                {r.customerName || "—"}
+                              </td>
+                              <td className="border p-1">{r.saleId || "—"}</td>
+                              <td className="border p-1">
+                                {maybeMoney(pending)}
+                              </td>
+                              <td className="border p-1">
+                                C${money(r.amount)}
+                              </td>
+                              <td className="border p-1">
+                                {maybeMoney(after)}
+                              </td>
+                              <td className="border p-1">{r.comment || "—"}</td>
+                            </tr>
+                          );
+                        })}
+                        {abonosRows.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={7}
+                              className="p-3 text-center text-gray-500"
+                            >
+                              Sin abonos para mostrar.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="pdf-mobile md:hidden space-y-3 mb-4">
+                    {abonosRows.map((r) => {
+                      const pending = Number.isFinite(
+                        Number(r.saleRemainingBefore),
+                      )
+                        ? r.saleRemainingBefore
+                        : Number.isFinite(Number(r.balanceBefore))
+                          ? r.balanceBefore
+                          : undefined;
+                      const after = Number.isFinite(
+                        Number(r.saleRemainingAfter),
+                      )
+                        ? r.saleRemainingAfter
+                        : Number.isFinite(Number(r.balanceAfter))
+                          ? r.balanceAfter
+                          : undefined;
+
+                      return (
+                        <div
+                          key={r.id}
+                          className="border rounded-xl bg-white shadow-sm p-3"
+                        >
+                          <div className="flex justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="font-semibold truncate">
+                                {r.customerName || "Cliente"}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {r.date}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-bold">
+                                C${money(r.amount)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 text-sm space-y-1">
+                            <div className="flex justify-between gap-3">
+                              <span className="text-gray-600">Venta</span>
+                              <strong className="text-right break-all">
+                                {r.saleId || "—"}
+                              </strong>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-gray-600">
+                                Saldo pendiente
+                              </span>
+                              <strong>{maybeMoney(pending)}</strong>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-gray-600">Saldo final</span>
+                              <strong>{maybeMoney(after)}</strong>
+                            </div>
+                            {r.comment && (
+                              <div className="text-xs text-gray-600">
+                                {r.comment}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {abonosRows.length === 0 && (
+                      <div className="text-center text-gray-500 text-sm py-6">
+                        Sin abonos para mostrar.
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* KPIs de totales */}
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-2 text-sm mb-4">
-            <div>
-              Total paquetes crédito: <strong>{qty3(totalPacksCredito)}</strong>
+            <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+              <div className="text-xs text-gray-600">
+                Total paquetes crédito
+              </div>
+              <div className="text-lg font-semibold">
+                {qty3(totalPacksCredito)}
+              </div>
             </div>
-            <div>
-              Total paquetes cash: <strong>{qty3(totalPacksCash)}</strong>
+            <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+              <div className="text-xs text-gray-600">Total paquetes cash</div>
+              <div className="text-lg font-semibold">
+                {qty3(totalPacksCash)}
+              </div>
             </div>
-            <div>
-              Total pendiente crédito:{" "}
-              <strong>C${money(totalPendienteCredito)}</strong>
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <div className="text-xs text-gray-600">
+                Total pendiente crédito
+              </div>
+              <div className="text-lg font-semibold">
+                C${money(totalPendienteCredito)}
+              </div>
             </div>
-            <div>
-              Total cobrado cash: <strong>C${money(totalCobradoCash)}</strong>
+            <div className="p-3 rounded-lg bg-indigo-50 border border-indigo-200">
+              <div className="text-xs text-gray-600">Total cobrado</div>
+              <div className="text-lg font-semibold">
+                C${money(totalCobrado)}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                Cash: C${money(totalCobradoCash)} · Abonos: C$
+                {money(totalAbonos)}
+              </div>
             </div>
-            <div>
-              Total comisión: <strong>C${money(totalCommission)}</strong>
+            <div className="p-3 rounded-lg bg-teal-50 border border-teal-200">
+              <div className="text-xs text-gray-600">Total comisión</div>
+              <div className="text-lg font-semibold">
+                C${money(totalCommission)}
+              </div>
             </div>
           </div>
 
@@ -2229,6 +2852,15 @@ export default function CierreVentasDulces({
             className="bg-blue-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-blue-700"
           >
             Procesar
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            onClick={backfillUvXpaqInSales}
+            disabled={isBackfillingUv}
+            className="bg-emerald-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-emerald-700 disabled:opacity-60"
+          >
+            {isBackfillingUv ? "Actualizando UVxPaq..." : "Actualizar UVxPaq"}
           </button>
         )}
         <button

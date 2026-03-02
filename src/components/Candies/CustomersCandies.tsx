@@ -92,6 +92,38 @@ async function deleteARMovesBySaleId(saleId: string) {
   );
 }
 
+async function removeAbonoFromSaleByMovementId(
+  saleId: string | undefined,
+  movementId: string,
+) {
+  const safeSaleId = String(saleId || "").trim();
+  const safeMovId = String(movementId || "").trim();
+  if (!safeSaleId || !safeMovId) return;
+
+  const saleRef = doc(db, "sales_candies", safeSaleId);
+  const saleSnap = await getDoc(saleRef);
+  if (!saleSnap.exists()) return;
+
+  const data = saleSnap.data() as any;
+  const abonosRaw = Array.isArray(data?.abonos) ? data.abonos : [];
+  const abonos = abonosRaw.filter((a: any) => a?.movementId !== safeMovId);
+  if (abonos.length === abonosRaw.length) return;
+
+  const abonosTotal = abonos.reduce(
+    (acc: number, a: any) => acc + Number(a?.amount || 0),
+    0,
+  );
+  const last = abonos.length ? abonos[abonos.length - 1] : null;
+
+  await updateDoc(saleRef, {
+    abonos,
+    abonosTotal: Math.round(abonosTotal * 100) / 100,
+    lastAbonoDate: last?.date || "",
+    lastAbonoAmount: Number(last?.amount || 0),
+    lastAbonoAt: last ? Timestamp.now() : null,
+  });
+}
+
 type RoleProp =
   | ""
   | "admin"
@@ -1021,6 +1053,9 @@ export default function CustomersCandy({
         await deleteARMovesBySaleId(m.ref.saleId);
       } else {
         await deleteDoc(doc(db, "ar_movements", m.id));
+        if (m.type === "ABONO" && m.ref?.saleId) {
+          await removeAbonoFromSaleByMovementId(m.ref.saleId, m.id);
+        }
       }
 
       const newList = stRows.filter((x) => {

@@ -2187,7 +2187,10 @@ export default function CandyMainOrders() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <RefreshButton onClick={refresh} loading={loading || catalogLoading} />
+          <RefreshButton
+            onClick={refresh}
+            loading={loading || catalogLoading}
+          />
 
           <button
             className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
@@ -2201,7 +2204,9 @@ export default function CandyMainOrders() {
         </div>
       </div>
 
-      {msg && <div className="mb-3 p-2 rounded border text-sm bg-white">{msg}</div>}
+      {msg && (
+        <div className="mb-3 p-2 rounded border text-sm bg-white">{msg}</div>
+      )}
 
       {/* MODAL ORDEN MAESTRA */}
       {openOrderModal && (
@@ -3800,82 +3805,85 @@ export default function CandyMainOrders() {
                   <th className="text-left p-2 border-b">Acciones</th>
                 </tr>
               </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={11} className="p-4 text-center">
-                    Cargando…
-                  </td>
-                </tr>
-              ) : orders.length === 0 ? (
-                <tr>
-                  <td colSpan={11} className="p-4 text-center">
-                    Sin ordenes maestras.
-                  </td>
-                </tr>
-              ) : (
-                pagedOrders.map((o) => {
-                  const agg = orderInventoryAgg[o.id];
-                  const fecha = getOrderListDate(o);
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={11} className="p-4 text-center">
+                      Cargando…
+                    </td>
+                  </tr>
+                ) : orders.length === 0 ? (
+                  <tr>
+                    <td colSpan={11} className="p-4 text-center">
+                      Sin ordenes maestras.
+                    </td>
+                  </tr>
+                ) : (
+                  pagedOrders.map((o) => {
+                    const agg = orderInventoryAgg[o.id];
+                    const fecha = getOrderListDate(o);
 
-                  const precioProveedor =
-                    o.totalPackages > 0
-                      ? (o.subtotal / o.totalPackages).toFixed(2)
-                      : "0.00";
+                    const precioProveedor =
+                      o.totalPackages > 0
+                        ? (o.subtotal / o.totalPackages).toFixed(2)
+                        : "0.00";
 
-                  const logi = Number(o.logisticsCost || 0);
-                  const grossEst =
-                    Number(o.totalRivas || 0) - Number(o.subtotal || 0);
+                    const logi = Number(o.logisticsCost || 0);
+                    const grossEst =
+                      Number(o.totalRivas || 0) - Number(o.subtotal || 0);
 
-                  return (
-                    <tr key={o.id} className="hover:bg-gray-50 whitespace-nowrap">
-                      <td className="p-2 border-b">{fecha}</td>
-                      <td className="p-2 border-b">{o.name}</td>
-                      <td className="p-2 border-b text-right">
-                        {o.totalPackages}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {agg ? agg.remainingPackages : 0}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {precioProveedor}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {Number(o.subtotal || 0).toFixed(2)}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {Number(o.totalRivas || 0).toFixed(2)}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {Number(o.totalIsla || 0).toFixed(2)}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {logi.toFixed(2)}
-                      </td>
-                      <td className="p-2 border-b text-right">
-                        {grossEst.toFixed(2)}
-                      </td>
-                      <td className="p-2 border-b">
-                        <div className="flex gap-1 justify-center">
-                          <button
-                            className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
-                            onClick={() => openOrderForEdit(o)}
-                          >
-                            Ver / Editar
-                          </button>
-                          <button
-                            className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
-                            onClick={() => handleDeleteOrder(o)}
-                          >
-                            Borrar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
+                    return (
+                      <tr
+                        key={o.id}
+                        className="hover:bg-gray-50 whitespace-nowrap"
+                      >
+                        <td className="p-2 border-b">{fecha}</td>
+                        <td className="p-2 border-b">{o.name}</td>
+                        <td className="p-2 border-b text-right">
+                          {o.totalPackages}
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          {agg ? agg.remainingPackages : 0}
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          {precioProveedor}
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          {Number(o.subtotal || 0).toFixed(2)}
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          {Number(o.totalRivas || 0).toFixed(2)}
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          {Number(o.totalIsla || 0).toFixed(2)}
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          {logi.toFixed(2)}
+                        </td>
+                        <td className="p-2 border-b text-right">
+                          {grossEst.toFixed(2)}
+                        </td>
+                        <td className="p-2 border-b">
+                          <div className="flex gap-1 justify-center">
+                            <button
+                              className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                              onClick={() => openOrderForEdit(o)}
+                            >
+                              Ver / Editar
+                            </button>
+                            <button
+                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                              onClick={() => handleDeleteOrder(o)}
+                            >
+                              Borrar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
             </table>
           </div>
           {/* Paginación (desktop) */}

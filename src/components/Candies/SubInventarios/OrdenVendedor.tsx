@@ -1796,7 +1796,10 @@ export default function VendorCandyOrders({
         const packs = Number(r.packages || 0);
 
         const unitPriceRivas = Number(
-          masterItem?.unitPriceRivas || r.unitPriceRivas || p?.unitPriceRivas || 0,
+          masterItem?.unitPriceRivas ||
+            r.unitPriceRivas ||
+            p?.unitPriceRivas ||
+            0,
         );
         const unitPriceSanJorge = Number(
           masterItem?.unitPriceSanJorge ||
@@ -4003,9 +4006,7 @@ export default function VendorCandyOrders({
                       }}
                       disabled={isSyncingAll}
                     >
-                      {isSyncingAll
-                        ? "Sincronizando..."
-                        : "Sincronizar todo"}
+                      {isSyncingAll ? "Sincronizando..." : "Sincronizar todo"}
                     </button>
                     <button
                       className="px-3 py-2 rounded border text-sm hover:bg-gray-50"

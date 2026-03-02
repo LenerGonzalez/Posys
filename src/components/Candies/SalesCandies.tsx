@@ -155,6 +155,9 @@ function generateCandyVoucherPDF(args: {
   vendorName?: string;
   vendorCommissionPercent?: number;
   vendorCommissionAmount?: number;
+  abonos?: { customerName?: string; amount: number }[];
+  abonosTotal?: number;
+  totalFinal?: number;
 }) {
   const {
     saleId,
@@ -166,6 +169,9 @@ function generateCandyVoucherPDF(args: {
     vendorName,
     vendorCommissionPercent,
     vendorCommissionAmount,
+    abonos,
+    abonosTotal,
+    totalFinal,
   } = args;
 
   const doc = new jsPDF();
@@ -246,6 +252,41 @@ function generateCandyVoucherPDF(args: {
     align: "right" as any,
   });
   y += 6;
+
+  if (Array.isArray(abonos) && abonos.length > 0) {
+    doc.setFontSize(11);
+    doc.text("Abonos:", 10, y);
+    y += 5;
+
+    abonos.forEach((a) => {
+      if (y > 270) {
+        doc.addPage();
+        y = 12;
+      }
+      const name = String(a.customerName || "Cliente");
+      const amount = Number(a.amount || 0).toFixed(2);
+      const line = `${name} — C$ ${amount}`;
+      doc.text(line, 10, y);
+      y += 4;
+    });
+
+    if (typeof abonosTotal === "number") {
+      y += 2;
+      doc.setFontSize(12);
+      doc.text(
+        `Total abonos: C$ ${Number(abonosTotal || 0).toFixed(2)}`,
+        10,
+        y,
+      );
+      y += 5;
+    }
+
+    if (typeof totalFinal === "number") {
+      doc.setFontSize(12);
+      doc.text(`Total final: C$ ${Number(totalFinal || 0).toFixed(2)}`, 10, y);
+      y += 6;
+    }
+  }
 
   doc.setFontSize(9);
   doc.text("Gracias por su compra.", 10, y);
@@ -397,6 +438,14 @@ interface SalesCandiesPOSProps {
   roles?: RoleProp[] | string[];
 }
 
+interface PendingAbono {
+  id: string;
+  date: string;
+  amount: number;
+  customerId: string;
+  customerName: string;
+}
+
 export default function SalesCandiesPOS({
   role = "",
   roles,
@@ -463,6 +512,12 @@ export default function SalesCandiesPOS({
   const [msg, setMsg] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
+  // ===== Abonos (pendientes hasta guardar venta) =====
+  const [abonoDate, setAbonoDate] = useState<string>(todayLocalISO());
+  const [abonoAmount, setAbonoAmount] = useState<number>(0);
+  const [abonoCustomerId, setAbonoCustomerId] = useState<string>("");
+  const [pendingAbonos, setPendingAbonos] = useState<PendingAbono[]>([]);
+
   // Modal cliente
   const [showModal, setShowModal] = useState(false);
   const [mName, setMName] = useState("");
@@ -488,12 +543,14 @@ export default function SalesCandiesPOS({
     if (!c) return;
     // buscar en productos disponibles para el picker
     const byBarcode = productsForVendorPicker.find(
-      (p) => String((p as any).barcode || "") === c,
+      (p: Product) => String((p as any).barcode || "") === c,
     );
     const bySku = productsForVendorPicker.find(
-      (p) => String(p.sku || "") === c,
+      (p: Product) => String(p.sku || "") === c,
     );
-    const byId = productsForVendorPicker.find((p) => String(p.id || "") === c);
+    const byId = productsForVendorPicker.find(
+      (p: Product) => String(p.id || "") === c,
+    );
     const found = byBarcode || bySku || byId || null;
     if (found) {
       await addProductToList(found.id);
@@ -666,6 +723,63 @@ export default function SalesCandiesPOS({
     return customers;
   }, [customers, lockVendor, vendorId]);
 
+  const customersWithBalance = useMemo(() => {
+    const effectiveVendorId = lockVendor ? vendorId || sellerCandyId : vendorId;
+    return customersForCredit.filter((c) => {
+      if (Number(c.balance || 0) <= 0) return false;
+      if (!effectiveVendorId) return false;
+      const cVendorId = (c as any).vendorId ?? c.sellerId ?? "";
+      return cVendorId === effectiveVendorId;
+    });
+  }, [customersForCredit, lockVendor, vendorId, sellerCandyId]);
+
+  const selectedAbonoCustomer = useMemo(
+    () => customers.find((c) => c.id === abonoCustomerId) || null,
+    [customers, abonoCustomerId],
+  );
+
+  const customerBalanceById = useMemo(() => {
+    const map: Record<string, number> = {};
+    customers.forEach((c) => {
+      map[c.id] = Number(c.balance || 0) || 0;
+    });
+    return map;
+  }, [customers]);
+
+  const abonoTotalPending = useMemo(() => {
+    return round2(
+      pendingAbonos.reduce((acc, a) => acc + Number(a.amount || 0), 0),
+    );
+  }, [pendingAbonos]);
+
+  const abonoCustomerBalance = useMemo(() => {
+    return Math.max(0, Number(selectedAbonoCustomer?.balance || 0));
+  }, [selectedAbonoCustomer]);
+
+  const abonoPreviewAmount = useMemo(() => {
+    return Math.max(0, Number(abonoAmount || 0));
+  }, [abonoAmount]);
+
+  const abonoSaldoFinal = useMemo(() => {
+    return round2(Math.max(0, abonoCustomerBalance - abonoPreviewAmount));
+  }, [abonoCustomerBalance, abonoPreviewAmount]);
+
+  const totalFinalWithAbonos = useMemo(() => {
+    return round2(Math.max(0, Number(totalAmount || 0)) + abonoTotalPending);
+  }, [totalAmount, abonoTotalPending]);
+
+  const maxAbonoForCustomer = useMemo(() => {
+    if (!abonoCustomerId) return 0;
+    const balance = abonoCustomerBalance;
+    return Math.max(0, balance || 0);
+  }, [abonoCustomerId, abonoCustomerBalance]);
+
+  const clampAbonoAmount = (raw: any) => {
+    const n = Math.max(0, Number(raw || 0));
+    if (!Number.isFinite(n)) return 0;
+    return Math.min(n, maxAbonoForCustomer);
+  };
+
   const currentBalance = selectedCustomer?.balance || 0;
   const projectedBalance =
     clientType === "CREDITO"
@@ -693,13 +807,17 @@ export default function SalesCandiesPOS({
     [vendors, vendorId],
   );
 
-  const vendorCommissionPercent = selectedVendor?.commissionPercent || 0;
+  const vendorCommissionPercent = useMemo(() => {
+    const pct = Number(selectedVendor?.commissionPercent ?? 0);
+    return Number.isFinite(pct) ? pct : 0;
+  }, [selectedVendor]);
+
   const vendorCommissionAmount = useMemo(() => {
-    const total = items.reduce(
+    const sum = items.reduce(
       (acc, it) => acc + Number(it.margenVendedor || 0),
       0,
     );
-    return Number(total.toFixed(2));
+    return round2(sum);
   }, [items]);
 
   // Cargar catálogos
@@ -1302,6 +1420,52 @@ export default function SalesCandiesPOS({
         // Nota: no seteamos initialDebt aquí para evitar doble conteo con movimientos.
       }
 
+      // 2.1) Abonos pendientes (se registran despues de crear la venta)
+      const abonosToSave = pendingAbonos.filter(
+        (a) => a.customerId && Number(a.amount || 0) > 0,
+      );
+      if (abonosToSave.length > 0) {
+        const abonosEntries: any[] = [];
+        for (const a of abonosToSave) {
+          const entry: any = {
+            amount: Number(a.amount || 0),
+            date: a.date,
+            customerId: a.customerId,
+            customerName: a.customerName,
+            createdAt: Timestamp.now(),
+          };
+
+          if (a.customerId) {
+            const movRef = await addDoc(collection(db, "ar_movements"), {
+              customerId: a.customerId,
+              type: "ABONO",
+              amount: -Number(a.amount || 0),
+              date: a.date,
+              createdAt: Timestamp.now(),
+              ref: { saleId: saleRef.id },
+              vendorId,
+              vendorName: vendorObj?.name || "",
+            });
+            entry.movementId = movRef.id;
+          }
+
+          abonosEntries.push(entry);
+        }
+
+        const abonosTotal = round2(
+          abonosEntries.reduce((acc, a) => acc + Number(a.amount || 0), 0),
+        );
+        const lastAbono = abonosEntries[abonosEntries.length - 1];
+
+        await updateDoc(doc(db, "sales_candies", saleRef.id), {
+          abonos: abonosEntries,
+          abonosTotal,
+          lastAbonoDate: lastAbono?.date || "",
+          lastAbonoAmount: Number(lastAbono?.amount || 0),
+          lastAbonoAt: Timestamp.now(),
+        });
+      }
+
       // 3) FIFO por producto, PERO AHORA SOBRE EL PEDIDO DEL VENDEDOR
       const allocationsByItem: Record<
         string,
@@ -1362,6 +1526,12 @@ export default function SalesCandiesPOS({
           vendorName: vendorObj?.name,
           vendorCommissionPercent: vendorObj?.commissionPercent || 0,
           vendorCommissionAmount,
+          abonos: pendingAbonos.map((a) => ({
+            customerName: a.customerName,
+            amount: Number(a.amount || 0),
+          })),
+          abonosTotal: abonoTotalPending,
+          totalFinal: totalFinalWithAbonos,
         });
       } catch (e) {
         console.error("Error generando voucher PDF:", e);
@@ -1375,23 +1545,31 @@ export default function SalesCandiesPOS({
       setSaleDate(todayLocalISO());
       setItems([]);
       setDownPayment(0);
+      setPendingAbonos([]);
+      setAbonoAmount(0);
+      setAbonoDate(todayLocalISO());
       // mantenemos vendorId (útil cuando es vendedor logueado)
 
-      if (clientType === "CREDITO" && customerId) {
-        setCustomers((prev) =>
-          prev.map((c) =>
-            c.id === customerId
-              ? {
-                  ...c,
-                  balance:
-                    (c.balance || 0) +
-                    (Number(totalAmount) || 0) -
-                    (Number(downPayment) || 0),
-                }
-              : c,
-          ),
+      const abonosByCustomer: Record<string, number> = {};
+      for (const a of pendingAbonos) {
+        if (!a.customerId) continue;
+        abonosByCustomer[a.customerId] = round2(
+          (abonosByCustomer[a.customerId] || 0) + Number(a.amount || 0),
         );
       }
+
+      setCustomers((prev) =>
+        prev.map((c) => {
+          let delta = 0;
+          if (clientType === "CREDITO" && customerId && c.id === customerId) {
+            delta += (Number(totalAmount) || 0) - (Number(downPayment) || 0);
+          }
+          const abonoDelta = abonosByCustomer[c.id] || 0;
+          delta -= abonoDelta;
+          if (delta === 0) return c;
+          return { ...c, balance: (c.balance || 0) + delta };
+        }),
+      );
 
       setMsg("✅ Venta de dulces registrada");
 
@@ -1407,6 +1585,45 @@ export default function SalesCandiesPOS({
     } finally {
       setSaving(false);
     }
+  };
+
+  const addPendingAbono = () => {
+    setMsg("");
+    const amt = Number(abonoAmount || 0);
+    if (!abonoCustomerId) {
+      setMsg("Selecciona el cliente del abono.");
+      return;
+    }
+    if (!(amt > 0)) {
+      setMsg("Ingresa un monto de abono mayor a 0.");
+      return;
+    }
+    if (amt > maxAbonoForCustomer) {
+      setMsg("El abono no puede superar el saldo actual del cliente.");
+      return;
+    }
+    if (!abonoDate) {
+      setMsg("Selecciona la fecha del abono.");
+      return;
+    }
+
+    const safeAmt = parseFloat(amt.toFixed(2));
+    const newRow: PendingAbono = {
+      id: String(Date.now()),
+      date: saleDate,
+      amount: safeAmt,
+      customerId: abonoCustomerId,
+      customerName: selectedAbonoCustomer?.name || "",
+    };
+
+    setPendingAbonos((prev) => [...prev, newRow]);
+    setAbonoCustomerId("");
+    setAbonoAmount(0);
+    setAbonoDate(todayLocalISO());
+  };
+
+  const removePendingAbono = (id: string) => {
+    setPendingAbonos((prev) => prev.filter((a) => a.id !== id));
   };
 
   // ✅ AJUSTE: lista de productos MOSTRABLES en el selector:
@@ -1441,6 +1658,13 @@ export default function SalesCandiesPOS({
       {/* ✅ Responsive header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
         <h2 className="text-2xl font-bold">Ventas (Dulces)</h2>
+        <button
+          type="button"
+          className="hidden md:inline-flex px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+          onClick={() => setShowModal(true)}
+        >
+          Crear Cliente
+        </button>
       </div>
 
       <form
@@ -1832,26 +2056,175 @@ export default function SalesCandiesPOS({
             </div>
 
             {items.length > 0 && (
-              <div className="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-6 mt-3 text-sm">
-                <div>
-                  <span className="text-gray-600">Paquetes totales: </span>
-                  <span className="font-semibold">{totalPackages}</span>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-3 text-sm">
+                <div className="p-2 rounded bg-blue-50 border border-blue-200">
+                  <div className="text-xs text-gray-600">Paquetes totales</div>
+                  <div className="font-semibold">{totalPackages}</div>
                 </div>
-                <div>
-                  <span className="text-gray-600">Total: </span>
-                  <span className="font-semibold">{money(totalAmount)}</span>
+                <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
+                  <div className="text-xs text-gray-600">Total venta</div>
+                  <div className="font-semibold">{money(totalAmount)}</div>
                 </div>
-                <div>
-                  <span className="text-gray-600">Comisión vendedor: </span>
-                  <span className="font-semibold">
+                <div className="p-2 rounded bg-amber-50 border border-amber-200">
+                  <div className="text-xs text-gray-600">Comisión vendedor</div>
+                  <div className="font-semibold">
                     {money(vendorCommissionAmount)}{" "}
                     {vendorCommissionPercent
                       ? `(${vendorCommissionPercent.toFixed(2)}%)`
                       : ""}
-                  </span>
+                  </div>
+                </div>
+                <div className="p-2 rounded bg-indigo-50 border border-indigo-200">
+                  <div className="text-xs text-gray-600">Total abonos</div>
+                  <div className="font-semibold">
+                    {money(abonoTotalPending)}
+                  </div>
+                </div>
+                <div className="p-2 rounded bg-teal-50 border border-teal-200">
+                  <div className="text-xs text-gray-600">Total final</div>
+                  <div className="font-semibold">
+                    {money(totalFinalWithAbonos)}
+                  </div>
                 </div>
               </div>
             )}
+
+            <div className="mt-4 border rounded-lg p-3 bg-gray-50">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div className="font-semibold">
+                  Abonos (se registran al guardar)
+                </div>
+                <div className="text-xs text-gray-600">
+                  Agregado: {money(abonoTotalPending)}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mt-3">
+                <div className="md:col-span-2">
+                  <label className="block text-xs text-gray-600">Cliente</label>
+                  <select
+                    className="w-full border p-2 rounded"
+                    value={abonoCustomerId}
+                    onChange={(e) => setAbonoCustomerId(e.target.value)}
+                  >
+                    <option value="">Selecciona un cliente</option>
+                    {customersWithBalance.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} | Saldo: {money(c.balance || 0)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs text-gray-600">Abono</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    max={maxAbonoForCustomer}
+                    className="w-full border p-2 rounded"
+                    value={abonoAmount === 0 ? "" : abonoAmount}
+                    onChange={(e) =>
+                      setAbonoAmount(clampAbonoAmount(e.target.value))
+                    }
+                    placeholder="0.00"
+                    disabled={!abonoCustomerId}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                <div className="p-2 rounded bg-white border">
+                  <div className="text-xs text-gray-600">Saldo actual</div>
+                  <div className="font-semibold">
+                    {money(abonoCustomerBalance)}
+                  </div>
+                </div>
+                <div className="p-2 rounded bg-white border">
+                  <div className="text-xs text-gray-600">Abono</div>
+                  <div className="font-semibold">
+                    {money(abonoPreviewAmount)}
+                  </div>
+                </div>
+                <div className="p-2 rounded bg-white border">
+                  <div className="text-xs text-gray-600">Saldo final</div>
+                  <div className="font-semibold">{money(abonoSaldoFinal)}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded bg-amber-600 text-white hover:bg-amber-700"
+                  onClick={addPendingAbono}
+                  disabled={!abonoCustomerId || !(Number(abonoAmount || 0) > 0)}
+                >
+                  Agregar abono
+                </button>
+              </div>
+
+              <div className="mt-3">
+                <div className="w-full overflow-x-auto">
+                  <div className="border rounded overflow-hidden min-w-[560px] bg-white">
+                    <div className="grid grid-cols-12 bg-gray-100 px-3 py-2 text-xs font-semibold border-b">
+                      <div className="col-span-3">Cliente</div>
+                      <div className="col-span-1">Fecha</div>
+                      <div className="col-span-2 text-right">Saldo</div>
+                      <div className="col-span-2 text-right">Abono</div>
+                      <div className="col-span-3 text-right">Saldo pend.</div>
+                      <div className="col-span-1 text-center">Quitar</div>
+                    </div>
+                    {pendingAbonos.length === 0 ? (
+                      <div className="px-3 py-4 text-sm text-gray-500">
+                        Sin abonos agregados.
+                      </div>
+                    ) : (
+                      (() => {
+                        const running: Record<string, number> = {};
+                        return pendingAbonos.map((a) => {
+                          const base = customerBalanceById[a.customerId] || 0;
+                          const next =
+                            (running[a.customerId] || 0) +
+                            Number(a.amount || 0);
+                          running[a.customerId] = next;
+                          const saldoPend = round2(Math.max(0, base - next));
+                          return (
+                            <div
+                              key={a.id}
+                              className="grid grid-cols-12 items-center px-3 py-2 border-b text-sm gap-x-2"
+                            >
+                              <div className="col-span-3">
+                                {a.customerName || "—"}
+                              </div>
+                              <div className="col-span-1">{saleDate}</div>
+                              <div className="col-span-2 text-right">
+                                {money(base)}
+                              </div>
+                              <div className="col-span-2 text-right">
+                                {money(a.amount)}
+                              </div>
+                              <div className="col-span-3 text-right">
+                                {money(saldoPend)}
+                              </div>
+                              <div className="col-span-1 text-center">
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 rounded bg-red-100 hover:bg-red-200"
+                                  onClick={() => removePendingAbono(a.id)}
+                                  title="Quitar abono"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Guardar WEB */}
@@ -2239,16 +2612,161 @@ export default function SalesCandiesPOS({
 
                 {items.length > 0 && (
                   <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                    <div className="p-2 rounded bg-gray-50 border">
+                    <div className="p-2 rounded bg-blue-50 border border-blue-200">
                       <div className="text-xs text-gray-600">Paquetes</div>
                       <div className="font-semibold">{totalPackages}</div>
                     </div>
-                    <div className="p-2 rounded bg-gray-50 border">
-                      <div className="text-xs text-gray-600">Total</div>
+                    <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
+                      <div className="text-xs text-gray-600">Total venta</div>
                       <div className="font-semibold">{money(totalAmount)}</div>
+                    </div>
+                    <div className="p-2 rounded bg-amber-50 border border-amber-200">
+                      <div className="text-xs text-gray-600">Comisión</div>
+                      <div className="font-semibold">
+                        {money(vendorCommissionAmount)}
+                      </div>
+                    </div>
+                    <div className="p-2 rounded bg-indigo-50 border border-indigo-200">
+                      <div className="text-xs text-gray-600">Abonos</div>
+                      <div className="font-semibold">
+                        {money(abonoTotalPending)}
+                      </div>
+                    </div>
+                    <div className="p-2 rounded bg-teal-50 border border-teal-200">
+                      <div className="text-xs text-gray-600">Total final</div>
+                      <div className="font-semibold">
+                        {money(totalFinalWithAbonos)}
+                      </div>
                     </div>
                   </div>
                 )}
+
+                <div className="mt-3 border rounded-xl p-3 bg-white">
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold">Abonos</div>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                    <div className="col-span-2">
+                      <label className="block text-xs text-gray-600">
+                        Cliente
+                      </label>
+                      <select
+                        className="w-full border p-2 rounded"
+                        value={abonoCustomerId}
+                        onChange={(e) => setAbonoCustomerId(e.target.value)}
+                      >
+                        <option value="">Selecciona un cliente</option>
+                        {customersWithBalance.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} | Saldo: {money(c.balance || 0)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-600">
+                        Abono
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        inputMode="decimal"
+                        max={maxAbonoForCustomer}
+                        className="w-full border p-2 rounded"
+                        value={abonoAmount === 0 ? "" : abonoAmount}
+                        onChange={(e) =>
+                          setAbonoAmount(clampAbonoAmount(e.target.value))
+                        }
+                        placeholder="0.00"
+                        disabled={!abonoCustomerId}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                    <div className="p-2 rounded bg-gray-50 border">
+                      <div className="text-xs text-gray-600">Saldo actual</div>
+                      <div className="font-semibold">
+                        {money(abonoCustomerBalance)}
+                      </div>
+                    </div>
+                    <div className="p-2 rounded bg-gray-50 border">
+                      <div className="text-xs text-gray-600">Abono</div>
+                      <div className="font-semibold">
+                        {money(abonoPreviewAmount)}
+                      </div>
+                    </div>
+                    <div className="p-2 rounded bg-gray-50 border">
+                      <div className="text-xs text-gray-600">Saldo final</div>
+                      <div className="font-semibold">
+                        {money(abonoSaldoFinal)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded bg-amber-600 text-white"
+                      onClick={addPendingAbono}
+                      disabled={
+                        !abonoCustomerId || !(Number(abonoAmount || 0) > 0)
+                      }
+                    >
+                      Agregar abono
+                    </button>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {pendingAbonos.length === 0 ? (
+                      <div className="text-xs text-gray-500">
+                        Sin abonos agregados.
+                      </div>
+                    ) : (
+                      (() => {
+                        const running: Record<string, number> = {};
+                        return pendingAbonos.map((a) => {
+                          const base = customerBalanceById[a.customerId] || 0;
+                          const next =
+                            (running[a.customerId] || 0) +
+                            Number(a.amount || 0);
+                          running[a.customerId] = next;
+                          const saldoPend = round2(Math.max(0, base - next));
+                          return (
+                            <div
+                              key={a.id}
+                              className="border rounded-lg p-2 bg-gray-50 text-sm"
+                            >
+                              <div className="flex items-center justify-between">
+                                <div>{a.customerName || "—"}</div>
+                                <div>{saleDate}</div>
+                                <div className="font-semibold">
+                                  {money(base)}
+                                </div>
+                                <div className="font-semibold">
+                                  {money(a.amount)}
+                                </div>
+                                <div className="font-semibold">
+                                  {money(saldoPend)}
+                                </div>
+                              </div>
+                              <div className="mt-2 text-right">
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 rounded bg-red-100"
+                                  onClick={() => removePendingAbono(a.id)}
+                                >
+                                  Quitar
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()
+                    )}
+                  </div>
+                </div>
               </div>
             )}
           </div>

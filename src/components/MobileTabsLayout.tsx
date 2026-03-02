@@ -3,6 +3,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
+import {
+  FaBook,
+  FaCandyCane,
+  FaDrumstickBite,
+  FaEllipsisV,
+  FaSignOutAlt,
+  FaTimes,
+} from "react-icons/fa";
 import { hasRole } from "../utils/roles";
 import { canPath, PathKey } from "../utils/access";
 
@@ -506,11 +514,92 @@ export default function MobileTabsLayout({
 
   const drawerLinkCls = ({ isActive }: { isActive: boolean }) =>
     cn(
-      "w-full flex items-center justify-between px-4 py-3 rounded-xl border",
-      isActive
-        ? "bg-blue-600 text-white border-blue-600"
-        : "bg-white text-gray-800 border-gray-200 hover:bg-gray-50",
+      "w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border",
+      "bg-white text-gray-800 border-gray-200 hover:bg-slate-50",
     );
+
+  const storedUserName =
+    typeof window !== "undefined" ? localStorage.getItem("user_name") : null;
+  const storedUserEmail =
+    typeof window !== "undefined" ? localStorage.getItem("user_email") : null;
+  const displayName = storedUserName || storedUserEmail || "Usuario";
+
+  const getInitials = (value: string) => {
+    const cleaned = value.trim();
+    if (!cleaned) return "U";
+    let parts = cleaned.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      const alt = cleaned.split(/[._-]+/).filter(Boolean);
+      if (alt.length >= 2) parts = alt;
+    }
+    const first = parts[0]?.[0] ?? "U";
+    const second = parts[1]?.[0] ?? "";
+    return `${first}${second}`.toUpperCase();
+  };
+
+  const avatarInitials = getInitials(displayName);
+
+  const roleLabels: Record<string, string> = {
+    admin: "Administrador",
+    supervisor_pollo: "Supervisor Pollo",
+    contador: "Contador",
+    vendedor_pollo: "Vendedor Pollo",
+    vendedor_ropa: "Vendedor Ropa",
+    vendedor_dulces: "Vendedor Dulces",
+    vendedor: "Vendedor Pollo",
+  };
+  const roleList = Array.isArray(subject)
+    ? subject.map(String)
+    : subject
+      ? [String(subject)]
+      : [];
+  const roleLabel = roleList.length
+    ? roleList.map((r) => roleLabels[r] || r).join("\n")
+    : "Sin rol";
+
+  const tabMeta = (to: string) => {
+    if (to.includes("notebooksInventory")) {
+      return {
+        icon: <FaBook className="h-3.5 w-3.5" />,
+        dot: "bg-indigo-500",
+        border: "border-indigo-400",
+        activeBg: "bg-indigo-200",
+        activeBorder: "border-indigo-400",
+        activeText: "text-indigo-900",
+      };
+    }
+    if (to.includes("Candies")) {
+      return {
+        icon: <FaCandyCane className="h-3.5 w-3.5" />,
+        dot: "bg-pink-500",
+        border: "border-pink-400",
+        activeBg: "bg-pink-200",
+        activeBorder: "border-pink-400",
+        activeText: "text-pink-900",
+      };
+    }
+    return {
+      icon: <FaDrumstickBite className="h-3.5 w-3.5" />,
+      dot: "bg-amber-500",
+      border: "border-amber-400",
+      activeBg: "bg-amber-200",
+      activeBorder: "border-amber-400",
+      activeText: "text-amber-900",
+    };
+  };
+
+  const showPolloBadge = tabs.some(
+    (t) =>
+      t.to.includes("salesV2") ||
+      t.to.includes("batches") ||
+      t.to.includes("customersPollo") ||
+      t.to.includes("transactionsPollo") ||
+      t.to.includes("bills"),
+  );
+  const showDulcesBadge = tabs.some((t) => t.to.includes("Candies"));
+  const showLibreriaBadge = tabs.some((t) =>
+    t.to.includes("notebooksInventory"),
+  );
 
   return (
     <div className="min-h-screen bg-[#f1f3f7] flex flex-col">
@@ -524,24 +613,30 @@ export default function MobileTabsLayout({
                 type="button"
                 onClick={() => setRubro("POLLO")}
                 className={cn(
-                  "px-3 py-2 rounded-2xl text-sm font-semibold",
+                  "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-sm transition",
                   rubro === "POLLO"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700",
+                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                    : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50",
                 )}
               >
-                Carniceria
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white">
+                  <FaDrumstickBite className="h-3 w-3" />
+                </span>
+                Pollos Bea
               </button>
               <button
                 type="button"
                 onClick={() => setRubro("DULCES")}
                 className={cn(
-                  "px-3 py-2 rounded-2xl text-sm font-semibold",
+                  "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-sm transition",
                   rubro === "DULCES"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700",
+                    ? "bg-pink-50 text-pink-700 border-pink-200"
+                    : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50",
                 )}
               >
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-pink-500 text-white">
+                  <FaCandyCane className="h-3 w-3" />
+                </span>
                 Mr. Candy
               </button>
             </div>
@@ -562,11 +657,11 @@ export default function MobileTabsLayout({
             <button
               type="button"
               onClick={() => setDrawerOpen(true)}
-              className="px-3 py-2 rounded-2xl bg-gray-100 text-gray-800 text-sm font-bold shadow hover:bg-gray-200"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-gray-100 text-gray-800 text-sm font-bold shadow hover:bg-gray-200"
               aria-label="Abrir menú"
               title="Menú"
             >
-              ⋮
+              <FaEllipsisV className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -584,42 +679,111 @@ export default function MobileTabsLayout({
           />
 
           {/* panel */}
-          <aside className="absolute right-0 top-0 h-full w-[86%] max-w-sm bg-white shadow-2xl border-l flex flex-col">
-            <div className="p-4 border-b">
+          <aside className="absolute right-0 top-0 h-full w-[86%] max-w-sm bg-gradient-to-b from-slate-50 via-white to-slate-50 shadow-2xl border-l border-slate-200 flex flex-col">
+            <div className="p-4 border-b border-slate-200">
               <div className="flex items-center justify-between">
-                <div className="font-bold text-gray-900">Menú</div>
+                <div className="font-bold text-gray-900">Panel</div>
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
-                  className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/90 border border-slate-200 shadow-sm hover:bg-slate-50"
                 >
-                  ✕
+                  <FaTimes className="h-4 w-4" />
                 </button>
               </div>
-              <div className="mt-2 text-[20px] text-gray-600">
-                {typeof window !== "undefined" &&
-                  (localStorage.getItem("user_name") ||
-                    localStorage.getItem("user_email"))}
+
+              {(showPolloBadge || showDulcesBadge || showLibreriaBadge) && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {showPolloBadge && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+                      <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-white">
+                        <FaDrumstickBite className="h-2.5 w-2.5" />
+                      </span>
+                      Pollos
+                    </span>
+                  )}
+                  {showDulcesBadge && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-pink-200 bg-pink-50 px-2.5 py-1 text-[11px] font-semibold text-pink-700">
+                      <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-pink-500 text-white">
+                        <FaCandyCane className="h-2.5 w-2.5" />
+                      </span>
+                      Dulces
+                    </span>
+                  )}
+                  {showLibreriaBadge && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
+                      <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500 text-white">
+                        <FaBook className="h-2.5 w-2.5" />
+                      </span>
+                      Libreria
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+                <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                  Conectado como
+                </div>
+                <div className="mt-2 flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-slate-900 text-white flex items-center justify-center font-semibold">
+                    {avatarInitials}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold text-slate-800 truncate">
+                      {displayName}
+                    </div>
+                    <div className="text-xs text-slate-500 whitespace-pre-line">
+                      {roleLabel}
+                    </div>
+                    {storedUserName && storedUserEmail && (
+                      <div className="text-xs text-slate-500 truncate">
+                        {storedUserEmail}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Lista de opciones */}
             <div className="p-3 flex-1 overflow-y-auto space-y-2">
-              {tabs.map((t) => (
-                <NavLink key={t.key} to={t.to} className={drawerLinkCls}>
-                  <span className="font-semibold">{t.label}</span>
-                  <span className="text-sm opacity-80">›</span>
-                </NavLink>
-              ))}
+              {tabs.map((t) => {
+                const meta = tabMeta(t.to);
+                return (
+                  <NavLink
+                    key={t.key}
+                    to={t.to}
+                    className={(args) =>
+                      `${drawerLinkCls(args)} border-l-4 ${meta.border} ${
+                        args.isActive
+                          ? `${meta.activeBg} ${meta.activeBorder} ${meta.activeText}`
+                          : ""
+                      }`
+                    }
+                  >
+                    <span className="flex items-center gap-3">
+                      <span
+                        className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-white ${meta.dot}`}
+                      >
+                        {meta.icon}
+                      </span>
+                      <span className="font-semibold">{t.label}</span>
+                    </span>
+                    <span className="text-sm opacity-80">›</span>
+                  </NavLink>
+                );
+              })}
             </div>
 
             {/* acciones abajo */}
             <div className="p-3 border-t space-y-2 pb-[calc(12px+env(safe-area-inset-bottom))]">
               <button
                 onClick={handleLogout}
-                className="w-full px-4 py-3 rounded-xl bg-red-500 text-white font-semibold shadow hover:bg-red-600"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-red-500 text-white font-semibold shadow hover:bg-red-600"
               >
-                Cerrar sesión
+                <FaSignOutAlt className="h-4 w-4" />
+                <span>Cerrar sesión</span>
               </button>
 
               {confirmLogoutOpen && (
