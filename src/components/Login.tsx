@@ -1,5 +1,5 @@
 // src/components/Login.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { auth, db } from "../firebase";
 import {
   signInWithEmailAndPassword,
@@ -25,15 +25,45 @@ export default function Login() {
   const [showPw, setShowPw] = useState(false);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showLogoutTransition, setShowLogoutTransition] = useState(false);
+  const isLoggingInRef = useRef(false);
+  const isRedirectingRef = useRef(false);
+  const minDurationMs = 100;
   const navigate = useNavigate();
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("logout_transition") === "1") {
+        sessionStorage.removeItem("logout_transition");
+        setShowLogoutTransition(true);
+        const t = window.setTimeout(() => {
+          setShowLogoutTransition(false);
+        }, 450);
+        return () => window.clearTimeout(t);
+      }
+    } catch (e) {}
+    return undefined;
+  }, []);
 
   useEffect(() => {
     let mounted = true;
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!firebaseUser || !mounted) return;
+      if (isLoggingInRef.current) return;
+      setLoading(true);
+      isRedirectingRef.current = true;
       try {
+        try {
+          localStorage.removeItem("pos_vendorId");
+          localStorage.removeItem("pos_role");
+        } catch (e) {}
         const snap = await getDoc(doc(db, "users", firebaseUser.uid));
-        if (!snap.exists()) return;
+        if (!snap.exists()) {
+          setMsg("Tu usuario no tiene perfil en la base de datos.");
+          isRedirectingRef.current = false;
+          setLoading(false);
+          return;
+        }
         const data = snap.data() as any;
         const roles: string[] = Array.isArray(data.roles)
           ? data.roles
@@ -50,7 +80,8 @@ export default function Login() {
         if (roles.length === 1) goByRole(role as AllowedRole);
         else navigate("/admin", { replace: true });
       } catch {
-        /* ignore auto-redirect errors */
+        isRedirectingRef.current = false;
+        setLoading(false);
       }
     });
     return () => {
@@ -96,9 +127,17 @@ export default function Login() {
       return;
     }
 
+    const start = Date.now();
+    isLoggingInRef.current = true;
+    isRedirectingRef.current = false;
     try {
       setLoading(true);
       console.info && console.info("[Login] attempting signIn", { email });
+
+      try {
+        localStorage.removeItem("pos_vendorId");
+        localStorage.removeItem("pos_role");
+      } catch (e) {}
 
       // ✅ Mantener la sesión (persistencia en el dispositivo)
       await setPersistence(auth, browserLocalPersistence);
@@ -157,9 +196,17 @@ export default function Login() {
       // Guardamos roles también para compatibilidad futura
       localStorage.setItem("roles", JSON.stringify(roles));
 
+      const elapsed = Date.now() - start;
+      if (elapsed < minDurationMs) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, minDurationMs - elapsed),
+        );
+      }
+
+      isRedirectingRef.current = true;
       // Si tiene solo un rol sencillo, redirigimos directo; si tiene múltiples, vamos a /admin
       if (roles.length === 1) goByRole(role as AllowedRole);
-      else navigate("/admin");
+      else navigate("/admin", { replace: true });
     } catch (err: any) {
       console.error && console.error("[Login] sign-in error:", err);
       // Errores comunes de Firebase Auth
@@ -180,70 +227,121 @@ export default function Login() {
         );
       }
     } finally {
-      setLoading(false);
+      isLoggingInRef.current = false;
+      if (!isRedirectingRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   return (
-    <div className="min-h-screen grid place-items-center ">
-      <form
-        onSubmit={handleSubmit}
-        className="w-[92%] max-w-md bg-white p-6 rounded-2xl shadow-2xl"
-      >
-        <h2 className="text-2xl font-bold text-center mb-4">Iniciar Sesión</h2>
+    <div className="min-h-screen bg-slate-900 grid place-items-center px-4 py-8 relative overflow-hidden">
+      <div className="absolute inset-0 md:hidden bg-gradient-to-br from-rose-600 via-amber-500 to-pink-600" />
+      <div className="absolute inset-0 hidden md:block bg-slate-900" />
+      <div className="w-full max-w-4xl grid md:grid-cols-2 rounded-3xl overflow-hidden shadow-2xl bg-white relative z-10">
+        <div className="p-7 sm:p-10">
+          <div className="flex flex-col items-center text-center mb-6">
+            <img
+              src="/logo_black.svg"
+              alt="Logo Multiservicios Ortiz"
+              className="h-36 w-auto mb-3"
+            />
+            <h1 className="text-xl font-bold text-slate-900">
+              Multiservicios Ortiz
+            </h1>
+            <p className="text-sm text-slate-500">Acceso al sistema</p>
+          </div>
 
-        <label className="block text-sm font-semibold">
-          Correo electrónico
-        </label>
-        <input
-          type="email"
-          className="w-full border rounded-2xl px-3 py-2 mb-3 shadow-2xl"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          autoComplete="username"
-        />
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <div>
+              <label className="block text-sm font-semibold text-slate-700">
+                Correo electrónico
+              </label>
+              <input
+                type="email"
+                className="w-full border border-slate-200 rounded-2xl px-3 py-2 mt-1 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
+              />
+            </div>
 
-        <label className="block text-sm font-semibold">Contraseña</label>
-        <div className="flex gap-2 mb-2">
-          <input
-            type={showPw ? "text" : "password"}
-            className="flex-1 border rounded-2xl px-3 py-2 shadow-2xl"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={6}
-            autoComplete="current-password"
+            <div>
+              <label className="block text-sm font-semibold text-slate-700">
+                Contraseña
+              </label>
+              <div className="flex gap-2 mt-1">
+                <input
+                  type={showPw ? "text" : "password"}
+                  className="flex-1 border border-slate-200 rounded-2xl px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  minLength={6}
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-2xl bg-slate-900 text-white hover:bg-slate-800"
+                  onClick={() => setShowPw((v) => !v)}
+                >
+                  {showPw ? "Ocultar" : "Mostrar"}
+                </button>
+              </div>
+              <div className="text-xs text-slate-500 mt-2">
+                Mínimo 6 caracteres (requisito de Firebase).
+              </div>
+            </div>
+
+            <button
+              className="w-full bg-slate-900 text-white px-4 py-2 rounded-2xl shadow hover:bg-slate-800 disabled:opacity-60"
+              disabled={loading}
+            >
+              {loading ? "Entrando..." : "Entrar"}
+            </button>
+
+            {msg && (
+              <p
+                className={`text-sm ${
+                  msg.startsWith("Error") || msg.includes("no válido")
+                    ? "text-red-600"
+                    : "text-slate-700"
+                }`}
+              >
+                {msg}
+              </p>
+            )}
+          </form>
+        </div>
+
+        <div className="relative hidden md:flex min-h-[180px] items-center justify-center bg-gradient-to-br from-rose-600 via-amber-500 to-pink-600 md:min-h-0">
+          <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.4),_transparent_55%)]" />
+          <img
+            src="/logo_red.svg"
+            alt="Logo Multiservicios Ortiz"
+            className="h-50 w-auto drop-shadow-lg"
           />
-          <button
-            type="button"
-            className="px-3 py-2 rounded-2xl shadow-2xl bg-gray-200 hover:bg-gray-300"
-            onClick={() => setShowPw((v) => !v)}
-          >
-            {showPw ? "Ocultar" : "Mostrar"}
-          </button>
         </div>
-        <div className="text-xs text-gray-600 mb-3">
-          Mínimo 6 caracteres (requisito de Firebase).
+      </div>
+      {loading && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-2xl bg-slate-900/90 px-6 py-5 text-white shadow-2xl">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+            <div className="text-sm font-semibold tracking-wide">
+              Iniciando sesion...
+            </div>
+          </div>
         </div>
-
-        <button
-          className="w-full bg-blue-600 text-white px-4 py-2 rounded-2xl shadow-2xl hover:bg-blue-700 disabled:opacity-60"
-          disabled={loading}
-        >
-          {loading ? "Entrando..." : "Entrar"}
-        </button>
-
-        {msg && (
-          <p
-            className={`mt-3 text-sm ${
-              msg.startsWith("Error") || msg.includes("no válido")
-                ? "text-red-600"
-                : "text-gray-700"
-            }`}
-          >
-            {msg}
-          </p>
-        )}
-      </form>
+      )}
+      {showLogoutTransition && !loading && (
+        <div className="fixed inset-0 z-[190] flex items-center justify-center bg-slate-900/70 backdrop-blur-sm logout-transition pointer-events-none">
+          <div className="flex flex-col items-center gap-3 rounded-2xl bg-slate-900/90 px-6 py-5 text-white shadow-2xl">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+            <div className="text-sm font-semibold tracking-wide">
+              Cerrando sesion...
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -88,6 +88,7 @@ export default function MobileTabsLayout({
   // Drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // Tabs por rubro/rol
   const tabs = useMemo(() => {
@@ -540,6 +541,8 @@ export default function MobileTabsLayout({
   };
 
   const doLogout = async () => {
+    setIsLoggingOut(true);
+    const start = Date.now();
     try {
       await signOut(auth);
     } catch (err) {
@@ -550,9 +553,21 @@ export default function MobileTabsLayout({
         localStorage.removeItem("user_email");
         localStorage.removeItem("roles");
         localStorage.removeItem("role");
+        localStorage.removeItem("pos_vendorId");
+        localStorage.removeItem("pos_role");
       } catch (e) {}
       setConfirmLogoutOpen(false);
       setDrawerOpen(false);
+      const elapsed = Date.now() - start;
+      const minDurationMs = 800;
+      if (elapsed < minDurationMs) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, minDurationMs - elapsed),
+        );
+      }
+      try {
+        sessionStorage.setItem("logout_transition", "1");
+      } catch (e) {}
       navigate("/");
     }
   };
@@ -676,6 +691,11 @@ export default function MobileTabsLayout({
           {/* Rubro selector para admin o usuario con ambos rubros */}
           {isAdmin || hasBoth ? (
             <div className="flex gap-2">
+              <img
+                src="/logo_black.svg"
+                alt="Logo Multiservicios Ortiz"
+                className="h-11 w-auto self-center"
+              />
               <button
                 type="button"
                 onClick={() => setRubro("POLLO")}
@@ -874,7 +894,8 @@ export default function MobileTabsLayout({
                       </button>
                       <button
                         onClick={doLogout}
-                        className="px-3 py-2 rounded bg-red-500 text-white"
+                        className="px-3 py-2 rounded bg-red-500 text-white disabled:opacity-60"
+                        disabled={isLoggingOut}
                       >
                         SI
                       </button>
@@ -884,6 +905,17 @@ export default function MobileTabsLayout({
               )}
             </div>
           </aside>
+        </div>
+      )}
+
+      {isLoggingOut && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-2xl bg-slate-900/90 px-6 py-5 text-white shadow-2xl">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+            <div className="text-sm font-semibold tracking-wide">
+              Cerrando sesion...
+            </div>
+          </div>
         </div>
       )}
 

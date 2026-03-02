@@ -21,7 +21,6 @@
   }
 } */
 
-
 /* Estilos base para tu app React */
 #root {
   min-height: 100%;
@@ -38,6 +37,23 @@ body {
   background: #f8fafc;
   color: #222;
   -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes logoutFadeOut {
+  from {
+    opacity: 1;
+    filter: blur(0px);
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    filter: blur(3px);
+    transform: scale(1.01);
+  }
+}
+
+.logout-transition {
+  animation: logoutFadeOut 450ms ease forwards;
 }
 
 /* Fuerza colores simples (rgb/hex) dentro del bloque a exportar */

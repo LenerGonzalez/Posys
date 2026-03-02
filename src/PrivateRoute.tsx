@@ -92,7 +92,7 @@ export default function PrivateRoute({
     return () => unsubscribe();
   }, [allowedRoles]);
 
-  if (loading) return <div className="p-4">Cargando...</div>;
+  if (loading) return null;
   if (!authorized) return <Navigate to="/" />;
 
   return children;

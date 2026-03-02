@@ -455,6 +455,7 @@ export default function SalesCandiesPOS({
   const subject = roles && roles.length ? roles : role;
   const isAdmin = hasRole(subject, "admin");
   const isVendDulces = hasRole(subject, "vendedor_dulces");
+  const isContador = hasRole(subject, "contador");
   // Catálogos
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -475,6 +476,11 @@ export default function SalesCandiesPOS({
   // Vendedor seleccionado
   const [vendorId, setVendorId] = useState<string>("");
   const [lockVendor, setLockVendor] = useState<boolean>(false);
+
+  const activeVendors = useMemo(
+    () => vendors.filter((v) => (v.status ?? "ACTIVO") === "ACTIVO"),
+    [vendors],
+  );
 
   // Selección de productos (múltiple)
   const [productId, setProductId] = useState<string>("");
@@ -936,7 +942,7 @@ export default function SalesCandiesPOS({
       }
       return;
     }
-    if (subject && (subject as any).includes?.("admin")) {
+    if (subject && ((subject as any).includes?.("admin") || isContador)) {
       setLockVendor(false);
       return;
     }
@@ -1800,7 +1806,7 @@ export default function SalesCandiesPOS({
               disabled={lockVendor}
             >
               <option value="">Selecciona un vendedor</option>
-              {vendors.map((v) => (
+              {activeVendors.map((v) => (
                 <option key={v.id} value={v.id}>
                   {v.name} — {v.branchLabel} — {v.commissionPercent.toFixed(2)}%
                   {" comisión"}
@@ -2408,7 +2414,7 @@ export default function SalesCandiesPOS({
                     disabled={lockVendor}
                   >
                     <option value="">Selecciona un vendedor</option>
-                    {vendors.map((v) => (
+                    {activeVendors.map((v) => (
                       <option key={v.id} value={v.id}>
                         {v.name} — {/*{v.branchLabel} —*/}{" "}
                         {v.commissionPercent.toFixed(2)}%
