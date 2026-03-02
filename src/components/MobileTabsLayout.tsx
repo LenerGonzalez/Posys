@@ -5,10 +5,12 @@ import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import {
   FaBook,
+  FaBars,
   FaCandyCane,
   FaDrumstickBite,
   FaEllipsisV,
   FaSignOutAlt,
+  FaThLarge,
   FaTimes,
 } from "react-icons/fa";
 import { hasRole } from "../utils/roles";
@@ -656,12 +658,20 @@ export default function MobileTabsLayout({
             {/* ✅ Botón 3 puntos (Drawer) */}
             <button
               type="button"
-              onClick={() => setDrawerOpen(true)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-gray-100 text-gray-800 text-sm font-bold shadow hover:bg-gray-200"
-              aria-label="Abrir menú"
-              title="Menú"
+              onClick={() => setDrawerOpen((v) => !v)}
+              className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl border shadow-sm transition ${
+                drawerOpen
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+              }`}
+              aria-label={drawerOpen ? "Cerrar menú" : "Abrir menú"}
+              title={drawerOpen ? "Cerrar menú" : "Menú"}
             >
-              <FaEllipsisV className="h-4 w-4" />
+              {drawerOpen ? (
+                <FaTimes className="h-4 w-4" />
+              ) : (
+                <FaBars className="h-4 w-4" />
+              )}
             </button>
           </div>
         </div>

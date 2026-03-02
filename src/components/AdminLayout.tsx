@@ -1051,7 +1051,6 @@ export default function AdminLayout({
               <FaSignOutAlt className="h-4 w-4" />
               <span>Cerrar sesión</span>
             </button>
-
             {confirmLogoutOpen && (
               <div className="fixed inset-0 z-[120] flex items-center justify-center">
                 <div
