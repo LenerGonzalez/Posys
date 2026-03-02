@@ -2,7 +2,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   FaBook,
   FaCandyCane,
@@ -33,6 +33,8 @@ export default function AdminLayout({
   // Sidebar ancho/colapsado
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [menuSearch, setMenuSearch] = useState("");
+  const searchQuery = menuSearch.trim().toLowerCase();
 
   // ====== estados de menús colapsables ======
   // Operaciones Pollo
@@ -272,6 +274,282 @@ export default function AdminLayout({
     ? roleList.map((r) => roleLabels[r] || r).join("\n")
     : "Sin rol";
 
+  type SearchItem = {
+    label: string;
+    to: string;
+    module: "pollo" | "ropa" | "dulces" | "otras";
+    section?: string;
+    pathLabel: string;
+  };
+
+  const searchItems = useMemo(() => {
+    const items: SearchItem[] = [];
+    const add = (cond: boolean, item: SearchItem) => {
+      if (cond) items.push(item);
+    };
+    const can = (key: string) => canPath(subject, key as any, "view");
+
+    const addPollo = (label: string, to: string, section: string) =>
+      add(true, {
+        label,
+        to,
+        module: "pollo",
+        section,
+        pathLabel: `Pollos Bea > ${section} > ${label}`,
+      });
+    const addRopa = (label: string, to: string, section: string) =>
+      add(true, {
+        label,
+        to,
+        module: "ropa",
+        section,
+        pathLabel: `Ropa > ${section} > ${label}`,
+      });
+    const addDulces = (label: string, to: string, section: string) =>
+      add(true, {
+        label,
+        to,
+        module: "dulces",
+        section,
+        pathLabel: `Dulces > ${section} > ${label}`,
+      });
+    const addOtras = (label: string, to: string) =>
+      add(true, {
+        label,
+        to,
+        module: "otras",
+        pathLabel: `Operaciones > ${label}`,
+      });
+
+    if (isAdmin) {
+      addPollo("Vender", `${base}/salesV2`, "Operaciones");
+      addPollo("Saldo Pendientes", `${base}/customersPollo`, "Operaciones");
+      addPollo("Transacciones", `${base}/transactionsPollo`, "Operaciones");
+      addPollo("Cierre Ventas", `${base}/bills`, "Operaciones");
+      addPollo("Estado de Cuenta", `${base}/statusAccount`, "Operaciones");
+      addPollo("Evolutivo Libras", `${base}/statusInventory`, "Operaciones");
+
+      addPollo("Inventario Pollo", `${base}/batches`, "Inventarios");
+      addPollo("Inventarios Pagados", `${base}/paidBatches`, "Inventarios");
+
+      addPollo("Dashboard", `${base}/financialDashboard`, "Finanzas");
+      addPollo("Facturacion", `${base}/billing`, "Finanzas");
+      addPollo("Gastos", `${base}/expenses`, "Finanzas");
+      addPollo("Arqueos Caja", `${base}/polloCashAudits`, "Finanzas");
+      addPollo("Historial de Cierres", `${base}/billhistoric`, "Finanzas");
+
+      addPollo("Productos", `${base}/products`, "Productos");
+
+      addRopa(
+        "Productos y Precios",
+        `${base}/notebooksInventory`,
+        "Inventarios",
+      );
+
+      addDulces("Venta", `${base}/salesCandies`, "Vendedores");
+      addDulces("Sub ordenes", `${base}/productsVendorsCandies`, "Vendedores");
+      addDulces("Precios Venta", `${base}/productsPricesCandies`, "Vendedores");
+
+      addDulces("Ordenes Maestras", `${base}/mainordersCandies`, "Inventario");
+      addDulces(
+        "Lista de Ordenes",
+        `${base}/inventoryMainOrderCandies`,
+        "Inventario",
+      );
+      addDulces("Lista Productos", `${base}/inventoryCandies`, "Inventario");
+      addDulces("Productos", `${base}/productsCandies`, "Inventario");
+
+      addDulces("Data Center", `${base}/datacenter`, "Finanzas");
+      addDulces("Entregas Cash", `${base}/cashDeliveries`, "Finanzas");
+      addDulces("Transacciones", `${base}/transactionCandies`, "Finanzas");
+      addDulces("Cierres", `${base}/cierreVentasCandies`, "Finanzas");
+      addDulces("Reporte Cierres", `${base}/reporteCierresCandies`, "Finanzas");
+      addDulces("Facturas", `${base}/billingsCandies`, "Finanzas");
+      addDulces(
+        "Consolidado Vendedores",
+        `${base}/consolidatedVendors`,
+        "Finanzas",
+      );
+      addDulces("Dashboard", `${base}/dashboardCandies`, "Finanzas");
+      addDulces("Clientes", `${base}/customersCandies`, "Finanzas");
+      addDulces("Estado de Cuenta", `${base}/estadoCuentaCandies`, "Finanzas");
+      addDulces("Vendedores", `${base}/vendorsCandies`, "Finanzas");
+      addDulces("Gastos", `${base}/expensesCandies`, "Finanzas");
+
+      addOtras("Usuarios", `${base}/users`);
+      addOtras("Fix de lotes", `${base}/fix`);
+      addOtras("Liquidaciones", `${base}/transactionclose`);
+    }
+
+    if (!isAdmin && hasPolloAccess) {
+      add(can("salesV2"), {
+        label: "Vender",
+        to: `${base}/salesV2`,
+        module: "pollo",
+        section: "Operaciones",
+        pathLabel: "Pollos Bea > Operaciones > Vender",
+      });
+      add(can("financialDashboard"), {
+        label: "Dashboard",
+        to: `${base}/financialDashboard`,
+        module: "pollo",
+        section: "Operaciones",
+        pathLabel: "Pollos Bea > Operaciones > Dashboard",
+      });
+      add(can("batches"), {
+        label: "Inventario Pollo",
+        to: `${base}/batches`,
+        module: "pollo",
+        section: "Operaciones",
+        pathLabel: "Pollos Bea > Operaciones > Inventario Pollo",
+      });
+      add(can("bills"), {
+        label: "Cierre Ventas",
+        to: `${base}/bills`,
+        module: "pollo",
+        section: "Operaciones",
+        pathLabel: "Pollos Bea > Operaciones > Cierre Ventas",
+      });
+      add(can("transactionsPollo"), {
+        label: "Transacciones",
+        to: `${base}/transactionsPollo`,
+        module: "pollo",
+        section: "Operaciones",
+        pathLabel: "Pollos Bea > Operaciones > Transacciones",
+      });
+      add(can("billing"), {
+        label: "Facturacion",
+        to: `${base}/billing`,
+        module: "pollo",
+        section: "Contabilidad",
+        pathLabel: "Pollos Bea > Contabilidad > Facturacion",
+      });
+      add(can("customersPollo"), {
+        label: "Saldos Pendientes",
+        to: `${base}/customersPollo`,
+        module: "pollo",
+        section: "Contabilidad",
+        pathLabel: "Pollos Bea > Contabilidad > Saldos Pendientes",
+      });
+      add(can("statusAccount"), {
+        label: "Estado de Cuenta",
+        to: `${base}/statusAccount`,
+        module: "pollo",
+        section: "Contabilidad",
+        pathLabel: "Pollos Bea > Contabilidad > Estado de Cuenta",
+      });
+      add(can("statusInventory"), {
+        label: "Evolutivo de Libras",
+        to: `${base}/statusInventory`,
+        module: "pollo",
+        section: "Contabilidad",
+        pathLabel: "Pollos Bea > Contabilidad > Evolutivo de Libras",
+      });
+      add(can("expenses"), {
+        label: "Gastos",
+        to: `${base}/expenses`,
+        module: "pollo",
+        section: "Contabilidad",
+        pathLabel: "Pollos Bea > Contabilidad > Gastos",
+      });
+    }
+
+    if (!isAdmin && hasDulcesAccess) {
+      add(can("salesCandies"), {
+        label: "Venta",
+        to: `${base}/salesCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Venta",
+      });
+      add(can("transactionCandies"), {
+        label: "Ventas del dia",
+        to: `${base}/transactionCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Ventas del dia",
+      });
+      add(can("cierreVentasCandies"), {
+        label: "Cierre de Ventas",
+        to: `${base}/cierreVentasCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Cierre de Ventas",
+      });
+      add(can("productsVendorsCandies"), {
+        label: "Pedidos",
+        to: `${base}/productsVendorsCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Pedidos",
+      });
+      add(can("customersCandies"), {
+        label: "Clientes",
+        to: `${base}/customersCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Clientes",
+      });
+      add(can("productsPricesCandies"), {
+        label: "Precios Venta",
+        to: `${base}/productsPricesCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Precios Venta",
+      });
+    }
+
+    if (isVendRopa) {
+      addRopa("Venta Ropa", `${base}/salesClothes`, "Ventas");
+      addRopa("Transacciones", `${base}/TransactionsReportClothes`, "Ventas");
+      addRopa("Agregar Productos", `${base}/productsClothes`, "Productos");
+      addRopa("Listado de Clientes", `${base}/CustomersClothes`, "Clientes");
+    }
+
+    return items;
+  }, [base, hasDulcesAccess, hasPolloAccess, isAdmin, isVendRopa, subject]);
+
+  const filteredSearchItems = useMemo(() => {
+    if (!searchQuery) return [] as SearchItem[];
+    return searchItems.filter((item) =>
+      (item.pathLabel + " " + item.label).toLowerCase().includes(searchQuery),
+    );
+  }, [searchItems, searchQuery]);
+
+  const revealSearchItem = (item: SearchItem) => {
+    if (item.module === "pollo") {
+      if (!openPollo) toggleModule("pollo");
+      if (item.section === "Operaciones") setOpenPolloOperaciones(true);
+      if (item.section === "Inventarios") setOpenPolloInv(true);
+      if (item.section === "Finanzas") setOpenPolloFin(true);
+      if (item.section === "Productos") setOpenPolloProd(true);
+      if (item.section === "Contabilidad") setContadorMenuFinanzas(true);
+    }
+    if (item.module === "ropa") {
+      if (!openRopa) toggleModule("ropa");
+      if (item.section === "Inventarios") setOpenRopaInv(true);
+      if (item.section === "Ventas") setOpenRopaFin(true);
+      if (item.section === "Productos") setOpenRopaProd(true);
+      if (item.section === "Clientes") setOpenClients(true);
+    }
+    if (item.module === "dulces") {
+      if (!openDulces) toggleModule("dulces");
+      if (item.section === "Vendedores") setOpenDulcesVendors(true);
+      if (item.section === "Inventario") setOpenDulcesInv(true);
+      if (item.section === "Finanzas") setOpenDulcesFin(true);
+      if (item.section === "Operaciones") setOpenDulcesVendors(true);
+    }
+    if (item.module === "otras") {
+      if (!openOtras) toggleModule("otras");
+    }
+  };
+
+  useEffect(() => {
+    if (!searchQuery) return;
+    if (!filteredSearchItems.length) return;
+    revealSearchItem(filteredSearchItems[0]);
+  }, [filteredSearchItems, searchQuery]);
+
   return (
     <div className="min-h-screen flex">
       <aside
@@ -317,6 +595,47 @@ export default function AdminLayout({
 
         {!isCollapsed && (
           <>
+            <div className="w-full mb-3 relative">
+              <label className="sr-only" htmlFor="menu-search">
+                Buscar módulo
+              </label>
+              <input
+                id="menu-search"
+                type="text"
+                value={menuSearch}
+                onChange={(e) => setMenuSearch(e.target.value)}
+                placeholder="Buscar módulo..."
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+              />
+              {searchQuery && (
+                <div className="absolute left-0 right-0 mt-2 max-h-56 overflow-auto rounded-xl border border-slate-200 bg-white shadow z-10">
+                  {filteredSearchItems.length ? (
+                    filteredSearchItems.slice(0, 10).map((item) => (
+                      <button
+                        key={item.to + item.label}
+                        type="button"
+                        onClick={() => {
+                          revealSearchItem(item);
+                          setMenuSearch("");
+                          navigate(item.to);
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                      >
+                        <div className="font-semibold">{item.label}</div>
+                        <div className="text-xs text-slate-500 break-words">
+                          {item.pathLabel}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2 text-xs text-slate-500">
+                      Sin resultados
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <nav className="space-y-2">
               {/* ================== ADMIN ================== */}
               {isAdmin && (
@@ -394,9 +713,6 @@ export default function AdminLayout({
                             >
                               Inventarios Pagados
                             </NavLink>
-                            <NavLink to={`${base}/billing`} className={linkCls}>
-                              Facturacion
-                            </NavLink>
                           </div>
                         )}
 
@@ -428,12 +744,6 @@ export default function AdminLayout({
                               className={linkCls}
                             >
                               Arqueos Caja
-                            </NavLink>
-                            <NavLink to={`${base}/salesV2`} className={linkCls}>
-                              Venta
-                            </NavLink>
-                            <NavLink to={`${base}/bills`} className={linkCls}>
-                              Cierre Ventas
                             </NavLink>
                             <NavLink
                               to={`${base}/billhistoric`}
