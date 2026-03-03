@@ -357,14 +357,12 @@ export default function ProductsCandies() {
   }, []);
 
   // ✅ colapsables (solo móvil nacen colapsados)
-  const [createOpen, setCreateOpen] = useState(true);
+  const [createOpen, setCreateOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(true);
   useEffect(() => {
     if (isMobile) {
-      setCreateOpen(false);
       setFiltersOpen(false);
     } else {
-      setCreateOpen(true);
       setFiltersOpen(true);
     }
   }, [isMobile]);
@@ -674,6 +672,7 @@ export default function ProductsCandies() {
       await addDoc(collection(db, "products_candies"), payload);
       setMsg("✅ Producto creado.");
       resetForm();
+      setCreateOpen(false);
     } catch (e) {
       console.error(e);
       setMsg("❌ Error creando producto.");
@@ -1141,10 +1140,20 @@ export default function ProductsCandies() {
               onClick={refresh}
               loading={loading || importLoading}
             />
+            <button
+              type="button"
+              className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
+              onClick={() => {
+                setMsg("");
+                setCreateOpen(true);
+              }}
+            >
+              Crear Producto
+            </button>
             {!isMobile && (
               <button
                 type="button"
-                className="px-3 py-2 rounded bg-white border shadow-sm"
+                className="px-3 py-2 rounded-md text-xs font-semibold bg-white border border-slate-200 shadow-sm hover:bg-slate-50"
                 onClick={() => {
                   setImportOpen(true);
                   setImportRows([]);
@@ -1176,9 +1185,12 @@ export default function ProductsCandies() {
           <button
             type="button"
             className="w-full px-3 py-2 rounded bg-gray-900 text-white"
-            onClick={() => setCreateOpen((v) => !v)}
+            onClick={() => {
+              setMsg("");
+              setCreateOpen(true);
+            }}
           >
-            {createOpen ? "Ocultar creación" : "Crear producto"}
+            Crear Producto
           </button>
 
           {/* (Escanear producto) moved into filtros below */}
@@ -1228,132 +1240,169 @@ export default function ProductsCandies() {
         </div>
       )}
 
-      {/* FORM CREAR (colapsable en móvil) */}
+      {/* MODAL CREAR PRODUCTO */}
       {createOpen && (
-        <form
-          onSubmit={createProduct}
-          className="bg-white p-3 rounded shadow border mb-4 grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
-        >
-          <div>
-            <label className="block font-semibold">Categoría</label>
-            <input
-              className="w-full border rounded px-2 py-1"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              placeholder="Ej: Gomitas"
-            />
-          </div>
-
-          <div className="md:col-span-2">
-            <label className="block font-semibold">Producto</label>
-            <input
-              className="w-full border rounded px-2 py-1"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ej: Gomita Fresa"
-            />
-          </div>
-
-          <div>
-            <label className="block font-semibold">Empaque</label>
-            <select
-              className="w-full border rounded px-2 py-1"
-              value={packaging}
-              onChange={(e) => setPackaging(e.target.value)}
-            >
-              <option value="">Seleccionar</option>
-              <option value="Tarro">Tarro</option>
-              <option value="Bolsa">Bolsa</option>
-              <option value="Ristra">Ristra</option>
-              <option value="Caja">Caja</option>
-              <option value="Vaso">Vaso</option>
-              <option value="Pana">Pana</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block font-semibold">
-              Precio proveedor (paq)
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              inputMode="decimal"
-              className="w-full border rounded px-2 py-1 text-right"
-              value={Number.isNaN(providerPrice) ? "" : providerPrice}
-              onChange={(e) =>
-                setProviderPrice(Math.max(0, toNum(e.target.value, 0)))
-              }
-            />
-          </div>
-
-          <div>
-            <label className="block font-semibold">Und x paquete</label>
-            <input
-              type="number"
-              min={1}
-              className="w-full border rounded px-2 py-1 text-right"
-              value={unitsPerPackage}
-              onChange={(e) => setUnitsPerPackage(roundInt(e.target.value, 1))}
-            />
-          </div>
-
-          <div>
-            <label className="block font-semibold">Código (opcional)</label>
-            <div className="flex gap-2">
-              <input
-                className="w-full border rounded px-2 py-1"
-                value={barcode}
-                onChange={(e) => setBarcode(e.target.value)}
-                placeholder="EAN/UPC"
-              />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setCreateOpen(false)}
+          />
+          <div className="relative z-10 w-full max-w-3xl bg-white rounded-2xl shadow-lg border border-slate-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-slate-900">
+                Crear producto
+              </h3>
               <button
+                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+                onClick={() => setCreateOpen(false)}
                 type="button"
-                className="px-3 py-2 rounded bg-gray-800 text-white hover:bg-black whitespace-nowrap"
-                onClick={() => {
-                  setScanTarget("create");
-                  setScanOpen(true);
-                }}
               >
-                Escanear
+                Cerrar
               </button>
             </div>
-          </div>
 
-          <div className="md:col-span-6 flex justify-end gap-2">
-            <button
-              type="button"
-              className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-              onClick={resetForm}
+            <form
+              onSubmit={createProduct}
+              className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
             >
-              Limpiar
-            </button>
-            <button
-              type="submit"
-              className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
-              disabled={loading}
-            >
-              Crear producto
-            </button>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Categoría
+                </label>
+                <input
+                  className="w-full border rounded-md px-3 py-2"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  placeholder="Ej: Gomitas"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Producto
+                </label>
+                <input
+                  className="w-full border rounded-md px-3 py-2"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Ej: Gomita Fresa"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Empaque
+                </label>
+                <select
+                  className="w-full border rounded-md px-3 py-2"
+                  value={packaging}
+                  onChange={(e) => setPackaging(e.target.value)}
+                >
+                  <option value="">Seleccionar</option>
+                  <option value="Tarro">Tarro</option>
+                  <option value="Bolsa">Bolsa</option>
+                  <option value="Ristra">Ristra</option>
+                  <option value="Caja">Caja</option>
+                  <option value="Vaso">Vaso</option>
+                  <option value="Pana">Pana</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Precio proveedor (paq)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  className="w-full border rounded-md px-3 py-2 text-right"
+                  value={Number.isNaN(providerPrice) ? "" : providerPrice}
+                  onChange={(e) =>
+                    setProviderPrice(Math.max(0, toNum(e.target.value, 0)))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Und x paquete
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  className="w-full border rounded-md px-3 py-2 text-right"
+                  value={unitsPerPackage}
+                  onChange={(e) =>
+                    setUnitsPerPackage(roundInt(e.target.value, 1))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Código (opcional)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 min-w-[220px] border rounded-md px-3 py-2"
+                    value={barcode}
+                    onChange={(e) => setBarcode(e.target.value)}
+                    placeholder="EAN/UPC"
+                  />
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black whitespace-nowrap"
+                    onClick={() => {
+                      setScanTarget("create");
+                      setScanOpen(true);
+                    }}
+                  >
+                    Escanear
+                  </button>
+                </div>
+              </div>
+
+              <div className="md:col-span-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  onClick={resetForm}
+                >
+                  Limpiar
+                </button>
+                <button
+                  type="submit"
+                  className="px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                  disabled={loading}
+                >
+                  Crear producto
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        </div>
       )}
 
       {/* FILTROS (colapsable en móvil) */}
       {filtersOpen && (
-        <div className="bg-white p-3 rounded shadow border mb-3 flex flex-col md:flex-row gap-3 items-center text-sm">
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-3 flex flex-col md:flex-row gap-3 items-center text-sm">
           <div className="w-full md:w-1/2">
-            <label className="block font-semibold">Buscar</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Buscar
+            </label>
             <input
-              className="w-full border rounded px-2 py-1"
+              className="w-full border rounded-md px-3 py-2"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar por categoría o producto…"
             />
             <div className="mt-2">
-              <label className="block font-semibold">Empaque</label>
+              <label className="block text-xs font-semibold text-slate-700">
+                Empaque
+              </label>
               <select
-                className="w-full border rounded px-2 py-1"
+                className="w-full border rounded-md px-3 py-2"
                 value={packagingFilter}
                 onChange={(e) => setPackagingFilter(e.target.value)}
               >
@@ -1369,9 +1418,11 @@ export default function ProductsCandies() {
           </div>
 
           <div className="w-full md:w-1/2">
-            <label className="block font-semibold">Buscar por código</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Buscar por código
+            </label>
             <input
-              className="w-full border rounded px-2 py-1"
+              className="w-full border rounded-md px-3 py-2"
               value={searchCode}
               onChange={(e) => setSearchCode(e.target.value)}
               placeholder="Ej: 7445074183182"
@@ -1379,7 +1430,7 @@ export default function ProductsCandies() {
             <div className="mt-2 md:mt-0">
               <button
                 type="button"
-                className="w-full md:w-auto px-3 py-2 rounded bg-gray-800 text-white"
+                className="w-full md:w-auto px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white"
                 onClick={() => {
                   setScanTarget("search");
                   setScanOpen(true);
@@ -1392,7 +1443,7 @@ export default function ProductsCandies() {
             <div className="mt-2 md:mt-0">
               <button
                 type="button"
-                className="w-full md:w-auto px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                className="w-full md:w-auto px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
                 onClick={() => {
                   setSearch("");
                   setSearchCode("");
@@ -1404,7 +1455,7 @@ export default function ProductsCandies() {
           </div>
 
           <div className="w-full md:w-auto text-right">
-            <div className="text-xs text-gray-600">Productos en catálogo</div>
+            <div className="text-xs text-slate-600">Productos en catálogo</div>
             <div className="text-lg font-semibold">{filtered.length}</div>
           </div>
         </div>
@@ -1711,17 +1762,17 @@ export default function ProductsCandies() {
         </div>
       ) : (
         /* ✅ WEB: TABLA igual */
-        <div className="bg-white rounded shadow border w-full overflow-x-auto">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full overflow-x-auto">
           <table className="min-w-[1050px] w-full text-xs md:text-sm">
-            <thead className="bg-gray-100">
-              <tr className="whitespace-nowrap">
-                <th className="p-2 border text-left">Categoría</th>
-                <th className="p-2 border text-left">Producto</th>
-                <th className="p-2 border text-left">Empaque</th>
-                <th className="p-2 border text-right">Precio proveedor</th>
-                <th className="p-2 border text-right">Und x paquete</th>
-                <th className="p-2 border text-center">Código</th>
-                <th className="p-2 border text-center">Acciones</th>
+            <thead className="bg-slate-100 sticky top-0 z-10">
+              <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
+                <th className="p-3 border-b text-left">Categoría</th>
+                <th className="p-3 border-b text-left">Producto</th>
+                <th className="p-3 border-b text-left">Empaque</th>
+                <th className="p-3 border-b text-right">Precio proveedor</th>
+                <th className="p-3 border-b text-right">Und x paquete</th>
+                <th className="p-3 border-b text-center">Código</th>
+                <th className="p-3 border-b text-center">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -1743,8 +1794,11 @@ export default function ProductsCandies() {
                   const hasCode = !!String(p.barcode || "").trim();
 
                   return (
-                    <tr key={p.id} className="align-top">
-                      <td className="p-2 border">
+                    <tr
+                      key={p.id}
+                      className="align-top odd:bg-white even:bg-slate-50"
+                    >
+                      <td className="p-3 border-b">
                         {isEd ? (
                           <input
                             className="w-full border rounded px-2 py-1"
@@ -1756,7 +1810,7 @@ export default function ProductsCandies() {
                         )}
                       </td>
 
-                      <td className="p-2 border">
+                      <td className="p-3 border-b">
                         {isEd ? (
                           <input
                             className="w-full border rounded px-2 py-1"
@@ -1768,7 +1822,7 @@ export default function ProductsCandies() {
                         )}
                       </td>
 
-                      <td className="p-2 border">
+                      <td className="p-3 border-b">
                         {isEd ? (
                           <select
                             className="w-full border rounded px-2 py-1"
@@ -1788,7 +1842,7 @@ export default function ProductsCandies() {
                         )}
                       </td>
 
-                      <td className="p-2 border text-right tabular-nums">
+                      <td className="p-3 border-b text-right tabular-nums">
                         {isEd ? (
                           <input
                             type="number"
@@ -1811,7 +1865,7 @@ export default function ProductsCandies() {
                         )}
                       </td>
 
-                      <td className="p-2 border text-right tabular-nums">
+                      <td className="p-3 border-b text-right tabular-nums">
                         {isEd ? (
                           <input
                             type="number"
@@ -1829,7 +1883,7 @@ export default function ProductsCandies() {
                         )}
                       </td>
 
-                      <td className="p-2 border text-center">
+                      <td className="p-3 border-b text-center">
                         {isEd ? (
                           <div className="flex gap-2 justify-center">
                             <input
@@ -1840,7 +1894,7 @@ export default function ProductsCandies() {
                             />
                             <button
                               type="button"
-                              className="px-2 py-1 rounded bg-gray-800 text-white hover:bg-black"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
                               onClick={() => {
                                 setScanTarget("edit");
                                 setScanOpen(true);
@@ -1852,7 +1906,7 @@ export default function ProductsCandies() {
                         ) : hasCode ? (
                           <button
                             type="button"
-                            className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
                             onClick={() => {
                               setCodeModalValue(String(p.barcode || "").trim());
                               setCodeModalOpen(true);
@@ -1861,24 +1915,24 @@ export default function ProductsCandies() {
                             Sí
                           </button>
                         ) : (
-                          <span className="px-2 py-1 rounded bg-gray-100 text-gray-600">
+                          <span className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-100 text-slate-600">
                             No
                           </span>
                         )}
                       </td>
 
-                      <td className="p-2 border">
+                      <td className="p-3 border-b">
                         {isEd ? (
                           <div className="flex gap-2 justify-center">
                             <button
-                              className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
                               onClick={saveEdit}
                               type="button"
                             >
                               Guardar
                             </button>
                             <button
-                              className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
                               onClick={cancelEdit}
                               type="button"
                             >
@@ -1888,14 +1942,14 @@ export default function ProductsCandies() {
                         ) : (
                           <div className="flex gap-2 justify-center flex-wrap">
                             <button
-                              className="px-2 py-1 rounded bg-yellow-400 hover:bg-yellow-500"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-amber-500 text-white hover:bg-amber-600"
                               onClick={() => startEdit(p)}
                               type="button"
                             >
                               Editar
                             </button>
                             <button
-                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
                               onClick={() => removeProduct(p)}
                               type="button"
                             >
@@ -1997,31 +2051,31 @@ export default function ProductsCandies() {
       {/* MODAL IMPORTACIÓN (igual) */}
       {importOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white w-full max-w-6xl max-h-[90vh] overflow-y-auto rounded shadow-lg p-5 text-sm">
+          <div className="bg-white w-full max-w-6xl max-h-[90vh] overflow-y-auto rounded-2xl shadow-lg border border-slate-200 p-5 text-sm">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xl font-bold">
                 Importar productos (.xlsx / .csv)
               </h3>
               <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
                 onClick={() => setImportOpen(false)}
               >
                 Cerrar
               </button>
             </div>
 
-            <div className="bg-gray-50 border rounded p-3 mb-3">
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-3">
               <div className="flex flex-col md:flex-row gap-3 md:items-end md:justify-between">
                 <div>
                   <div className="font-semibold">1) Subí tu archivo</div>
-                  <div className="text-xs text-gray-600">
+                  <div className="text-xs text-slate-600">
                     Columnas esperadas (flexible): Id (opcional), Categoria,
                     Producto/Nombre, PrecioProveedor, UnidadesPorPaquete,
                     Empaque (opcional), Codigo (opcional).
                   </div>
                 </div>
                 <button
-                  className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                  className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
                   onClick={downloadTemplateXlsx}
                   type="button"
                 >
@@ -2036,7 +2090,7 @@ export default function ProductsCandies() {
                   onChange={(e) => onPickFile(e.target.files?.[0] || null)}
                 />
                 {importFileName && (
-                  <span className="text-xs text-gray-600">
+                  <span className="text-xs text-slate-600">
                     Archivo: <b>{importFileName}</b>
                   </span>
                 )}
@@ -2057,13 +2111,13 @@ export default function ProductsCandies() {
               </div>
             )}
 
-            <div className="bg-white border rounded p-3">
+            <div className="bg-white border border-slate-200 rounded-xl p-3">
               <div className="flex flex-wrap gap-4 items-center justify-between mb-2">
                 <div>
                   <div className="font-semibold">
                     2) Previsualización (editable)
                   </div>
-                  <div className="text-xs text-gray-600">
+                  <div className="text-xs text-slate-600">
                     Se importarán {importStats.total} filas (Crear:{" "}
                     {importStats.willCreate} / Actualizar:{" "}
                     {importStats.willUpdate})
@@ -2071,7 +2125,7 @@ export default function ProductsCandies() {
                 </div>
 
                 <button
-                  className="px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                  className="px-3 py-2 rounded-md text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
                   onClick={importToFirestore}
                   disabled={
                     importLoading ||
@@ -2084,24 +2138,24 @@ export default function ProductsCandies() {
                 </button>
               </div>
 
-              <div className="overflow-x-auto border rounded">
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
                 <table className="min-w-[1250px] w-full text-xs">
-                  <thead className="bg-gray-100">
-                    <tr className="whitespace-nowrap">
-                      <th className="p-2 border text-left">Id (opcional)</th>
-                      <th className="p-2 border text-left">Categoría</th>
-                      <th className="p-2 border text-left">Producto</th>
-                      <th className="p-2 border text-right">
+                  <thead className="bg-slate-100 sticky top-0 z-10">
+                    <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
+                      <th className="p-3 border-b text-left">Id (opcional)</th>
+                      <th className="p-3 border-b text-left">Categoría</th>
+                      <th className="p-3 border-b text-left">Producto</th>
+                      <th className="p-3 border-b text-right">
                         Precio proveedor
                       </th>
-                      <th className="p-2 border text-right">Und x paquete</th>
-                      <th className="p-2 border text-left">
+                      <th className="p-3 border-b text-right">Und x paquete</th>
+                      <th className="p-3 border-b text-left">
                         Empaque (opcional)
                       </th>
-                      <th className="p-2 border text-left">
+                      <th className="p-3 border-b text-left">
                         Codigo (opcional)
                       </th>
-                      <th className="p-2 border text-center">Acción</th>
+                      <th className="p-3 border-b text-center">Acción</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2109,7 +2163,7 @@ export default function ProductsCandies() {
                       <tr>
                         <td
                           colSpan={8}
-                          className="p-4 text-center text-gray-500"
+                          className="p-4 text-center text-slate-500"
                         >
                           Subí un archivo para ver la previsualización.
                         </td>
@@ -2134,9 +2188,9 @@ export default function ProductsCandies() {
                         return (
                           <tr
                             key={`${r.id || ""}-${i}`}
-                            className="whitespace-nowrap"
+                            className="whitespace-nowrap odd:bg-white even:bg-slate-50"
                           >
-                            <td className="p-2 border">
+                            <td className="p-3 border-b">
                               <input
                                 className="w-56 border rounded px-2 py-1"
                                 value={r.id || ""}
@@ -2149,7 +2203,7 @@ export default function ProductsCandies() {
                               />
                             </td>
 
-                            <td className="p-2 border">
+                            <td className="p-3 border-b">
                               <input
                                 className="w-56 border rounded px-2 py-1"
                                 value={r.category}
@@ -2162,7 +2216,7 @@ export default function ProductsCandies() {
                               />
                             </td>
 
-                            <td className="p-2 border">
+                            <td className="p-3 border-b">
                               <input
                                 className="w-72 border rounded px-2 py-1"
                                 value={r.name}
@@ -2172,7 +2226,7 @@ export default function ProductsCandies() {
                               />
                             </td>
 
-                            <td className="p-2 border text-right tabular-nums">
+                            <td className="p-3 border-b text-right tabular-nums">
                               <input
                                 type="number"
                                 step="0.01"
@@ -2194,7 +2248,7 @@ export default function ProductsCandies() {
                               />
                             </td>
 
-                            <td className="p-2 border text-right tabular-nums">
+                            <td className="p-3 border-b text-right tabular-nums">
                               <input
                                 type="number"
                                 min={1}
@@ -2211,7 +2265,7 @@ export default function ProductsCandies() {
                               />
                             </td>
 
-                            <td className="p-2 border">
+                            <td className="p-3 border-b">
                               <input
                                 className="w-56 border rounded px-2 py-1"
                                 value={r.packaging || ""}
@@ -2225,7 +2279,7 @@ export default function ProductsCandies() {
                               />
                             </td>
 
-                            <td className="p-2 border">
+                            <td className="p-3 border-b">
                               <input
                                 className="w-56 border rounded px-2 py-1"
                                 value={r.barcode || ""}
@@ -2238,12 +2292,12 @@ export default function ProductsCandies() {
                               />
                             </td>
 
-                            <td className="p-2 border text-center">
+                            <td className="p-3 border-b text-center">
                               <span
                                 className={`px-2 py-0.5 rounded text-[10px] ${
                                   exists
-                                    ? "bg-yellow-100 text-yellow-700"
-                                    : "bg-green-100 text-green-700"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-emerald-100 text-emerald-700"
                                 }`}
                               >
                                 {exists ? "ACTUALIZA" : "CREA"}

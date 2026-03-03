@@ -533,6 +533,8 @@ export default function SaleForm({
         Math.max(0, Number(downPayment || 0))
       : 0;
 
+  const missingContadoClient = clientType === "CONTADO" && !clientName.trim();
+
   // Validación rápida
   const validate = async (): Promise<string | null> => {
     if (items.length === 0) return "Agrega al menos un producto.";
@@ -847,13 +849,25 @@ export default function SaleForm({
               </select>
 
               <div className="grid grid-cols-2 gap-2">
-                <div className="p-2 rounded bg-gray-50 border">
+                <div
+                  className={`p-2 rounded border ${
+                    clientType === "CREDITO"
+                      ? "bg-blue-50 border-blue-200"
+                      : "bg-gray-50"
+                  }`}
+                >
                   <div className="text-xs text-gray-600">Saldo actual</div>
                   <div className="text-base font-semibold">
                     {money(currentBalance)}
                   </div>
                 </div>
-                <div className="p-2 rounded bg-gray-50 border">
+                <div
+                  className={`p-2 rounded border ${
+                    clientType === "CREDITO"
+                      ? "bg-blue-50 border-blue-200"
+                      : "bg-gray-50"
+                  }`}
+                >
                   <div className="text-xs text-gray-600">Saldo proyectado</div>
                   <div className="text-base font-semibold">
                     {money(projectedBalance)}
@@ -1032,11 +1046,17 @@ export default function SaleForm({
 
           <button
             onClick={handleSubmit as any}
-            disabled={items.length === 0 || saving}
+            disabled={items.length === 0 || saving || missingContadoClient}
             className="w-full bg-blue-600 text-white px-4 py-2 rounded"
           >
             {saving ? "Guardando..." : "Guardar venta"}
           </button>
+
+          {missingContadoClient && (
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+              ⚠️ Debe ingresar un cliente contado para registrar venta.
+            </div>
+          )}
 
           {message && (
             <div
@@ -1172,7 +1192,13 @@ export default function SaleForm({
               </select>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="p-2 rounded bg-gray-50 border">
+                <div
+                  className={`p-2 rounded border ${
+                    clientType === "CREDITO"
+                      ? "bg-blue-50 border-blue-200"
+                      : "bg-gray-50"
+                  }`}
+                >
                   <div className="text-xs text-gray-600">Saldo actual</div>
                   <div className="text-lg font-semibold">
                     {money(currentBalance)}
@@ -1202,7 +1228,13 @@ export default function SaleForm({
                   />
                 </div>
 
-                <div className="p-2 rounded bg-gray-50 border">
+                <div
+                  className={`p-2 rounded border ${
+                    clientType === "CREDITO"
+                      ? "bg-blue-50 border-blue-200"
+                      : "bg-gray-50"
+                  }`}
+                >
                   <div className="text-xs text-gray-600">Saldo proyectado</div>
                   <div className="text-lg font-semibold">
                     {money(projectedBalance)}
@@ -1396,10 +1428,16 @@ export default function SaleForm({
         <button
           type="submit"
           className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-2xl shadow-2xl font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50"
-          disabled={items.length === 0 || saving}
+          disabled={items.length === 0 || saving || missingContadoClient}
         >
           {saving ? "Guardando..." : "Guardar venta"}
         </button>
+
+        {missingContadoClient && (
+          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+            ⚠️ Debe ingresar un cliente contado para registrar venta.
+          </p>
+        )}
 
         {message && (
           <p

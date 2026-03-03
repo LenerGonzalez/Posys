@@ -366,29 +366,29 @@ export default function ProductForm() {
       </div>
 
       {/* Tabla */}
-      <div className="bg-white p-2 rounded shadow border overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Nombre</th>
-              <th className="p-2 border">Categoría</th>
-              <th className="p-2 border">Unidad</th>
-              <th className="p-2 border">Precio proveedor</th>
-              <th className="p-2 border">Precio</th>
-              <th className="p-2 border">Estado</th>
-              <th className="p-2 border">Acciones</th>
+      <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
+        <table className="min-w-full w-full text-sm">
+          <thead className="bg-slate-100 sticky top-0 z-10">
+            <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+              <th className="p-3 border-b text-left">Nombre</th>
+              <th className="p-3 border-b text-left">Categoría</th>
+              <th className="p-3 border-b text-left">Unidad</th>
+              <th className="p-3 border-b text-right">Precio proveedor</th>
+              <th className="p-3 border-b text-right">Precio</th>
+              <th className="p-3 border-b text-left">Estado</th>
+              <th className="p-3 border-b text-left">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loadingList ? (
               <tr>
-                <td colSpan={6} className="p-4 text-center">
+                <td colSpan={7} className="p-4 text-center">
                   Cargando…
                 </td>
               </tr>
             ) : visibleRows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="p-4 text-center">
+                <td colSpan={7} className="p-4 text-center">
                   Sin productos
                 </td>
               </tr>
@@ -397,8 +397,11 @@ export default function ProductForm() {
                 const isEditing = editingId === p.id;
                 const isActive = p.active !== false;
                 return (
-                  <tr key={p.id} className="text-center">
-                    <td className="p-2 border">
+                  <tr
+                    key={p.id}
+                    className="text-center odd:bg-white even:bg-slate-50"
+                  >
+                    <td className="p-3 border-b text-left">
                       {isEditing ? (
                         <input
                           className="w-full border p-1 rounded"
@@ -409,7 +412,7 @@ export default function ProductForm() {
                         p.name
                       )}
                     </td>
-                    <td className="p-2 border">
+                    <td className="p-3 border-b text-left">
                       {isEditing ? (
                         <select
                           className="w-full border p-1 rounded"
@@ -427,7 +430,7 @@ export default function ProductForm() {
                         p.category
                       )}
                     </td>
-                    <td className="p-2 border">
+                    <td className="p-3 border-b text-left">
                       {isEditing ? (
                         <select
                           className="w-full border p-1 rounded"
@@ -443,7 +446,7 @@ export default function ProductForm() {
                         p.measurement
                       )}
                     </td>
-                    <td className="p-2 border">
+                    <td className="p-3 border-b text-right">
                       {isEditing ? (
                         <input
                           type="number"
@@ -462,7 +465,7 @@ export default function ProductForm() {
                         money(p.providerPrice || 0)
                       )}
                     </td>
-                    <td className="p-2 border">
+                    <td className="p-3 border-b text-right">
                       {isEditing ? (
                         <input
                           type="number"
@@ -477,7 +480,7 @@ export default function ProductForm() {
                         money(p.price)
                       )}
                     </td>
-                    <td className="p-2 border">
+                    <td className="p-3 border-b text-left">
                       <span
                         className={`px-2 py-0.5 rounded text-xs ${
                           isActive
@@ -488,17 +491,17 @@ export default function ProductForm() {
                         {isActive ? "Activo" : "Inactivo"}
                       </span>
                     </td>
-                    <td className="p-2 border space-x-2">
+                    <td className="p-3 border-b text-left space-x-2">
                       {isEditing ? (
                         <>
                           <button
-                            className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700"
                             onClick={saveEdit}
                           >
                             Guardar
                           </button>
                           <button
-                            className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
                             onClick={cancelEdit}
                           >
                             Cancelar
@@ -507,23 +510,23 @@ export default function ProductForm() {
                       ) : (
                         <>
                           <button
-                            className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700"
                             onClick={() => startEdit(p)}
                           >
                             Editar
                           </button>
                           <button
-                            className={`px-2 py-1 rounded ${
+                            className={`px-3 py-1.5 rounded-md text-xs font-semibold ${
                               isActive
-                                ? "bg-gray-600 hover:bg-gray-700 text-white"
-                                : "bg-green-600 hover:bg-green-700 text-white"
+                                ? "bg-slate-600 hover:bg-slate-700 text-white"
+                                : "bg-emerald-600 hover:bg-emerald-700 text-white"
                             }`}
                             onClick={() => toggleActive(p)}
                           >
                             {isActive ? "Desactivar" : "Activar"}
                           </button>
                           <button
-                            className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-red-600 hover:bg-red-700"
                             onClick={() => deleteProduct(p.id)}
                           >
                             Eliminar

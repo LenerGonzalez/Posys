@@ -1,5 +1,3 @@
-
-
 // src/pages/Billing.tsx
 import React, { useEffect, useState, useRef } from "react";
 import { db } from "../../firebase";
@@ -447,115 +445,137 @@ export default function Billing() {
       </div>
 
       {/* Tabla principal */}
-      <div className="bg-white p-2 rounded shadow border w-full mb-4">
-        <table className="min-w-full w-full- text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">N° factura</th>
-              <th className="p-2 border">Descripción</th>
-              <th className="p-2 border">Libras</th>
-              <th className="p-2 border">Unidades</th>
-              <th className="p-2 border">Facturado</th>
-              <th className="p-2 border">Ventas</th>
-              <th className="p-2 border">Gastos</th>
-              <th className="p-2 border">Débitos</th>
-              <th className="p-2 border">Créditos</th>
-              <th className="p-2 border">Monto final</th>
-              <th className="p-2 border">Estado</th>
-              <th className="p-2 border">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={13} className="p-4 text-center">
-                  Cargando…
-                </td>
+      <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-200 w-full mb-4">
+        <div className="rounded-xl overflow-x-auto border border-slate-200">
+          <table className="min-w-full w-full text-sm">
+            <thead className="bg-slate-100 sticky top-0 z-10">
+              <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                <th className="p-3 border-b text-left">Fecha</th>
+                <th className="p-3 border-b text-left">N° factura</th>
+                <th className="p-3 border-b text-left">Descripción</th>
+                <th className="p-3 border-b text-right">Libras</th>
+                <th className="p-3 border-b text-right">Unidades</th>
+                <th className="p-3 border-b text-right">Facturado</th>
+                <th className="p-3 border-b text-right">Ventas</th>
+                <th className="p-3 border-b text-right">Gastos</th>
+                <th className="p-3 border-b text-right">Débitos</th>
+                <th className="p-3 border-b text-right">Créditos</th>
+                <th className="p-3 border-b text-right">Monto final</th>
+                <th className="p-3 border-b text-left">Estado</th>
+                <th className="p-3 border-b text-right">Acciones</th>
               </tr>
-            ) : paginatedRows.length === 0 ? (
-              <tr>
-                <td colSpan={13} className="p-4 text-center">
-                  Sin facturas
-                </td>
-              </tr>
-            ) : (
-              paginatedRows.map((f) => {
-                const t = computeTotalsFromDoc(f);
-                return (
-                  <tr key={f.id} className="text-center">
-                    <td className="p-2 border">{f.date}</td>
-                    <td className="p-2 border">{f.number || "—"}</td>
-                    <td className="p-2 border">{f.description || "—"}</td>
-                    <td className="p-2 border">{qty3(t.lbs)}</td>
-                    <td className="p-2 border">{qty3(t.units)}</td>
-                    <td className="p-2 border">{money(t.invoicedSum)}</td>
-                    <td className="p-2 border">{money(t.expectedSum)}</td>
-                    <td className="p-2 border">{money(t.expenses)}</td>
-                    <td className="p-2 border">{money(t.debits)}</td>
-                    <td className="p-2 border">{money(t.credits)}</td>
-                    <td className="p-2 border">{money(t.finalAmount)}</td>
-                    <td className="p-2 border">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          f.status === "PAGADA"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-yellow-100 text-yellow-700"
-                        }`}
-                      >
-                        {f.status}
-                      </span>
-                    </td>
-                    <td className="p-2 border">
-                      <div className="flex gap-2 justify-center">
-                        <button
-                          className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                          onClick={() => setSelected(f)}
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={13} className="p-4 text-center">
+                    Cargando…
+                  </td>
+                </tr>
+              ) : paginatedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={13} className="p-4 text-center">
+                    Sin facturas
+                  </td>
+                </tr>
+              ) : (
+                paginatedRows.map((f) => {
+                  const t = computeTotalsFromDoc(f);
+                  return (
+                    <tr
+                      key={f.id}
+                      className="text-center odd:bg-white even:bg-slate-50"
+                    >
+                      <td className="p-3 border-b text-left">{f.date}</td>
+                      <td className="p-3 border-b text-left">
+                        {f.number || "—"}
+                      </td>
+                      <td className="p-3 border-b text-left">
+                        {f.description || "—"}
+                      </td>
+                      <td className="p-3 border-b text-right">{qty3(t.lbs)}</td>
+                      <td className="p-3 border-b text-right">
+                        {qty3(t.units)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(t.invoicedSum)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(t.expectedSum)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(t.expenses)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(t.debits)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(t.credits)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(t.finalAmount)}
+                      </td>
+                      <td className="p-3 border-b text-left">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs ${
+                            f.status === "PAGADA"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-yellow-100 text-yellow-700"
+                          }`}
                         >
-                          Ver
-                        </button>
-                        <button
-                          className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
-                          onClick={() => toggleStatus(f)}
-                        >
-                          {f.status === "PAGADA"
-                            ? "Marcar PENDIENTE"
-                            : "Marcar PAGADA"}
-                        </button>
-                        <button
-                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                          onClick={() => removeInvoice(f)}
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-            {/* Paginación */}
-            <div className="flex justify-center items-center gap-2 mb-4">
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page === 1}
-              >
-                Anterior
-              </button>
-              <span className="text-sm">
-                Página {page} de {totalPages}
-              </span>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page === totalPages}
-              >
-                Siguiente
-              </button>
-            </div>
-          </tbody>
-        </table>
+                          {f.status}
+                        </span>
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        <div className="flex gap-2 justify-center">
+                          <button
+                            className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                            onClick={() => setSelected(f)}
+                          >
+                            Ver
+                          </button>
+                          <button
+                            className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                            onClick={() => toggleStatus(f)}
+                          >
+                            {f.status === "PAGADA"
+                              ? "Marcar PENDIENTE"
+                              : "Marcar PAGADA"}
+                          </button>
+                          <button
+                            className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                            onClick={() => removeInvoice(f)}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex justify-center items-center gap-2 mt-3 mb-1">
+          <button
+            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+          >
+            Anterior
+          </button>
+          <span className="text-sm">
+            Página {page} de {totalPages}
+          </span>
+          <button
+            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page === totalPages}
+          >
+            Siguiente
+          </button>
+        </div>
       </div>
 
       {/* Detalle */}
@@ -636,126 +656,161 @@ export default function Billing() {
 
           {/* Lotes */}
           <h4 className="font-semibold mb-1">Lotes</h4>
-          <table className="min-w-full text-sm mb-4 shadow-2xl">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 border">Producto</th>
-                <th className="p-2 border">Unidad</th>
-                <th className="p-2 border">Cantidad</th>
-                <th className="p-2 border">Precio venta</th>
-                <th className="p-2 border">Total facturado</th>
-                <th className="p-2 border">Total esperado</th>
-                <th className="p-2 border">Ganancia bruta</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(selected.batches || []).map((it, i) => {
-                const qty = Number(it.quantity ?? 0);
-                const expected =
-                  it.expectedTotal !== undefined && it.expectedTotal !== null
-                    ? Number(it.expectedTotal)
-                    : qty * Number(it.salePrice ?? 0);
+          <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm mb-4">
+            <table className="min-w-full w-full text-sm">
+              <thead className="bg-slate-100 sticky top-0 z-10">
+                <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                  <th className="p-3 border-b text-left">Producto</th>
+                  <th className="p-3 border-b text-left">Unidad</th>
+                  <th className="p-3 border-b text-right">Cantidad</th>
+                  <th className="p-3 border-b text-right">Precio venta</th>
+                  <th className="p-3 border-b text-right">Total facturado</th>
+                  <th className="p-3 border-b text-right">Total esperado</th>
+                  <th className="p-3 border-b text-right">Ganancia bruta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(selected.batches || []).map((it, i) => {
+                  const qty = Number(it.quantity ?? 0);
+                  const expected =
+                    it.expectedTotal !== undefined && it.expectedTotal !== null
+                      ? Number(it.expectedTotal)
+                      : qty * Number(it.salePrice ?? 0);
 
-                let facturado = qty * Number(it.purchasePrice ?? Number.NaN);
-                if (!isFinite(facturado)) {
-                  facturado =
-                    it.invoiceTotal !== undefined && it.invoiceTotal !== null
-                      ? Number(it.invoiceTotal)
-                      : 0;
-                }
+                  let facturado = qty * Number(it.purchasePrice ?? Number.NaN);
+                  if (!isFinite(facturado)) {
+                    facturado =
+                      it.invoiceTotal !== undefined && it.invoiceTotal !== null
+                        ? Number(it.invoiceTotal)
+                        : 0;
+                  }
 
-                const gross = expected - facturado;
+                  const gross = expected - facturado;
 
-                return (
-                  <tr key={i} className="text-center">
-                    <td className="p-2 border">
-                      {it.productName || "(sin nombre)"}
-                    </td>
-                    <td className="p-2 border">
-                      {(it.unit || "").toUpperCase()}
-                    </td>
-                    <td className="p-2 border">{qty3(it.quantity)}</td>
-                    <td className="p-2 border">{money(it.salePrice)}</td>
-                    <td className="p-2 border">{money(facturado)}</td>
-                    <td className="p-2 border">{money(expected)}</td>
-                    <td className="p-2 border">{money(gross)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  return (
+                    <tr
+                      key={i}
+                      className="text-center odd:bg-white even:bg-slate-50"
+                    >
+                      <td className="p-3 border-b text-left">
+                        {it.productName || "(sin nombre)"}
+                      </td>
+                      <td className="p-3 border-b text-left">
+                        {(it.unit || "").toUpperCase()}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {qty3(it.quantity)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(it.salePrice)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(facturado)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(expected)}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(gross)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
           {/* Gastos */}
           <h4 className="font-semibold mb-1">Gastos</h4>
-          <table className="min-w-full text-sm shadow-xl mb-4">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 border">Fecha</th>
-                <th className="p-2 border">Descripción</th>
-                <th className="p-2 border">Monto</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(selected.expenses || []).length > 0 ? (
-                (selected.expenses || []).map((ex, i) => (
-                  <tr key={i} className="text-center">
-                    <td className="p-2 border">{ex.date}</td>
-                    <td className="p-2 border">{ex.description}</td>
-                    <td className="p-2 border">{money(ex.amount)}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={3} className="p-3 text-center text-gray-500">
-                    Sin gastos
-                  </td>
+          <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm mb-4">
+            <table className="min-w-full w-full text-sm">
+              <thead className="bg-slate-100 sticky top-0 z-10">
+                <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                  <th className="p-3 border-b text-left">Fecha</th>
+                  <th className="p-3 border-b text-left">Descripción</th>
+                  <th className="p-3 border-b text-right">Monto</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {(selected.expenses || []).length > 0 ? (
+                  (selected.expenses || []).map((ex, i) => (
+                    <tr
+                      key={i}
+                      className="text-center odd:bg-white even:bg-slate-50"
+                    >
+                      <td className="p-3 border-b text-left">{ex.date}</td>
+                      <td className="p-3 border-b text-left">
+                        {ex.description}
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(ex.amount)}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={3} className="p-3 text-center text-gray-500">
+                      Sin gastos
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
           {/* Cargos extras */}
           <h4 className="font-semibold mb-1">
             Cargos extras (Notas crédito/débito)
           </h4>
-          <table className="min-w-full text-sm shadow-xl mb-4">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 border">Descripción</th>
-                <th className="p-2 border">Tipo de cargo</th>
-                <th className="p-2 border">Monto</th>
-                <th className="p-2 border">Fecha</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(selected.adjustments || []).length > 0 ? (
-                (selected.adjustments || []).map((a, i) => (
-                  <tr key={i} className="text-center">
-                    <td className="p-2 border">{a.description}</td>
-                    <td className="p-2 border">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          a.type === "DEBITO"
-                            ? "bg-red-100 text-red-700"
-                            : "bg-green-100 text-green-700"
-                        }`}
-                      >
-                        {a.type}
-                      </span>
-                    </td>
-                    <td className="p-2 border">{money(a.amount)}</td>
-                    <td className="p-2 border">{selected.date}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={4} className="p-3 text-center text-gray-500">
-                    Sin cargos extras
-                  </td>
+          <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm mb-4">
+            <table className="min-w-full w-full text-sm">
+              <thead className="bg-slate-100 sticky top-0 z-10">
+                <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                  <th className="p-3 border-b text-left">Descripción</th>
+                  <th className="p-3 border-b text-left">Tipo de cargo</th>
+                  <th className="p-3 border-b text-right">Monto</th>
+                  <th className="p-3 border-b text-left">Fecha</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {(selected.adjustments || []).length > 0 ? (
+                  (selected.adjustments || []).map((a, i) => (
+                    <tr
+                      key={i}
+                      className="text-center odd:bg-white even:bg-slate-50"
+                    >
+                      <td className="p-3 border-b text-left">
+                        {a.description}
+                      </td>
+                      <td className="p-3 border-b text-left">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs ${
+                            a.type === "DEBITO"
+                              ? "bg-red-100 text-red-700"
+                              : "bg-green-100 text-green-700"
+                          }`}
+                        >
+                          {a.type}
+                        </span>
+                      </td>
+                      <td className="p-3 border-b text-right">
+                        {money(a.amount)}
+                      </td>
+                      <td className="p-3 border-b text-left">
+                        {selected.date}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="p-3 text-center text-gray-500">
+                      Sin cargos extras
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
           {/* Consolidados al fondo (3 columnas + KPI) */}
           {(() => {

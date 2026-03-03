@@ -9,6 +9,7 @@ import {
   doc,
   getDoc,
   onSnapshot,
+  where,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "../../firebase";
@@ -45,6 +46,13 @@ function parseDateKey(dateStr: any) {
   if (!s) return 0;
   const t = Date.parse(s);
   return Number.isFinite(t) ? t : 0;
+}
+
+function normKey(s: any) {
+  return String(s ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 // ============================
@@ -215,6 +223,9 @@ export default function PrecioVentas() {
   const [msg, setMsg] = useState("");
 
   const [rows, setRows] = useState<PriceRow[]>([]);
+  const [uvxpaqMap, setUvxpaqMap] = useState<Record<string, number>>({});
+  const [uvxpaqAvgMap, setUvxpaqAvgMap] = useState<Record<string, number>>({});
+  const [sellerCandyId, setSellerCandyId] = useState<string>("");
 
   // filtros
   const [searchProduct, setSearchProduct] = useState("");
@@ -551,8 +562,8 @@ export default function PrecioVentas() {
     );
   }, [filtered]);
 
-  // paginación (móvil: 5 grupos por página)
-  const PAGE_SIZE = 5;
+  // paginación (móvil: 15 grupos por página)
+  const PAGE_SIZE = 15;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(
     1,
@@ -624,6 +635,74 @@ export default function PrecioVentas() {
     </div>
   );
 
+  // paginación (web: 15 productos por página)
+  const WEB_PAGE_SIZE = 15;
+  const [webPage, setWebPage] = useState(1);
+  const totalWebPages = Math.max(1, Math.ceil(filtered.length / WEB_PAGE_SIZE));
+  const pagedWebRows = useMemo(() => {
+    const start = (webPage - 1) * WEB_PAGE_SIZE;
+    return filtered.slice(start, start + WEB_PAGE_SIZE);
+  }, [filtered, webPage]);
+
+  useEffect(() => {
+    setWebPage(1);
+  }, [
+    searchProduct,
+    searchCode,
+    minPrice,
+    maxPrice,
+    priceField,
+    packagingFilter,
+  ]);
+
+  useEffect(() => {
+    setWebPage((p) => Math.min(p, totalWebPages));
+  }, [totalWebPages]);
+
+  const webGoFirst = () => setWebPage(1);
+  const webGoPrev = () => setWebPage((p) => Math.max(1, p - 1));
+  const webGoNext = () => setWebPage((p) => Math.min(totalWebPages, p + 1));
+  const webGoLast = () => setWebPage(totalWebPages);
+
+  const renderWebPager = () => (
+    <div className="flex items-center justify-between mt-3">
+      <div className="flex items-center gap-1 flex-wrap">
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={webGoFirst}
+          disabled={webPage === 1}
+        >
+          « Primero
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={webGoPrev}
+          disabled={webPage === 1}
+        >
+          ‹ Anterior
+        </button>
+        <span className="px-2 text-sm">
+          Página {webPage} de {totalWebPages}
+        </span>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={webGoNext}
+          disabled={webPage === totalWebPages}
+        >
+          Siguiente ›
+        </button>
+        <button
+          className="px-2 py-1 border rounded disabled:opacity-50"
+          onClick={webGoLast}
+          disabled={webPage === totalWebPages}
+        >
+          Último »
+        </button>
+      </div>
+      <div className="text-sm text-gray-600">{filtered.length} producto(s)</div>
+    </div>
+  );
+
   const toggleCategory = (cat: string) => {
     setOpenCategoryMap((prev) => ({
       ...prev,
@@ -672,6 +751,7 @@ export default function PrecioVentas() {
   }, []);
 
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isVendor, setIsVendor] = useState(false);
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       if (!u) return setIsAdmin(false);
@@ -685,14 +765,136 @@ export default function PrecioVentas() {
               ? [data.role]
               : []
           : [];
+        setSellerCandyId(String(data?.sellerCandyId || "").trim());
         setIsAdmin(hasRole(subject, "admin"));
+        setIsVendor(hasRole(subject, "vendedor_dulces"));
       } catch (e) {
         console.error(e);
         setIsAdmin(false);
+        setIsVendor(false);
+        setSellerCandyId("");
       }
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (!sellerCandyId || isAdmin) {
+      setUvxpaqMap({});
+      return;
+    }
+
+    const q = query(
+      collection(db, "inventory_candies_sellers"),
+      where("sellerId", "==", sellerCandyId),
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const map: Record<string, { val: number; ts: number }> = {};
+
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          const pname = String(x.productName || "").trim();
+          const key = pname ? normKey(pname) : String(x.productId || "");
+          if (!key) return;
+
+          const createdAtMs =
+            x?.createdAt?.toMillis?.() ||
+            (x?.createdAt?.seconds ? x.createdAt.seconds * 1000 : 0) ||
+            0;
+          const updatedAtMs =
+            x?.updatedAt?.toMillis?.() ||
+            (x?.updatedAt?.seconds ? x.updatedAt.seconds * 1000 : 0) ||
+            0;
+          const dateKey = parseDateKey(x.date);
+          const ts = Math.max(createdAtMs, updatedAtMs, dateKey);
+
+          const explicitUv = Number(
+            x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? x.u_vxpaq ?? NaN,
+          );
+          let valUv = NaN as number;
+          if (Number.isFinite(explicitUv)) valUv = explicitUv;
+          else {
+            const uVend = Number(x.uVendor ?? x.vendorProfit ?? 0);
+            const packs = Math.max(1, Number(x.packages ?? 0));
+            valUv = packs > 0 ? uVend / packs : 0;
+          }
+
+          const current = map[key];
+          if (!current || ts >= current.ts) {
+            map[key] = { val: Number(valUv || 0), ts };
+          }
+        });
+
+        const out: Record<string, number> = {};
+        Object.keys(map).forEach((k) => {
+          out[k] = map[k].val || 0;
+        });
+        setUvxpaqMap(out);
+      },
+      (err) => {
+        console.error("inventory_candies_sellers snapshot error:", err);
+        setUvxpaqMap({});
+      },
+    );
+
+    return () => unsub();
+  }, [sellerCandyId, isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setUvxpaqAvgMap({});
+      return;
+    }
+
+    const q = query(collection(db, "inventory_candies_sellers"));
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const sumMap: Record<string, number> = {};
+        const countMap: Record<string, number> = {};
+
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          const pname = String(x.productName || "").trim();
+          const key = pname ? normKey(pname) : String(x.productId || "");
+          if (!key) return;
+
+          const explicitUv = Number(
+            x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? x.u_vxpaq ?? NaN,
+          );
+          let valUv = NaN as number;
+          if (Number.isFinite(explicitUv)) valUv = explicitUv;
+          else {
+            const uVend = Number(x.uVendor ?? x.vendorProfit ?? 0);
+            const packs = Math.max(1, Number(x.packages ?? 0));
+            valUv = packs > 0 ? uVend / packs : 0;
+          }
+
+          if (!Number.isFinite(valUv)) return;
+
+          sumMap[key] = (sumMap[key] || 0) + Number(valUv || 0);
+          countMap[key] = (countMap[key] || 0) + 1;
+        });
+
+        const out: Record<string, number> = {};
+        Object.keys(sumMap).forEach((k) => {
+          const cnt = countMap[k] || 0;
+          out[k] = cnt > 0 ? sumMap[k] / cnt : 0;
+        });
+        setUvxpaqAvgMap(out);
+      },
+      (err) => {
+        console.error("inventory_candies_sellers avg error:", err);
+        setUvxpaqAvgMap({});
+      },
+    );
+
+    return () => unsub();
+  }, [isAdmin]);
 
   const onDetected = async (code: string) => {
     if (scanTarget === "search") {
@@ -870,12 +1072,14 @@ export default function PrecioVentas() {
       </div>
 
       {/* ===== WEB: filtros siempre visibles (igual idea de antes) ===== */}
-      <div className="hidden md:block bg-white p-3 rounded shadow border mb-3 text-sm">
+      <div className="hidden md:block bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-3 text-sm">
         <div className="grid grid-cols-6 gap-3 items-end">
           <div className="col-span-2">
-            <label className="block font-semibold">Filtrar por producto</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Filtrar por producto
+            </label>
             <input
-              className="w-full border rounded px-2 py-1"
+              className="w-full border rounded-md px-3 py-2"
               value={searchProduct}
               onChange={(e) => setSearchProduct(e.target.value)}
               placeholder="Ej: Conitos, Gomitas…"
@@ -883,9 +1087,11 @@ export default function PrecioVentas() {
           </div>
 
           <div>
-            <label className="block font-semibold">Tipo empaque</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Tipo empaque
+            </label>
             <select
-              className="w-full border rounded px-2 py-1"
+              className="w-full border rounded-md px-3 py-2"
               value={packagingFilter}
               onChange={(e) => setPackagingFilter(e.target.value)}
             >
@@ -900,9 +1106,11 @@ export default function PrecioVentas() {
           </div>
 
           <div>
-            <label className="block font-semibold">Precio mín</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Precio mín
+            </label>
             <input
-              className="w-full border rounded px-2 py-1 text-right"
+              className="w-full border rounded-md px-3 py-2 text-right"
               inputMode="decimal"
               value={minPrice}
               onChange={(e) => setMinPrice(e.target.value)}
@@ -911,9 +1119,11 @@ export default function PrecioVentas() {
           </div>
 
           <div>
-            <label className="block font-semibold">Precio máx</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Precio máx
+            </label>
             <input
-              className="w-full border rounded px-2 py-1 text-right"
+              className="w-full border rounded-md px-3 py-2 text-right"
               inputMode="decimal"
               value={maxPrice}
               onChange={(e) => setMaxPrice(e.target.value)}
@@ -923,7 +1133,7 @@ export default function PrecioVentas() {
 
           <div className="text-right">
             <button
-              className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+              className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
               type="button"
               onClick={clearFilters}
             >
@@ -932,13 +1142,13 @@ export default function PrecioVentas() {
           </div>
         </div>
 
-        <div className="mt-2 flex items-center justify-between">
-          <div className="text-xs text-gray-600">
+        <div className="mt-3 flex items-center justify-between">
+          <div className="text-xs text-slate-600">
             Fuente: <b>candy_main_orders.items[]</b> • Muestra el{" "}
             <b>último precio</b> registrado por producto.
           </div>
           <div className="text-sm">
-            <span className="text-gray-600">Mostrando:</span>{" "}
+            <span className="text-slate-600">Mostrando:</span>{" "}
             <b>{filtered.length}</b>
           </div>
         </div>
@@ -972,13 +1182,13 @@ export default function PrecioVentas() {
                       <div className="text-[13px] font-semibold truncate">
                         {cat}
                       </div>
-                      <div className="text-[10px] text-gray-600 truncate">
+                      <div className="text-[12px] text-gray-600 truncate">
                         {items.length}{" "}
-                        {items.length === 1 ? "producto" : "productos"}
+                        {items.length === 1 ? "Producto" : "Productos"}
                       </div>
                     </div>
                     <div className="text-sm font-semibold">
-                      {expandedCategory ? "−" : "+"}
+                      {expandedCategory ? "Cerrar" : "Ver"}
                     </div>
                   </button>
 
@@ -990,7 +1200,18 @@ export default function PrecioVentas() {
                         const providerPrice =
                           providerPriceMap[r.productId] || 0;
                         const utilidad = r.priceIsla - providerPrice;
-                        const comision = utilidad * 0.25;
+                        const uvKey = normKey(r.productName || r.productId);
+                        const uvXpaq = uvxpaqMap[uvKey];
+                        const uvAvg = uvxpaqAvgMap[uvKey];
+                        const uvLabel = isAdmin
+                          ? Number.isFinite(Number(uvAvg))
+                            ? money(uvAvg)
+                            : "--"
+                          : isVendor
+                            ? Number.isFinite(Number(uvXpaq))
+                              ? money(uvXpaq)
+                              : "--"
+                            : "--";
                         return (
                           <div
                             key={r.productId}
@@ -1014,8 +1235,8 @@ export default function PrecioVentas() {
                                 </div>
                               </div>
                               <div className="text-right">
-                                <div className="text-[10px] text-gray-600">
-                                  P. Paquete
+                                <div className="text-[12px] text-gray-600">
+                                  Precio Paq
                                 </div>
                                 <div className="text-sm font-semibold tabular-nums">
                                   {money(r.priceIsla)}
@@ -1028,7 +1249,7 @@ export default function PrecioVentas() {
                                 <div className="pt-3 space-y-2 text-sm">
                                   <div className="grid grid-cols-2 gap-2">
                                     <div>
-                                      <div className="text-[10px] text-gray-600">
+                                      <div className="text-[12px] text-gray-600">
                                         Categoría
                                       </div>
                                       <div className="text-sm">
@@ -1036,7 +1257,7 @@ export default function PrecioVentas() {
                                       </div>
 
                                       <div className="mt-2">
-                                        <div className="text-[10px] text-gray-600">
+                                        <div className="text-[12px] text-gray-600">
                                           Unidades x paquete
                                         </div>
                                         <div className="text-sm">
@@ -1045,8 +1266,8 @@ export default function PrecioVentas() {
                                       </div>
 
                                       <div className="mt-2">
-                                        <div className="text-[10px] text-gray-600">
-                                          Precio Unidad
+                                        <div className="text-[12px] text-gray-600">
+                                          Precio x Unidad
                                         </div>
                                         <div className="text-sm tabular-nums">
                                           {money(
@@ -1057,8 +1278,8 @@ export default function PrecioVentas() {
                                       </div>
 
                                       <div className="mt-2">
-                                        <div className="text-[10px] text-gray-600">
-                                          Precio Paquete
+                                        <div className="text-[12px] text-gray-600">
+                                          Precio x Paquete
                                         </div>
                                         {isEditing ? (
                                           <input
@@ -1082,7 +1303,7 @@ export default function PrecioVentas() {
                                     <div>
                                       {isAdmin && (
                                         <div>
-                                          <div className="text-[10px] text-gray-600">
+                                          <div className="text-[12px] text-gray-600">
                                             Utilidad Bruta
                                           </div>
                                           <div className="text-sm tabular-nums">
@@ -1092,16 +1313,16 @@ export default function PrecioVentas() {
                                       )}
 
                                       <div className="mt-1">
-                                        <div className="text-[10px] text-gray-600">
-                                          Comisión
+                                        <div className="text-[12px] text-gray-600">
+                                          Comision x Paquete Vendido
                                         </div>
                                         <div className="text-sm tabular-nums">
-                                          {money(comision)}
+                                          {uvLabel}
                                         </div>
                                       </div>
 
                                       <div className="mt-2">
-                                        <div className="text-[10px] text-gray-600">
+                                        <div className="text-[12px] text-gray-600">
                                           Código EAN
                                         </div>
                                         {isEditing ? (
@@ -1130,7 +1351,7 @@ export default function PrecioVentas() {
                                       </div>
 
                                       <div className="mt-2">
-                                        <div className="text-[10px] text-gray-600">
+                                        <div className="text-[12px] text-gray-600">
                                           Tipo Empaque
                                         </div>
                                         {isEditing ? (
@@ -1259,37 +1480,40 @@ export default function PrecioVentas() {
       />
 
       {/* ===== WEB: tabla ===== */}
-      <div className="hidden md:block bg-white rounded shadow border w-full overflow-x-auto">
+      <div className="hidden md:block rounded-xl overflow-x-auto border border-slate-200 shadow-sm w-full">
         <table className="min-w-[900px] w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr className="whitespace-nowrap">
-              <th className="p-2 border text-left">Categoría</th>
-              <th className="p-2 border text-left">Producto</th>
-              <th className="p-2 border text-left">Empaque</th>
-              <th className="p-2 border text-right">Precio Isla</th>
-              <th className="p-2 border text-right">Precio Rivas</th>
-              <th className="p-2 border text-right">Acciones</th>
+          <thead className="bg-slate-100 sticky top-0 z-10">
+            <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
+              <th className="p-3 border-b text-left">Categoría</th>
+              <th className="p-3 border-b text-left">Producto</th>
+              <th className="p-3 border-b text-left">Empaque</th>
+              <th className="p-3 border-b text-right">Und x paquete</th>
+              <th className="p-3 border-b text-right">Precio x unidad</th>
+              <th className="p-3 border-b text-right">Precio Isla</th>
+              <th className="p-3 border-b text-right">Precio Rivas</th>
+              <th className="p-3 border-b text-right">UV x paquete</th>
+              <th className="p-3 border-b text-right">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-center" colSpan={6}>
+                <td className="p-4 text-center" colSpan={9}>
                   Cargando…
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td className="p-4 text-center" colSpan={6}>
+                <td className="p-4 text-center" colSpan={9}>
                   Sin resultados.
                 </td>
               </tr>
             ) : (
-              filtered.map((r) => (
-                <tr key={r.productId}>
-                  <td className="p-2 border">{r.category}</td>
-                  <td className="p-2 border">{r.productName}</td>
-                  <td className="p-2 border">
+              pagedWebRows.map((r) => (
+                <tr key={r.productId} className="odd:bg-white even:bg-slate-50">
+                  <td className="p-3 border-b text-left">{r.category}</td>
+                  <td className="p-3 border-b text-left">{r.productName}</td>
+                  <td className="p-3 border-b text-left">
                     {editingId === r.productId ? (
                       <select
                         className="w-full border rounded px-2 py-1"
@@ -1308,7 +1532,13 @@ export default function PrecioVentas() {
                       packagingMap[r.productId] || "—"
                     )}
                   </td>
-                  <td className="p-2 border text-right tabular-nums">
+                  <td className="p-3 border-b text-right tabular-nums">
+                    {String(r.unitsPerPackage || 1)}
+                  </td>
+                  <td className="p-3 border-b text-right tabular-nums">
+                    {money(r.priceIsla / (r.unitsPerPackage || 1))}
+                  </td>
+                  <td className="p-3 border-b text-right tabular-nums">
                     {editingId === r.productId ? (
                       <input
                         className="w-24 border rounded px-2 py-1 text-right"
@@ -1322,7 +1552,7 @@ export default function PrecioVentas() {
                       money(r.priceIsla)
                     )}
                   </td>
-                  <td className="p-2 border text-right tabular-nums">
+                  <td className="p-3 border-b text-right tabular-nums">
                     {editingId === r.productId ? (
                       <input
                         className="w-24 border rounded px-2 py-1 text-right"
@@ -1336,18 +1566,35 @@ export default function PrecioVentas() {
                       money(r.priceRivas)
                     )}
                   </td>
-                  <td className="p-2 border text-right">
+                  <td className="p-3 border-b text-right tabular-nums">
+                    {(() => {
+                      const uvKey = normKey(r.productName || r.productId);
+                      const uvXpaq = uvxpaqMap[uvKey];
+                      const uvAvg = uvxpaqAvgMap[uvKey];
+                      const uvLabel = isAdmin
+                        ? Number.isFinite(Number(uvAvg))
+                          ? money(uvAvg)
+                          : "--"
+                        : isVendor
+                          ? Number.isFinite(Number(uvXpaq))
+                            ? money(uvXpaq)
+                            : "--"
+                          : "--";
+                      return uvLabel;
+                    })()}
+                  </td>
+                  <td className="p-3 border-b text-right">
                     {editingId === r.productId ? (
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          className="px-2 py-1 rounded bg-green-600 text-white text-sm"
+                          className="px-3 py-1.5 rounded-md text-xs font-semibold bg-green-600 text-white"
                           onClick={() => saveEditedPrices(r.productId)}
                           type="button"
                         >
                           Guardar
                         </button>
                         <button
-                          className="px-2 py-1 rounded bg-gray-200 text-sm"
+                          className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-200 text-slate-700"
                           onClick={() => setEditingId(null)}
                           type="button"
                         >
@@ -1358,7 +1605,7 @@ export default function PrecioVentas() {
                       isAdmin && (
                         <div className="flex items-center justify-end gap-2">
                           <button
-                            className="px-2 py-1 rounded bg-yellow-400 text-sm"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-amber-500 text-white"
                             onClick={() => {
                               setEditingId(r.productId);
                               setEditPriceIsla(r.priceIsla || 0);
@@ -1370,7 +1617,7 @@ export default function PrecioVentas() {
                             Editar
                           </button>
                           <button
-                            className="px-2 py-1 rounded bg-blue-600 text-white text-sm"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white"
                             onClick={() => {
                               setEditingId(r.productId);
                               setScanTarget("edit");
@@ -1381,7 +1628,7 @@ export default function PrecioVentas() {
                             Escanear
                           </button>
                           <button
-                            className="px-2 py-1 rounded bg-red-600 text-white text-sm"
+                            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white"
                             onClick={() =>
                               setRows((prev) =>
                                 prev.filter((x) => x.productId !== r.productId),
@@ -1400,6 +1647,10 @@ export default function PrecioVentas() {
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="hidden md:block">
+        {!loading && filtered.length > 0 && renderWebPager()}
       </div>
 
       {/* msg para web (móvil ya lo muestra arriba) */}

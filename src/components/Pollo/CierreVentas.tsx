@@ -282,6 +282,14 @@ export default function CierreVentas({
   // ✅ NUEVO: filtro por producto
   const [productFilter, setProductFilter] = useState<string>("");
 
+  // paginacion (tabla contado y credito)
+  const PAGE_SIZE = 25;
+  const [cashPage, setCashPage] = useState(1);
+  const [creditPage, setCreditPage] = useState(1);
+  const [pdfMode, setPdfMode] = useState(false);
+  const [cashTableOpen, setCashTableOpen] = useState(true);
+  const [creditTableOpen, setCreditTableOpen] = useState(true);
+
   const pdfRef = useRef<HTMLDivElement>(null);
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -477,6 +485,46 @@ export default function CierreVentas({
 
   const cashSales = visibleSales.filter((s) => s.type === "CONTADO");
   const creditSales = visibleSales.filter((s) => s.type === "CREDITO");
+
+  const cashTotalPages = Math.max(1, Math.ceil(cashSales.length / PAGE_SIZE));
+  const creditTotalPages = Math.max(
+    1,
+    Math.ceil(creditSales.length / PAGE_SIZE),
+  );
+
+  const pagedCashSales = React.useMemo(() => {
+    const start = (cashPage - 1) * PAGE_SIZE;
+    return cashSales.slice(start, start + PAGE_SIZE);
+  }, [cashSales, cashPage]);
+
+  const pagedCreditSales = React.useMemo(() => {
+    const start = (creditPage - 1) * PAGE_SIZE;
+    return creditSales.slice(start, start + PAGE_SIZE);
+  }, [creditSales, creditPage]);
+
+  useEffect(() => {
+    setCashPage(1);
+    setCreditPage(1);
+  }, [visibleSales]);
+
+  useEffect(() => {
+    setCashPage((p) => Math.min(p, cashTotalPages));
+  }, [cashTotalPages]);
+
+  useEffect(() => {
+    setCreditPage((p) => Math.min(p, creditTotalPages));
+  }, [creditTotalPages]);
+
+  const showCashTable =
+    operationFilter === "ALL" || operationFilter === "CONTADO";
+  const showCreditTable =
+    operationFilter === "ALL" || operationFilter === "CREDITO";
+
+  const cashOpenEffective = pdfMode ? true : cashTableOpen;
+  const creditOpenEffective = pdfMode ? true : creditTableOpen;
+
+  const cashRowsForTable = pdfMode ? cashSales : pagedCashSales;
+  const creditRowsForTable = pdfMode ? creditSales : pagedCreditSales;
 
   const totalUnitsCash = round3(
     cashSales
@@ -741,6 +789,7 @@ export default function CierreVentas({
     // ✅ fuerza modo PDF (muestra tabla desktop aunque estés en móvil)
     pdfRef.current.classList.add("force-pdf-colors");
     pdfRef.current.classList.add("pdf-print-mode");
+    setPdfMode(true);
 
     try {
       const canvas = await html2canvas(pdfRef.current, {
@@ -753,8 +802,181 @@ export default function CierreVentas({
     } finally {
       pdfRef.current.classList.remove("pdf-print-mode");
       pdfRef.current.classList.remove("force-pdf-colors");
+      setPdfMode(false);
     }
   };
+
+  const renderProPager = (
+    page: number,
+    totalPages: number,
+    onPage: (p: number) => void,
+    totalItems: number,
+  ) => {
+    const pages: number[] = [];
+    const maxBtns = 7;
+    if (totalPages <= maxBtns) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      const left = Math.max(1, page - 2);
+      const right = Math.min(totalPages, page + 2);
+      pages.push(1);
+      if (left > 2) pages.push(-1 as any);
+      for (let i = left; i <= right; i++)
+        if (i !== 1 && i !== totalPages) pages.push(i);
+      if (right < totalPages - 1) pages.push(-2 as any);
+      pages.push(totalPages);
+    }
+
+    return (
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
+        <div className="flex items-center gap-1 flex-wrap">
+          <button
+            className="px-2 py-1 border rounded disabled:opacity-50"
+            onClick={() => onPage(1)}
+            disabled={page === 1}
+          >
+            « Primero
+          </button>
+          <button
+            className="px-2 py-1 border rounded disabled:opacity-50"
+            onClick={() => onPage(Math.max(1, page - 1))}
+            disabled={page === 1}
+          >
+            ‹ Anterior
+          </button>
+          {pages.map((p, idx) =>
+            typeof p === "number" ? (
+              <button
+                key={idx}
+                className={`px-3 py-1 border rounded ${
+                  p === page ? "bg-blue-600 text-white" : ""
+                }`}
+                onClick={() => onPage(p)}
+              >
+                {p}
+              </button>
+            ) : (
+              <span key={idx} className="px-2">
+                …
+              </span>
+            ),
+          )}
+          <button
+            className="px-2 py-1 border rounded disabled:opacity-50"
+            onClick={() => onPage(Math.min(totalPages, page + 1))}
+            disabled={page === totalPages}
+          >
+            Siguiente ›
+          </button>
+          <button
+            className="px-2 py-1 border rounded disabled:opacity-50"
+            onClick={() => onPage(totalPages)}
+            disabled={page === totalPages}
+          >
+            Último »
+          </button>
+        </div>
+        <div className="text-sm text-gray-600">
+          Página {page} de {totalPages} • {totalItems} registro(s)
+        </div>
+      </div>
+    );
+  };
+
+  const renderSalesTable = (rows: SaleData[]) => (
+    <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
+      <table className="min-w-full w-full text-sm">
+        <thead className="bg-slate-100 sticky top-0 z-10">
+          <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+            <th className="p-3 border-b text-left">Estado</th>
+            <th className="p-3 border-b text-left">Fecha venta</th>
+            <th className="p-3 border-b text-left">Tipo</th>
+            <th className="p-3 border-b text-left">Producto</th>
+            <th className="p-3 border-b text-right">Libras - Unidad</th>
+            <th className="p-3 border-b text-right">Monto</th>
+            <th className="p-3 border-b text-left">Vendedor</th>
+            <th className="p-3 border-b text-right">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((s) => (
+            <tr
+              key={s.id}
+              className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
+            >
+              <td className="p-3 border-b text-left">
+                <span
+                  className={`px-2 py-0.5 rounded text-xs ${
+                    s.status === "PROCESADA"
+                      ? "bg-green-100 text-green-700"
+                      : "bg-yellow-100 text-yellow-700"
+                  }`}
+                >
+                  {s.status}
+                </span>
+              </td>
+              <td className="p-3 border-b text-left">{s.date}</td>
+              <td className="p-3 border-b text-left">
+                {s.type === "CREDITO" ? "Crédito" : "Cash"}
+              </td>
+              <td className="p-3 border-b text-left">{s.productName}</td>
+              <td className="p-3 border-b text-right">{qty3(s.quantity)}</td>
+              <td className="p-3 border-b text-right">C${money(s.amount)}</td>
+              <td className="p-3 border-b text-left">
+                {displaySeller(s.userEmail)}
+              </td>
+              <td className="p-3 border-b text-right">
+                {s.status === "FLOTANTE" ? (
+                  <div className="flex gap-2 justify-end">
+                    {isAdmin ? (
+                      <>
+                        <button
+                          onClick={() => openEdit(s)}
+                          className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => deleteSale(s.id)}
+                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                        >
+                          Eliminar
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
+                    )}
+                  </div>
+                ) : s.status === "PROCESADA" ? (
+                  <div className="flex gap-2 justify-end">
+                    {isAdmin ? (
+                      <button
+                        onClick={() => handleRevert(s.id)}
+                        className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                      >
+                        Revertir
+                      </button>
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-gray-400 text-xs">No options</span>
+                )}
+              </td>
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={8} className="p-3 text-center text-gray-500">
+                Sin ventas para mostrar.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
@@ -864,93 +1086,277 @@ export default function CierreVentas({
               DESKTOP / WEB -> TABLA (igual que antes)
               ========================= */}
           <div className="pdf-desktop hidden md:block">
-            <table className="min-w-full border text-sm mb-4 shadow-2xl">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="border p-2">Estado</th>
-                  <th className="border p-2">Tipo</th>
-                  <th className="border p-2">Producto</th>
-                  <th className="border p-2">Libras - Unidad</th>
-                  <th className="border p-2">Monto</th>
-                  <th className="border p-2">Fecha venta</th>
-                  <th className="border p-2">Vendedor</th>
-                  <th className="border p-2">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleSales.map((s) => (
-                  <tr key={s.id} className="text-center">
-                    <td className="border p-1">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          s.status === "PROCESADA"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-yellow-100 text-yellow-700"
+            <div className="space-y-6">
+              {showCashTable && (
+                <div className="mt-8">
+                  <div className="mb-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm">
+                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
+                      <div className="text-xs text-emerald-700">
+                        Total libras Cash
+                      </div>
+                      <div className="text-base font-semibold text-emerald-900">
+                        {qty3(totalLbsCash)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
+                      <div className="text-xs text-emerald-700">
+                        Total Unidades Cash
+                      </div>
+                      <div className="text-base font-semibold text-emerald-900">
+                        {qty3(totalUnitsCash)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
+                      <div className="text-xs text-amber-700">
+                        Total libras Credito
+                      </div>
+                      <div className="text-base font-semibold text-amber-900">
+                        {qty3(totalLbsCredit)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
+                      <div className="text-xs text-amber-700">
+                        Total Unidades Credito
+                      </div>
+                      <div className="text-base font-semibold text-amber-900">
+                        {qty3(totalUnitsCredit)}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
+                      <div className="text-xs text-emerald-700">
+                        Total facturado Cash
+                      </div>
+                      <div className="text-base font-semibold text-emerald-900">
+                        C${money(totalCOGSCash)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
+                      <div className="text-xs text-amber-700">
+                        Total facturado Credito
+                      </div>
+                      <div className="text-base font-semibold text-amber-900">
+                        C${money(totalCOGSCredit)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
+                      <div className="text-xs text-emerald-700">
+                        Total venta Cash
+                      </div>
+                      <div className="text-base font-semibold text-emerald-900">
+                        C${money(totalSalesCash)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
+                      <div className="text-xs text-amber-700">
+                        Total venta Credito
+                      </div>
+                      <div className="text-base font-semibold text-amber-900">
+                        C${money(totalSalesCredit)}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
+                      <div className="text-xs text-emerald-700">
+                        Utilidad bruta Cash
+                      </div>
+                      <div className="text-base font-semibold text-emerald-900">
+                        C${money(grossProfitCash)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
+                      <div className="text-xs text-amber-700">
+                        Utilidad bruta Credito
+                      </div>
+                      <div className="text-base font-semibold text-amber-900">
+                        C${money(grossProfitCredit)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50">
+                      <div className="text-xs text-indigo-700">
+                        Total libras (Cash + Credito)
+                      </div>
+                      <div className="text-base font-semibold text-indigo-900">
+                        {qty3(totalLbsAll)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50">
+                      <div className="text-xs text-indigo-700">
+                        Total unidades (Cash + Credito)
+                      </div>
+                      <div className="text-base font-semibold text-indigo-900">
+                        {qty3(totalUnitsAll)}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50">
+                      <div className="text-xs text-indigo-700">
+                        Total ventas (Cash + Credito)
+                      </div>
+                      <div className="text-base font-semibold text-indigo-900">
+                        C${money(totalSalesAll)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
+                      <div className="text-xs text-slate-600">
+                        Total facturado a precio compra
+                      </div>
+                      <div className="text-base font-semibold text-slate-900">
+                        C${money(totalCOGSVisible)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <SectionHeader
+                      title="Consolidado por producto"
+                      open={consolidadoOpen}
+                      onToggle={() => setConsolidadoOpen((v) => !v)}
+                      right={
+                        <span className="ml-1">
+                          {productSummaryArray.length}
+                        </span>
+                      }
+                    />
+
+                    {consolidadoOpen && (
+                      <div className="mt-3">
+                        <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
+                          <table className="min-w-full w-full text-sm">
+                            <thead className="bg-slate-100 sticky top-0 z-10">
+                              <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                                <th className="p-3 border-b text-left">
+                                  Producto
+                                </th>
+                                <th className="p-3 border-b text-right">
+                                  Total libras/unidades
+                                </th>
+                                <th className="p-3 border-b text-right">
+                                  Total dinero
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {productSummaryArray.map((row) => (
+                                <tr
+                                  key={row.productName}
+                                  className="text-center odd:bg-white even:bg-slate-50"
+                                >
+                                  <td className="p-3 border-b text-left">
+                                    {row.productName}
+                                  </td>
+                                  <td className="p-3 border-b text-right">
+                                    {qty3(row.totalQuantity)}
+                                  </td>
+                                  <td className="p-3 border-b text-right">
+                                    C${money(row.totalAmount)}
+                                  </td>
+                                </tr>
+                              ))}
+                              {productSummaryArray.length > 0 && (
+                                <tr className="text-center bg-slate-100/70">
+                                  <td className="p-3 border-b text-left font-semibold">
+                                    Totales
+                                  </td>
+                                  <td className="p-3 border-b text-right font-semibold">
+                                    Lbs: {qty3(totalLbsAll)} • Und:{" "}
+                                    {qty3(totalUnitsAll)}
+                                  </td>
+                                  <td className="p-3 border-b text-right font-semibold">
+                                    C${money(totalSalesAll)}
+                                  </td>
+                                </tr>
+                              )}
+                              {productSummaryArray.length === 0 && (
+                                <tr>
+                                  <td
+                                    colSpan={3}
+                                    className="p-3 text-center text-gray-500"
+                                  >
+                                    Sin datos para consolidar.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-6 flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-slate-700">
+                      Contado
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-slate-500">
+                        {cashSales.length} registro(s)
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCashTableOpen((v) => !v)}
+                        className={`text-xs px-3 py-1.5 rounded border font-semibold transition ${
+                          cashOpenEffective
+                            ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700"
+                            : "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700"
                         }`}
                       >
-                        {s.status}
-                      </span>
-                    </td>
-                    <td className="border p-1">
-                      {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                    </td>
-                    <td className="border p-1">{s.productName}</td>
-                    <td className="border p-1">{qty3(s.quantity)}</td>
-                    <td className="border p-1">C${money(s.amount)}</td>
-                    <td className="border p-1">{s.date}</td>
-                    <td className="border p-1">{displaySeller(s.userEmail)}</td>
-                    <td className="border p-1">
-                      {s.status === "FLOTANTE" ? (
-                        <div className="flex gap-2 justify-center">
-                          {isAdmin ? (
-                            <>
-                              <button
-                                onClick={() => openEdit(s)}
-                                className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                              >
-                                Editar
-                              </button>
-                              <button
-                                onClick={() => deleteSale(s.id)}
-                                className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                              >
-                                Eliminar
-                              </button>
-                            </>
-                          ) : (
-                            <span className="text-gray-400 text-xs">—</span>
-                          )}
-                        </div>
-                      ) : s.status === "PROCESADA" ? (
-                        <div className="flex gap-2 justify-center">
-                          {isAdmin ? (
-                            <button
-                              onClick={() => handleRevert(s.id)}
-                              className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                            >
-                              Revertir
-                            </button>
-                          ) : (
-                            <span className="text-gray-400 text-xs">—</span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-gray-400 text-xs">
-                          No options
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {visibleSales.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="p-3 text-center text-gray-500">
-                      Sin ventas para mostrar.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                        {cashOpenEffective ? "Cerrar" : "Ver"}
+                      </button>
+                    </div>
+                  </div>
+                  {cashOpenEffective && (
+                    <>
+                      {renderSalesTable(cashRowsForTable)}
+                      {!pdfMode &&
+                        renderProPager(
+                          cashPage,
+                          cashTotalPages,
+                          setCashPage,
+                          cashSales.length,
+                        )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {showCreditTable && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm font-semibold text-slate-700">
+                      Crédito
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-slate-500">
+                        {creditSales.length} registro(s)
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCreditTableOpen((v) => !v)}
+                        className={`text-xs px-3 py-1.5 rounded border font-semibold transition ${
+                          creditOpenEffective
+                            ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700"
+                            : "bg-amber-500 text-white border-amber-500 hover:bg-amber-600"
+                        }`}
+                      >
+                        {creditOpenEffective ? "Cerrar" : "Ver"}
+                      </button>
+                    </div>
+                  </div>
+                  {creditOpenEffective && (
+                    <>
+                      {renderSalesTable(creditRowsForTable)}
+                      {!pdfMode &&
+                        renderProPager(
+                          creditPage,
+                          creditTotalPages,
+                          setCreditPage,
+                          creditSales.length,
+                        )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* =========================
@@ -1078,104 +1484,6 @@ export default function CierreVentas({
                     Sin ventas para mostrar.
                   </div>
                 )}
-              </div>
-            )}
-          </div>
-
-          {/* KPIs */}
-          <div className="grid grid-cols-2 gap-2 text-sm mb-6">
-            <div>
-              Total libras Cash: <strong>{qty3(totalLbsCash)}</strong>
-            </div>
-            <div>
-              Total Unidades cash: <strong>{qty3(totalUnitsCash)}</strong>
-            </div>
-            <div>
-              Total libras credito: <strong>{qty3(totalLbsCredit)}</strong>
-            </div>
-            <div>
-              Total Unidades credito: <strong>{qty3(totalUnitsCredit)}</strong>
-            </div>
-            <div>
-              Total facturado Cash: <strong>C${money(totalCOGSCash)}</strong>
-            </div>
-            <div>
-              Total facturado credito:{" "}
-              <strong>C${money(totalCOGSCredit)}</strong>
-            </div>
-            <div>
-              Total venta Cash: <strong>C${money(totalSalesCash)}</strong>
-            </div>
-            <div>
-              Total venta Credito: <strong>C${money(totalSalesCredit)}</strong>
-            </div>
-            <div>
-              Utilidad bruta Cash: <strong>C${money(grossProfitCash)}</strong>
-            </div>
-            <div>
-              Utilidad bruta credito:{" "}
-              <strong>C${money(grossProfitCredit)}</strong>
-            </div>
-            <div>
-              Total libras cash y credito: <strong>{qty3(totalLbsAll)}</strong>
-            </div>
-            <div>
-              Total unidades cash y credito:{" "}
-              <strong>{qty3(totalUnitsAll)}</strong>
-            </div>
-            <div>
-              Total ventas Cash y credito:{" "}
-              <strong>C${money(totalSalesAll)}</strong>
-            </div>
-            <div>
-              Total facturado a precio compra:{" "}
-              <strong>C${money(totalCOGSVisible)}</strong>
-            </div>
-          </div>
-
-          {/* ✅ CONSOLIDADO COLAPSABLE */}
-          <div className="mt-4">
-            <SectionHeader
-              title="Consolidado por producto"
-              open={consolidadoOpen}
-              onToggle={() => setConsolidadoOpen((v) => !v)}
-              right={<span className="ml-1">{productSummaryArray.length}</span>}
-            />
-
-            {consolidadoOpen && (
-              <div className="mt-3">
-                <table className="min-w-full border text-sm mb-2 shadow-2xl">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="border p-2">Producto</th>
-                      <th className="border p-2">Total libras/unidades</th>
-                      <th className="border p-2">Total dinero</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {productSummaryArray.map((row) => (
-                      <tr key={row.productName} className="text-center">
-                        <td className="border p-1">{row.productName}</td>
-                        <td className="border p-1">
-                          {qty3(row.totalQuantity)}
-                        </td>
-                        <td className="border p-1">
-                          C${money(row.totalAmount)}
-                        </td>
-                      </tr>
-                    ))}
-                    {productSummaryArray.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={3}
-                          className="p-3 text-center text-gray-500"
-                        >
-                          Sin datos para consolidar.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
               </div>
             )}
           </div>

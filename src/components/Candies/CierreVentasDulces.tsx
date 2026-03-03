@@ -1075,24 +1075,44 @@ export default function CierreVentasDulces({
   visibleSales.forEach((s) => {
     const amt = Number(s.amount || 0);
     const received = Number(s.amountReceived || 0);
-    const commission = getCommissionAmount(s);
-
-    totalCommission += commission;
 
     if (s.type === "CREDITO") {
       totalPacksCredito += s.quantity || 0;
       totalPendienteCredito += amt - received;
-      totalCommissionCredito += commission;
     } else {
       totalPacksCash += s.quantity || 0;
       totalCobradoCash += amt;
-      totalCommissionCash += commission;
     }
   });
 
+  const commissionGroupMap = new Map<
+    string,
+    { qty: number; sample: SaleData; type: SaleType }
+  >();
+  visibleSales.forEach((s) => {
+    const key = `${s.type}|${s.vendorId || ""}|${normKey(s.productName || "")}`;
+    const current = commissionGroupMap.get(key);
+    if (current) {
+      current.qty += Number(s.quantity || 0);
+    } else {
+      commissionGroupMap.set(key, {
+        qty: Number(s.quantity || 0),
+        sample: s,
+        type: s.type,
+      });
+    }
+  });
+  commissionGroupMap.forEach((entry) => {
+    const uv = getUvXpaqForSale(entry.sample);
+    const total = round2(uv * entry.qty);
+    if (total <= 0) return;
+    if (entry.type === "CREDITO") totalCommissionCredito += total;
+    else totalCommissionCash += total;
+  });
+  totalCommission = round2(totalCommissionCash + totalCommissionCredito);
+
   totalPendienteCredito = round2(totalPendienteCredito);
   totalCobradoCash = round2(totalCobradoCash);
-  totalCommission = round2(totalCommission);
   totalCommissionCash = round2(totalCommissionCash);
   totalCommissionCredito = round2(totalCommissionCredito);
 
@@ -1103,51 +1123,99 @@ export default function CierreVentasDulces({
 
   // ✅ KPI: comisiones por vendedor en el periodo (CASH / CRÉDITO separados)
   const vendorCommissionRowsCash = React.useMemo(() => {
-    const map: Record<
+    const map = new Map<
       string,
-      { vendorId: string; name: string; total: number }
-    > = {};
+      {
+        vendorId: string;
+        name: string;
+        total: number;
+        products: Map<string, { qty: number; sample: SaleData }>;
+      }
+    >();
     for (const s of visibleSales) {
       const vid = (s.vendorId || "").trim();
       if (!vid) continue;
       if (s.type === "CREDITO") continue; // ✅ solo cash
-      const commission = getCommissionAmount(s);
-      if (!map[vid]) {
-        const seller = sellers.find((x) => x.id === vid);
-        map[vid] = {
+      const seller = sellers.find((x) => x.id === vid);
+      if (!map.has(vid)) {
+        map.set(vid, {
           vendorId: vid,
           name: seller?.name || s.userEmail || "(sin vendedor)",
           total: 0,
-        };
+          products: new Map(),
+        });
       }
-      map[vid].total = round2(map[vid].total + commission);
+      const entry = map.get(vid);
+      if (!entry) continue;
+      const pkey = normKey(s.productName || "");
+      const current = entry.products.get(pkey);
+      if (current) {
+        current.qty += Number(s.quantity || 0);
+      } else {
+        entry.products.set(pkey, {
+          qty: Number(s.quantity || 0),
+          sample: s,
+        });
+      }
     }
-    return Object.values(map)
+    map.forEach((entry) => {
+      let total = 0;
+      entry.products.forEach((p) => {
+        const uv = getUvXpaqForSale(p.sample);
+        total += round2(uv * p.qty);
+      });
+      entry.total = round2(total);
+    });
+    return Array.from(map.values())
       .filter((x) => x.total > 0)
       .sort((a, b) => b.total - a.total);
   }, [visibleSales, sellers]);
 
   const vendorCommissionRowsCredito = React.useMemo(() => {
-    const map: Record<
+    const map = new Map<
       string,
-      { vendorId: string; name: string; total: number }
-    > = {};
+      {
+        vendorId: string;
+        name: string;
+        total: number;
+        products: Map<string, { qty: number; sample: SaleData }>;
+      }
+    >();
     for (const s of visibleSales) {
       const vid = (s.vendorId || "").trim();
       if (!vid) continue;
       if (s.type !== "CREDITO") continue; // ✅ solo crédito
-      const commission = getCommissionAmount(s);
-      if (!map[vid]) {
-        const seller = sellers.find((x) => x.id === vid);
-        map[vid] = {
+      const seller = sellers.find((x) => x.id === vid);
+      if (!map.has(vid)) {
+        map.set(vid, {
           vendorId: vid,
           name: seller?.name || s.userEmail || "(sin vendedor)",
           total: 0,
-        };
+          products: new Map(),
+        });
       }
-      map[vid].total = round2(map[vid].total + commission);
+      const entry = map.get(vid);
+      if (!entry) continue;
+      const pkey = normKey(s.productName || "");
+      const current = entry.products.get(pkey);
+      if (current) {
+        current.qty += Number(s.quantity || 0);
+      } else {
+        entry.products.set(pkey, {
+          qty: Number(s.quantity || 0),
+          sample: s,
+        });
+      }
     }
-    return Object.values(map)
+    map.forEach((entry) => {
+      let total = 0;
+      entry.products.forEach((p) => {
+        const uv = getUvXpaqForSale(p.sample);
+        total += round2(uv * p.qty);
+      });
+      entry.total = round2(total);
+    });
+    return Array.from(map.values())
       .filter((x) => x.total > 0)
       .sort((a, b) => b.total - a.total);
   }, [visibleSales, sellers]);
@@ -1155,7 +1223,12 @@ export default function CierreVentasDulces({
   // Consolidado por producto (en paquetes + comisión)
   const productMap: Record<
     string,
-    { totalQuantity: number; totalAmount: number; totalCommission: number }
+    {
+      totalQuantity: number;
+      totalAmount: number;
+      totalCommission: number;
+      totalCommissionUv: number;
+    }
   > = {};
   visibleSales.forEach((s) => {
     const key = s.productName || "(sin nombre)";
@@ -1164,6 +1237,7 @@ export default function CierreVentasDulces({
         totalQuantity: 0,
         totalAmount: 0,
         totalCommission: 0,
+        totalCommissionUv: 0,
       };
     productMap[key].totalQuantity = round3(
       productMap[key].totalQuantity + (s.quantity || 0),
@@ -1174,6 +1248,10 @@ export default function CierreVentasDulces({
     productMap[key].totalCommission = round2(
       productMap[key].totalCommission + getCommissionAmount(s),
     );
+    productMap[key].totalCommissionUv = round2(
+      productMap[key].totalCommissionUv +
+        getUvXpaqForSale(s) * Number(s.quantity || 0),
+    );
   });
 
   const productSummaryArray = Object.entries(productMap).map(
@@ -1183,6 +1261,7 @@ export default function CierreVentasDulces({
       totalQuantity: v.totalQuantity,
       totalAmount: v.totalAmount,
       totalCommission: v.totalCommission,
+      totalCommissionUv: v.totalCommissionUv,
     }),
   );
 
@@ -1590,7 +1669,7 @@ export default function CierreVentasDulces({
       </h2>
 
       {/* filtros por periodo + estado + vendedor */}
-      <div className="bg-white border rounded shadow-sm mb-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
@@ -1609,29 +1688,35 @@ export default function CierreVentasDulces({
         >
           <div className="flex flex-col md:flex-row md:items-end gap-3">
             <div className="flex items-center gap-2">
-              <label className="text-sm">Desde:</label>
+              <label className="text-xs font-semibold text-slate-700">
+                Desde
+              </label>
               <input
                 type="date"
-                className="border rounded px-2 py-1"
+                className="border rounded-md px-3 py-2"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
               />
             </div>
 
             <div className="flex items-center gap-2">
-              <label className="text-sm">Hasta:</label>
+              <label className="text-xs font-semibold text-slate-700">
+                Hasta
+              </label>
               <input
                 type="date"
-                className="border rounded px-2 py-1"
+                className="border rounded-md px-3 py-2"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
               />
             </div>
 
             <div className="flex items-center gap-2">
-              <label className="text-sm">Filtrar:</label>
+              <label className="text-xs font-semibold text-slate-700">
+                Filtrar
+              </label>
               <select
-                className="border rounded px-2 py-1"
+                className="border rounded-md px-3 py-2"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value as any)}
               >
@@ -1644,9 +1729,11 @@ export default function CierreVentasDulces({
             {/* ✅ NUEVO: filtro por vendedor (solo admin) */}
             {isAdmin && (
               <div className="flex items-center gap-2">
-                <label className="text-sm">Vendedor:</label>
+                <label className="text-xs font-semibold text-slate-700">
+                  Vendedor
+                </label>
                 <select
-                  className="border rounded px-2 py-1"
+                  className="border rounded-md px-3 py-2"
                   value={vendorFilter}
                   onChange={(e) => setVendorFilter(e.target.value)}
                 >
@@ -1661,11 +1748,11 @@ export default function CierreVentasDulces({
             )}
 
             <div className="flex items-center gap-2 w-full md:w-auto">
-              <label className="text-xs md:text-sm whitespace-nowrap">
-                Productos:
+              <label className="text-xs font-semibold text-slate-700 whitespace-nowrap">
+                Productos
               </label>
               <select
-                className="border rounded px-2 py-1 text-xs w-full md:w-48 lg:w-56"
+                className="border rounded-md px-3 py-2 text-xs w-full md:w-48 lg:w-56"
                 value={productFilter}
                 onChange={(e) => setProductFilter(e.target.value)}
                 disabled={productOptions.length === 0}
@@ -1683,7 +1770,7 @@ export default function CierreVentasDulces({
       </div>
 
       {/* KPIs arriba */}
-      <div className="bg-white border rounded shadow-sm mb-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
@@ -1701,76 +1788,76 @@ export default function CierreVentasDulces({
           className={`collapsible-content ${kpiCardOpen ? "block" : "hidden"} border-t p-4`}
         >
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-7 gap-3">
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Ventas flotantes</div>
+            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">Ventas flotantes</div>
               <div className="text-2xl font-bold">{kpiFloCount}</div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-500 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Ventas procesadas</div>
+            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">Ventas procesadas</div>
               <div className="text-2xl font-bold">{kpiProCount}</div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-500 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Ventas crédito</div>
+            <div className="border rounded-xl p-3 shadow-sm bg-amber-50 border-amber-200">
+              <div className="text-xs text-amber-700">Ventas credito</div>
               <div className="text-2xl font-bold">{kpiCreditoCount}</div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-amber-700/70 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Ventas cash</div>
+            <div className="border rounded-xl p-3 shadow-sm bg-emerald-50 border-emerald-200">
+              <div className="text-xs text-emerald-700">Ventas cash</div>
               <div className="text-2xl font-bold">{kpiCashCount}</div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-emerald-700/70 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Paquetes Cash</div>
+            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">Paquetes Cash</div>
               <div className="text-2xl font-bold">{qty3(totalPacksCash)}</div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-500 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">Paquetes Crédito</div>
+            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">Paquetes Credito</div>
               <div className="text-2xl font-bold">
                 {qty3(totalPacksCredito)}
               </div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-500 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
+            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">
                 Comisión cash (período)
               </div>
               <div className="text-2xl font-bold">
                 C${money(totalCommissionCash)}
               </div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-500 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
+            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">
                 Comisión crédito (período)
               </div>
               <div className="text-2xl font-bold">
                 C${money(totalCommissionCredito)}
               </div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-500 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
@@ -1779,36 +1866,36 @@ export default function CierreVentasDulces({
       </div>
 
       {/* KPIs listados por vendedor (cash / crédito) */}
-      <div className="bg-white border rounded shadow-sm mb-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
         <button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
           onClick={() => setVendorKpiCardOpen((v) => !v)}
           aria-expanded={vendorKpiCardOpen}
         >
           <span>KPIs por vendedor</span>
           <span
-            className={`transition-transform ${vendorKpiCardOpen ? "rotate-180" : ""}`}
+            className={`text-slate-400 transition-transform ${vendorKpiCardOpen ? "rotate-180" : ""}`}
           >
             ▼
           </span>
         </button>
         <div
-          className={`collapsible-content ${vendorKpiCardOpen ? "block" : "hidden"} border-t p-4`}
+          className={`collapsible-content ${vendorKpiCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
+            <div className="border border-slate-200 rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">
                 Vendedores (comisión CASH del período)
               </div>
               {vendorCommissionRowsCash.length === 0 ? (
-                <div className="text-sm text-gray-500 mt-2">—</div>
+                <div className="text-sm text-slate-500 mt-2">—</div>
               ) : (
                 <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
                   {vendorCommissionRowsCash.map((v) => (
                     <div
                       key={v.vendorId}
-                      className="flex items-center justify-between text-sm"
+                      className="flex items-center justify-between text-sm text-slate-700"
                     >
                       <span className="truncate">{v.name}</span>
                       <strong className="ml-2">C${money(v.total)}</strong>
@@ -1818,18 +1905,18 @@ export default function CierreVentasDulces({
               )}
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-gray-50">
-              <div className="text-xs text-gray-600">
+            <div className="border border-slate-200 rounded-xl p-3 shadow-sm bg-slate-50">
+              <div className="text-xs text-slate-600">
                 Vendedores (comisión CRÉDITO del período)
               </div>
               {vendorCommissionRowsCredito.length === 0 ? (
-                <div className="text-sm text-gray-500 mt-2">—</div>
+                <div className="text-sm text-slate-500 mt-2">—</div>
               ) : (
                 <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
                   {vendorCommissionRowsCredito.map((v) => (
                     <div
                       key={v.vendorId}
-                      className="flex items-center justify-between text-sm"
+                      className="flex items-center justify-between text-sm text-slate-700"
                     >
                       <span className="truncate">{v.name}</span>
                       <strong className="ml-2">C${money(v.total)}</strong>
@@ -1846,174 +1933,217 @@ export default function CierreVentasDulces({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          <div className="bg-white border rounded shadow-sm mb-4">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
             <button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
               onClick={() => setCashCardOpen((v) => !v)}
               aria-expanded={cashCardOpen}
             >
               <span>Transacciones Cash</span>
               <span
-                className={`transition-transform ${cashCardOpen ? "rotate-180" : ""}`}
+                className={`text-slate-400 transition-transform ${cashCardOpen ? "rotate-180" : ""}`}
               >
                 ▼
               </span>
             </button>
             <div
-              className={`collapsible-content ${cashCardOpen ? "block" : "hidden"} border-t p-4`}
+              className={`collapsible-content ${cashCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
               <div className="pdf-desktop hidden md:block">
-                <table className="min-w-full border text-sm mb-4 shadow-2xl">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="border p-2">Estado</th>
-                      <th className="border p-2">Producto</th>
-                      <th className="border p-2">Tipo</th>
-                      <th className="border p-2">Paquetes</th>
-                      <th className="border p-2">Monto</th>
-                      {isAdmin && <th className="border p-2">U. Paquete</th>}
-                      {isAdmin && <th className="border p-2">UV x Paq</th>}
-                      {isAdmin && <th className="border p-2">Comision</th>}
-                      <th className="border p-2">U. Vendedor</th>
-                      <th className="border p-2">U. Neta</th>
-                      <th className="border p-2">Fecha venta</th>
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Estado
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Producto
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Tipo
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Paquetes
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Monto
+                        </th>
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            U. Paquete
+                          </th>
+                        )}
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            UV x Paq
+                          </th>
+                        )}
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            Comision
+                          </th>
+                        )}
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          U. Vendedor
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          U. Neta
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Fecha venta
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Vendedor
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Acciones
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {cashSales.map((s) => {
+                        const commission = getCommissionAmount(s);
+                        const vendUtil = getVendorUtility(s);
+                        const processDate = (s.processedDate || "").trim();
 
-                      <th className="border p-2">Vendedor</th>
-                      <th className="border p-2">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cashSales.map((s) => {
-                      const commission = getCommissionAmount(s);
-                      const vendUtil = getVendorUtility(s);
-                      const processDate = (s.processedDate || "").trim();
-
-                      return (
-                        <tr key={s.id} className="text-center">
-                          <td className="border p-1">
-                            <span
-                              className={`px-2 py-0.5 rounded text-xs ${
-                                s.status === "PROCESADA"
-                                  ? "bg-green-100 text-green-700"
-                                  : "bg-yellow-100 text-yellow-700"
-                              }`}
-                            >
-                              {s.status}
-                            </span>
-                          </td>
-                          <td className="border p-1">{s.productName}</td>
-                          <td className="border p-1">Cash</td>
-                          <td className="border p-1">{qty3(s.quantity)}</td>
-                          <td className="border p-1">C${money(s.amount)}</td>
-                          {isAdmin && (
-                            <td className="border p-1">
-                              {(() => {
-                                const key = normKey(s.productName || "");
-                                const u = upaqueteMap[s.vendorId || ""]?.[key];
-                                return u && Number(u) !== 0
-                                  ? `C$${money(round2(Number(u)))}`
-                                  : "—";
-                              })()}
-                            </td>
-                          )}
-                          {isAdmin && (
-                            <td className="border p-1">
-                              {(() => {
-                                const qty = Math.max(
-                                  1,
-                                  Number(s.quantity || 0),
-                                );
-                                const uv = getUvXpaqForSale(s);
-                                return uv > 0 ? `C$${money(round2(uv))}` : "—";
-                              })()}
-                            </td>
-                          )}
-                          {isAdmin && (
-                            <td className="border p-1">
-                              {(() => {
-                                const qty = Number(s.quantity || 0);
-                                const uv = getUvXpaqForSale(s);
-                                const total = Number(uv || 0) * qty;
-                                return uv && total > 0
-                                  ? `C$${money(round2(total))}`
-                                  : "—";
-                              })()}
-                            </td>
-                          )}
-                          <td className="border p-1">
-                            {getCommissionFromItems(s) > 0
-                              ? `C$${money(getCommissionFromItems(s))}`
-                              : "—"}
-                          </td>
-                          <td className="border p-1">
-                            {getVendorNetUtility(s) > 0
-                              ? `C$${money(getVendorNetUtility(s))}`
-                              : "—"}
-                          </td>
-                          <td className="border p-1">{s.date}</td>
-
-                          <td className="border p-1">{s.userEmail}</td>
-                          <td className="border p-1">
-                            {s.status === "FLOTANTE" ? (
-                              <div className="flex gap-2 justify-center">
-                                {isAdmin ? (
-                                  <>
-                                    <button
-                                      onClick={() => openEdit(s)}
-                                      className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                                    >
-                                      Editar
-                                    </button>
-                                    <button
-                                      onClick={() => deleteSale(s.id)}
-                                      className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                                    >
-                                      Eliminar
-                                    </button>
-                                  </>
-                                ) : (
-                                  <span className="text-gray-400 text-xs">
-                                    —
-                                  </span>
-                                )}
-                              </div>
-                            ) : s.status === "PROCESADA" ? (
-                              <div className="flex gap-2 justify-center">
-                                {isAdmin ? (
-                                  <button
-                                    onClick={() => handleRevert(s.id)}
-                                    className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                                  >
-                                    Revertir
-                                  </button>
-                                ) : (
-                                  <span className="text-gray-400 text-xs">
-                                    —
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-gray-400 text-xs">
-                                No options
+                        return (
+                          <tr
+                            key={s.id}
+                            className="text-center odd:bg-white even:bg-slate-50/50"
+                          >
+                            <td className="px-3 py-2">
+                              <span
+                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${
+                                  s.status === "PROCESADA"
+                                    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                                    : "bg-amber-50 text-amber-700 ring-amber-200"
+                                }`}
+                              >
+                                {s.status}
                               </span>
+                            </td>
+                            <td className="px-3 py-2 text-left text-slate-700">
+                              {s.productName}
+                            </td>
+                            <td className="px-3 py-2">Cash</td>
+                            <td className="px-3 py-2">{qty3(s.quantity)}</td>
+                            <td className="px-3 py-2">C${money(s.amount)}</td>
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  const key = normKey(s.productName || "");
+                                  const u =
+                                    upaqueteMap[s.vendorId || ""]?.[key];
+                                  return u && Number(u) !== 0
+                                    ? `C$${money(round2(Number(u)))}`
+                                    : "—";
+                                })()}
+                              </td>
                             )}
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  const qty = Math.max(
+                                    1,
+                                    Number(s.quantity || 0),
+                                  );
+                                  const uv = getUvXpaqForSale(s);
+                                  return uv > 0
+                                    ? `C$${money(round2(uv))}`
+                                    : "—";
+                                })()}
+                              </td>
+                            )}
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  const qty = Number(s.quantity || 0);
+                                  const uv = getUvXpaqForSale(s);
+                                  const total = Number(uv || 0) * qty;
+                                  return uv && total > 0
+                                    ? `C$${money(round2(total))}`
+                                    : "—";
+                                })()}
+                              </td>
+                            )}
+                            <td className="px-3 py-2">
+                              {getCommissionFromItems(s) > 0
+                                ? `C$${money(getCommissionFromItems(s))}`
+                                : "—"}
+                            </td>
+                            <td className="px-3 py-2">
+                              {getVendorNetUtility(s) > 0
+                                ? `C$${money(getVendorNetUtility(s))}`
+                                : "—"}
+                            </td>
+                            <td className="px-3 py-2">{s.date}</td>
+
+                            <td className="px-3 py-2 text-left">
+                              {s.userEmail}
+                            </td>
+                            <td className="px-3 py-2">
+                              {s.status === "FLOTANTE" ? (
+                                <div className="flex gap-2 justify-center">
+                                  {isAdmin ? (
+                                    <>
+                                      <button
+                                        onClick={() => openEdit(s)}
+                                        className="text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 px-2 py-1 text-white shadow-sm hover:bg-indigo-700"
+                                      >
+                                        Editar
+                                      </button>
+                                      <button
+                                        onClick={() => deleteSale(s.id)}
+                                        className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
+                                      >
+                                        Eliminar
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <span className="text-slate-400 text-xs">
+                                      —
+                                    </span>
+                                  )}
+                                </div>
+                              ) : s.status === "PROCESADA" ? (
+                                <div className="flex gap-2 justify-center">
+                                  {isAdmin ? (
+                                    <button
+                                      onClick={() => handleRevert(s.id)}
+                                      className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
+                                    >
+                                      Revertir
+                                    </button>
+                                  ) : (
+                                    <span className="text-slate-400 text-xs">
+                                      —
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-slate-400 text-xs">
+                                  No options
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {cashSales.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={isAdmin ? 12 : 11}
+                            className="px-3 py-6 text-center text-slate-500"
+                          >
+                            Sin ventas cash para mostrar.
                           </td>
                         </tr>
-                      );
-                    })}
-                    {cashSales.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={isAdmin ? 12 : 11}
-                          className="p-3 text-center text-gray-500"
-                        >
-                          Sin ventas cash para mostrar.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <div className="pdf-mobile md:hidden space-y-3 mb-4">
@@ -2025,14 +2155,14 @@ export default function CierreVentasDulces({
                   return (
                     <details
                       key={s.id}
-                      className="border rounded-xl bg-white shadow-sm"
+                      className="border border-slate-200 rounded-xl bg-white shadow-sm"
                     >
                       <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
                         <div className="min-w-0">
                           <div className="font-semibold truncate">
                             {s.productName}
                           </div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-slate-500">
                             Cash • {s.date}
                           </div>
                         </div>
@@ -2040,10 +2170,10 @@ export default function CierreVentasDulces({
                         <div className="text-right shrink-0 ml-3">
                           <div className="font-bold">C${money(s.amount)}</div>
                           <span
-                            className={`text-xs px-2 py-0.5 rounded ${
+                            className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ring-inset ${
                               s.status === "PROCESADA"
-                                ? "bg-green-100 text-green-700"
-                                : "bg-yellow-100 text-yellow-700"
+                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                                : "bg-amber-50 text-amber-700 ring-amber-200"
                             }`}
                           >
                             {s.status}
@@ -2053,7 +2183,12 @@ export default function CierreVentasDulces({
 
                       <div className="px-4 pb-4 pt-2 text-sm space-y-2">
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">U. Vendedor</span>
+                          <span className="text-slate-600">Paquetes</span>
+                          <strong>{Math.trunc(Number(s.quantity || 0))}</strong>
+                        </div>
+
+                        {/* <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">U. Vendedor</span>
                           <strong>
                             {getCommissionFromItems(s) > 0
                               ? `C$${money(getCommissionFromItems(s))}`
@@ -2062,23 +2197,23 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">U. Neta</span>
+                          <span className="text-slate-600">U. Neta</span>
                           <strong>
                             {getVendorNetUtility(s) > 0
                               ? `C$${money(getVendorNetUtility(s))}`
                               : "—"}
                           </strong>
-                        </div>
+                        </div> */}
 
-                        <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Comisión</span>
+                        {/* <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">Comis</span>
                           <strong>
                             {commission > 0 ? `C$${money(commission)}` : "—"}
                           </strong>
-                        </div>
+                        </div> */}
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Comision</span>
+                          <span className="text-slate-600">Comisión</span>
                           <strong>
                             {(() => {
                               const qty = Number(s.quantity || 0);
@@ -2092,7 +2227,7 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Vendedor</span>
+                          <span className="text-slate-600">Vendedor</span>
                           <strong className="text-right break-all">
                             {s.userEmail}
                           </strong>
@@ -2105,19 +2240,19 @@ export default function CierreVentasDulces({
                                 <>
                                   <button
                                     onClick={() => openEdit(s)}
-                                    className="flex-1 text-xs bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700"
+                                    className="flex-1 text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 py-2 text-white shadow-sm hover:bg-indigo-700"
                                   >
                                     Editar
                                   </button>
                                   <button
                                     onClick={() => deleteSale(s.id)}
-                                    className="flex-1 text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                    className="flex-1 text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
                                   >
                                     Eliminar
                                   </button>
                                 </>
                               ) : (
-                                <div className="text-gray-400 text-xs w-full text-center">
+                                <div className="text-slate-400 text-xs w-full text-center">
                                   —
                                 </div>
                               )}
@@ -2127,18 +2262,18 @@ export default function CierreVentasDulces({
                               {isAdmin ? (
                                 <button
                                   onClick={() => handleRevert(s.id)}
-                                  className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                  className="w-full text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
                                 >
                                   Revertir
                                 </button>
                               ) : (
-                                <div className="text-gray-400 text-xs w-full text-center">
+                                <div className="text-slate-400 text-xs w-full text-center">
                                   —
                                 </div>
                               )}
                             </div>
                           ) : (
-                            <div className="text-gray-400 text-xs w-full text-center">
+                            <div className="text-slate-400 text-xs w-full text-center">
                               No options
                             </div>
                           )}
@@ -2149,7 +2284,7 @@ export default function CierreVentasDulces({
                 })}
 
                 {cashSales.length === 0 && (
-                  <div className="text-center text-gray-500 text-sm py-6">
+                  <div className="text-center text-slate-500 text-sm py-6">
                     Sin ventas cash para mostrar.
                   </div>
                 )}
@@ -2157,174 +2292,217 @@ export default function CierreVentasDulces({
             </div>
           </div>
 
-          <div className="bg-white border rounded shadow-sm mb-4">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
             <button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
               onClick={() => setCreditCardOpen((v) => !v)}
               aria-expanded={creditCardOpen}
             >
               <span>Transacciones Crédito</span>
               <span
-                className={`transition-transform ${creditCardOpen ? "rotate-180" : ""}`}
+                className={`text-slate-400 transition-transform ${creditCardOpen ? "rotate-180" : ""}`}
               >
                 ▼
               </span>
             </button>
             <div
-              className={`collapsible-content ${creditCardOpen ? "block" : "hidden"} border-t p-4`}
+              className={`collapsible-content ${creditCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
               <div className="pdf-desktop hidden md:block">
-                <table className="min-w-full border text-sm mb-4 shadow-2xl">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="border p-2">Estado</th>
-                      <th className="border p-2">Producto</th>
-                      <th className="border p-2">Tipo</th>
-                      <th className="border p-2">Paquetes</th>
-                      <th className="border p-2">Monto</th>
-                      {isAdmin && <th className="border p-2">U. Paquete</th>}
-                      {isAdmin && <th className="border p-2">UV x Paq</th>}
-                      {isAdmin && <th className="border p-2">Comision</th>}
-                      <th className="border p-2">U. Vendedor</th>
-                      <th className="border p-2">U. Neta</th>
-                      <th className="border p-2">Fecha venta</th>
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Estado
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Producto
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Tipo
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Paquetes
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Monto
+                        </th>
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            U. Paquete
+                          </th>
+                        )}
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            UV x Paq
+                          </th>
+                        )}
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            Comision
+                          </th>
+                        )}
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          U. Vendedor
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          U. Neta
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Fecha venta
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Vendedor
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Acciones
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {creditSales.map((s) => {
+                        const commission = getCommissionAmount(s);
+                        const vendUtil = getVendorUtility(s);
+                        const processDate = (s.processedDate || "").trim();
 
-                      <th className="border p-2">Vendedor</th>
-                      <th className="border p-2">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {creditSales.map((s) => {
-                      const commission = getCommissionAmount(s);
-                      const vendUtil = getVendorUtility(s);
-                      const processDate = (s.processedDate || "").trim();
-
-                      return (
-                        <tr key={s.id} className="text-center">
-                          <td className="border p-1">
-                            <span
-                              className={`px-2 py-0.5 rounded text-xs ${
-                                s.status === "PROCESADA"
-                                  ? "bg-green-100 text-green-700"
-                                  : "bg-yellow-100 text-yellow-700"
-                              }`}
-                            >
-                              {s.status}
-                            </span>
-                          </td>
-                          <td className="border p-1">{s.productName}</td>
-                          <td className="border p-1">Crédito</td>
-                          <td className="border p-1">{qty3(s.quantity)}</td>
-                          <td className="border p-1">C${money(s.amount)}</td>
-                          {isAdmin && (
-                            <td className="border p-1">
-                              {(() => {
-                                const key = normKey(s.productName || "");
-                                const u = upaqueteMap[s.vendorId || ""]?.[key];
-                                return u && Number(u) !== 0
-                                  ? `C$${money(round2(Number(u)))}`
-                                  : "—";
-                              })()}
-                            </td>
-                          )}
-                          {isAdmin && (
-                            <td className="border p-1">
-                              {(() => {
-                                const qty = Math.max(
-                                  1,
-                                  Number(s.quantity || 0),
-                                );
-                                const uv = getUvXpaqForSale(s);
-                                return uv > 0 ? `C$${money(round2(uv))}` : "—";
-                              })()}
-                            </td>
-                          )}
-                          {isAdmin && (
-                            <td className="border p-1">
-                              {(() => {
-                                const qty = Number(s.quantity || 0);
-                                const uv = getUvXpaqForSale(s);
-                                const total = Number(uv || 0) * qty;
-                                return uv && total > 0
-                                  ? `C$${money(round2(total))}`
-                                  : "—";
-                              })()}
-                            </td>
-                          )}
-                          <td className="border p-1">
-                            {getCommissionFromItems(s) > 0
-                              ? `C$${money(getCommissionFromItems(s))}`
-                              : "—"}
-                          </td>
-                          <td className="border p-1">
-                            {getVendorNetUtility(s) > 0
-                              ? `C$${money(getVendorNetUtility(s))}`
-                              : "—"}
-                          </td>
-                          <td className="border p-1">{s.date}</td>
-
-                          <td className="border p-1">{s.userEmail}</td>
-                          <td className="border p-1">
-                            {s.status === "FLOTANTE" ? (
-                              <div className="flex gap-2 justify-center">
-                                {isAdmin ? (
-                                  <>
-                                    <button
-                                      onClick={() => openEdit(s)}
-                                      className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                                    >
-                                      Editar
-                                    </button>
-                                    <button
-                                      onClick={() => deleteSale(s.id)}
-                                      className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                                    >
-                                      Eliminar
-                                    </button>
-                                  </>
-                                ) : (
-                                  <span className="text-gray-400 text-xs">
-                                    —
-                                  </span>
-                                )}
-                              </div>
-                            ) : s.status === "PROCESADA" ? (
-                              <div className="flex gap-2 justify-center">
-                                {isAdmin ? (
-                                  <button
-                                    onClick={() => handleRevert(s.id)}
-                                    className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                                  >
-                                    Revertir
-                                  </button>
-                                ) : (
-                                  <span className="text-gray-400 text-xs">
-                                    —
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-gray-400 text-xs">
-                                No options
+                        return (
+                          <tr
+                            key={s.id}
+                            className="text-center odd:bg-white even:bg-slate-50/50"
+                          >
+                            <td className="px-3 py-2">
+                              <span
+                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${
+                                  s.status === "PROCESADA"
+                                    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                                    : "bg-amber-50 text-amber-700 ring-amber-200"
+                                }`}
+                              >
+                                {s.status}
                               </span>
+                            </td>
+                            <td className="px-3 py-2 text-left text-slate-700">
+                              {s.productName}
+                            </td>
+                            <td className="px-3 py-2">Crédito</td>
+                            <td className="px-3 py-2">{qty3(s.quantity)}</td>
+                            <td className="px-3 py-2">C${money(s.amount)}</td>
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  const key = normKey(s.productName || "");
+                                  const u =
+                                    upaqueteMap[s.vendorId || ""]?.[key];
+                                  return u && Number(u) !== 0
+                                    ? `C$${money(round2(Number(u)))}`
+                                    : "—";
+                                })()}
+                              </td>
                             )}
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  const qty = Math.max(
+                                    1,
+                                    Number(s.quantity || 0),
+                                  );
+                                  const uv = getUvXpaqForSale(s);
+                                  return uv > 0
+                                    ? `C$${money(round2(uv))}`
+                                    : "—";
+                                })()}
+                              </td>
+                            )}
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  const qty = Number(s.quantity || 0);
+                                  const uv = getUvXpaqForSale(s);
+                                  const total = Number(uv || 0) * qty;
+                                  return uv && total > 0
+                                    ? `C$${money(round2(total))}`
+                                    : "—";
+                                })()}
+                              </td>
+                            )}
+                            <td className="px-3 py-2">
+                              {getCommissionFromItems(s) > 0
+                                ? `C$${money(getCommissionFromItems(s))}`
+                                : "—"}
+                            </td>
+                            <td className="px-3 py-2">
+                              {getVendorNetUtility(s) > 0
+                                ? `C$${money(getVendorNetUtility(s))}`
+                                : "—"}
+                            </td>
+                            <td className="px-3 py-2">{s.date}</td>
+
+                            <td className="px-3 py-2 text-left">
+                              {s.userEmail}
+                            </td>
+                            <td className="px-3 py-2">
+                              {s.status === "FLOTANTE" ? (
+                                <div className="flex gap-2 justify-center">
+                                  {isAdmin ? (
+                                    <>
+                                      <button
+                                        onClick={() => openEdit(s)}
+                                        className="text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 px-2 py-1 text-white shadow-sm hover:bg-indigo-700"
+                                      >
+                                        Editar
+                                      </button>
+                                      <button
+                                        onClick={() => deleteSale(s.id)}
+                                        className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
+                                      >
+                                        Eliminar
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <span className="text-slate-400 text-xs">
+                                      —
+                                    </span>
+                                  )}
+                                </div>
+                              ) : s.status === "PROCESADA" ? (
+                                <div className="flex gap-2 justify-center">
+                                  {isAdmin ? (
+                                    <button
+                                      onClick={() => handleRevert(s.id)}
+                                      className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
+                                    >
+                                      Revertir
+                                    </button>
+                                  ) : (
+                                    <span className="text-slate-400 text-xs">
+                                      —
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-slate-400 text-xs">
+                                  No options
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {creditSales.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={isAdmin ? 12 : 11}
+                            className="px-3 py-6 text-center text-slate-500"
+                          >
+                            Sin ventas crédito para mostrar.
                           </td>
                         </tr>
-                      );
-                    })}
-                    {creditSales.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={isAdmin ? 12 : 11}
-                          className="p-3 text-center text-gray-500"
-                        >
-                          Sin ventas crédito para mostrar.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <div className="pdf-mobile md:hidden space-y-3 mb-4">
@@ -2336,14 +2514,14 @@ export default function CierreVentasDulces({
                   return (
                     <details
                       key={s.id}
-                      className="border rounded-xl bg-white shadow-sm"
+                      className="border border-slate-200 rounded-xl bg-white shadow-sm"
                     >
                       <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
                         <div className="min-w-0">
                           <div className="font-semibold truncate">
                             {s.productName}
                           </div>
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-slate-500">
                             Crédito • {s.date}
                           </div>
                         </div>
@@ -2351,10 +2529,10 @@ export default function CierreVentasDulces({
                         <div className="text-right shrink-0 ml-3">
                           <div className="font-bold">C${money(s.amount)}</div>
                           <span
-                            className={`text-xs px-2 py-0.5 rounded ${
+                            className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ring-inset ${
                               s.status === "PROCESADA"
-                                ? "bg-green-100 text-green-700"
-                                : "bg-yellow-100 text-yellow-700"
+                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                                : "bg-amber-50 text-amber-700 ring-amber-200"
                             }`}
                           >
                             {s.status}
@@ -2364,19 +2542,19 @@ export default function CierreVentasDulces({
 
                       <div className="px-4 pb-4 pt-2 text-sm space-y-2">
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Paquetes</span>
-                          <strong>{qty3(s.quantity)}</strong>
+                          <span className="text-slate-600">Paquetes</span>
+                          <strong>{Math.trunc(Number(s.quantity || 0))}</strong>
                         </div>
 
-                        <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">U. Vendedor</span>
+                        {/* <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">U. Vendedor</span>
                           <strong>
                             {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
                           </strong>
                         </div>
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">U. Vendedor</span>
+                          <span className="text-slate-600">U. Vendedor</span>
                           <strong>
                             {getCommissionFromItems(s) > 0
                               ? `C$${money(getCommissionFromItems(s))}`
@@ -2385,23 +2563,16 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">U. Neta</span>
+                          <span className="text-slate-600">U. Neta</span>
                           <strong>
                             {getVendorNetUtility(s) > 0
                               ? `C$${money(getVendorNetUtility(s))}`
                               : "—"}
                           </strong>
-                        </div>
+                        </div> */}
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Comisión</span>
-                          <strong>
-                            {commission > 0 ? `C$${money(commission)}` : "—"}
-                          </strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Comision</span>
+                          <span className="text-slate-600">Comisión</span>
                           <strong>
                             {(() => {
                               const qty = Number(s.quantity || 0);
@@ -2414,15 +2585,15 @@ export default function CierreVentasDulces({
                           </strong>
                         </div>
 
-                        <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">U. Vendedor</span>
+                        {/* <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">U. Vendedor</span>
                           <strong>
                             {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
                           </strong>
-                        </div>
+                        </div> */}
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-gray-600">Vendedor</span>
+                          <span className="text-slate-600">Vendedor</span>
                           <strong className="text-right break-all">
                             {s.userEmail}
                           </strong>
@@ -2435,19 +2606,19 @@ export default function CierreVentasDulces({
                                 <>
                                   <button
                                     onClick={() => openEdit(s)}
-                                    className="flex-1 text-xs bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700"
+                                    className="flex-1 text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 py-2 text-white shadow-sm hover:bg-indigo-700"
                                   >
                                     Editar
                                   </button>
                                   <button
                                     onClick={() => deleteSale(s.id)}
-                                    className="flex-1 text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                    className="flex-1 text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
                                   >
                                     Eliminar
                                   </button>
                                 </>
                               ) : (
-                                <div className="text-gray-400 text-xs w-full text-center">
+                                <div className="text-slate-400 text-xs w-full text-center">
                                   —
                                 </div>
                               )}
@@ -2457,18 +2628,18 @@ export default function CierreVentasDulces({
                               {isAdmin ? (
                                 <button
                                   onClick={() => handleRevert(s.id)}
-                                  className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                  className="w-full text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
                                 >
                                   Revertir
                                 </button>
                               ) : (
-                                <div className="text-gray-400 text-xs w-full text-center">
+                                <div className="text-slate-400 text-xs w-full text-center">
                                   —
                                 </div>
                               )}
                             </div>
                           ) : (
-                            <div className="text-gray-400 text-xs w-full text-center">
+                            <div className="text-slate-400 text-xs w-full text-center">
                               No options
                             </div>
                           )}
@@ -2479,7 +2650,7 @@ export default function CierreVentasDulces({
                 })}
 
                 {creditSales.length === 0 && (
-                  <div className="text-center text-gray-500 text-sm py-6">
+                  <div className="text-center text-slate-500 text-sm py-6">
                     Sin ventas crédito para mostrar.
                   </div>
                 )}
@@ -2487,89 +2658,112 @@ export default function CierreVentasDulces({
             </div>
           </div>
 
-          <div className="bg-white border rounded shadow-sm mb-4">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
             <button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
               onClick={() => setAbonosCardOpen((v) => !v)}
               aria-expanded={abonosCardOpen}
             >
               <span>Abonos (período)</span>
               <span
-                className={`transition-transform ${abonosCardOpen ? "rotate-180" : ""}`}
+                className={`text-slate-400 transition-transform ${abonosCardOpen ? "rotate-180" : ""}`}
               >
                 ▼
               </span>
             </button>
             <div
-              className={`collapsible-content ${abonosCardOpen ? "block" : "hidden"} border-t p-4`}
+              className={`collapsible-content ${abonosCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
               {abonosLoading ? (
-                <div className="text-sm text-gray-500">Cargando abonos...</div>
+                <div className="text-sm text-slate-500">Cargando abonos...</div>
               ) : (
                 <>
                   <div className="pdf-desktop hidden md:block">
-                    <table className="min-w-full border text-sm mb-4 shadow-2xl">
-                      <thead className="bg-gray-100">
-                        <tr>
-                          <th className="border p-2">Fecha</th>
-                          <th className="border p-2">Cliente</th>
-                          <th className="border p-2">Venta</th>
-                          <th className="border p-2">Saldo pendiente</th>
-                          <th className="border p-2">Abono</th>
-                          <th className="border p-2">Saldo final</th>
-                          <th className="border p-2">Comentario</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {abonosRows.map((r) => {
-                          const pending = Number.isFinite(
-                            Number(r.saleRemainingBefore),
-                          )
-                            ? r.saleRemainingBefore
-                            : Number.isFinite(Number(r.balanceBefore))
-                              ? r.balanceBefore
-                              : undefined;
-                          const after = Number.isFinite(
-                            Number(r.saleRemainingAfter),
-                          )
-                            ? r.saleRemainingAfter
-                            : Number.isFinite(Number(r.balanceAfter))
-                              ? r.balanceAfter
-                              : undefined;
-
-                          return (
-                            <tr key={r.id} className="text-center">
-                              <td className="border p-1">{r.date}</td>
-                              <td className="border p-1">
-                                {r.customerName || "—"}
-                              </td>
-                              <td className="border p-1">{r.saleId || "—"}</td>
-                              <td className="border p-1">
-                                {maybeMoney(pending)}
-                              </td>
-                              <td className="border p-1">
-                                C${money(r.amount)}
-                              </td>
-                              <td className="border p-1">
-                                {maybeMoney(after)}
-                              </td>
-                              <td className="border p-1">{r.comment || "—"}</td>
-                            </tr>
-                          );
-                        })}
-                        {abonosRows.length === 0 && (
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-50 text-slate-600">
                           <tr>
-                            <td
-                              colSpan={7}
-                              className="p-3 text-center text-gray-500"
-                            >
-                              Sin abonos para mostrar.
-                            </td>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Fecha
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Cliente
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Venta
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Saldo pendiente
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Abono
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Saldo final
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Comentario
+                            </th>
                           </tr>
-                        )}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {abonosRows.map((r) => {
+                            const pending = Number.isFinite(
+                              Number(r.saleRemainingBefore),
+                            )
+                              ? r.saleRemainingBefore
+                              : Number.isFinite(Number(r.balanceBefore))
+                                ? r.balanceBefore
+                                : undefined;
+                            const after = Number.isFinite(
+                              Number(r.saleRemainingAfter),
+                            )
+                              ? r.saleRemainingAfter
+                              : Number.isFinite(Number(r.balanceAfter))
+                                ? r.balanceAfter
+                                : undefined;
+
+                            return (
+                              <tr
+                                key={r.id}
+                                className="text-center odd:bg-white even:bg-slate-50/50"
+                              >
+                                <td className="px-3 py-2">{r.date}</td>
+                                <td className="px-3 py-2 text-left">
+                                  {r.customerName || "—"}
+                                </td>
+                                <td className="px-3 py-2 text-left">
+                                  {r.saleId || "—"}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {maybeMoney(pending)}
+                                </td>
+                                <td className="px-3 py-2">
+                                  C${money(r.amount)}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {maybeMoney(after)}
+                                </td>
+                                <td className="px-3 py-2 text-left">
+                                  {r.comment || "—"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {abonosRows.length === 0 && (
+                            <tr>
+                              <td
+                                colSpan={7}
+                                className="px-3 py-6 text-center text-slate-500"
+                              >
+                                Sin abonos para mostrar.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
 
                   <div className="pdf-mobile md:hidden space-y-3 mb-4">
@@ -2592,14 +2786,14 @@ export default function CierreVentasDulces({
                       return (
                         <div
                           key={r.id}
-                          className="border rounded-xl bg-white shadow-sm p-3"
+                          className="border border-slate-200 rounded-xl bg-white shadow-sm p-3"
                         >
                           <div className="flex justify-between gap-3">
                             <div className="min-w-0">
                               <div className="font-semibold truncate">
                                 {r.customerName || "Cliente"}
                               </div>
-                              <div className="text-xs text-gray-500">
+                              <div className="text-xs text-slate-500">
                                 {r.date}
                               </div>
                             </div>
@@ -2612,23 +2806,25 @@ export default function CierreVentasDulces({
 
                           <div className="mt-2 text-sm space-y-1">
                             <div className="flex justify-between gap-3">
-                              <span className="text-gray-600">Venta</span>
+                              <span className="text-slate-600">Venta</span>
                               <strong className="text-right break-all">
                                 {r.saleId || "—"}
                               </strong>
                             </div>
                             <div className="flex justify-between gap-3">
-                              <span className="text-gray-600">
+                              <span className="text-slate-600">
                                 Saldo pendiente
                               </span>
                               <strong>{maybeMoney(pending)}</strong>
                             </div>
                             <div className="flex justify-between gap-3">
-                              <span className="text-gray-600">Saldo final</span>
+                              <span className="text-slate-600">
+                                Saldo final
+                              </span>
                               <strong>{maybeMoney(after)}</strong>
                             </div>
                             {r.comment && (
-                              <div className="text-xs text-gray-600">
+                              <div className="text-xs text-slate-600">
                                 {r.comment}
                               </div>
                             )}
@@ -2638,7 +2834,7 @@ export default function CierreVentasDulces({
                     })}
 
                     {abonosRows.length === 0 && (
-                      <div className="text-center text-gray-500 text-sm py-6">
+                      <div className="text-center text-slate-500 text-sm py-6">
                         Sin abonos para mostrar.
                       </div>
                     )}
@@ -2650,40 +2846,40 @@ export default function CierreVentasDulces({
 
           {/* KPIs de totales */}
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-2 text-sm mb-4">
-            <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
-              <div className="text-xs text-gray-600">
+            <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 shadow-sm">
+              <div className="text-xs text-slate-600">
                 Total paquetes crédito
               </div>
               <div className="text-lg font-semibold">
                 {qty3(totalPacksCredito)}
               </div>
             </div>
-            <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
-              <div className="text-xs text-gray-600">Total paquetes cash</div>
+            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 shadow-sm">
+              <div className="text-xs text-slate-600">Total paquetes cash</div>
               <div className="text-lg font-semibold">
                 {qty3(totalPacksCash)}
               </div>
             </div>
-            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
-              <div className="text-xs text-gray-600">
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 shadow-sm">
+              <div className="text-xs text-slate-600">
                 Total pendiente crédito
               </div>
               <div className="text-lg font-semibold">
                 C${money(totalPendienteCredito)}
               </div>
             </div>
-            <div className="p-3 rounded-lg bg-indigo-50 border border-indigo-200">
-              <div className="text-xs text-gray-600">Total cobrado</div>
+            <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 shadow-sm">
+              <div className="text-xs text-slate-600">Total cobrado</div>
               <div className="text-lg font-semibold">
                 C${money(totalCobrado)}
               </div>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-slate-500 mt-1">
                 Cash: C${money(totalCobradoCash)} · Abonos: C$
                 {money(totalAbonos)}
               </div>
             </div>
-            <div className="p-3 rounded-lg bg-teal-50 border border-teal-200">
-              <div className="text-xs text-gray-600">Total comisión</div>
+            <div className="p-3 rounded-xl bg-teal-50 border border-teal-200 shadow-sm">
+              <div className="text-xs text-slate-600">Total comisión</div>
               <div className="text-lg font-semibold">
                 C${money(totalCommission)}
               </div>
@@ -2706,22 +2902,22 @@ export default function CierreVentasDulces({
             </div>
           )}
 
-          <div className="bg-white border rounded shadow-sm mb-4">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
             <button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
               onClick={() => setProductCardOpen((v) => !v)}
               aria-expanded={productCardOpen}
             >
               <span>Consolidado por producto</span>
               <span
-                className={`transition-transform ${productCardOpen ? "rotate-180" : ""}`}
+                className={`text-slate-400 transition-transform ${productCardOpen ? "rotate-180" : ""}`}
               >
                 ▼
               </span>
             </button>
             <div
-              className={`collapsible-content ${productCardOpen ? "block" : "hidden"} border-t p-4`}
+              className={`collapsible-content ${productCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
               <div className="space-y-3">
                 {productSummaryByCategory.map((group) => {
@@ -2729,17 +2925,17 @@ export default function CierreVentasDulces({
                   return (
                     <div
                       key={group.category}
-                      className="border rounded-xl bg-white shadow-sm"
+                      className="border border-slate-200 rounded-xl bg-white shadow-sm"
                     >
                       <button
                         type="button"
-                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
                         onClick={() => toggleCategory(group.category)}
                         aria-expanded={isOpen}
                       >
                         <div className="min-w-0">
                           <div className="truncate">{group.category}</div>
-                          <div className="text-xs text-gray-600">
+                          <div className="text-xs text-slate-600">
                             {qty3(group.totalQuantity)} paquetes · C$
                             {money(group.totalAmount)} · Comisión{" "}
                             {group.totalCommission > 0
@@ -2748,80 +2944,90 @@ export default function CierreVentasDulces({
                           </div>
                         </div>
                         <span
-                          className={`transition-transform ${isOpen ? "rotate-180" : ""}`}
+                          className={`text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
                         >
                           ▼
                         </span>
                       </button>
 
                       <div
-                        className={`collapsible-content ${isOpen ? "block" : "hidden"} border-t p-3`}
+                        className={`collapsible-content ${isOpen ? "block" : "hidden"} border-t border-slate-100 p-3`}
                       >
                         <div className="pdf-desktop hidden md:block">
-                          <table className="min-w-full border text-sm mb-2">
-                            <thead className="bg-gray-100">
-                              <tr>
-                                <th className="border p-2">Producto</th>
-                                <th className="border p-2">Total paquetes</th>
-                                <th className="border p-2">Total dinero</th>
-                                <th className="border p-2">Comisión</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {group.rows.map((row) => (
-                                <tr
-                                  key={row.productName}
-                                  className="text-center"
-                                >
-                                  <td className="border p-1">
-                                    {row.productName}
-                                  </td>
-                                  <td className="border p-1">
-                                    {qty3(row.totalQuantity)}
-                                  </td>
-                                  <td className="border p-1">
-                                    C${money(row.totalAmount)}
-                                  </td>
-                                  <td className="border p-1">
-                                    {row.totalCommission > 0
-                                      ? `C$${money(row.totalCommission)}`
-                                      : "—"}
-                                  </td>
+                          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                            <table className="min-w-full text-sm">
+                              <thead className="bg-slate-50 text-slate-600">
+                                <tr>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold">
+                                    Producto
+                                  </th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold">
+                                    Total paquetes
+                                  </th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold">
+                                    Total dinero
+                                  </th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold">
+                                    Comisión
+                                  </th>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {group.rows.map((row) => (
+                                  <tr
+                                    key={row.productName}
+                                    className="text-center odd:bg-white even:bg-slate-50/50"
+                                  >
+                                    <td className="px-3 py-2 text-left">
+                                      {row.productName}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {qty3(row.totalQuantity)}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      C${money(row.totalAmount)}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {row.totalCommission > 0
+                                        ? `C$${money(row.totalCommission)}`
+                                        : "—"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
 
                         <div className="pdf-mobile md:hidden space-y-2">
                           {group.rows.map((row) => (
                             <div
                               key={row.productName}
-                              className="border rounded-xl bg-white shadow-sm p-3"
+                              className="border border-slate-200 rounded-xl bg-white shadow-sm p-3"
                             >
                               <div className="font-semibold">
                                 {row.productName}
                               </div>
                               <div className="mt-2 text-sm space-y-1">
                                 <div className="flex justify-between gap-3">
-                                  <span className="text-gray-600">
+                                  <span className="text-slate-600">
                                     Total paquetes
                                   </span>
                                   <strong>{qty3(row.totalQuantity)}</strong>
                                 </div>
                                 <div className="flex justify-between gap-3">
-                                  <span className="text-gray-600">
+                                  <span className="text-slate-600">
                                     Total dinero
                                   </span>
                                   <strong>C${money(row.totalAmount)}</strong>
                                 </div>
                                 <div className="flex justify-between gap-3">
-                                  <span className="text-gray-600">
+                                  <span className="text-slate-600">
                                     Comisión
                                   </span>
                                   <strong>
-                                    {row.totalCommission > 0
-                                      ? `C$${money(row.totalCommission)}`
+                                    {row.totalCommissionUv > 0
+                                      ? `C$${money(row.totalCommissionUv)}`
                                       : "—"}
                                   </strong>
                                 </div>
@@ -2835,7 +3041,7 @@ export default function CierreVentasDulces({
                 })}
 
                 {productSummaryByCategory.length === 0 && (
-                  <div className="text-center text-gray-500 text-sm py-6">
+                  <div className="text-center text-slate-500 text-sm py-6">
                     Sin datos para consolidar.
                   </div>
                 )}
@@ -2849,7 +3055,7 @@ export default function CierreVentasDulces({
         {isAdmin && (
           <button
             onClick={handleSaveClosure}
-            className="bg-blue-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-blue-700"
+            className="bg-blue-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-blue-700"
           >
             Procesar
           </button>
@@ -2858,26 +3064,26 @@ export default function CierreVentasDulces({
           <button
             onClick={backfillUvXpaqInSales}
             disabled={isBackfillingUv}
-            className="bg-emerald-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-emerald-700 disabled:opacity-60"
+            className="bg-emerald-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {isBackfillingUv ? "Actualizando UVxPaq..." : "Actualizar UVxPaq"}
           </button>
         )}
         <button
           onClick={handleDownloadPDF}
-          className="bg-green-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-green-700"
+          className="bg-green-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-green-700"
         >
           PDF
         </button>
         <button
           onClick={handleExportCSV}
-          className="bg-gray-700 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-gray-800"
+          className="bg-slate-700 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-slate-800"
         >
           CSV
         </button>
         <button
           onClick={handleExportXLSX}
-          className="bg-amber-600 text-white px-2 py-0.5 text-xs sm:px-4 sm:py-2 rounded hover:bg-amber-700"
+          className="bg-amber-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-amber-700"
         >
           Excel
         </button>

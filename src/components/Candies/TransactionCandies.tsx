@@ -635,14 +635,14 @@ export default function TransactionsReportCandies({
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
         <div className="flex items-center gap-1 flex-wrap">
           <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
             onClick={goFirst}
             disabled={page === 1}
           >
             « Primero
           </button>
           <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
             onClick={goPrev}
             disabled={page === 1}
           >
@@ -652,8 +652,8 @@ export default function TransactionsReportCandies({
             typeof p === "number" ? (
               <button
                 key={idx}
-                className={`px-3 py-1 border rounded ${
-                  p === page ? "bg-blue-600 text-white" : ""
+                className={`px-3 py-1 rounded-md text-xs font-semibold border border-slate-200 ${
+                  p === page ? "bg-blue-600 text-white border-blue-600" : ""
                 }`}
                 onClick={() => setPage(p)}
               >
@@ -666,21 +666,21 @@ export default function TransactionsReportCandies({
             ),
           )}
           <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
             onClick={goNext}
             disabled={page === totalPages}
           >
             Siguiente ›
           </button>
           <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
             onClick={goLast}
             disabled={page === totalPages}
           >
             Último »
           </button>
         </div>
-        <div className="text-sm text-gray-600">
+        <div className="text-sm text-slate-600">
           Página {page} de {totalPages} • {filteredSales.length} transacción(es)
         </div>
       </div>
@@ -693,7 +693,7 @@ export default function TransactionsReportCandies({
       <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
 
       {/* Filtros (colapsables) */}
-      <div className="bg-white border rounded shadow-sm mb-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
@@ -711,10 +711,12 @@ export default function TransactionsReportCandies({
           <div className="p-4 border-t">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end text-sm">
               <div>
-                <label className="block font-semibold">Desde</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Desde
+                </label>
                 <input
                   type="date"
-                  className="border rounded px-2 py-1 w-full"
+                  className="border rounded-md px-3 py-2 w-full"
                   value={fromDate}
                   onChange={(e) => {
                     setFromDate(e.target.value);
@@ -724,10 +726,12 @@ export default function TransactionsReportCandies({
               </div>
 
               <div>
-                <label className="block font-semibold">Hasta</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Hasta
+                </label>
                 <input
                   type="date"
-                  className="border rounded px-2 py-1 w-full"
+                  className="border rounded-md px-3 py-2 w-full"
                   value={toDate}
                   onChange={(e) => {
                     setToDate(e.target.value);
@@ -737,9 +741,11 @@ export default function TransactionsReportCandies({
               </div>
 
               <div className="sm:col-span-2 lg:col-span-2">
-                <label className="block font-semibold">Cliente (crédito)</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Cliente (credito)
+                </label>
                 <select
-                  className="border rounded px-2 py-1 w-full"
+                  className="border rounded-md px-3 py-2 w-full"
                   value={filterCustomerId}
                   onChange={(e) => {
                     setFilterCustomerId(e.target.value);
@@ -756,9 +762,11 @@ export default function TransactionsReportCandies({
               </div>
 
               <div className="sm:col-span-2 lg:col-span-2">
-                <label className="block font-semibold">Vendedor</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Vendedor
+                </label>
                 <select
-                  className="border rounded px-2 py-1 w-full"
+                  className="border rounded-md px-3 py-2 w-full"
                   value={filterSellerId}
                   onChange={(e) => {
                     setFilterSellerId(e.target.value);
@@ -775,9 +783,11 @@ export default function TransactionsReportCandies({
               </div>
 
               <div>
-                <label className="block font-semibold">Tipo</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Tipo
+                </label>
                 <select
-                  className="border rounded px-2 py-1 w-full"
+                  className="border rounded-md px-3 py-2 w-full"
                   value={filterType}
                   onChange={(e) => {
                     setFilterType(e.target.value as "" | SaleType);
@@ -791,9 +801,11 @@ export default function TransactionsReportCandies({
               </div>
 
               <div>
-                <label className="block font-semibold">Producto</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Producto
+                </label>
                 <select
-                  className="border rounded px-2 py-1 w-full"
+                  className="border rounded-md px-3 py-2 w-full"
                   value={filterProduct}
                   onChange={(e) => {
                     setFilterProduct(e.target.value);
@@ -811,13 +823,13 @@ export default function TransactionsReportCandies({
               </div>
 
               <button
-                className="sm:col-span-2 lg:col-span-1 px-2 py-1 text-sm sm:px-3 sm:py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
+                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 w-full"
                 onClick={handleExportPDF}
               >
                 Exportar PDF
               </button>
               <button
-                className="sm:col-span-2 lg:col-span-1 px-2 py-1 text-sm sm:px-3 sm:py-2 rounded bg-green-600 text-white hover:bg-green-700 w-full"
+                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 w-full"
                 onClick={handleExportXLSXAllProducts}
               >
                 Exportar Excel (Sábana)
@@ -828,7 +840,7 @@ export default function TransactionsReportCandies({
       </div>
 
       {/* KPIs (colapsables) */}
-      <div className="bg-white border rounded shadow-sm mb-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
@@ -845,34 +857,34 @@ export default function TransactionsReportCandies({
         {kpisCardOpen && (
           <div className="p-4 border-t">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Paquetes Cash</div>
+              <div className="p-3 border rounded-lg bg-slate-50">
+                <div className="text-xs text-slate-600">Paquetes Cash</div>
                 <div className="text-xl font-semibold">{kpis.packsCash}</div>
               </div>
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Paquetes Crédito</div>
+              <div className="p-3 border rounded-lg bg-slate-50">
+                <div className="text-xs text-slate-600">Paquetes Credito</div>
                 <div className="text-xl font-semibold">{kpis.packsCredito}</div>
               </div>
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Monto Cash</div>
+              <div className="p-3 border rounded-lg bg-emerald-50 border-emerald-200">
+                <div className="text-xs text-emerald-700">Monto Cash</div>
                 <div className="text-xl font-semibold">
                   {money(kpis.montoCash)}
                 </div>
               </div>
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Monto Crédito</div>
+              <div className="p-3 border rounded-lg bg-amber-50 border-amber-200">
+                <div className="text-xs text-amber-700">Monto Credito</div>
                 <div className="text-xl font-semibold">
                   {money(kpis.montoCredito)}
                 </div>
               </div>
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Comisión Cash</div>
+              <div className="p-3 border rounded-lg bg-slate-50">
+                <div className="text-xs text-slate-600">Comision Cash</div>
                 <div className="text-xl font-semibold">
                   {money(kpis.comisionCash)}
                 </div>
               </div>
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Comisión Crédito</div>
+              <div className="p-3 border rounded-lg bg-slate-50">
+                <div className="text-xs text-slate-600">Comision Credito</div>
                 <div className="text-xl font-semibold">
                   {money(kpis.comisionCredito)}
                 </div>
@@ -885,14 +897,16 @@ export default function TransactionsReportCandies({
       {/* ===== MOBILE: Cards expandibles (sin perder datos) ===== */}
       <div className="block md:hidden space-y-3">
         {loading ? (
-          <div className="bg-white border rounded-lg p-4 shadow">Cargando…</div>
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+            Cargando…
+          </div>
         ) : paged.length === 0 ? (
-          <div className="bg-white border rounded-lg p-4 shadow">
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
             Sin transacciones en el rango.
           </div>
         ) : (
           <>
-            <div className="bg-white border rounded-xl shadow">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
               <button
                 type="button"
                 className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
@@ -909,7 +923,7 @@ export default function TransactionsReportCandies({
               {cashCardOpen && (
                 <div className="p-3 border-t space-y-3">
                   {cashPaged.length === 0 ? (
-                    <div className="text-sm text-gray-500">
+                    <div className="text-sm text-slate-500">
                       Sin transacciones cash.
                     </div>
                   ) : (
@@ -923,7 +937,7 @@ export default function TransactionsReportCandies({
                       return (
                         <div
                           key={s.id}
-                          className="bg-white border rounded-xl shadow"
+                          className="bg-white border border-slate-200 rounded-xl shadow-sm"
                         >
                           <details className="group">
                             <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
@@ -932,17 +946,17 @@ export default function TransactionsReportCandies({
                                   <div className="font-semibold truncate">
                                     {name}
                                   </div>
-                                  <div className="text-xs text-gray-600 shrink-0">
+                                  <div className="text-xs text-slate-600 shrink-0">
                                     {s.date}
                                   </div>
                                 </div>
 
                                 <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
-                                  <span className="px-2 py-1 rounded-full border bg-green-50 border-green-200 text-green-700">
+                                  <span className="px-2 py-1 rounded-full border bg-emerald-50 border-emerald-200 text-emerald-700">
                                     Cash
                                   </span>
 
-                                  <span className="text-gray-700">
+                                  <span className="text-slate-700">
                                     <b>Paquetes:</b>{" "}
                                     <button
                                       type="button"
@@ -957,13 +971,13 @@ export default function TransactionsReportCandies({
                                     </button>
                                   </span>
 
-                                  <span className="text-gray-700">
+                                  <span className="text-slate-700">
                                     <b>Monto:</b> {money(s.total)}
                                   </span>
                                 </div>
                               </div>
 
-                              <div className="text-gray-500 mt-1">
+                              <div className="text-slate-500 mt-1">
                                 <span className="inline-block transition-transform group-open:rotate-180">
                                   ▼
                                 </span>
@@ -973,24 +987,26 @@ export default function TransactionsReportCandies({
                             <div className="px-3 pb-3 pt-0 text-sm">
                               <div className="grid grid-cols-1 gap-2 border-t pt-3">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Cliente</span>
+                                  <span className="text-slate-600">
+                                    Cliente
+                                  </span>
                                   <span className="font-medium text-right">
                                     {name}
                                   </span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Fecha</span>
+                                  <span className="text-slate-600">Fecha</span>
                                   <span className="font-medium">{s.date}</span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Tipo</span>
+                                  <span className="text-slate-600">Tipo</span>
                                   <span className="font-medium">Cash</span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">
+                                  <span className="text-slate-600">
                                     Paquetes
                                   </span>
                                   <span className="font-medium">
@@ -1006,15 +1022,15 @@ export default function TransactionsReportCandies({
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Monto</span>
+                                  <span className="text-slate-600">Monto</span>
                                   <span className="font-semibold">
                                     {money(s.total)}
                                   </span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">
-                                    Comisión
+                                  <span className="text-slate-600">
+                                    Comision
                                   </span>
                                   <span className="font-medium">
                                     {commissionAmount > 0
@@ -1024,7 +1040,7 @@ export default function TransactionsReportCandies({
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">
+                                  <span className="text-slate-600">
                                     Vendedor
                                   </span>
                                   <span className="font-medium">
@@ -1035,7 +1051,7 @@ export default function TransactionsReportCandies({
                                 {canDelete && (
                                   <div className="pt-2 flex items-center justify-end gap-2">
                                     <button
-                                      className="px-3 py-2 rounded border hover:bg-gray-50"
+                                      className="px-3 py-2 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50"
                                       onClick={() =>
                                         setOpenMenuId((prev) =>
                                           prev === s.id ? null : s.id,
@@ -1047,7 +1063,7 @@ export default function TransactionsReportCandies({
 
                                     {openMenuId === s.id && (
                                       <button
-                                        className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                                        className="px-3 py-2 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
                                         onClick={() => confirmDelete(s)}
                                       >
                                         Eliminar
@@ -1066,7 +1082,7 @@ export default function TransactionsReportCandies({
               )}
             </div>
 
-            <div className="bg-white border rounded-xl shadow">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
               <button
                 type="button"
                 className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
@@ -1083,7 +1099,7 @@ export default function TransactionsReportCandies({
               {creditCardOpen && (
                 <div className="p-3 border-t space-y-3">
                   {creditPaged.length === 0 ? (
-                    <div className="text-sm text-gray-500">
+                    <div className="text-sm text-slate-500">
                       Sin transacciones crédito.
                     </div>
                   ) : (
@@ -1097,7 +1113,7 @@ export default function TransactionsReportCandies({
                       return (
                         <div
                           key={s.id}
-                          className="bg-white border rounded-xl shadow"
+                          className="bg-white border border-slate-200 rounded-xl shadow-sm"
                         >
                           <details className="group">
                             <summary className="list-none cursor-pointer p-3 flex items-start gap-3">
@@ -1106,17 +1122,17 @@ export default function TransactionsReportCandies({
                                   <div className="font-semibold truncate">
                                     {name}
                                   </div>
-                                  <div className="text-xs text-gray-600 shrink-0">
+                                  <div className="text-xs text-slate-600 shrink-0">
                                     {s.date}
                                   </div>
                                 </div>
 
                                 <div className="mt-1 flex items-center gap-2 flex-wrap text-xs">
-                                  <span className="px-2 py-1 rounded-full border bg-yellow-50 border-yellow-200 text-yellow-700">
+                                  <span className="px-2 py-1 rounded-full border bg-amber-50 border-amber-200 text-amber-700">
                                     Crédito
                                   </span>
 
-                                  <span className="text-gray-700">
+                                  <span className="text-slate-700">
                                     <b>Paquetes:</b>{" "}
                                     <button
                                       type="button"
@@ -1131,13 +1147,13 @@ export default function TransactionsReportCandies({
                                     </button>
                                   </span>
 
-                                  <span className="text-gray-700">
+                                  <span className="text-slate-700">
                                     <b>Monto:</b> {money(s.total)}
                                   </span>
                                 </div>
                               </div>
 
-                              <div className="text-gray-500 mt-1">
+                              <div className="text-slate-500 mt-1">
                                 <span className="inline-block transition-transform group-open:rotate-180">
                                   ▼
                                 </span>
@@ -1147,24 +1163,26 @@ export default function TransactionsReportCandies({
                             <div className="px-3 pb-3 pt-0 text-sm">
                               <div className="grid grid-cols-1 gap-2 border-t pt-3">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Cliente</span>
+                                  <span className="text-slate-600">
+                                    Cliente
+                                  </span>
                                   <span className="font-medium text-right">
                                     {name}
                                   </span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Fecha</span>
+                                  <span className="text-slate-600">Fecha</span>
                                   <span className="font-medium">{s.date}</span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Tipo</span>
+                                  <span className="text-slate-600">Tipo</span>
                                   <span className="font-medium">Crédito</span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">
+                                  <span className="text-slate-600">
                                     Paquetes
                                   </span>
                                   <span className="font-medium">
@@ -1180,15 +1198,15 @@ export default function TransactionsReportCandies({
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Monto</span>
+                                  <span className="text-slate-600">Monto</span>
                                   <span className="font-semibold">
                                     {money(s.total)}
                                   </span>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">
-                                    Comisión
+                                  <span className="text-slate-600">
+                                    Comision
                                   </span>
                                   <span className="font-medium">
                                     {commissionAmount > 0
@@ -1198,7 +1216,7 @@ export default function TransactionsReportCandies({
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">
+                                  <span className="text-slate-600">
                                     Vendedor
                                   </span>
                                   <span className="font-medium">
@@ -1209,7 +1227,7 @@ export default function TransactionsReportCandies({
                                 {canDelete && (
                                   <div className="pt-2 flex items-center justify-end gap-2">
                                     <button
-                                      className="px-3 py-2 rounded border hover:bg-gray-50"
+                                      className="px-3 py-2 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50"
                                       onClick={() =>
                                         setOpenMenuId((prev) =>
                                           prev === s.id ? null : s.id,
@@ -1221,7 +1239,7 @@ export default function TransactionsReportCandies({
 
                                     {openMenuId === s.id && (
                                       <button
-                                        className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                                        className="px-3 py-2 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
                                         onClick={() => confirmDelete(s)}
                                       >
                                         Eliminar
@@ -1242,24 +1260,26 @@ export default function TransactionsReportCandies({
           </>
         )}
 
-        <div className="bg-white p-3 rounded shadow border">
+        <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200">
           {renderPager()}
         </div>
       </div>
 
       {/* ===== DESKTOP: Tabla original ===== */}
-      <div className="hidden md:block bg-white p-2 rounded shadow border w-full">
+      <div className="hidden md:block bg-white rounded-xl shadow-sm border border-slate-200 w-full overflow-x-auto">
         <table className="min-w-full w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Fecha</th>
-              <th className="p-2 border">Cliente</th>
-              <th className="p-2 border">Tipo</th>
-              <th className="p-2 border">Paquetes</th>
-              <th className="p-2 border">Monto</th>
-              <th className="p-2 border">Comisión</th>
-              <th className="p-2 border">Vendedor</th>
-              {canDelete && <th className="p-2 border">Acciones</th>}
+          <thead className="bg-slate-100 sticky top-0 z-10">
+            <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+              <th className="p-3 border-b text-left">Fecha</th>
+              <th className="p-3 border-b text-left">Cliente</th>
+              <th className="p-3 border-b text-left">Tipo</th>
+              <th className="p-3 border-b text-right">Paquetes</th>
+              <th className="p-3 border-b text-right">Monto</th>
+              <th className="p-3 border-b text-right">Comision</th>
+              <th className="p-3 border-b text-left">Vendedor</th>
+              {canDelete && (
+                <th className="p-3 border-b text-right">Acciones</th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -1284,13 +1304,13 @@ export default function TransactionsReportCandies({
                 const commissionAmount = getCommissionAmount(s);
 
                 return (
-                  <tr key={s.id} className="text-center">
-                    <td className="p-2 border">{s.date}</td>
-                    <td className="p-2 border">{name}</td>
-                    <td className="p-2 border">
+                  <tr key={s.id} className="odd:bg-white even:bg-slate-50">
+                    <td className="p-3 border-b text-left">{s.date}</td>
+                    <td className="p-3 border-b text-left">{name}</td>
+                    <td className="p-3 border-b text-left">
                       {s.type === "CREDITO" ? "Crédito" : "Cash"}
                     </td>
-                    <td className="p-2 border">
+                    <td className="p-3 border-b text-right">
                       <button
                         type="button"
                         className="underline text-blue-600 hover:text-blue-800"
@@ -1300,16 +1320,20 @@ export default function TransactionsReportCandies({
                         {s.quantity}
                       </button>
                     </td>
-                    <td className="p-2 border">{money(s.total)}</td>
-                    <td className="p-2 border">
+                    <td className="p-3 border-b text-right">
+                      {money(s.total)}
+                    </td>
+                    <td className="p-3 border-b text-right">
                       {commissionAmount > 0 ? money(commissionAmount) : "—"}
                     </td>
-                    <td className="p-2 border">{s.vendorName || "—"}</td>
+                    <td className="p-3 border-b text-left">
+                      {s.vendorName || "—"}
+                    </td>
 
                     {canDelete && (
-                      <td className="p-2 border relative">
+                      <td className="p-3 border-b relative text-right">
                         <button
-                          className="px-2 py-1 rounded border hover:bg-gray-50"
+                          className="px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50"
                           onClick={() =>
                             setOpenMenuId((prev) =>
                               prev === s.id ? null : s.id,
@@ -1320,9 +1344,9 @@ export default function TransactionsReportCandies({
                           ⋮
                         </button>
                         {openMenuId === s.id && (
-                          <div className="absolute right-2 mt-1 w-28 bg-white border rounded shadow z-10 text-left">
+                          <div className="absolute right-2 mt-1 w-32 bg-white border border-slate-200 rounded-md shadow z-10 text-left">
                             <button
-                              className="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
+                              className="block w-full text-left px-3 py-2 hover:bg-slate-50 text-red-600 text-xs font-semibold"
                               onClick={() => confirmDelete(s)}
                             >
                               Eliminar
@@ -1347,7 +1371,7 @@ export default function TransactionsReportCandies({
       {/* Modal: Detalle de piezas de la venta */}
       {itemsModalOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-[95%] max-w-3xl p-4">
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h3 className="text-lg font-bold">
@@ -1356,7 +1380,14 @@ export default function TransactionsReportCandies({
                 </h3>
 
                 {modalSale && (
-                  <div className="text-sm text-gray-700 mt-1">
+                  <div className="text-sm text-slate-700 mt-1">
+                    Fecha de venta:{" "}
+                    <span className="font-semibold">{modalSale.date}</span>
+                  </div>
+                )}
+
+                {modalSale && (
+                  <div className="text-sm text-slate-700 mt-1">
                     Comisión de vendedor:{" "}
                     <span className="font-semibold">
                       {getCommissionAmount(modalSale) > 0
@@ -1368,23 +1399,23 @@ export default function TransactionsReportCandies({
               </div>
 
               <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
                 onClick={() => setItemsModalOpen(false)}
               >
                 Cerrar
               </button>
             </div>
 
-            <div className="bg-white rounded border overflow-x-auto">
+            <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Producto</th>
-                    <th className="p-2 border text-right">Paquetes</th>
-                    <th className="p-2 border text-right">Precio</th>
-                    <th className="p-2 border text-right">Descuento</th>
-                    <th className="p-2 border text-right">Monto</th>
-                    <th className="p-2 border text-right">Comisión</th>
+                <thead className="bg-slate-100 sticky top-0 z-10">
+                  <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                    <th className="p-3 border-b text-left">Producto</th>
+                    <th className="p-3 border-b text-right">Paquetes</th>
+                    <th className="p-3 border-b text-right">Precio</th>
+                    <th className="p-3 border-b text-right">Descuento</th>
+                    <th className="p-3 border-b text-right">Monto</th>
+                    <th className="p-3 border-b text-right">Comision</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1402,21 +1433,21 @@ export default function TransactionsReportCandies({
                     </tr>
                   ) : (
                     itemsModalRows.map((it, idx) => (
-                      <tr key={idx} className="text-center">
-                        <td className="p-2 border text-left">
+                      <tr key={idx} className="odd:bg-white even:bg-slate-50">
+                        <td className="p-3 border-b text-left">
                           {it.productName}
                         </td>
-                        <td className="p-2 border text-right">{it.qty}</td>
-                        <td className="p-2 border text-right">
+                        <td className="p-3 border-b text-right">{it.qty}</td>
+                        <td className="p-3 border-b text-right">
                           {money(it.unitPrice)}
                         </td>
-                        <td className="p-2 border text-right">
+                        <td className="p-3 border-b text-right">
                           {money(it.discount || 0)}
                         </td>
-                        <td className="p-2 border text-right">
+                        <td className="p-3 border-b text-right">
                           {money(it.total)}
                         </td>
-                        <td className="p-2 border text-right">
+                        <td className="p-3 border-b text-right">
                           {money(it.commission || 0)}
                         </td>
                       </tr>

@@ -309,22 +309,26 @@ export default function UserRegisterForm() {
         ? "admin"
         : r === "supervisor_pollo"
           ? "supervisor_pollo"
-          : r === "vendedor_ropa"
-            ? "vendedor_ropa"
-            : r === "vendedor_dulces"
-              ? "vendedor_dulces"
-              : "vendedor_pollo";
+          : r === "contador"
+            ? "contador"
+            : r === "vendedor_ropa"
+              ? "vendedor_ropa"
+              : r === "vendedor_dulces"
+                ? "vendedor_dulces"
+                : "vendedor_pollo";
 
     const cls =
       label === "admin"
         ? "bg-blue-100 text-blue-700"
         : label === "supervisor_pollo"
           ? "bg-amber-100 text-amber-700"
-          : label === "vendedor_ropa"
-            ? "bg-indigo-100 text-indigo-700"
-            : label === "vendedor_dulces"
-              ? "bg-pink-100 text-pink-700"
-              : "bg-green-100 text-green-700";
+          : label === "contador"
+            ? "bg-emerald-100 text-emerald-700"
+            : label === "vendedor_ropa"
+              ? "bg-indigo-100 text-indigo-700"
+              : label === "vendedor_dulces"
+                ? "bg-pink-100 text-pink-700"
+                : "bg-green-100 text-green-700";
 
     return (
       <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>

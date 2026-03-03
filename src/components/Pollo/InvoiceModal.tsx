@@ -820,33 +820,40 @@ export default function InvoiceModal({
               Sin ventas cash en el periodo.
             </p>
           ) : (
-            <div className="border rounded max-h-80 overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Producto</th>
-                    <th className="p-2 border">Unidad</th>
-                    <th className="p-2 border text-right">Cantidad</th>
-                    <th className="p-2 border text-right">Total facturado</th>
-                    <th className="p-2 border text-right">Total esperado</th>
-                    <th className="p-2 border text-right">Ganancia bruta</th>
+            <div className="rounded-xl overflow-auto border border-slate-200 shadow-sm max-h-80">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-slate-100 sticky top-0 z-10">
+                  <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                    <th className="p-3 border-b text-left">Producto</th>
+                    <th className="p-3 border-b text-left">Unidad</th>
+                    <th className="p-3 border-b text-right">Cantidad</th>
+                    <th className="p-3 border-b text-right">Total facturado</th>
+                    <th className="p-3 border-b text-right">Total esperado</th>
+                    <th className="p-3 border-b text-right">Ganancia bruta</th>
                   </tr>
                 </thead>
                 <tbody>
                   {consolidatedRows.map((r) => (
-                    <tr key={r.productName} className="text-center">
-                      <td className="p-2 border text-left">{r.productName}</td>
-                      <td className="p-2 border">{r.measurement || "—"}</td>
-                      <td className="p-2 border text-right">
+                    <tr
+                      key={r.productName}
+                      className="text-center odd:bg-white even:bg-slate-50"
+                    >
+                      <td className="p-3 border-b text-left">
+                        {r.productName}
+                      </td>
+                      <td className="p-3 border-b text-left">
+                        {r.measurement || "—"}
+                      </td>
+                      <td className="p-3 border-b text-right">
                         {qty3(r.totalQuantity)}
                       </td>
-                      <td className="p-2 border text-right">
+                      <td className="p-3 border-b text-right">
                         {money(r.totalInvoiced)}
                       </td>
-                      <td className="p-2 border text-right">
+                      <td className="p-3 border-b text-right">
                         {money(r.totalExpected)}
                       </td>
-                      <td className="p-2 border text-right">
+                      <td className="p-3 border-b text-right">
                         {money(r.grossProfit)}
                       </td>
                     </tr>
@@ -919,22 +926,25 @@ export default function InvoiceModal({
               No hay gastos en el rango seleccionado.
             </p>
           ) : (
-            <div className="border rounded max-h-48 overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Sel</th>
-                    <th className="p-2 border">Fecha</th>
-                    <th className="p-2 border">Descripción</th>
-                    <th className="p-2 border">Monto</th>
+            <div className="rounded-xl overflow-auto border border-slate-200 shadow-sm max-h-48">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-slate-100 sticky top-0 z-10">
+                  <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                    <th className="p-3 border-b">Sel</th>
+                    <th className="p-3 border-b text-left">Fecha</th>
+                    <th className="p-3 border-b text-left">Descripción</th>
+                    <th className="p-3 border-b text-right">Monto</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredExpenses.map((g) => {
                     const checked = selectedExpenseIds.includes(g.id);
                     return (
-                      <tr key={g.id} className="text-center">
-                        <td className="p-2 border">
+                      <tr
+                        key={g.id}
+                        className="text-center odd:bg-white even:bg-slate-50"
+                      >
+                        <td className="p-3 border-b">
                           <input
                             type="checkbox"
                             checked={checked}
@@ -943,9 +953,13 @@ export default function InvoiceModal({
                             }
                           />
                         </td>
-                        <td className="p-2 border">{g.date || "—"}</td>
-                        <td className="p-2 border">{g.description || "—"}</td>
-                        <td className="p-2 border">
+                        <td className="p-3 border-b text-left">
+                          {g.date || "—"}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {g.description || "—"}
+                        </td>
+                        <td className="p-3 border-b text-right">
                           {money(Number(g.amount || 0))}
                         </td>
                       </tr>
@@ -983,22 +997,25 @@ export default function InvoiceModal({
           {adjustments.length === 0 ? (
             <p className="text-sm text-gray-500">Sin cargos agregados.</p>
           ) : (
-            <div className="border rounded max-h-40 overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Descripción</th>
-                    <th className="p-2 border">Tipo</th>
-                    <th className="p-2 border">Monto</th>
-                    <th className="p-2 border">Acciones</th>
+            <div className="rounded-xl overflow-auto border border-slate-200 shadow-sm max-h-40">
+              <table className="min-w-full w-full text-sm">
+                <thead className="bg-slate-100 sticky top-0 z-10">
+                  <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                    <th className="p-3 border-b text-left">Descripción</th>
+                    <th className="p-3 border-b">Tipo</th>
+                    <th className="p-3 border-b text-right">Monto</th>
+                    <th className="p-3 border-b">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {adjustments.map((a) => {
                     const isEditing = editingAdjId === a.id;
                     return (
-                      <tr key={a.id} className="text-center">
-                        <td className="p-2 border">
+                      <tr
+                        key={a.id}
+                        className="text-center odd:bg-white even:bg-slate-50"
+                      >
+                        <td className="p-3 border-b text-left">
                           {isEditing ? (
                             <textarea
                               className="w-full border rounded px-2 py-1 min-h-[70px]"
@@ -1008,13 +1025,13 @@ export default function InvoiceModal({
                           ) : (
                             <span title={a.description}>
                               {a.description.length > 60
-                                ? `${a.description.slice(0, 60)}…`
+                                ? `${a.description.slice(0, 60)}...`
                                 : a.description}
                             </span>
                           )}
                         </td>
 
-                        <td className="p-2 border">
+                        <td className="p-3 border-b">
                           {isEditing ? (
                             <select
                               className="w-full border rounded px-2 py-1"
@@ -1025,8 +1042,8 @@ export default function InvoiceModal({
                                 )
                               }
                             >
-                              <option value="DEBITO">Débito</option>
-                              <option value="CREDITO">Crédito</option>
+                              <option value="DEBITO">Debito</option>
+                              <option value="CREDITO">Credito</option>
                             </select>
                           ) : (
                             <span
@@ -1041,7 +1058,7 @@ export default function InvoiceModal({
                           )}
                         </td>
 
-                        <td className="p-2 border">
+                        <td className="p-3 border-b text-right">
                           {isEditing ? (
                             <input
                               type="number"
@@ -1055,7 +1072,7 @@ export default function InvoiceModal({
                           )}
                         </td>
 
-                        <td className="p-2 border">
+                        <td className="p-3 border-b">
                           {isEditing ? (
                             <div className="flex gap-2 justify-center">
                               <button

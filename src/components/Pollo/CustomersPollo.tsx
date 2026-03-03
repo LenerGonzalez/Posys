@@ -1329,23 +1329,25 @@ export default function CustomersPollo({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-        <div className="p-4 border rounded-lg bg-white shadow-sm">
-          <div className="text-xs uppercase tracking-wide text-gray-600">
+        <div className="p-4 border border-amber-200 rounded-xl bg-gradient-to-br from-amber-50 to-white shadow-sm">
+          <div className="text-[11px] uppercase tracking-wider text-amber-700">
             Saldo pendiente
           </div>
-          <div className="text-2xl font-semibold">
+          <div className="text-2xl font-semibold text-amber-900">
             {money(totalPendingBalance)}
           </div>
-          <p className="text-[11px] text-gray-500 mt-1">
+          <p className="text-[11px] text-amber-700/80 mt-1">
             Calculado sobre los clientes filtrados
           </p>
         </div>
-        <div className="p-4 border rounded-lg bg-white shadow-sm">
-          <div className="text-xs uppercase tracking-wide text-gray-600">
+        <div className="p-4 border border-emerald-200 rounded-xl bg-gradient-to-br from-emerald-50 to-white shadow-sm">
+          <div className="text-[11px] uppercase tracking-wider text-emerald-700">
             Clientes activos
           </div>
-          <div className="text-2xl font-semibold">{activeCustomersCount}</div>
-          <p className="text-[11px] text-gray-500 mt-1">
+          <div className="text-2xl font-semibold text-emerald-900">
+            {activeCustomersCount}
+          </div>
+          <p className="text-[11px] text-emerald-700/80 mt-1">
             De un total de {totalCustomersCount}
           </p>
         </div>
@@ -1435,218 +1437,227 @@ export default function CustomersPollo({
       {/* Nota: implementé las áreas críticas: cargas, creación, edición, borrado y estado de cuenta.
           Si quieres que reemplace textos adicionales (antes mostraban "dulces") los adapto.
       */}
-      <div className="bg-white p-2 rounded shadow border w-full">
+      <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-200 w-full">
         {/* tabla simplificada: muestra nombres y saldo como placeholder */}
         <div className="hidden md:block">
-          <table className="min-w-full w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 border">Fecha</th>
-                <th className="p-2 border">Nombre</th>
-                <th className="p-2 border">Teléfono</th>
-                <th className="p-2 border">Vendedor</th>
-                <th className="p-2 border">Lugar</th>
-                <th className="p-2 border">Estado</th>
-                <th className="p-2 border">Límite</th>
-                <th className="p-2 border">Saldo</th>
-                <th className="p-2 border">Comentario</th>
-                <th className="p-2 border">Acciones</th>
-              </tr>
-            </thead>
+          <div className="rounded-xl overflow-hidden border border-slate-200">
+            <table className="min-w-full w-full text-sm">
+              <thead className="bg-slate-100 sticky top-0 z-10">
+                <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                  <th className="p-3 border-b text-left">Fecha</th>
+                  <th className="p-3 border-b text-left">Nombre</th>
+                  <th className="p-3 border-b text-left">Teléfono</th>
+                  <th className="p-3 border-b text-left">Vendedor</th>
+                  <th className="p-3 border-b text-left">Lugar</th>
+                  <th className="p-3 border-b text-left">Estado</th>
+                  <th className="p-3 border-b text-right">Límite</th>
+                  <th className="p-3 border-b text-right">Saldo</th>
+                  <th className="p-3 border-b text-left">Comentario</th>
+                  <th className="p-3 border-b text-right">Acciones</th>
+                </tr>
+              </thead>
 
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td className="p-4 text-center" colSpan={10}>
-                    Cargando…
-                  </td>
-                </tr>
-              ) : filteredRows.length === 0 ? (
-                <tr>
-                  <td className="p-4 text-center" colSpan={10}>
-                    Sin clientes
-                  </td>
-                </tr>
-              ) : (
-                filteredRows.map((c) => {
-                  const isEditing = editingId === c.id;
-                  return (
-                    <tr key={c.id} className="text-center">
-                      <td className="p-2 border">
-                        {c.createdAt?.toDate
-                          ? c.createdAt.toDate().toISOString().slice(0, 10)
-                          : "—"}
-                      </td>
-                      <td className="p-2 border text-left">
-                        {isEditing ? (
-                          <input
-                            className="w-full border p-1 rounded"
-                            value={eName}
-                            onChange={(e) => setEName(e.target.value)}
-                          />
-                        ) : (
-                          <div className="font-medium">{c.name}</div>
-                        )}
-                      </td>
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <input
-                            className="w-full border p-1 rounded"
-                            value={ePhone}
-                            onChange={(e) =>
-                              setEPhone(normalizePhone(e.target.value))
-                            }
-                          />
-                        ) : (
-                          c.phone
-                        )}
-                      </td>
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded text-xs"
-                            value={isVendor ? sellerIdSafe : eVendorId}
-                            onChange={(e) => setEVendorId(e.target.value)}
-                            disabled={isVendor}
-                            title="Vendedor asociado"
-                          >
-                            <option value="">— Sin vendedor —</option>
-                            {sellers.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          c.vendorName || "—"
-                        )}
-                      </td>
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded"
-                            value={ePlace}
-                            onChange={(e) => setEPlace(e.target.value as Place)}
-                          >
-                            <option value="">—</option>
-                            {PLACES.map((p) => (
-                              <option key={p} value={p}>
-                                {p}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          c.place || "—"
-                        )}
-                      </td>
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded"
-                            value={eStatus}
-                            onChange={(e) =>
-                              setEStatus(e.target.value as Status)
-                            }
-                          >
-                            <option value="ACTIVO">ACTIVO</option>
-                            <option value="BLOQUEADO">BLOQUEADO</option>
-                          </select>
-                        ) : (
-                          <span
-                            className={`px-2 py-0.5 rounded text-xs ${badgeStatus(c.status)}`}
-                          >
-                            {c.status}
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <input
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            className="w-full border p-1 rounded text-right"
-                            value={
-                              Number.isNaN(eCreditLimit) ? "" : eCreditLimit
-                            }
-                            onChange={(e) =>
-                              setECreditLimit(
-                                Math.max(0, Number(e.target.value || 0)),
-                              )
-                            }
-                          />
-                        ) : (
-                          money(c.creditLimit || 0)
-                        )}
-                      </td>
-                      <td className="p-2 border font-semibold">
-                        {money(c.balance || 0)}
-                      </td>
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <textarea
-                            className="w-full border p-1 rounded resize-y min-h-12"
-                            value={eNotes}
-                            onChange={(e) => setENotes(e.target.value)}
-                            maxLength={500}
-                          />
-                        ) : (
-                          <span title={c.notes || ""}>
-                            {(c.notes || "").length > 40
-                              ? (c.notes || "").slice(0, 40) + "…"
-                              : c.notes || "—"}
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-2 border">
-                        <div className="flex gap-2 justify-center">
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td className="p-4 text-center" colSpan={10}>
+                      Cargando…
+                    </td>
+                  </tr>
+                ) : filteredRows.length === 0 ? (
+                  <tr>
+                    <td className="p-4 text-center" colSpan={10}>
+                      Sin clientes
+                    </td>
+                  </tr>
+                ) : (
+                  filteredRows.map((c) => {
+                    const isEditing = editingId === c.id;
+                    return (
+                      <tr
+                        key={c.id}
+                        className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
+                      >
+                        <td className="p-3 border-b text-left">
+                          {c.createdAt?.toDate
+                            ? c.createdAt.toDate().toISOString().slice(0, 10)
+                            : "—"}
+                        </td>
+                        <td className="p-3 border-b text-left">
                           {isEditing ? (
-                            <>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                                onClick={saveEdit}
-                              >
-                                Guardar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                                onClick={cancelEdit}
-                              >
-                                Cancelar
-                              </button>
-                            </>
+                            <input
+                              className="w-full border p-1 rounded"
+                              value={eName}
+                              onChange={(e) => setEName(e.target.value)}
+                            />
                           ) : (
-                            <>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                                onClick={() => startEdit(c)}
-                              >
-                                Editar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
-                                onClick={() => handleDelete(c)}
-                                disabled={!isAdmin}
-                                title={!isAdmin ? "Solo admin" : "Borrar"}
-                              >
-                                Borrar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
-                                onClick={() => openStatement(c)}
-                              >
-                                Estado de cuenta
-                              </button>
-                            </>
+                            <div className="font-medium text-slate-900">
+                              {c.name}
+                            </div>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <input
+                              className="w-full border p-1 rounded"
+                              value={ePhone}
+                              onChange={(e) =>
+                                setEPhone(normalizePhone(e.target.value))
+                              }
+                            />
+                          ) : (
+                            c.phone
+                          )}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <select
+                              className="w-full border p-1 rounded text-xs"
+                              value={isVendor ? sellerIdSafe : eVendorId}
+                              onChange={(e) => setEVendorId(e.target.value)}
+                              disabled={isVendor}
+                              title="Vendedor asociado"
+                            >
+                              <option value="">— Sin vendedor —</option>
+                              {sellers.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            c.vendorName || "—"
+                          )}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <select
+                              className="w-full border p-1 rounded"
+                              value={ePlace}
+                              onChange={(e) =>
+                                setEPlace(e.target.value as Place)
+                              }
+                            >
+                              <option value="">—</option>
+                              {PLACES.map((p) => (
+                                <option key={p} value={p}>
+                                  {p}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            c.place || "—"
+                          )}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <select
+                              className="w-full border p-1 rounded"
+                              value={eStatus}
+                              onChange={(e) =>
+                                setEStatus(e.target.value as Status)
+                              }
+                            >
+                              <option value="ACTIVO">ACTIVO</option>
+                              <option value="BLOQUEADO">BLOQUEADO</option>
+                            </select>
+                          ) : (
+                            <span
+                              className={`px-2 py-0.5 rounded text-xs ${badgeStatus(c.status)}`}
+                            >
+                              {c.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3 border-b text-right">
+                          {isEditing ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              inputMode="decimal"
+                              className="w-full border p-1 rounded text-right"
+                              value={
+                                Number.isNaN(eCreditLimit) ? "" : eCreditLimit
+                              }
+                              onChange={(e) =>
+                                setECreditLimit(
+                                  Math.max(0, Number(e.target.value || 0)),
+                                )
+                              }
+                            />
+                          ) : (
+                            money(c.creditLimit || 0)
+                          )}
+                        </td>
+                        <td className="p-3 border-b text-right font-semibold">
+                          {money(c.balance || 0)}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <textarea
+                              className="w-full border p-1 rounded resize-y min-h-12"
+                              value={eNotes}
+                              onChange={(e) => setENotes(e.target.value)}
+                              maxLength={500}
+                            />
+                          ) : (
+                            <span title={c.notes || ""}>
+                              {(c.notes || "").length > 40
+                                ? (c.notes || "").slice(0, 40) + "…"
+                                : c.notes || "—"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3 border-b text-right">
+                          <div className="flex gap-2 justify-end">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                                  onClick={saveEdit}
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                                  onClick={cancelEdit}
+                                >
+                                  Cancelar
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                                  onClick={() => startEdit(c)}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                                  onClick={() => handleDelete(c)}
+                                  disabled={!isAdmin}
+                                  title={!isAdmin ? "Solo admin" : "Borrar"}
+                                >
+                                  Borrar
+                                </button>
+                                <button
+                                  className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
+                                  onClick={() => openStatement(c)}
+                                >
+                                  Estado de cuenta
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
         {/* ===== MOBILE LIST (ANTES NO EXISTÍA, POR ESO EN CEL SE VE VACÍO) ===== */}
         <div className="md:hidden space-y-2">

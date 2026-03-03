@@ -854,7 +854,7 @@ export default function TransactionsPollo({
 
   const [filtersCardOpen, setFiltersCardOpen] = useState(false);
   const [kpisCardOpen, setKpisCardOpen] = useState(false);
-  const [transactionsCardOpen, setTransactionsCardOpen] = useState(false);
+  const [transactionsCardOpen, setTransactionsCardOpen] = useState(true);
 
   const mobileGroups = useMemo(() => {
     const map = new Map<string, { cash: SaleDoc[]; credit: SaleDoc[] }>();
@@ -1382,7 +1382,7 @@ export default function TransactionsPollo({
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-gray-600">Libras</span>
+                <span className="text-gray-600">Libras/Unidades</span>
                 <span className="font-medium">
                   <button
                     type="button"
@@ -1736,110 +1736,127 @@ export default function TransactionsPollo({
               </div>
             </div>
 
-            <div className="hidden md:block bg-white p-2 rounded shadow border w-full">
-              <table className="min-w-full w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Fecha</th>
-                    <th className="p-2 border">Estado</th>
-                    <th className="p-2 border">Cliente</th>
-                    <th className="p-2 border">Producto</th>
-                    <th className="p-2 border">Tipo</th>
-                    <th className="p-2 border">Libras</th>
-                    <th className="p-2 border">Ventas</th>
-                    {canDelete && <th className="p-2 border">Acciones</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td className="p-4 text-center" colSpan={columnsCount}>
-                        Cargando…
-                      </td>
+            <div className="hidden md:block bg-white p-2 rounded-xl shadow-sm border border-slate-200 w-full">
+              <div className="rounded-xl overflow-x-auto border border-slate-200">
+                <table className="min-w-full w-full text-sm">
+                  <thead className="bg-slate-100 sticky top-0 z-10">
+                    <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                      <th className="p-3 border-b text-left">Fecha</th>
+                      <th className="p-3 border-b text-left">Estado</th>
+                      <th className="p-3 border-b text-left">Cliente</th>
+                      <th className="p-3 border-b text-left">Producto</th>
+                      <th className="p-3 border-b text-left">Tipo</th>
+                      <th className="p-3 border-b text-right">Lb/Un</th>
+                      <th className="p-3 border-b text-right">Ventas</th>
+                      {canDelete && (
+                        <th className="p-3 border-b text-right">Acciones</th>
+                      )}
                     </tr>
-                  ) : paged.length === 0 ? (
-                    <tr>
-                      <td className="p-4 text-center" colSpan={columnsCount}>
-                        Sin transacciones en el rango.
-                      </td>
-                    </tr>
-                  ) : (
-                    paged.map((s) => {
-                      const name = getSaleCustomerName(s, customersById);
-                      // Mostrar todos los productos vendidos en la venta
-                      let productName = "(sin producto)";
-                      if (
-                        Array.isArray(s._raw?.items) &&
-                        s._raw.items.length > 0
-                      ) {
-                        productName = s._raw.items
-                          .map(
-                            (it: any) =>
-                              it.productName ||
-                              it.product ||
-                              it.name ||
-                              "(sin nombre)",
-                          )
-                          .join(", ");
-                      } else if (s._raw?.productName) {
-                        productName = s._raw.productName;
-                      } else if (s._raw?.items?.[0]?.productName) {
-                        productName = s._raw.items[0].productName;
-                      }
-                      const estadoLabel = getEstadoLabel(s._raw);
+                  </thead>
+                  <tbody>
+                    {loading ? (
+                      <tr>
+                        <td className="p-4 text-center" colSpan={columnsCount}>
+                          Cargando…
+                        </td>
+                      </tr>
+                    ) : paged.length === 0 ? (
+                      <tr>
+                        <td className="p-4 text-center" colSpan={columnsCount}>
+                          Sin transacciones en el rango.
+                        </td>
+                      </tr>
+                    ) : (
+                      paged.map((s) => {
+                        const name = getSaleCustomerName(s, customersById);
+                        // Mostrar todos los productos vendidos en la venta
+                        let productName = "(sin producto)";
+                        if (
+                          Array.isArray(s._raw?.items) &&
+                          s._raw.items.length > 0
+                        ) {
+                          productName = s._raw.items
+                            .map(
+                              (it: any) =>
+                                it.productName ||
+                                it.product ||
+                                it.name ||
+                                "(sin nombre)",
+                            )
+                            .join(", ");
+                        } else if (s._raw?.productName) {
+                          productName = s._raw.productName;
+                        } else if (s._raw?.items?.[0]?.productName) {
+                          productName = s._raw.items[0].productName;
+                        }
+                        const estadoLabel = getEstadoLabel(s._raw);
 
-                      return (
-                        <tr key={s.id} className="text-center">
-                          <td className="p-2 border">{s.date}</td>
-                          <td className="p-2 border">{estadoLabel}</td>
-                          <td className="p-2 border">{name}</td>
-                          <td className="p-2 border">{productName}</td>
-                          <td className="p-2 border">
-                            {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                          </td>
-                          <td className="p-2 border">
-                            <button
-                              type="button"
-                              className="underline text-blue-600 hover:text-blue-800"
-                              title="Ver detalle de productos de esta venta"
-                              onClick={() => openItemsModal(s.id)}
-                            >
-                              {qty3(s.quantity)}
-                            </button>
-                          </td>
-                          <td className="p-2 border">{money(s.total)}</td>
-
-                          {canDelete && (
-                            <td className="p-2 border relative">
-                              <button
-                                className="px-2 py-1 rounded border hover:bg-gray-50"
-                                onClick={() =>
-                                  setOpenMenuId((prev) =>
-                                    prev === s.id ? null : s.id,
-                                  )
-                                }
-                                title="Acciones"
-                              >
-                                ⋮
-                              </button>
-                              {openMenuId === s.id && (
-                                <div className="absolute right-2 mt-1 w-28 bg-white border rounded shadow z-10 text-left">
-                                  <button
-                                    className="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
-                                    onClick={() => confirmDelete(s)}
-                                  >
-                                    Eliminar
-                                  </button>
-                                </div>
-                              )}
+                        return (
+                          <tr
+                            key={s.id}
+                            className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
+                          >
+                            <td className="p-3 border-b text-left whitespace-nowrap">
+                              {s.date}
                             </td>
-                          )}
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                            <td className="p-3 border-b text-left whitespace-nowrap">
+                              {estadoLabel}
+                            </td>
+                            <td className="p-3 border-b text-left whitespace-nowrap">
+                              {name}
+                            </td>
+                            <td className="p-3 border-b text-left whitespace-nowrap">
+                              {productName}
+                            </td>
+                            <td className="p-3 border-b text-left whitespace-nowrap">
+                              {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                            </td>
+                            <td className="p-3 border-b text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                className="underline text-blue-600 hover:text-blue-800"
+                                title="Ver detalle de productos de esta venta"
+                                onClick={() => openItemsModal(s.id)}
+                              >
+                                {qty3(s.quantity)}
+                              </button>
+                            </td>
+                            <td className="p-3 border-b text-right whitespace-nowrap">
+                              {money(s.total)}
+                            </td>
+
+                            {canDelete && (
+                              <td className="p-3 border-b text-right relative whitespace-nowrap">
+                                <button
+                                  className="px-2 py-1 rounded border hover:bg-gray-50"
+                                  onClick={() =>
+                                    setOpenMenuId((prev) =>
+                                      prev === s.id ? null : s.id,
+                                    )
+                                  }
+                                  title="Acciones"
+                                >
+                                  ⋮
+                                </button>
+                                {openMenuId === s.id && (
+                                  <div className="absolute right-2 mt-1 w-28 bg-white border rounded shadow z-10 text-left">
+                                    <button
+                                      className="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
+                                      onClick={() => confirmDelete(s)}
+                                    >
+                                      Eliminar
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
               {renderPager()}
             </div>
@@ -1852,34 +1869,35 @@ export default function TransactionsPollo({
       {/* Modal: Detalle de piezas de la venta */}
       {itemsModalOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <h3 className="text-lg font-bold">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-[95%] max-w-3xl max-h-[90vh] overflow-hidden">
+            <div className="flex items-start justify-between gap-3 px-4 py-3 border-b bg-slate-50">
+              <div className="min-w-0">
+                <h3 className="text-lg font-bold text-slate-900 truncate">
                   Productos vendidos{" "}
                   {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
                 </h3>
-
-                {/* no mostramos comisión en Pollo */}
+                <div className="text-xs text-slate-600 mt-1">
+                  Fecha de compra: <b>{modalSale?.date || "—"}</b>
+                </div>
               </div>
 
               <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                className="px-3 py-1 rounded bg-white border border-slate-200 hover:bg-slate-100"
                 onClick={() => setItemsModalOpen(false)}
               >
                 Cerrar
               </button>
             </div>
 
-            <div className="bg-white rounded border overflow-x-auto">
+            <div className="bg-white border-t border-slate-200 overflow-auto">
               <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Producto</th>
-                    <th className="p-2 border text-right">Libras</th>
-                    <th className="p-2 border text-right">Precio</th>
-                    <th className="p-2 border text-right">Descuento</th>
-                    <th className="p-2 border text-right">Monto</th>
+                <thead className="bg-slate-100 sticky top-0 z-10">
+                  <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                    <th className="p-3 border-b text-left">Producto</th>
+                    <th className="p-3 border-b text-right">Libras/Unidades</th>
+                    <th className="p-3 border-b text-right">Precio</th>
+                    <th className="p-3 border-b text-right">Descuento</th>
+                    <th className="p-3 border-b text-right">Monto</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1897,18 +1915,23 @@ export default function TransactionsPollo({
                     </tr>
                   ) : (
                     itemsModalRows.map((it, idx) => (
-                      <tr key={idx} className="text-center">
-                        <td className="p-2 border text-left">
+                      <tr
+                        key={idx}
+                        className="text-center odd:bg-white even:bg-slate-50"
+                      >
+                        <td className="p-3 border-b text-left whitespace-nowrap">
                           {it.productName}
                         </td>
-                        <td className="p-2 border text-right">{it.qty}</td>
-                        <td className="p-2 border text-right">
+                        <td className="p-3 border-b text-right whitespace-nowrap">
+                          {it.qty}
+                        </td>
+                        <td className="p-3 border-b text-right whitespace-nowrap">
                           {money(it.unitPrice)}
                         </td>
-                        <td className="p-2 border text-right">
+                        <td className="p-3 border-b text-right whitespace-nowrap">
                           {money(it.discount || 0)}
                         </td>
-                        <td className="p-2 border text-right">
+                        <td className="p-3 border-b text-right font-semibold whitespace-nowrap">
                           {money(it.total)}
                         </td>
                       </tr>

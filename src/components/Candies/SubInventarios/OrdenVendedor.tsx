@@ -3906,7 +3906,7 @@ export default function VendorCandyOrders({
   // RENDER
   // =========================
   return (
-    <div className="p-3 md:p-6">
+    <div className="p-3 md:p-6 overflow-x-hidden">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-3">
         <div className="flex-1">
@@ -3964,7 +3964,7 @@ export default function VendorCandyOrders({
       ) : (
         <>
           {/* Desktop table */}
-          <div className="hidden md:block bg-white border rounded">
+          <div className="hidden md:block bg-white border border-slate-200 rounded-xl shadow-sm overflow-x-hidden max-w-full">
             <div className="p-3 border-b flex items-center justify-between">
               <div className="text-sm text-gray-700">
                 Total pedidos: <b>{orderSummaries.length}</b>
@@ -4029,31 +4029,31 @@ export default function VendorCandyOrders({
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-w-full w-full">
               <table className="min-w-[1100px] w-full text-xs">
-                <thead className="bg-gray-50">
-                  <tr className="whitespace-nowrap">
-                    <th className="text-left p-2 border-b">Nombre</th>
-                    <th className="text-left p-2 border-b">Fecha</th>
-                    <th className="text-left p-2 border-b">Vendedor</th>
-                    <th className="text-right p-2 border-b">P. Agregados</th>
-                    <th className="text-right p-2 border-b">P. Restantes</th>
+                <thead className="bg-slate-100 sticky top-0 z-10">
+                  <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
+                    <th className="text-left p-3 border-b">Nombre</th>
+                    <th className="text-left p-3 border-b">Fecha</th>
+                    <th className="text-left p-3 border-b">Vendedor</th>
+                    <th className="text-right p-3 border-b">P. Agregados</th>
+                    <th className="text-right p-3 border-b">P. Restantes</th>
                     {isAdmin && (
-                      <th className="text-right p-2 border-b">
+                      <th className="text-right p-3 border-b">
                         Total esperado
                       </th>
                     )}
                     {isAdmin && (
-                      <th className="text-right p-2 border-b">U. Bruta</th>
+                      <th className="text-right p-3 border-b">U. Bruta</th>
                     )}
                     {isAdmin && (
-                      <th className="text-right p-2 border-b">Gastos</th>
+                      <th className="text-right p-3 border-b">Gastos</th>
                     )}
 
-                    <th className="text-right p-2 border-b">U. Vendedor</th>
-                    <th className="text-right p-2 border-b">Trasl. Salida</th>
-                    <th className="text-right p-2 border-b">Trasl. Entrada</th>
-                    <th className="text-left p-2 border-b">Acciones</th>
+                    <th className="text-right p-3 border-b">U. Vendedor</th>
+                    <th className="text-right p-3 border-b">Trasl. Salida</th>
+                    <th className="text-right p-3 border-b">Trasl. Entrada</th>
+                    <th className="text-left p-3 border-b">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4073,60 +4073,60 @@ export default function VendorCandyOrders({
                     return (
                       <tr
                         key={o.orderKey}
-                        className="hover:bg-gray-50 whitespace-nowrap"
+                        className="hover:bg-slate-50 whitespace-nowrap odd:bg-white even:bg-slate-50"
                       >
-                        <td className="p-2 border-b">{o.orderName || "—"}</td>
-                        <td className="p-2 border-b">{o.date}</td>
-                        <td className="p-2 border-b">{o.sellerName}</td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-3 border-b">{o.orderName || "—"}</td>
+                        <td className="p-3 border-b">{o.date}</td>
+                        <td className="p-3 border-b">{o.sellerName}</td>
+                        <td className="p-3 border-b text-right">
                           <span className={zeroClass(o.totalPackages)}>
                             {o.totalPackages}
                           </span>
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-3 border-b text-right">
                           <span className={zeroClass(o.totalRemainingPackages)}>
                             {o.totalRemainingPackages}
                           </span>
                         </td>
                         {isAdmin && (
-                          <td className="p-2 border-b text-right">
+                          <td className="p-3 border-b text-right">
                             <span className={zeroClass(totalExpectedVal)}>
                               {money(totalExpectedVal)}
                             </span>
                           </td>
                         )}
                         {isAdmin && (
-                          <td className="p-2 border-b text-right">
+                          <td className="p-3 border-b text-right">
                             <span className={zeroClass(grossProfitVal)}>
                               {money(grossProfitVal)}
                             </span>
                           </td>
                         )}
                         {isAdmin && (
-                          <td className="p-2 border-b text-right">
+                          <td className="p-3 border-b text-right">
                             {money((o.gastosActive ?? o.gastos) || 0)}
                           </td>
                         )}
 
-                        <td className="p-2 border-b text-right">
+                        <td className="p-3 border-b text-right">
                           <span className={zeroClass(vendorProfitVal)}>
                             {money(vendorProfitVal)}
                           </span>
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-3 border-b text-right">
                           <span className={zeroClass(transferredOutVal)}>
                             {o.transferredOut}
                           </span>
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-3 border-b text-right">
                           <span className={zeroClass(transferredInVal)}>
                             {o.transferredIn}
                           </span>
                         </td>
-                        <td className="p-2 border-b">
+                        <td className="p-3 border-b">
                           <div className="flex gap-2">
                             <button
-                              className="px-3 py-1.5 rounded bg-gray-900 text-white text-xs hover:bg-black"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
                               onClick={() => openEditOrder(o.orderKey)}
                             >
                               Ver / Editar
@@ -4134,7 +4134,7 @@ export default function VendorCandyOrders({
                             {/* recalc button removed per request */}
                             {isAdmin && (
                               <button
-                                className="px-3 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-700"
+                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
                                 onClick={() => {
                                   if (
                                     confirm("¿Eliminar este pedido completo?")
