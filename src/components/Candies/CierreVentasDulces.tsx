@@ -40,6 +40,7 @@ interface SaleDataRaw {
   vendorName?: string;
   vendorId?: string;
   // suma de margenVendedor por items (para reconciliar con vendorCommissionAmount)
+  price?: number;
   commissionFromItems?: number;
   clientName?: string;
   amountReceived?: number;
@@ -114,6 +115,7 @@ interface SaleData {
   commissionFromItems?: number;
 
   // uvxpaq calculado en la venta (si existe)
+  price?: number;
   uvXpaq?: number;
 
   // fallback legacy
@@ -158,7 +160,7 @@ interface SellerCandy {
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
-const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
+const qty3 = (n: unknown) => Math.trunc(Number(n ?? 0)).toString();
 const maybeMoney = (n: unknown) =>
   Number.isFinite(Number(n)) ? `C$${money(n)}` : "—";
 const normKey = (v: unknown) =>
@@ -229,7 +231,11 @@ async function deleteARMovesBySaleId(saleId: string) {
 
 // ✅ Normaliza UNA venta en MÚLTIPLES filas si trae items[]
 // ✅ Ajuste: prorratea vendorCommissionAmount por línea
-const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
+const normalizeMany = (
+  raw: SaleDataRaw,
+  id: string,
+  upaqueteMap: Record<string, Record<string, number>>,
+): SaleData[] => {
   const date =
     raw.date ??
     (raw.timestamp?.toDate
@@ -293,6 +299,61 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       const vendorNet = round2(uBrutaItem - prorrateo - vendorUtil);
       const uvXpaqFromItem = Number(it?.uvXpaq ?? it?.upaquete ?? NaN);
 
+      // Calcular utilidad neta por paquete desde upaqueteMap si existe
+      let uNetaPorPaquete: number | undefined = undefined;
+      try {
+        const vendedorId = String(
+          vendorId || raw.vendorId || it.vendorId || "",
+        ).trim();
+        const prodKey = normKey(it.productName || it.productId || "");
+        const upaMap = typeof upaqueteMap !== "undefined" ? upaqueteMap : {};
+        let foundKey = null;
+        if (upaMap[vendedorId]) {
+          // Mostrar todas las claves disponibles para ese vendedor
+          const allKeys = Object.keys(upaMap[vendedorId]);
+          console.log(
+            "[CierreVentasDulces] Claves en upaqueteMap para vendedor",
+            vendedorId,
+            allKeys,
+          );
+          // Buscar match exacto
+          if (upaMap[vendedorId][prodKey] !== undefined) {
+            foundKey = prodKey;
+          } else {
+            // Buscar por similitud (ignorando espacios y mayúsculas)
+            const match = allKeys.find(
+              (k) => k.replace(/\s+/g, "") === prodKey.replace(/\s+/g, ""),
+            );
+            if (match) foundKey = match;
+          }
+          if (foundKey) {
+            uNetaPorPaquete = Number(upaMap[vendedorId][foundKey]);
+            console.log(
+              "[CierreVentasDulces] Match clave producto:",
+              foundKey,
+              "valor:",
+              uNetaPorPaquete,
+            );
+          }
+        }
+        if (
+          uNetaPorPaquete === undefined &&
+          typeof it.uNeta === "number" &&
+          Number(it.packages) > 0
+        ) {
+          uNetaPorPaquete = round2(Number(it.uNeta) / Number(it.packages));
+        }
+        console.log(
+          "[CierreVentasDulces] uNetaPorPaquete:",
+          uNetaPorPaquete,
+          "vendedor:",
+          vendedorId,
+          "producto:",
+          prodKey,
+        );
+      } catch (e) {
+        uNetaPorPaquete = undefined;
+      }
       return {
         id: `${id}#${idx}`,
         productName: String(it?.productName ?? "(sin nombre)"),
@@ -320,6 +381,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         uvXpaq: Number.isFinite(uvXpaqFromItem)
           ? Number(uvXpaqFromItem)
           : undefined,
+        uNetaPorPaquete,
         processedDate: processedDate || "",
       };
     });
@@ -488,7 +550,11 @@ export default function CierreVentasDulces({
       (snap) => {
         const rows: SaleData[] = [];
         snap.forEach((d) => {
-          const parts = normalizeMany(d.data() as SaleDataRaw, d.id);
+          const parts = normalizeMany(
+            d.data() as SaleDataRaw,
+            d.id,
+            upaqueteMap,
+          );
           rows.push(...parts);
         });
         setSales(rows);
@@ -687,19 +753,12 @@ export default function CierreVentasDulces({
               x.productName || x.productName?.toString() || "",
             );
             const key = pname ? normKey(pname) : String(x.productId || "");
-            // prefer explicit field `upaquete` if exists
-            const explicitUpa = Number(
-              x.upaquete ?? x.uPaquete ?? x.u_per_package ?? NaN,
-            );
-            let valUpa = NaN as number;
-            if (Number.isFinite(explicitUpa)) valUpa = explicitUpa;
-            else {
-              const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
-              const packs = Math.max(1, Number(x.packages ?? 0));
-              valUpa = packs > 0 ? gross / packs : 0;
+            // usar SOLO el campo uNetaPorPaquete de Firestore
+            const valUpa = Number(x.uNetaPorPaquete ?? NaN);
+            if (Number.isFinite(valUpa)) {
+              mapUpa[sid][key] = valUpa;
             }
-            mapUpa[sid][key] = Number(valUpa || 0);
-
+            // El resto igual para mapUv
             const explicitUv = Number(
               x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? x.u_vxpaq ?? NaN,
             );
@@ -1050,7 +1109,7 @@ export default function CierreVentasDulces({
   );
 
   // Totales visibles (quantity = paquetes)
-  const totalPaquetes = round3(
+  const totalPaquetes = Math.round(
     visibleSales.reduce((sum, s) => sum + (s.quantity || 0), 0),
   );
   const totalCOGSVisible = round2(
@@ -1077,10 +1136,10 @@ export default function CierreVentasDulces({
     const received = Number(s.amountReceived || 0);
 
     if (s.type === "CREDITO") {
-      totalPacksCredito += s.quantity || 0;
+      totalPacksCredito += Math.round(s.quantity || 0);
       totalPendienteCredito += amt - received;
     } else {
-      totalPacksCash += s.quantity || 0;
+      totalPacksCash += Math.round(s.quantity || 0);
       totalCobradoCash += amt;
     }
   });
@@ -1150,10 +1209,10 @@ export default function CierreVentasDulces({
       const pkey = normKey(s.productName || "");
       const current = entry.products.get(pkey);
       if (current) {
-        current.qty += Number(s.quantity || 0);
+        current.qty += Math.round(s.quantity || 0);
       } else {
         entry.products.set(pkey, {
-          qty: Number(s.quantity || 0),
+          qty: Math.round(s.quantity || 0),
           sample: s,
         });
       }
@@ -1199,10 +1258,10 @@ export default function CierreVentasDulces({
       const pkey = normKey(s.productName || "");
       const current = entry.products.get(pkey);
       if (current) {
-        current.qty += Number(s.quantity || 0);
+        current.qty += Math.round(s.quantity || 0);
       } else {
         entry.products.set(pkey, {
-          qty: Number(s.quantity || 0),
+          qty: Math.round(s.quantity || 0),
           sample: s,
         });
       }
@@ -1239,8 +1298,8 @@ export default function CierreVentasDulces({
         totalCommission: 0,
         totalCommissionUv: 0,
       };
-    productMap[key].totalQuantity = round3(
-      productMap[key].totalQuantity + (s.quantity || 0),
+    productMap[key].totalQuantity = Math.round(
+      productMap[key].totalQuantity + Math.round(s.quantity || 0),
     );
     productMap[key].totalAmount = round2(
       productMap[key].totalAmount + (s.amount || 0),
@@ -1258,9 +1317,9 @@ export default function CierreVentasDulces({
     ([productName, v]) => ({
       productName,
       category: productCategoryMap[normKey(productName)] || "(sin categoría)",
-      totalQuantity: v.totalQuantity,
+      totalQuantity: Math.round(v.totalQuantity),
       totalAmount: v.totalAmount,
-      totalCommission: v.totalCommission,
+      totalCommission: v.totalCommissionUv, // AJUSTE: ahora la comisión es uvXpaq * paquetes
       totalCommissionUv: v.totalCommissionUv,
     }),
   );
@@ -1289,8 +1348,8 @@ export default function CierreVentasDulces({
         };
       }
       map[cat].rows.push(row);
-      map[cat].totalQuantity = round3(
-        map[cat].totalQuantity + (row.totalQuantity || 0),
+      map[cat].totalQuantity = Math.round(
+        map[cat].totalQuantity + Math.round(row.totalQuantity || 0),
       );
       map[cat].totalAmount = round2(
         map[cat].totalAmount + (row.totalAmount || 0),
@@ -1336,8 +1395,8 @@ export default function CierreVentasDulces({
         totalSuggested: round2(
           toProcess.reduce((a, s) => a + (s.amountSuggested || 0), 0),
         ),
-        totalUnits: round3(
-          toProcess.reduce((a, s) => a + (s.quantity || 0), 0),
+        totalUnits: Math.round(
+          toProcess.reduce((a, s) => a + Math.round(s.quantity || 0), 0),
         ),
         totalCOGS: round2(
           toProcess.reduce((a, s) => a + Number(s.cogsAmount ?? 0), 0),
@@ -1374,8 +1433,8 @@ export default function CierreVentasDulces({
       );
 
       const totalsSplit = {
-        totalPacksCash: round3(split.packsCash),
-        totalPacksCredit: round3(split.packsCredit),
+        totalPacksCash: Math.round(split.packsCash),
+        totalPacksCredit: Math.round(split.packsCredit),
         totalAmountCash: round2(split.amountCash),
         totalAmountCredit: round2(split.amountCredit),
         totalCommissionCash: round2(split.comCash),
@@ -1396,7 +1455,7 @@ export default function CierreVentasDulces({
         ...totalsSplit,
         products: toProcess.map((s) => ({
           productName: s.productName,
-          quantity: s.quantity,
+          quantity: Math.round(s.quantity),
           amount: s.amount,
         })),
         sales: toProcess.map((s) => ({
@@ -1614,35 +1673,48 @@ export default function CierreVentasDulces({
 
   // Export visible sales as real Excel (.xlsx) using SheetJS
   const handleExportXLSX = () => {
-    const rows = visibleSales.map((s) => ({
-      id: s.id,
-      productName: s.productName,
-      type: s.type,
-      quantity: s.quantity ?? 0,
-      amount: Number(s.amount ?? 0).toFixed(2),
-      commissionFromItems: Number(s.commissionFromItems ?? 0).toFixed(2),
-      vendorNetUtility: Number(s.vendorNetUtility ?? 0).toFixed(2),
-      date: s.date,
-      processedDate: s.processedDate ?? "",
-      vendor: s.userEmail ?? "",
-      status: s.status,
-    }));
-
-    const rowsWithUpa = rows.map((r) => {
-      const matching = visibleSales.find((s) => s.id === r.id);
-      const u = getUpaqueteForSale(matching);
-      const uv = getUvXpaqForSale(matching);
-      const qty = Number(matching?.quantity || 0);
-      const comision = uv > 0 ? round2(uv * qty) : 0;
+    // Columnas igual que la UI (cash/credito):
+    // Estado, Producto, Tipo, Paquetes, Precio, Monto, UN x Paq, UV x Paq, Comision, U. Neta, Fecha venta, Vendedor
+    const rows = visibleSales.map((s) => {
+      const key = normKey(s.productName || "");
+      const qty = Number(s.quantity || 0);
+      // Precio
+      let precio = "";
+      if (typeof s.price === "number" && !isNaN(s.price)) {
+        precio = `C$${money(s.price)}`;
+      } else if (qty > 0 && typeof s.amount === "number") {
+        precio = `C$${money(s.amount / qty)}`;
+      }
+      // UN x Paq
+      const u = upaqueteMap[s.vendorId || ""]?.[key];
+      // UV x Paq
+      const uv = getUvXpaqForSale(s);
+      // Comision
+      const comision = uv > 0 ? round2(uv * qty) : "";
+      // U. Neta
+      const uneta = u && qty > 0 ? round2(Number(u) * qty) : "";
       return {
-        ...r,
-        uPaquete: u !== null && u !== undefined ? round2(Number(u)) : "",
-        uvXpaq: uv > 0 ? round2(uv) : "",
-        comision: comision > 0 ? round2(comision) : "",
+        Estado: s.status,
+        Producto: s.productName,
+        Tipo: s.type === "CREDITO" ? "Crédito" : "Cash",
+        Paquetes: qty3(s.quantity),
+        Precio: precio,
+        Monto: `C$${money(s.amount)}`,
+        ...(isAdmin
+          ? {
+              "UN x Paq":
+                u && Number(u) !== 0 ? `C$${money(round2(Number(u)))}` : "—",
+              "UV x Paq": uv > 0 ? `C$${money(round2(uv))}` : "—",
+              Comision: comision ? `C$${money(comision)}` : "—",
+              "U. Neta": u && uneta ? `C$${money(uneta)}` : "—",
+            }
+          : {}),
+        "Fecha venta": s.date,
+        Vendedor: s.userEmail,
       };
     });
 
-    const ws = XLSX.utils.json_to_sheet(rowsWithUpa);
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ventas");
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
@@ -1668,6 +1740,45 @@ export default function CierreVentasDulces({
         Cierre de Ventas de Dulces - Proceso: {today}
       </h2>
 
+      {/* Botones de acción arriba de filtros */}
+      <div className="flex gap-2 mb-4">
+        {isAdmin && (
+          <button
+            onClick={handleSaveClosure}
+            className="bg-blue-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-blue-700"
+          >
+            Procesar
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            onClick={backfillUvXpaqInSales}
+            disabled={isBackfillingUv}
+            className="bg-emerald-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-emerald-700 disabled:opacity-60"
+          >
+            {isBackfillingUv ? "Actualizando UVxPaq..." : "Actualizar UVxPaq"}
+          </button>
+        )}
+        <button
+          onClick={handleDownloadPDF}
+          className="bg-green-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-green-700"
+        >
+          PDF
+        </button>
+        <button
+          onClick={handleExportCSV}
+          className="bg-slate-700 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-slate-800"
+        >
+          CSV
+        </button>
+        <button
+          onClick={handleExportXLSX}
+          className="bg-amber-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-amber-700"
+        >
+          Excel
+        </button>
+      </div>
+
       {/* filtros por periodo + estado + vendedor */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
         <button
@@ -1686,6 +1797,46 @@ export default function CierreVentasDulces({
         <div
           className={`collapsible-content ${filtersCardOpen ? "block" : "hidden"} border-t p-4`}
         >
+          {/* Botones de acción también dentro del card de filtros en mobile */}
+          <div className="flex gap-2 mb-4 md:hidden">
+            {isAdmin && (
+              <button
+                onClick={handleSaveClosure}
+                className="bg-blue-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-blue-700"
+              >
+                Procesar
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={backfillUvXpaqInSales}
+                disabled={isBackfillingUv}
+                className="bg-emerald-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {isBackfillingUv
+                  ? "Actualizando UVxPaq..."
+                  : "Actualizar UVxPaq"}
+              </button>
+            )}
+            <button
+              onClick={handleDownloadPDF}
+              className="bg-green-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-green-700"
+            >
+              PDF
+            </button>
+            <button
+              onClick={handleExportCSV}
+              className="bg-slate-700 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-slate-800"
+            >
+              CSV
+            </button>
+            <button
+              onClick={handleExportXLSX}
+              className="bg-amber-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-amber-700"
+            >
+              Excel
+            </button>
+          </div>
           <div className="flex flex-col md:flex-row md:items-end gap-3">
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-700">
@@ -1769,7 +1920,7 @@ export default function CierreVentasDulces({
         </div>
       </div>
 
-      {/* KPIs arriba */}
+      {/* KPIs arriba (con KPIs por vendedor adentro) */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
         <button
           type="button"
@@ -1862,68 +2013,67 @@ export default function CierreVentasDulces({
               </div>
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* KPIs listados por vendedor (cash / crédito) */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-        <button
-          type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
-          onClick={() => setVendorKpiCardOpen((v) => !v)}
-          aria-expanded={vendorKpiCardOpen}
-        >
-          <span>KPIs por vendedor</span>
-          <span
-            className={`text-slate-400 transition-transform ${vendorKpiCardOpen ? "rotate-180" : ""}`}
-          >
-            ▼
-          </span>
-        </button>
-        <div
-          className={`collapsible-content ${vendorKpiCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="border border-slate-200 rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">
-                Vendedores (comisión CASH del período)
-              </div>
-              {vendorCommissionRowsCash.length === 0 ? (
-                <div className="text-sm text-slate-500 mt-2">—</div>
-              ) : (
-                <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
-                  {vendorCommissionRowsCash.map((v) => (
-                    <div
-                      key={v.vendorId}
-                      className="flex items-center justify-between text-sm text-slate-700"
-                    >
-                      <span className="truncate">{v.name}</span>
-                      <strong className="ml-2">C${money(v.total)}</strong>
+          {/* KPIs por vendedor ahora dentro del card de KPIs */}
+          <div className="mt-6">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+              onClick={() => setVendorKpiCardOpen((v) => !v)}
+              aria-expanded={vendorKpiCardOpen}
+            >
+              <span>KPIs por vendedor</span>
+              <span
+                className={`text-slate-400 transition-transform ${vendorKpiCardOpen ? "rotate-180" : ""}`}
+              >
+                ▼
+              </span>
+            </button>
+            <div
+              className={`collapsible-content ${vendorKpiCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="border border-slate-200 rounded-xl p-3 shadow-sm bg-slate-50">
+                  <div className="text-xs text-slate-600">
+                    Vendedores (comisión CASH del período)
+                  </div>
+                  {vendorCommissionRowsCash.length === 0 ? (
+                    <div className="text-sm text-slate-500 mt-2">—</div>
+                  ) : (
+                    <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
+                      {vendorCommissionRowsCash.map((v) => (
+                        <div
+                          key={v.vendorId}
+                          className="flex items-center justify-between text-sm text-slate-700"
+                        >
+                          <span className="truncate">{v.name}</span>
+                          <strong className="ml-2">C${money(v.total)}</strong>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
-              )}
-            </div>
 
-            <div className="border border-slate-200 rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">
-                Vendedores (comisión CRÉDITO del período)
-              </div>
-              {vendorCommissionRowsCredito.length === 0 ? (
-                <div className="text-sm text-slate-500 mt-2">—</div>
-              ) : (
-                <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
-                  {vendorCommissionRowsCredito.map((v) => (
-                    <div
-                      key={v.vendorId}
-                      className="flex items-center justify-between text-sm text-slate-700"
-                    >
-                      <span className="truncate">{v.name}</span>
-                      <strong className="ml-2">C${money(v.total)}</strong>
+                <div className="border border-slate-200 rounded-xl p-3 shadow-sm bg-slate-50">
+                  <div className="text-xs text-slate-600">
+                    Vendedores (comisión CRÉDITO del período)
+                  </div>
+                  {vendorCommissionRowsCredito.length === 0 ? (
+                    <div className="text-sm text-slate-500 mt-2">—</div>
+                  ) : (
+                    <div className="mt-2 space-y-1 max-h-28 overflow-auto pr-1">
+                      {vendorCommissionRowsCredito.map((v) => (
+                        <div
+                          key={v.vendorId}
+                          className="flex items-center justify-between text-sm text-slate-700"
+                        >
+                          <span className="truncate">{v.name}</span>
+                          <strong className="ml-2">C${money(v.total)}</strong>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </div>
@@ -1968,11 +2118,14 @@ export default function CierreVentasDulces({
                           Paquetes
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Precio
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
                           Monto
                         </th>
                         {isAdmin && (
                           <th className="px-3 py-2 text-left text-xs font-semibold">
-                            U. Paquete
+                            UN x Paq
                           </th>
                         )}
                         {isAdmin && (
@@ -1985,12 +2138,17 @@ export default function CierreVentasDulces({
                             Comision
                           </th>
                         )}
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            U. Neta
+                          </th>
+                        )}
+                        {/* <th className="px-3 py-2 text-left text-xs font-semibold">
                           U. Vendedor
-                        </th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
-                          U. Neta
-                        </th>
+                        </th> */}
+                        {/* <th className="px-3 py-2 text-left text-xs font-semibold">
+                          COMENTAR
+                        </th> */}
                         <th className="px-3 py-2 text-left text-xs font-semibold">
                           Fecha venta
                         </th>
@@ -2029,6 +2187,23 @@ export default function CierreVentasDulces({
                             </td>
                             <td className="px-3 py-2">Cash</td>
                             <td className="px-3 py-2">{qty3(s.quantity)}</td>
+                            <td className="px-3 py-2">
+                              {(() => {
+                                // Si existe s.price, úsalo. Si no, calcula unitario por producto
+                                if (
+                                  typeof s.price === "number" &&
+                                  !isNaN(s.price)
+                                ) {
+                                  return `C$${money(s.price)}`;
+                                }
+                                // Si no existe, intenta calcularlo
+                                const qty = Number(s.quantity || 0);
+                                if (qty > 0 && typeof s.amount === "number") {
+                                  return `C$${money(s.amount / qty)}`;
+                                }
+                                return "—";
+                              })()}
+                            </td>
                             <td className="px-3 py-2">C${money(s.amount)}</td>
                             {isAdmin && (
                               <td className="px-3 py-2">
@@ -2068,16 +2243,23 @@ export default function CierreVentasDulces({
                                 })()}
                               </td>
                             )}
-                            <td className="px-3 py-2">
-                              {getCommissionFromItems(s) > 0
-                                ? `C$${money(getCommissionFromItems(s))}`
-                                : "—"}
-                            </td>
-                            <td className="px-3 py-2">
-                              {getVendorNetUtility(s) > 0
-                                ? `C$${money(getVendorNetUtility(s))}`
-                                : "—"}
-                            </td>
+
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  // UN x Paq * paquetes vendidos
+                                  const key = normKey(s.productName || "");
+                                  const un =
+                                    upaqueteMap[s.vendorId || ""]?.[key];
+                                  const qty = Number(s.quantity || 0);
+                                  const total = Number(un || 0) * qty;
+                                  return un && total > 0
+                                    ? `C$${money(round2(total))}`
+                                    : "—";
+                                })()}
+                              </td>
+                            )}
+
                             <td className="px-3 py-2">{s.date}</td>
 
                             <td className="px-3 py-2 text-left">
@@ -2327,11 +2509,14 @@ export default function CierreVentasDulces({
                           Paquetes
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Precio
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
                           Monto
                         </th>
                         {isAdmin && (
                           <th className="px-3 py-2 text-left text-xs font-semibold">
-                            U. Paquete
+                            UN x Paq
                           </th>
                         )}
                         {isAdmin && (
@@ -2344,12 +2529,11 @@ export default function CierreVentasDulces({
                             Comision
                           </th>
                         )}
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
-                          U. Vendedor
-                        </th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
-                          U. Neta
-                        </th>
+                        {isAdmin && (
+                          <th className="px-3 py-2 text-left text-xs font-semibold">
+                            U. Neta
+                          </th>
+                        )}
                         <th className="px-3 py-2 text-left text-xs font-semibold">
                           Fecha venta
                         </th>
@@ -2388,6 +2572,21 @@ export default function CierreVentasDulces({
                             </td>
                             <td className="px-3 py-2">Crédito</td>
                             <td className="px-3 py-2">{qty3(s.quantity)}</td>
+                            <td className="px-3 py-2">
+                              {(() => {
+                                if (
+                                  typeof s.price === "number" &&
+                                  !isNaN(s.price)
+                                ) {
+                                  return `C$${money(s.price)}`;
+                                }
+                                const qty = Number(s.quantity || 0);
+                                if (qty > 0 && typeof s.amount === "number") {
+                                  return `C$${money(s.amount / qty)}`;
+                                }
+                                return "—";
+                              })()}
+                            </td>
                             <td className="px-3 py-2">C${money(s.amount)}</td>
                             {isAdmin && (
                               <td className="px-3 py-2">
@@ -2427,18 +2626,22 @@ export default function CierreVentasDulces({
                                 })()}
                               </td>
                             )}
-                            <td className="px-3 py-2">
-                              {getCommissionFromItems(s) > 0
-                                ? `C$${money(getCommissionFromItems(s))}`
-                                : "—"}
-                            </td>
-                            <td className="px-3 py-2">
-                              {getVendorNetUtility(s) > 0
-                                ? `C$${money(getVendorNetUtility(s))}`
-                                : "—"}
-                            </td>
+                            {isAdmin && (
+                              <td className="px-3 py-2">
+                                {(() => {
+                                  // UN x Paq * paquetes vendidos
+                                  const key = normKey(s.productName || "");
+                                  const un =
+                                    upaqueteMap[s.vendorId || ""]?.[key];
+                                  const qty = Number(s.quantity || 0);
+                                  const total = Number(un || 0) * qty;
+                                  return un && total > 0
+                                    ? `C$${money(round2(total))}`
+                                    : "—";
+                                })()}
+                              </td>
+                            )}
                             <td className="px-3 py-2">{s.date}</td>
-
                             <td className="px-3 py-2 text-left">
                               {s.userEmail}
                             </td>
@@ -2847,15 +3050,13 @@ export default function CierreVentasDulces({
           {/* KPIs de totales */}
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-2 text-sm mb-4">
             <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 shadow-sm">
-              <div className="text-xs text-slate-600">
-                Total paquetes crédito
-              </div>
+              <div className="text-xs text-slate-600">Paquetes Crédito</div>
               <div className="text-lg font-semibold">
                 {qty3(totalPacksCredito)}
               </div>
             </div>
             <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 shadow-sm">
-              <div className="text-xs text-slate-600">Total paquetes cash</div>
+              <div className="text-xs text-slate-600">Paquetes Cash</div>
               <div className="text-lg font-semibold">
                 {qty3(totalPacksCash)}
               </div>
@@ -2962,10 +3163,10 @@ export default function CierreVentasDulces({
                                     Producto
                                   </th>
                                   <th className="px-3 py-2 text-left text-xs font-semibold">
-                                    Total paquetes
+                                    Paquetes vendidos
                                   </th>
                                   <th className="px-3 py-2 text-left text-xs font-semibold">
-                                    Total dinero
+                                    Monto total
                                   </th>
                                   <th className="px-3 py-2 text-left text-xs font-semibold">
                                     Comisión
@@ -3011,13 +3212,13 @@ export default function CierreVentasDulces({
                               <div className="mt-2 text-sm space-y-1">
                                 <div className="flex justify-between gap-3">
                                   <span className="text-slate-600">
-                                    Total paquetes
+                                    Paquetes vendidos
                                   </span>
                                   <strong>{qty3(row.totalQuantity)}</strong>
                                 </div>
                                 <div className="flex justify-between gap-3">
                                   <span className="text-slate-600">
-                                    Total dinero
+                                    Monto total
                                   </span>
                                   <strong>C${money(row.totalAmount)}</strong>
                                 </div>
@@ -3051,43 +3252,7 @@ export default function CierreVentasDulces({
         </div>
       )}
 
-      <div className="flex gap-2 mt-4">
-        {isAdmin && (
-          <button
-            onClick={handleSaveClosure}
-            className="bg-blue-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-blue-700"
-          >
-            Procesar
-          </button>
-        )}
-        {isAdmin && (
-          <button
-            onClick={backfillUvXpaqInSales}
-            disabled={isBackfillingUv}
-            className="bg-emerald-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-emerald-700 disabled:opacity-60"
-          >
-            {isBackfillingUv ? "Actualizando UVxPaq..." : "Actualizar UVxPaq"}
-          </button>
-        )}
-        <button
-          onClick={handleDownloadPDF}
-          className="bg-green-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-green-700"
-        >
-          PDF
-        </button>
-        <button
-          onClick={handleExportCSV}
-          className="bg-slate-700 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-slate-800"
-        >
-          CSV
-        </button>
-        <button
-          onClick={handleExportXLSX}
-          className="bg-amber-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-amber-700"
-        >
-          Excel
-        </button>
-      </div>
+      {/* Eliminado: botones ahora están arriba */}
 
       {message && <p className="mt-2 text-sm">{message}</p>}
 

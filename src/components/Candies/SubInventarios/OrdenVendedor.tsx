@@ -19,6 +19,7 @@ import {
 import * as XLSX from "xlsx";
 import { db, auth } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
+import LoadingOverlay from "../../common/LoadingOverlay";
 import useManualRefresh from "../../../hooks/useManualRefresh";
 import { hasRole } from "../../../utils/roles";
 import {
@@ -1547,6 +1548,8 @@ export default function VendorCandyOrders({
           packs > 0 ? round2(Number(grossProfit || 0) / packs) : 0;
         const uvXpaq =
           packs > 0 ? round2(Number(split.uVendor || 0) / packs) : 0;
+        const uNetaPorPaquete =
+          packs > 0 ? round2(Number(uNeta || 0) / packs) : 0;
         await updateDoc(doc(db, "inventory_candies_sellers", id), {
           totalExpected,
           grossProfit,
@@ -1557,6 +1560,7 @@ export default function VendorCandyOrders({
           uNeta,
           upaquete: uPaquete,
           uvXpaq,
+          uNetaPorPaquete,
           updatedAt: Timestamp.now(),
         });
       }
@@ -2806,6 +2810,8 @@ export default function VendorCandyOrders({
         const uVendor = split.uVendor;
         const uInvestor = split.uInvestor;
         const uNeta = grossProfit - logisticAllocated - uVendor;
+        // Utilidad neta por paquete
+        const uNetaPorPaquete = packs > 0 ? round2(uNeta / packs) : 0;
 
         const needsUpdate =
           diff(r.packages, packs) ||
@@ -2833,6 +2839,8 @@ export default function VendorCandyOrders({
           uVendor,
           // utilidad vendedor por paquete
           uvXpaq: packs > 0 ? round2(Number(uVendor || 0) / packs) : 0,
+          // utilidad neta por paquete
+          uNetaPorPaquete,
           uInvestor,
           uNeta,
           vendorProfit: uVendor,
@@ -2853,11 +2861,15 @@ export default function VendorCandyOrders({
 
       setMsg(`✅ Actualizados ${updated} documentos.`);
       refresh();
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error("Error en backfillCalculatedFields", err);
       setMsg("❌ Error actualizando documentos.");
+      showToast("❌ Error actualizando documentos.", "error");
     } finally {
       setIsBackfilling(false);
+      if (!msg) {
+        showToast("Campos calculados actualizados correctamente", "success");
+      }
     }
   };
 
@@ -3958,10 +3970,15 @@ export default function VendorCandyOrders({
         </div>
       )}
 
-      {/* Loading */}
-      {loading ? (
-        <div className="p-4 text-sm text-gray-600">Cargando…</div>
-      ) : (
+      {/* Loading: solo si no está abierto el modal */}
+      {(loading || isBackfilling) && !openForm && (
+        <LoadingOverlay
+          message={
+            isBackfilling ? "Actualizando Firestore..." : "Cargando datos..."
+          }
+        />
+      )}
+      {!loading && (
         <>
           {/* Desktop table */}
           <div className="hidden md:block bg-white border border-slate-200 rounded-xl shadow-sm overflow-x-hidden max-w-full">
@@ -3971,7 +3988,7 @@ export default function VendorCandyOrders({
               </div>
 
               <div className="flex items-center gap-2">
-                {isAdmin && (
+                {/* {isAdmin && (
                   <button
                     className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
                     onClick={() => {
@@ -3986,7 +4003,7 @@ export default function VendorCandyOrders({
                   >
                     Exportar asociados
                   </button>
-                )}
+                )} */}
                 {isAdmin && (
                   <>
                     <button
@@ -4014,8 +4031,8 @@ export default function VendorCandyOrders({
                       disabled={isBackfilling}
                     >
                       {isBackfilling
-                        ? "Actualizando campos..."
-                        : "Actualizar campos calculados"}
+                        ? "Actualizando Firestore..."
+                        : "Update Firestore"}
                     </button>
                     {/* <button
                       className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
@@ -4687,7 +4704,12 @@ export default function VendorCandyOrders({
                         )}
                         <th className="text-right p-2 border-b">U. Vendedor</th>
                         {isAdmin && (
-                          <th className="text-right p-2 border-b">U. Neta</th>
+                          <>
+                            <th className="text-right p-2 border-b">
+                              UN x Paq
+                            </th>
+                            <th className="text-right p-2 border-b">U. Neta</th>
+                          </>
                         )}
                         <th className="text-right p-2 border-b">Margen (%)</th>
                         <th className="text-left p-2 border-b">X</th>
@@ -4956,11 +4978,22 @@ export default function VendorCandyOrders({
                               </span>
                             </td>
                             {isAdmin && (
-                              <td className="p-2 border-b text-right">
-                                <span className={zeroClass(uNetaDisplay)}>
-                                  {money(uNetaDisplay)}
-                                </span>
-                              </td>
+                              <>
+                                <td className="p-2 border-b text-right">
+                                  <span
+                                    className={zeroClass(uNetaDisplay && packs)}
+                                  >
+                                    {packs > 0
+                                      ? money(uNetaDisplay / packs)
+                                      : "-"}
+                                  </span>
+                                </td>
+                                <td className="p-2 border-b text-right">
+                                  <span className={zeroClass(uNetaDisplay)}>
+                                    {money(uNetaDisplay)}
+                                  </span>
+                                </td>
+                              </>
                             )}
 
                             <td className="p-2 border-b text-right">
