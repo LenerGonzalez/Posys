@@ -1197,10 +1197,11 @@ export default function CustomersPollo({
 
   const toggleDebtStatus = async (movement: MovementRow) => {
     if (movement.type !== "CARGO") return;
-    const nextStatus =
+    const nextStatus = (
       normalizeDebtStatus(movement.debtStatus) === "PAGADA"
         ? "PENDIENTE"
-        : "PAGADA";
+        : "PAGADA"
+    ) as "PENDIENTE" | "PAGADA";
 
     try {
       setUpdatingDebtStatusId(movement.id);
@@ -1208,8 +1209,10 @@ export default function CustomersPollo({
         debtStatus: nextStatus,
       });
 
-      const updatedList = stRows.map((row) =>
-        row.id === movement.id ? { ...row, debtStatus: nextStatus } : row,
+      const updatedList: MovementRow[] = stRows.map((row) =>
+        row.id === movement.id
+          ? ({ ...row, debtStatus: nextStatus } as MovementRow)
+          : row,
       );
 
       setStRows(updatedList);

@@ -424,6 +424,29 @@ export default function TransactionsPollo({
         );
       }
 
+      // fallback: precio por producto en collection `products`
+      const productIds = new Set<string>();
+      for (const it of arr) {
+        const pid = String(it.productId || "").trim();
+        if (pid) productIds.add(pid);
+      }
+      const productPriceMap: Record<string, number> = {};
+      if (productIds.size > 0) {
+        await Promise.all(
+          Array.from(productIds).map(async (pid) => {
+            try {
+              const pSnap = await getDoc(doc(db, "products", pid));
+              if (pSnap.exists()) {
+                const p = pSnap.data() as any;
+                productPriceMap[pid] = Number(p.salePrice ?? p.price ?? 0);
+              }
+            } catch {
+              /* ignore */
+            }
+          }),
+        );
+      }
+
       const rows = arr.map((it: any) => {
         const productName = String(
           it.productName || it.product || it.name || "(sin nombre)",

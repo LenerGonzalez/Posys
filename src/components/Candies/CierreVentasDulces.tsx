@@ -63,6 +63,8 @@ interface SaleDataRaw {
   prorrateo?: number;
   uvXpaq?: number;
   upaquete?: number;
+  uNeta?: number;
+  uNetaPorPaquete?: number;
   // tipo de venta en sales_candies
   type?: SaleType;
 
@@ -120,6 +122,10 @@ interface SaleData {
 
   // fallback legacy
   upaquete?: number;
+
+  // optional net utility fields
+  uNeta?: number;
+  uNetaPorPaquete?: number;
 
   // ✅ fecha de proceso
   processedDate?: string;
@@ -299,16 +305,25 @@ const normalizeMany = (
       const vendorNet = round2(uBrutaItem - prorrateo - vendorUtil);
       const uvXpaqFromItem = Number(it?.uvXpaq ?? it?.upaquete ?? NaN);
 
-      // Calcular utilidad neta por paquete desde upaqueteMap si existe
+      // Calcular/utilizar utilidad neta por paquete:
+      // 1) preferir si viene precomputada en el item (uNetaPorPaquete)
+      // 2) luego buscar en upaqueteMap por vendedor/producto
+      // 3) fallback: si viene uNeta y packages, dividir uNeta / packages
       let uNetaPorPaquete: number | undefined = undefined;
       try {
+        if (
+          it?.uNetaPorPaquete !== undefined &&
+          Number.isFinite(Number(it.uNetaPorPaquete))
+        ) {
+          uNetaPorPaquete = Number(it.uNetaPorPaquete);
+        }
         const vendedorId = String(
           vendorId || raw.vendorId || it.vendorId || "",
         ).trim();
         const prodKey = normKey(it.productName || it.productId || "");
         const upaMap = typeof upaqueteMap !== "undefined" ? upaqueteMap : {};
         let foundKey = null;
-        if (upaMap[vendedorId]) {
+        if (!uNetaPorPaquete && upaMap[vendedorId]) {
           // Mostrar todas las claves disponibles para ese vendedor
           const allKeys = Object.keys(upaMap[vendedorId]);
           console.log(
@@ -503,6 +518,51 @@ export default function CierreVentasDulces({
   // vendedores para KPI listado + filtro
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
 
+  const sellersMap = React.useMemo(() => {
+    const m: Record<string, SellerCandy> = {};
+    sellers.forEach((x) => {
+      if (x && x.id) m[x.id] = x;
+    });
+    return m;
+  }, [sellers]);
+
+  const getSellerDisplayName = (s: SaleData): string => {
+    const vid = (s.vendorId || "").trim();
+    // 1) intentar match por vendorId (id del doc)
+    if (vid) {
+      const seller = sellersMap[vid];
+      if (seller && seller.name) return seller.name;
+    }
+
+    // 2) intentar match por userEmail (algunas ventas guardan email o nombre)
+    const user = (s.userEmail || "").trim();
+    if (user) {
+      const byId = sellers.find((x) => x.id === user);
+      if (byId && byId.name) return byId.name;
+
+      const byNameExact = sellers.find(
+        (x) => (x.name || "").trim().toLowerCase() === user.toLowerCase(),
+      );
+      if (byNameExact && byNameExact.name) return byNameExact.name;
+
+      const byNamePartial = sellers.find((x) =>
+        (x.name || "").toLowerCase().includes(user.toLowerCase()),
+      );
+      if (byNamePartial && byNamePartial.name) return byNamePartial.name;
+    }
+
+    // 3) intentar match por vendorId tratado como nombre
+    if (vid) {
+      const byNameFromVid = sellers.find(
+        (x) => (x.name || "").trim().toLowerCase() === vid.toLowerCase(),
+      );
+      if (byNameFromVid && byNameFromVid.name) return byNameFromVid.name;
+    }
+
+    // fallback: mostrar lo que venga en la venta
+    return s.userEmail || s.vendorId || "(sin vendedor)";
+  };
+
   const [customersById, setCustomersById] = useState<Record<string, string>>(
     {},
   );
@@ -589,10 +649,12 @@ export default function CierreVentasDulces({
   }, [today]);
 
   // cargar vendedores
+  // cargar vendedores (suscripción en tiempo real para reflejar cambios)
   useEffect(() => {
-    const fetchSellers = async () => {
-      try {
-        const snap = await getDocs(collection(db, "sellers_candies"));
+    const col = collection(db, "sellers_candies");
+    const unsub = onSnapshot(
+      col,
+      (snap) => {
         const list: SellerCandy[] = [];
         snap.forEach((d) => {
           const data = d.data() as any;
@@ -603,11 +665,12 @@ export default function CierreVentasDulces({
           });
         });
         setSellers(list);
-      } catch (e) {
-        console.error("Error cargando sellers_candies", e);
-      }
-    };
-    fetchSellers();
+      },
+      (err) => {
+        console.error("Error cargando sellers_candies", err);
+      },
+    );
+    return () => unsub();
   }, []);
 
   // cargar clientes (para nombre en abonos)
@@ -1654,7 +1717,7 @@ export default function CierreVentasDulces({
       Number(s.vendorNetUtility ?? 0).toFixed(2),
       s.date,
       s.processedDate ?? "",
-      s.userEmail ?? "",
+      getSellerDisplayName(s),
       s.status,
     ]);
 
@@ -1710,7 +1773,7 @@ export default function CierreVentasDulces({
             }
           : {}),
         "Fecha venta": s.date,
-        Vendedor: s.userEmail,
+        Vendedor: getSellerDisplayName(s),
       };
     });
 
@@ -2263,7 +2326,7 @@ export default function CierreVentasDulces({
                             <td className="px-3 py-2">{s.date}</td>
 
                             <td className="px-3 py-2 text-left">
-                              {s.userEmail}
+                              {getSellerDisplayName(s)}
                             </td>
                             <td className="px-3 py-2">
                               {s.status === "FLOTANTE" ? (
@@ -2411,7 +2474,7 @@ export default function CierreVentasDulces({
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Vendedor</span>
                           <strong className="text-right break-all">
-                            {s.userEmail}
+                            {getSellerDisplayName(s)}
                           </strong>
                         </div>
 
@@ -2643,7 +2706,7 @@ export default function CierreVentasDulces({
                             )}
                             <td className="px-3 py-2">{s.date}</td>
                             <td className="px-3 py-2 text-left">
-                              {s.userEmail}
+                              {getSellerDisplayName(s)}
                             </td>
                             <td className="px-3 py-2">
                               {s.status === "FLOTANTE" ? (
@@ -2798,7 +2861,7 @@ export default function CierreVentasDulces({
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Vendedor</span>
                           <strong className="text-right break-all">
-                            {s.userEmail}
+                            {getSellerDisplayName(s)}
                           </strong>
                         </div>
 
@@ -3083,6 +3146,10 @@ export default function CierreVentasDulces({
               <div className="text-xs text-slate-600">Total comisión</div>
               <div className="text-lg font-semibold">
                 C${money(totalCommission)}
+              </div>
+              <div className="text-xs text-slate-500 mt-1">
+                Cash: C${money(totalCommissionCash)} · Crédito: C$
+                {money(totalCommissionCredito)}
               </div>
             </div>
           </div>

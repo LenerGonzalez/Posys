@@ -109,6 +109,10 @@ interface SelectedItem {
   margenVendedor?: number; // comisión calculada sobre la ganancia bruta
   uBruta?: number; // utilidad bruta por ítem
   uvXpaq?: number; // utilidad por paquete desde orden de vendedor (si existe)
+  // optional fields that can come from the vendor order / product
+  upaquete?: number; // utilidad neta por paquete desde catálogo (u paq)
+  uNeta?: number; // utilidad neta total para el line (para dividir entre paquetes)
+  uNetaPorPaquete?: number; // precomputed uNeta per paquete
 }
 
 interface VoucherItem {
@@ -1353,6 +1357,20 @@ export default function SalesCandiesPOS({
                 ? Number(it.uvXpaq)
                 : null,
             uBruta,
+            upaquete:
+              it.upaquete !== undefined && it.upaquete !== null
+                ? Number(it.upaquete)
+                : null,
+            uNeta:
+              it.uNeta !== undefined && it.uNeta !== null
+                ? Number(it.uNeta)
+                : null,
+            uNetaPorPaquete:
+              it.uNetaPorPaquete !== undefined && it.uNetaPorPaquete !== null
+                ? Number(it.uNetaPorPaquete)
+                : it.uNeta !== undefined && qtyPaq > 0
+                  ? round2(Number(it.uNeta) / Number(qtyPaq))
+                  : null,
           };
         });
 
