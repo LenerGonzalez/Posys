@@ -1590,53 +1590,111 @@ export default function TransactionsPollo({
         </button>
         {kpisCardOpen && (
           <div className="p-4 border-t">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Libras Cash</div>
-                <div className="text-xl font-semibold">
-                  {qty3(kpis.packsCash)}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Card 1: Libras & Unidades */}
+              <div className="p-4 rounded-lg border bg-blue-50 border-blue-200">
+                <div className="text-sm font-semibold text-blue-800">
+                  Libras / Unidades
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Libras Cash</div>
+                    <div className="text-xl font-bold text-blue-800">
+                      {qty3(kpis.packsCash)}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Libras Crédito</div>
+                    <div className="text-xl font-bold text-amber-800">
+                      {qty3(kpis.packsCredito)}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Unidades Cash</div>
+                    <div className="text-xl font-bold text-green-800">
+                      {kpisUnidades.unidadesCash}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">
+                      Unidades Crédito
+                    </div>
+                    <div className="text-xl font-bold text-amber-800">
+                      {kpisUnidades.unidadesCredito}
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Libras Crédito</div>
-                <div className="text-xl font-semibold">
-                  {qty3(kpis.packsCredito)}
+              {/* Card 2: Ventas / Monto */}
+              <div className="p-4 rounded-lg border bg-amber-50 border-amber-200">
+                <div className="text-sm font-semibold text-amber-800">
+                  Ventas / Monto
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Ventas Cash</div>
+                    <div className="mt-1 text-sm font-semibold text-emerald-800">
+                      {money(kpis.montoCash)}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Ventas Crédito</div>
+                    <div className="mt-1 text-sm font-semibold text-amber-800">
+                      {money(kpis.montoCredito)}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">
+                      Transacciones Cash
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-emerald-900">
+                      {filteredSales.filter((s) => s.type === "CONTADO").length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">
+                      Transacciones Credito
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-amber-900">
+                      {filteredSales.filter((s) => s.type === "CREDITO").length}
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Unidades Cash</div>
-                <div className="text-xl font-semibold">
-                  {kpisUnidades.unidadesCash}
+              {/* Card 3: Totales */}
+              <div className="p-4 rounded-lg border bg-indigo-50 border-indigo-200">
+                <div className="text-sm font-semibold text-indigo-800">
+                  Totales
                 </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Unidades Crédito</div>
-                <div className="text-xl font-semibold">
-                  {kpisUnidades.unidadesCredito}
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Ventas Cash</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.montoCash)}
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Ventas Crédito</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.montoCredito)}
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Ventas Total</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.montoTotal)}
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Ventas total</div>
+                    <div className="mt-1 text-xl font-bold text-amber-900">
+                      {money(kpis.montoTotal)}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Libras totales</div>
+                    <div className="mt-1 text-xl font-bold text-blue-800">
+                      {qty3(kpis.packsTotal)}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">
+                      Unidades totales
+                    </div>
+                    <div className="mt-1 text-xl font-bold text-green-800">
+                      {kpisUnidades.unidadesTotal}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded bg-white border">
+                    <div className="text-xs text-slate-600">Transacciones</div>
+                    <div className="mt-1 text-xl font-bold text-emerald-900">
+                      {filteredSales.length}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

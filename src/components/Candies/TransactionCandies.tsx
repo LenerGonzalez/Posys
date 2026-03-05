@@ -224,7 +224,9 @@ export default function TransactionsReportCandies({
         unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? 0),
         discount: Number(it.discount || 0),
         total: Number(it.total ?? it.lineFinal ?? 0),
-        commission: Number(it.margenVendedor || 0),
+        commission: Number(
+          it.margenVendedor ?? it.vendorGain ?? it.vendorCommissionAmount ?? 0,
+        ),
       }));
 
       setItemsModalRows(rows);
@@ -309,6 +311,19 @@ export default function TransactionsReportCandies({
 
           if (arr.length > 0) {
             for (const it of arr) {
+              const itemCommission = Number(
+                it.margenVendedor ??
+                  it.vendorGain ??
+                  it.vendorCommissionAmount ??
+                  0,
+              );
+              const origen =
+                itemCommission > 0
+                  ? "item"
+                  : Number(s.vendorCommissionAmount || 0) > 0
+                    ? "venta"
+                    : "calculado";
+
               rows.push({
                 Fecha: s.date,
                 Venta: s.id,
@@ -320,10 +335,20 @@ export default function TransactionsReportCandies({
                 Precio: Number(it.unitPricePackage ?? it.unitPrice ?? 0),
                 Descuento: Number(it.discount || 0),
                 Monto: Number(it.total ?? it.lineFinal ?? 0),
-                Comision: Number(it.margenVendedor || 0),
+                Comision: itemCommission,
+                OrigenComision: origen,
               });
             }
           } else {
+            const saleCommission = Number(
+              (s as any).commissionFromItems || s.vendorCommissionAmount || 0,
+            );
+            const saleOrigen =
+              (s as any).commissionFromItems > 0
+                ? "items"
+                : Number(s.vendorCommissionAmount || 0) > 0
+                  ? "venta"
+                  : "calculado";
             rows.push({
               Fecha: s.date,
               Venta: s.id,
@@ -336,9 +361,8 @@ export default function TransactionsReportCandies({
               Precio: s.total,
               Descuento: 0,
               Monto: s.total,
-              Comision: Number(
-                (s as any).commissionFromItems || s.vendorCommissionAmount || 0,
-              ),
+              Comision: saleCommission,
+              OrigenComision: saleOrigen,
             });
           }
         } catch (e) {
@@ -856,37 +880,46 @@ export default function TransactionsReportCandies({
         </button>
         {kpisCardOpen && (
           <div className="p-4 border-t">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="p-3 border rounded-lg bg-slate-50">
-                <div className="text-xs text-slate-600">Paquetes Cash</div>
-                <div className="text-xl font-semibold">{kpis.packsCash}</div>
+                <div className="text-xs text-slate-600">Paquetes</div>
+                <div className="text-xl font-semibold">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-slate-600">Cash</span>
+                    <span>{kpis.packsCash}</span>
+                  </div>
+                  <div className="flex justify-between mt-1">
+                    <span className="text-sm text-slate-600">Crédito</span>
+                    <span>{kpis.packsCredito}</span>
+                  </div>
+                </div>
               </div>
-              <div className="p-3 border rounded-lg bg-slate-50">
-                <div className="text-xs text-slate-600">Paquetes Credito</div>
-                <div className="text-xl font-semibold">{kpis.packsCredito}</div>
-              </div>
+
               <div className="p-3 border rounded-lg bg-emerald-50 border-emerald-200">
-                <div className="text-xs text-emerald-700">Monto Cash</div>
+                <div className="text-xs text-emerald-700">Monto</div>
                 <div className="text-xl font-semibold">
-                  {money(kpis.montoCash)}
+                  <div className="flex justify-between">
+                    <span className="text-sm text-emerald-700">Cash</span>
+                    <span>{money(kpis.montoCash)}</span>
+                  </div>
+                  <div className="flex justify-between mt-1">
+                    <span className="text-sm text-amber-700">Crédito</span>
+                    <span>{money(kpis.montoCredito)}</span>
+                  </div>
                 </div>
               </div>
-              <div className="p-3 border rounded-lg bg-amber-50 border-amber-200">
-                <div className="text-xs text-amber-700">Monto Credito</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.montoCredito)}
-                </div>
-              </div>
+
               <div className="p-3 border rounded-lg bg-slate-50">
-                <div className="text-xs text-slate-600">Comision Cash</div>
+                <div className="text-xs text-slate-600">Comisión</div>
                 <div className="text-xl font-semibold">
-                  {money(kpis.comisionCash)}
-                </div>
-              </div>
-              <div className="p-3 border rounded-lg bg-slate-50">
-                <div className="text-xs text-slate-600">Comision Credito</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.comisionCredito)}
+                  <div className="flex justify-between">
+                    <span className="text-sm text-slate-600">Cash</span>
+                    <span>{money(kpis.comisionCash)}</span>
+                  </div>
+                  <div className="flex justify-between mt-1">
+                    <span className="text-sm text-slate-600">Crédito</span>
+                    <span>{money(kpis.comisionCredito)}</span>
+                  </div>
                 </div>
               </div>
             </div>

@@ -121,7 +121,7 @@ export default function MobileTabsLayout({
               label: "Estado de Inventario",
               to: `${base}/statusInventory`,
             },
-            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
+            { key: "cierre", label: "Ventas diarias", to: `${base}/bills` },
             {
               key: "trxs",
               label: "Transacciones",
@@ -168,7 +168,7 @@ export default function MobileTabsLayout({
               label: "Transacciones",
               to: `${base}/transactionsPollo`,
             },
-            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
+            { key: "cierre", label: "Ventas diarias", to: `${base}/bills` },
             { key: "facturacion", label: "Facturación", to: `${base}/billing` },
           ];
 
@@ -182,7 +182,7 @@ export default function MobileTabsLayout({
               label: "Saldos Pendientes",
               to: `${base}/customersPollo`,
             },
-            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
+            { key: "cierre", label: "Ventas diarias", to: `${base}/bills` },
             {
               key: "trxs",
               label: "Transacciones",
@@ -212,7 +212,7 @@ export default function MobileTabsLayout({
               label: "Estado de Inventario",
               to: `${base}/statusInventory`,
             },
-            { key: "cierre", label: "Cierre Ventas", to: `${base}/bills` },
+            { key: "cierre", label: "Ventas diarias", to: `${base}/bills` },
             {
               key: "trxs",
               label: "Transacciones",
@@ -260,7 +260,7 @@ export default function MobileTabsLayout({
             },
             {
               key: "cier",
-              label: "Cierre de ventas",
+              label: "Ventas diarias",
               to: `${base}/cierreVentasCandies`,
             },
             {
@@ -356,7 +356,7 @@ export default function MobileTabsLayout({
           if (canPath(subject, "cierreVentasCandies", "view")) {
             dulcesTabs.push({
               key: "cier",
-              label: "Cierre Ventas",
+              label: "Ventas diarias",
               to: `${base}/cierreVentasCandies`,
             });
           }
@@ -396,10 +396,10 @@ export default function MobileTabsLayout({
           },
           {
             key: "trxs",
-            label: "Transacciones",
+            label: "Reporte Ventas",
             to: `${base}/transactionsPollo`,
           },
-          { key: "cierre", label: "Cierre", to: `${base}/bills` },
+          { key: "cierre", label: "Ventas diarias", to: `${base}/bills` },
           { key: "facturacion", label: "Facturación", to: `${base}/billing` },
         ];
         if (hasRole(subject, "contador")) {
@@ -427,10 +427,10 @@ export default function MobileTabsLayout({
       else if (isVendPollo) {
         built = [
           { key: "venta", label: "Venta", to: `${base}/salesV2` },
-          { key: "cierre", label: "Cierre", to: `${base}/bills` },
+          { key: "cierre", label: "Ventas diarias", to: `${base}/bills` },
           {
             key: "trxs",
-            label: "Transacciones",
+            label: "Reporte Ventas",
             to: `${base}/transactionsPollo`,
           },
         ];
@@ -454,8 +454,16 @@ export default function MobileTabsLayout({
             label: "Saldos Pendientes",
             to: `${base}/customersCandies`,
           },
-          { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
-          { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
+          {
+            key: "trx",
+            label: "Reporte Ventas",
+            to: `${base}/transactionCandies`,
+          },
+          {
+            key: "cier",
+            label: "Ventas diarias",
+            to: `${base}/cierreVentasCandies`,
+          },
         ];
       } else {
         built = [{ key: "home", label: "Inicio", to: `${base}` }];
@@ -650,7 +658,14 @@ export default function MobileTabsLayout({
         activeText: "text-indigo-900",
       };
     }
-    if (to.includes("Candies")) {
+    if (
+      to.includes("Candies") ||
+      to.includes("datacenter") ||
+      to.includes("cashDeliveries") ||
+      to.includes("billingsCandies") ||
+      to.includes("consolidatedVendors") ||
+      to.includes("dashboardCandies")
+    ) {
       return {
         icon: <FaCandyCane className="h-3.5 w-3.5" />,
         dot: "bg-pink-500",

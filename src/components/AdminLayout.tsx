@@ -11,6 +11,7 @@ import {
   FaChevronRight,
   FaSignOutAlt,
   FaTools,
+  FaTimes,
 } from "react-icons/fa";
 import { hasRole } from "../utils/roles";
 import { canPath } from "../utils/access";
@@ -32,7 +33,14 @@ export default function AdminLayout({
 
   // Sidebar ancho/colapsado
   const navigate = useNavigate();
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return localStorage.getItem("admin_isCollapsed") === "1";
+    } catch (e) {
+      return false;
+    }
+  });
   const [menuSearch, setMenuSearch] = useState("");
   const searchQuery = menuSearch.trim().toLowerCase();
 
@@ -159,6 +167,14 @@ export default function AdminLayout({
     if (module === "dulces") setOpenDulces(true);
     if (module === "otras") setOpenOtras(true);
   };
+
+  // Persistir estado colapsado en localStorage
+  useEffect(() => {
+    try {
+      if (typeof window !== "undefined")
+        localStorage.setItem("admin_isCollapsed", isCollapsed ? "1" : "0");
+    } catch (e) {}
+  }, [isCollapsed]);
 
   // Helpers visuales
   const SectionBtn = ({
@@ -583,6 +599,101 @@ export default function AdminLayout({
           </span>
         </button>
 
+        {isCollapsed && (
+          <div className="w-full mt-16 flex flex-col items-center gap-3">
+            <div className="mt-1 mb-1">
+              <img
+                src="/logo_black.svg"
+                alt="Logo"
+                className="h-10 w-auto opacity-95"
+              />
+            </div>
+            <div className="relative group">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCollapsed(false);
+                  toggleModule("pollo");
+                }}
+                className="p-2 rounded-md hover:bg-slate-100"
+                aria-label="Pollos Bea"
+              >
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
+                  <FaDrumstickBite className="h-4 w-4" />
+                </span>
+              </button>
+              <div className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-30">
+                <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-sm text-slate-800 whitespace-nowrap">
+                  Pollos Bea
+                </div>
+              </div>
+            </div>
+
+            <div className="relative group">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCollapsed(false);
+                  toggleModule("dulces");
+                }}
+                className="p-2 rounded-md hover:bg-slate-100"
+                aria-label="CandyShop"
+              >
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-pink-100 text-pink-700">
+                  <FaCandyCane className="h-4 w-4" />
+                </span>
+              </button>
+              <div className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-30">
+                <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-sm text-slate-800 whitespace-nowrap">
+                  CandyShop
+                </div>
+              </div>
+            </div>
+
+            <div className="relative group">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCollapsed(false);
+                  toggleModule("ropa");
+                }}
+                className="p-2 rounded-md hover:bg-slate-100"
+                aria-label="Gonper"
+              >
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-indigo-100 text-indigo-700">
+                  <FaBook className="h-4 w-4" />
+                </span>
+              </button>
+              <div className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-30">
+                <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-sm text-slate-800 whitespace-nowrap">
+                  Gonper
+                </div>
+              </div>
+            </div>
+
+            <div className="relative group">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCollapsed(false);
+                  toggleModule("otras");
+                }}
+                className="p-2 rounded-md hover:bg-slate-100"
+                aria-label="Operaciones"
+              >
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 text-slate-700">
+                  <FaTools className="h-4 w-4" />
+                </span>
+              </button>
+              <div className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-30">
+                <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-sm text-slate-800 whitespace-nowrap">
+                  Operaciones
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {!isCollapsed && (
           <div className="w-full pt-2 pb-3 flex justify-end pr-4">
             <img
@@ -595,52 +706,523 @@ export default function AdminLayout({
 
         {!isCollapsed && (
           <>
-            <div className="w-full mb-3 relative">
+            <div className="w-full mb-3">
               <label className="sr-only" htmlFor="menu-search">
                 Buscar módulo
               </label>
-              <input
-                id="menu-search"
-                type="text"
-                value={menuSearch}
-                onChange={(e) => setMenuSearch(e.target.value)}
-                placeholder="Buscar módulo..."
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
-              />
+              <div className="relative">
+                <input
+                  id="menu-search"
+                  type="text"
+                  value={menuSearch}
+                  onChange={(e) => setMenuSearch(e.target.value)}
+                  placeholder="Buscar módulo..."
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                />
+                {menuSearch && (
+                  <button
+                    type="button"
+                    aria-label="Limpiar búsqueda"
+                    onClick={() => {
+                      setMenuSearch("");
+                      try {
+                        const el = document.getElementById(
+                          "menu-search",
+                        ) as HTMLInputElement | null;
+                        if (el) el.focus();
+                      } catch (e) {}
+
+                      // Al limpiar la búsqueda, cerrar cualquier módulo abierto
+                      try {
+                        closePolloMenus();
+                        closeRopaMenus();
+                        closeDulcesMenus();
+                        closeOtrasMenus();
+                      } catch (e) {}
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 p-1 rounded"
+                  >
+                    <FaTimes className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
               {searchQuery && (
-                <div className="absolute left-0 right-0 mt-2 max-h-56 overflow-auto rounded-xl border border-slate-200 bg-white shadow z-10">
-                  {filteredSearchItems.length ? (
-                    filteredSearchItems.slice(0, 10).map((item) => (
-                      <button
-                        key={item.to + item.label}
-                        type="button"
-                        onClick={() => {
-                          revealSearchItem(item);
-                          setMenuSearch("");
-                          navigate(item.to);
-                        }}
-                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                      >
-                        <div className="font-semibold">{item.label}</div>
-                        <div className="text-xs text-slate-500 break-words">
-                          {item.pathLabel}
-                        </div>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="px-3 py-2 text-xs text-slate-500">
-                      Sin resultados
-                    </div>
-                  )}
+                <div className="mt-3 w-56">
+                  <div className="rounded-xl border border-slate-200 bg-white shadow-sm max-h-72 overflow-auto">
+                    {filteredSearchItems.length ? (
+                      filteredSearchItems.map((item) => (
+                        <button
+                          key={item.to + item.label}
+                          type="button"
+                          onClick={() => {
+                            revealSearchItem(item);
+                            setMenuSearch("");
+                            navigate(item.to);
+                          }}
+                          className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 border-b last:border-b-0"
+                        >
+                          <div className="font-semibold">{item.label}</div>
+                          <div className="text-xs text-slate-500 break-words">
+                            {item.pathLabel}
+                          </div>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-3 py-2 text-xs text-slate-500">
+                        Sin resultados
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
 
-            <nav className="space-y-2">
-              {/* ================== ADMIN ================== */}
-              {isAdmin && (
-                <>
-                  {/* -------- Operaciones Pollo -------- */}
+            {!searchQuery && (
+              <nav className="space-y-2">
+                {/* ================== ADMIN ================== */}
+                {isAdmin && (
+                  <>
+                    {/* -------- Operaciones Pollo -------- */}
+                    <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-amber-400">
+                      <SectionBtn
+                        open={openPollo}
+                        onClick={() => toggleModule("pollo")}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white">
+                            <FaDrumstickBite className="h-3.5 w-3.5" />
+                          </span>
+                          <span>Pollos Bea</span>
+                        </span>
+                      </SectionBtn>
+
+                      {openPollo && (
+                        <div className="pb-2">
+                          <SubSectionBtn
+                            open={openPolloOperaciones}
+                            onClick={() => setOpenPolloOperaciones((v) => !v)}
+                            title="Operaciones"
+                          />
+                          {openPolloOperaciones && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/salesV2`}
+                                className={linkCls}
+                              >
+                                Vender
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/customersPollo`}
+                                className={linkCls}
+                              >
+                                Saldo Pendientes
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/transactionsPollo`}
+                                className={linkCls}
+                              >
+                                Transacciones
+                              </NavLink>
+                              <NavLink to={`${base}/bills`} className={linkCls}>
+                                Cierre Ventas
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/statusAccount`}
+                                className={linkCls}
+                              >
+                                Estado de Cuenta
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/statusInventory`}
+                                className={linkCls}
+                              >
+                                Evolutivo Libras
+                              </NavLink>
+                            </div>
+                          )}
+
+                          {/* Inventario (Pollo) */}
+                          <SubSectionBtn
+                            open={openPolloInv}
+                            onClick={() => setOpenPolloInv((v) => !v)}
+                            title="Inventarios"
+                          />
+                          {openPolloInv && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/batches`}
+                                className={linkCls}
+                              >
+                                Inventario Pollo
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/paidBatches`}
+                                className={linkCls}
+                              >
+                                Inventarios Pagados
+                              </NavLink>
+                            </div>
+                          )}
+
+                          {/* Finanzas (Pollo) */}
+                          <SubSectionBtn
+                            open={openPolloFin}
+                            onClick={() => setOpenPolloFin((v) => !v)}
+                            title="Finanzas"
+                          />
+                          {openPolloFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/financialDashboard`}
+                                className={linkCls}
+                              >
+                                Dashboard
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/billing`}
+                                className={linkCls}
+                              >
+                                Facturacion
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/expenses`}
+                                className={linkCls}
+                              >
+                                Gastos
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/polloCashAudits`}
+                                className={linkCls}
+                              >
+                                Arqueos Caja
+                              </NavLink>
+                              <NavLink
+                                to={`${base}/billhistoric`}
+                                className={linkCls}
+                              >
+                                Historial de Cierres
+                              </NavLink>
+                            </div>
+                          )}
+
+                          {/* Productos (Pollo) */}
+                          <SubSectionBtn
+                            open={openPolloProd}
+                            onClick={() => setOpenPolloProd((v) => !v)}
+                            title="Productos"
+                          />
+                          {openPolloProd && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/products`}
+                                className={linkCls}
+                              >
+                                Productos
+                              </NavLink>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* -------- Operaciones Ropa -------- */}
+                    <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-indigo-400">
+                      <SectionBtn
+                        open={openRopa}
+                        onClick={() => toggleModule("ropa")}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white">
+                            <FaBook className="h-3.5 w-3.5" />
+                          </span>
+                          <span>Gonper</span>
+                        </span>
+                      </SectionBtn>
+
+                      {openRopa && (
+                        <div className="pb-2">
+                          <SubSectionBtn
+                            open={openRopaInv}
+                            onClick={() => setOpenRopaInv((v) => !v)}
+                            title="Inventarios"
+                          />
+                          {openRopaInv && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/notebooksInventory`}
+                                className={linkCls}
+                              >
+                                Productos y Precios
+                              </NavLink>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* -------- Operaciones Dulces -------- */}
+                    <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-pink-400">
+                      <SectionBtn
+                        open={openDulces}
+                        onClick={() => toggleModule("dulces")}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-pink-500 text-white">
+                            <FaCandyCane className="h-3.5 w-3.5" />
+                          </span>
+                          <span>CandyShop</span>
+                        </span>
+                      </SectionBtn>
+
+                      {openDulces && (
+                        <div className="pb-2">
+                          <SubSectionBtn
+                            open={openDulcesVendors}
+                            onClick={() => setOpenDulcesVendors((v) => !v)}
+                            title="Vendedores"
+                          />
+                          {openDulcesVendors && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/salesCandies`}
+                                className={linkCls}
+                              >
+                                Venta
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesVendors && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/productsVendorsCandies`}
+                                className={linkCls}
+                              >
+                                Sub ordenes
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesVendors && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/productsPricesCandies`}
+                                className={linkCls}
+                              >
+                                Precios Venta
+                              </NavLink>
+                            </div>
+                          )}
+
+                          <SubSectionBtn
+                            open={openDulcesInv}
+                            onClick={() => setOpenDulcesInv((v) => !v)}
+                            title="Inventario"
+                          />
+                          {openDulcesInv && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/mainordersCandies`}
+                                className={linkCls}
+                              >
+                                Ordenes Maestras
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesInv && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/inventoryMainOrderCandies`}
+                                className={linkCls}
+                              >
+                                Lista de Ordenes
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesInv && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/inventoryCandies`}
+                                className={linkCls}
+                              >
+                                Lista Productos
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesInv && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/productsCandies`}
+                                className={linkCls}
+                              >
+                                Productos
+                              </NavLink>
+                            </div>
+                          )}
+
+                          <SubSectionBtn
+                            open={openDulcesFin}
+                            onClick={() => setOpenDulcesFin((v) => !v)}
+                            title="Finanzas"
+                          />
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/datacenter`}
+                                className={linkCls}
+                              >
+                                Data Center
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/cashDeliveries`}
+                                className={linkCls}
+                              >
+                                Entregas Cash
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/transactionCandies`}
+                                className={linkCls}
+                              >
+                                Reporte Ventas
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/cierreVentasCandies`}
+                                className={linkCls}
+                              >
+                                Ventas diarias
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/reporteCierresCandies`}
+                                className={linkCls}
+                              >
+                                Reporte Cierres
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/billingsCandies`}
+                                className={linkCls}
+                              >
+                                Facturas
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/consolidatedVendors`}
+                                className={linkCls}
+                              >
+                                Consolidado Vendedores
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/dashboardCandies`}
+                                className={linkCls}
+                              >
+                                Dashboard
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/customersCandies`}
+                                className={linkCls}
+                              >
+                                Clientes
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/estadoCuentaCandies`}
+                                className={linkCls}
+                              >
+                                Estado de Cuenta
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/vendorsCandies`}
+                                className={linkCls}
+                              >
+                                Vendedores
+                              </NavLink>
+                            </div>
+                          )}
+                          {openDulcesFin && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/expensesCandies`}
+                                className={linkCls}
+                              >
+                                Gastos
+                              </NavLink>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* -------- Operaciones Otras -------- */}
+                    <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-slate-400">
+                      <SectionBtn
+                        open={openOtras}
+                        onClick={() => toggleModule("otras")}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white">
+                            <FaTools className="h-3.5 w-3.5" />
+                          </span>
+                          <span>Operaciones</span>
+                        </span>
+                      </SectionBtn>
+
+                      {openOtras && (
+                        <div className="pb-2 ml-4 mt-1 space-y-1">
+                          <NavLink to={`${base}/users`} className={linkCls}>
+                            Usuarios
+                          </NavLink>
+                          <NavLink to={`${base}/fix`} className={linkCls}>
+                            Fix de lotes
+                          </NavLink>
+                          <NavLink
+                            to={`${base}/transactionclose`}
+                            className={linkCls}
+                          >
+                            Liquidaciones
+                          </NavLink>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* ================== POLLO (supervisor/contador/vendedor o multi-rol) ================== */}
+                {!isAdmin && hasPolloAccess && (
                   <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-amber-400">
                     <SectionBtn
                       open={openPollo}
@@ -655,161 +1237,103 @@ export default function AdminLayout({
                     </SectionBtn>
 
                     {openPollo && (
-                      <div className="pb-2">
-                        <SubSectionBtn
-                          open={openPolloOperaciones}
-                          onClick={() => setOpenPolloOperaciones((v) => !v)}
-                          title="Operaciones"
-                        />
-                        {openPolloOperaciones && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink to={`${base}/salesV2`} className={linkCls}>
-                              Vender
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/customersPollo`}
-                              className={linkCls}
-                            >
-                              Saldo Pendientes
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/transactionsPollo`}
-                              className={linkCls}
-                            >
-                              Transacciones
-                            </NavLink>
-                            <NavLink to={`${base}/bills`} className={linkCls}>
-                              Cierre Ventas
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/statusAccount`}
-                              className={linkCls}
-                            >
-                              Estado de Cuenta
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/statusInventory`}
-                              className={linkCls}
-                            >
-                              Evolutivo Libras
-                            </NavLink>
-                          </div>
+                      <div className="pb-2 ml-4 mt-1 space-y-1">
+                        {canPath(subject, "salesV2") && (
+                          <NavLink to={`${base}/salesV2`} className={linkCls}>
+                            Vender
+                          </NavLink>
+                        )}
+                        {canPath(subject, "financialDashboard") && (
+                          <NavLink
+                            to={`${base}/financialDashboard`}
+                            className={linkCls}
+                          >
+                            Dashboard
+                          </NavLink>
+                        )}
+                        {canPath(subject, "batches") && (
+                          <NavLink to={`${base}/batches`} className={linkCls}>
+                            Inventario Pollo
+                          </NavLink>
                         )}
 
-                        {/* Inventario (Pollo) */}
-                        <SubSectionBtn
-                          open={openPolloInv}
-                          onClick={() => setOpenPolloInv((v) => !v)}
-                          title="Inventarios"
-                        />
-                        {openPolloInv && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink to={`${base}/batches`} className={linkCls}>
-                              Inventario Pollo
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/paidBatches`}
-                              className={linkCls}
-                            >
-                              Inventarios Pagados
-                            </NavLink>
-                          </div>
+                        {canPath(subject, "bills") && (
+                          <NavLink to={`${base}/bills`} className={linkCls}>
+                            Cierre Ventas
+                          </NavLink>
+                        )}
+                        {canPath(subject, "transactionsPollo") && (
+                          <NavLink
+                            to={`${base}/transactionsPollo`}
+                            className={linkCls}
+                          >
+                            Transacciones
+                          </NavLink>
                         )}
 
-                        {/* Finanzas (Pollo) */}
-                        <SubSectionBtn
-                          open={openPolloFin}
-                          onClick={() => setOpenPolloFin((v) => !v)}
-                          title="Finanzas"
-                        />
-                        {openPolloFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/financialDashboard`}
-                              className={linkCls}
-                            >
-                              Dashboard
-                            </NavLink>
-                            <NavLink to={`${base}/billing`} className={linkCls}>
-                              Facturacion
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/expenses`}
-                              className={linkCls}
-                            >
-                              Gastos
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/polloCashAudits`}
-                              className={linkCls}
-                            >
-                              Arqueos Caja
-                            </NavLink>
-                            <NavLink
-                              to={`${base}/billhistoric`}
-                              className={linkCls}
-                            >
-                              Historial de Cierres
-                            </NavLink>
-                          </div>
-                        )}
+                        {openPollo && (
+                          <div className="pb-2">
+                            <SubSectionBtn
+                              open={contadorMenuFinanzas}
+                              onClick={() => setContadorMenuFinanzas((v) => !v)}
+                              title="Contabilidad"
+                            />
 
-                        {/* Productos (Pollo) */}
-                        <SubSectionBtn
-                          open={openPolloProd}
-                          onClick={() => setOpenPolloProd((v) => !v)}
-                          title="Productos"
-                        />
-                        {openPolloProd && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/products`}
-                              className={linkCls}
-                            >
-                              Productos
-                            </NavLink>
+                            {contadorMenuFinanzas && (
+                              <div className="ml-4 mt-1 space-y-1">
+                                {canPath(subject, "billing") && (
+                                  <NavLink
+                                    to={`${base}/billing`}
+                                    className={linkCls}
+                                  >
+                                    Facturacion
+                                  </NavLink>
+                                )}
+
+                                {canPath(subject, "customersPollo") && (
+                                  <NavLink
+                                    to={`${base}/customersPollo`}
+                                    className={linkCls}
+                                  >
+                                    Saldos Pendientes
+                                  </NavLink>
+                                )}
+
+                                {canPath(subject, "statusAccount") && (
+                                  <NavLink
+                                    to={`${base}/statusAccount`}
+                                    className={linkCls}
+                                  >
+                                    Estado de Cuenta
+                                  </NavLink>
+                                )}
+                                {canPath(subject, "statusInventory") && (
+                                  <NavLink
+                                    to={`${base}/statusInventory`}
+                                    className={linkCls}
+                                  >
+                                    Evolutivo de Libras
+                                  </NavLink>
+                                )}
+                                {canPath(subject, "expenses") && (
+                                  <NavLink
+                                    to={`${base}/expenses`}
+                                    className={linkCls}
+                                  >
+                                    Gastos
+                                  </NavLink>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
                     )}
                   </div>
+                )}
 
-                  {/* -------- Operaciones Ropa -------- */}
-                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-indigo-400">
-                    <SectionBtn
-                      open={openRopa}
-                      onClick={() => toggleModule("ropa")}
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white">
-                          <FaBook className="h-3.5 w-3.5" />
-                        </span>
-                        <span>Gonper</span>
-                      </span>
-                    </SectionBtn>
-
-                    {openRopa && (
-                      <div className="pb-2">
-                        <SubSectionBtn
-                          open={openRopaInv}
-                          onClick={() => setOpenRopaInv((v) => !v)}
-                          title="Inventarios"
-                        />
-                        {openRopaInv && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/notebooksInventory`}
-                              className={linkCls}
-                            >
-                              Productos y Precios
-                            </NavLink>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* -------- Operaciones Dulces -------- */}
+                {/* ================== DULCES (vendedor_dulces o multi-rol) ================== */}
+                {!isAdmin && hasDulcesAccess && (
                   <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-pink-400">
                     <SectionBtn
                       open={openDulces}
@@ -824,436 +1348,63 @@ export default function AdminLayout({
                     </SectionBtn>
 
                     {openDulces && (
-                      <div className="pb-2">
-                        <SubSectionBtn
-                          open={openDulcesVendors}
-                          onClick={() => setOpenDulcesVendors((v) => !v)}
-                          title="Vendedores"
-                        />
-                        {openDulcesVendors && (
-                          <div className="ml-4 mt-1 space-y-1">
+                      <>
+                        <div className="pb-2 ml-4 mt-1 space-y-1">
+                          {canPath(subject, "salesCandies") && (
                             <NavLink
                               to={`${base}/salesCandies`}
                               className={linkCls}
                             >
                               Venta
                             </NavLink>
-                          </div>
-                        )}
-                        {openDulcesVendors && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/productsVendorsCandies`}
-                              className={linkCls}
-                            >
-                              Sub ordenes
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesVendors && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/productsPricesCandies`}
-                              className={linkCls}
-                            >
-                              Precios Venta
-                            </NavLink>
-                          </div>
-                        )}
+                          )}
+                        </div>
 
-                        <SubSectionBtn
-                          open={openDulcesInv}
-                          onClick={() => setOpenDulcesInv((v) => !v)}
-                          title="Inventario"
-                        />
-                        {openDulcesInv && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/mainordersCandies`}
-                              className={linkCls}
-                            >
-                              Ordenes Maestras
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesInv && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/inventoryMainOrderCandies`}
-                              className={linkCls}
-                            >
-                              Lista de Ordenes
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesInv && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/inventoryCandies`}
-                              className={linkCls}
-                            >
-                              Lista Productos
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesInv && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/productsCandies`}
-                              className={linkCls}
-                            >
-                              Productos
-                            </NavLink>
-                          </div>
-                        )}
-
-                        <SubSectionBtn
-                          open={openDulcesFin}
-                          onClick={() => setOpenDulcesFin((v) => !v)}
-                          title="Finanzas"
-                        />
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/datacenter`}
-                              className={linkCls}
-                            >
-                              Data Center
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/cashDeliveries`}
-                              className={linkCls}
-                            >
-                              Entregas Cash
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
+                        <div className="pb-2 ml-4 mt-1 space-y-1">
+                          {canPath(subject, "transactionCandies") && (
                             <NavLink
                               to={`${base}/transactionCandies`}
                               className={linkCls}
                             >
-                              Transacciones
+                              Ventas del dia
                             </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
+                          )}
+                        </div>
+
+                        <div className="pb-2 ml-4 mt-1 space-y-1">
+                          {canPath(subject, "cierreVentasCandies") && (
                             <NavLink
                               to={`${base}/cierreVentasCandies`}
                               className={linkCls}
                             >
-                              Cierres
+                              Cierre de Ventas
                             </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
+                          )}
+                        </div>
+
+                        <div className="ml-4 mt-1 space-y-1">
+                          {canPath(subject, "productsVendorsCandies") && (
                             <NavLink
-                              to={`${base}/reporteCierresCandies`}
+                              to={`${base}/productsVendorsCandies`}
                               className={linkCls}
                             >
-                              Reporte Cierres
+                              Pedidos
                             </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/billingsCandies`}
-                              className={linkCls}
-                            >
-                              Facturas
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/consolidatedVendors`}
-                              className={linkCls}
-                            >
-                              Consolidado Vendedores
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/dashboardCandies`}
-                              className={linkCls}
-                            >
-                              Dashboard
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
+                          )}
+                        </div>
+
+                        <div className="ml-4 mt-1 space-y-1">
+                          {canPath(subject, "customersCandies") && (
                             <NavLink
                               to={`${base}/customersCandies`}
                               className={linkCls}
                             >
                               Clientes
                             </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/estadoCuentaCandies`}
-                              className={linkCls}
-                            >
-                              Estado de Cuenta
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/vendorsCandies`}
-                              className={linkCls}
-                            >
-                              Vendedores
-                            </NavLink>
-                          </div>
-                        )}
-                        {openDulcesFin && (
-                          <div className="ml-4 mt-1 space-y-1">
-                            <NavLink
-                              to={`${base}/expensesCandies`}
-                              className={linkCls}
-                            >
-                              Gastos
-                            </NavLink>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* -------- Operaciones Otras -------- */}
-                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-slate-400">
-                    <SectionBtn
-                      open={openOtras}
-                      onClick={() => toggleModule("otras")}
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-500 text-white">
-                          <FaTools className="h-3.5 w-3.5" />
-                        </span>
-                        <span>Operaciones</span>
-                      </span>
-                    </SectionBtn>
-
-                    {openOtras && (
-                      <div className="pb-2 ml-4 mt-1 space-y-1">
-                        <NavLink to={`${base}/users`} className={linkCls}>
-                          Usuarios
-                        </NavLink>
-                        <NavLink to={`${base}/fix`} className={linkCls}>
-                          Fix de lotes
-                        </NavLink>
-                        <NavLink
-                          to={`${base}/transactionclose`}
-                          className={linkCls}
-                        >
-                          Liquidaciones
-                        </NavLink>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {/* ================== POLLO (supervisor/contador/vendedor o multi-rol) ================== */}
-              {!isAdmin && hasPolloAccess && (
-                <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-amber-400">
-                  <SectionBtn
-                    open={openPollo}
-                    onClick={() => toggleModule("pollo")}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white">
-                        <FaDrumstickBite className="h-3.5 w-3.5" />
-                      </span>
-                      <span>Pollos Bea</span>
-                    </span>
-                  </SectionBtn>
-
-                  {openPollo && (
-                    <div className="pb-2 ml-4 mt-1 space-y-1">
-                      {canPath(subject, "salesV2") && (
-                        <NavLink to={`${base}/salesV2`} className={linkCls}>
-                          Vender
-                        </NavLink>
-                      )}
-                      {canPath(subject, "financialDashboard") && (
-                        <NavLink
-                          to={`${base}/financialDashboard`}
-                          className={linkCls}
-                        >
-                          Dashboard
-                        </NavLink>
-                      )}
-                      {canPath(subject, "batches") && (
-                        <NavLink to={`${base}/batches`} className={linkCls}>
-                          Inventario Pollo
-                        </NavLink>
-                      )}
-
-                      {canPath(subject, "bills") && (
-                        <NavLink to={`${base}/bills`} className={linkCls}>
-                          Cierre Ventas
-                        </NavLink>
-                      )}
-                      {canPath(subject, "transactionsPollo") && (
-                        <NavLink
-                          to={`${base}/transactionsPollo`}
-                          className={linkCls}
-                        >
-                          Transacciones
-                        </NavLink>
-                      )}
-
-                      {openPollo && (
-                        <div className="pb-2">
-                          <SubSectionBtn
-                            open={contadorMenuFinanzas}
-                            onClick={() => setContadorMenuFinanzas((v) => !v)}
-                            title="Contabilidad"
-                          />
-
-                          {contadorMenuFinanzas && (
-                            <div className="ml-4 mt-1 space-y-1">
-                              {canPath(subject, "billing") && (
-                                <NavLink
-                                  to={`${base}/billing`}
-                                  className={linkCls}
-                                >
-                                  Facturacion
-                                </NavLink>
-                              )}
-
-                              {canPath(subject, "customersPollo") && (
-                                <NavLink
-                                  to={`${base}/customersPollo`}
-                                  className={linkCls}
-                                >
-                                  Saldos Pendientes
-                                </NavLink>
-                              )}
-
-                              {canPath(subject, "statusAccount") && (
-                                <NavLink
-                                  to={`${base}/statusAccount`}
-                                  className={linkCls}
-                                >
-                                  Estado de Cuenta
-                                </NavLink>
-                              )}
-                              {canPath(subject, "statusInventory") && (
-                                <NavLink
-                                  to={`${base}/statusInventory`}
-                                  className={linkCls}
-                                >
-                                  Evolutivo de Libras
-                                </NavLink>
-                              )}
-                              {canPath(subject, "expenses") && (
-                                <NavLink
-                                  to={`${base}/expenses`}
-                                  className={linkCls}
-                                >
-                                  Gastos
-                                </NavLink>
-                              )}
-                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
 
-              {/* ================== DULCES (vendedor_dulces o multi-rol) ================== */}
-              {!isAdmin && hasDulcesAccess && (
-                <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-pink-400">
-                  <SectionBtn
-                    open={openDulces}
-                    onClick={() => toggleModule("dulces")}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-pink-500 text-white">
-                        <FaCandyCane className="h-3.5 w-3.5" />
-                      </span>
-                      <span>CandyShop</span>
-                    </span>
-                  </SectionBtn>
-
-                  {openDulces && (
-                    <>
-                      <div className="pb-2 ml-4 mt-1 space-y-1">
-                        {canPath(subject, "salesCandies") && (
-                          <NavLink
-                            to={`${base}/salesCandies`}
-                            className={linkCls}
-                          >
-                            Venta
-                          </NavLink>
-                        )}
-                      </div>
-
-                      <div className="pb-2 ml-4 mt-1 space-y-1">
-                        {canPath(subject, "transactionCandies") && (
-                          <NavLink
-                            to={`${base}/transactionCandies`}
-                            className={linkCls}
-                          >
-                            Ventas del dia
-                          </NavLink>
-                        )}
-                      </div>
-
-                      <div className="pb-2 ml-4 mt-1 space-y-1">
-                        {canPath(subject, "cierreVentasCandies") && (
-                          <NavLink
-                            to={`${base}/cierreVentasCandies`}
-                            className={linkCls}
-                          >
-                            Cierre de Ventas
-                          </NavLink>
-                        )}
-                      </div>
-
-                      <div className="ml-4 mt-1 space-y-1">
-                        {canPath(subject, "productsVendorsCandies") && (
-                          <NavLink
-                            to={`${base}/productsVendorsCandies`}
-                            className={linkCls}
-                          >
-                            Pedidos
-                          </NavLink>
-                        )}
-                      </div>
-
-                      <div className="ml-4 mt-1 space-y-1">
-                        {canPath(subject, "customersCandies") && (
-                          <NavLink
-                            to={`${base}/customersCandies`}
-                            className={linkCls}
-                          >
-                            Clientes
-                          </NavLink>
-                        )}
-                      </div>
-
-                      {/* <div className="ml-4 mt-1 space-y-1">
+                        {/* <div className="ml-4 mt-1 space-y-1">
                         {canPath(subject, "estadoCuentaCandies") && (
                           <NavLink
                             to={`${base}/estadoCuentaCandies`}
@@ -1264,96 +1415,97 @@ export default function AdminLayout({
                         )}
                       </div> */}
 
-                      <div className="ml-4 mt-1 space-y-1">
-                        {canPath(subject, "productsPricesCandies") && (
-                          <NavLink
-                            to={`${base}/productsPricesCandies`}
-                            className={linkCls}
-                          >
-                            Precios Venta
-                          </NavLink>
+                        <div className="ml-4 mt-1 space-y-1">
+                          {canPath(subject, "productsPricesCandies") && (
+                            <NavLink
+                              to={`${base}/productsPricesCandies`}
+                              className={linkCls}
+                            >
+                              Precios Venta
+                            </NavLink>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* ================== VENDEDOR ROPA ================== */}
+                {isVendRopa && (
+                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-indigo-400">
+                    <SectionBtn
+                      open={openRopa}
+                      onClick={() => toggleModule("ropa")}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white">
+                          <FaBook className="h-3.5 w-3.5" />
+                        </span>
+                        <span>Operaciones Ropa</span>
+                      </span>
+                    </SectionBtn>
+
+                    {openRopa && (
+                      <div className="pb-2">
+                        <SubSectionBtn
+                          open={openRopaFin}
+                          onClick={() => setOpenRopaFin((v) => !v)}
+                          title="Ventas"
+                        />
+                        {openRopaFin && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/salesClothes`}
+                              className={linkCls}
+                            >
+                              Venta Ropa
+                            </NavLink>
+                            <NavLink
+                              to={`${base}/TransactionsReportClothes`}
+                              className={linkCls}
+                            >
+                              Transacciones
+                            </NavLink>
+                          </div>
+                        )}
+
+                        <SubSectionBtn
+                          open={openRopaProd}
+                          onClick={() => setOpenRopaProd((v) => !v)}
+                          title="Productos"
+                        />
+                        {openRopaProd && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/productsClothes`}
+                              className={linkCls}
+                            >
+                              Agregar Productos
+                            </NavLink>
+                          </div>
+                        )}
+
+                        <SubSectionBtn
+                          open={openClients}
+                          onClick={() => setOpenClients((v) => !v)}
+                          title="Clientes"
+                        />
+                        {openClients && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <NavLink
+                              to={`${base}/CustomersClothes`}
+                              className={linkCls}
+                            >
+                              Listado de Clientes
+                            </NavLink>
+                          </div>
                         )}
                       </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* ================== VENDEDOR ROPA ================== */}
-              {isVendRopa && (
-                <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-indigo-400">
-                  <SectionBtn
-                    open={openRopa}
-                    onClick={() => toggleModule("ropa")}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white">
-                        <FaBook className="h-3.5 w-3.5" />
-                      </span>
-                      <span>Operaciones Ropa</span>
-                    </span>
-                  </SectionBtn>
-
-                  {openRopa && (
-                    <div className="pb-2">
-                      <SubSectionBtn
-                        open={openRopaFin}
-                        onClick={() => setOpenRopaFin((v) => !v)}
-                        title="Ventas"
-                      />
-                      {openRopaFin && (
-                        <div className="ml-4 mt-1 space-y-1">
-                          <NavLink
-                            to={`${base}/salesClothes`}
-                            className={linkCls}
-                          >
-                            Venta Ropa
-                          </NavLink>
-                          <NavLink
-                            to={`${base}/TransactionsReportClothes`}
-                            className={linkCls}
-                          >
-                            Transacciones
-                          </NavLink>
-                        </div>
-                      )}
-
-                      <SubSectionBtn
-                        open={openRopaProd}
-                        onClick={() => setOpenRopaProd((v) => !v)}
-                        title="Productos"
-                      />
-                      {openRopaProd && (
-                        <div className="ml-4 mt-1 space-y-1">
-                          <NavLink
-                            to={`${base}/productsClothes`}
-                            className={linkCls}
-                          >
-                            Agregar Productos
-                          </NavLink>
-                        </div>
-                      )}
-
-                      <SubSectionBtn
-                        open={openClients}
-                        onClick={() => setOpenClients((v) => !v)}
-                        title="Clientes"
-                      />
-                      {openClients && (
-                        <div className="ml-4 mt-1 space-y-1">
-                          <NavLink
-                            to={`${base}/CustomersClothes`}
-                            className={linkCls}
-                          >
-                            Listado de Clientes
-                          </NavLink>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </nav>
+                    )}
+                  </div>
+                )}
+              </nav>
+            )}
 
             <div className="mt-3 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
               <div className="text-xs uppercase tracking-wide text-slate-500">

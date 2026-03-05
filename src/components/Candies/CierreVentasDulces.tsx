@@ -244,12 +244,34 @@ const normalizeMany = (
   if (!date) return [];
 
   const sellerEmail = raw.userEmail ?? ""; // email real del usuario
-  const vendedorLabel =
-    raw.vendorName ||
-    raw.vendor ||
-    sellerEmail ||
-    raw.vendorId ||
-    "(sin vendedor)";
+  // Busca el nombre actualizado del vendedor usando vendorId
+  let vendedorLabel = "(sin vendedor)";
+  if (
+    raw.vendorId &&
+    typeof window !== "undefined" &&
+    (window as any).__SELLERS__
+  ) {
+    const seller = (window as any).__SELLERS__.find(
+      (s: any) => s.id === raw.vendorId,
+    );
+    if (seller && seller.name) {
+      vendedorLabel = seller.name;
+    } else {
+      vendedorLabel =
+        raw.vendorName ||
+        raw.vendor ||
+        sellerEmail ||
+        raw.vendorId ||
+        "(sin vendedor)";
+    }
+  } else {
+    vendedorLabel =
+      raw.vendorName ||
+      raw.vendor ||
+      sellerEmail ||
+      raw.vendorId ||
+      "(sin vendedor)";
+  }
 
   const type: SaleType = (raw.type || "CONTADO") as SaleType;
   const vendorId = raw.vendorId;
@@ -502,6 +524,10 @@ export default function CierreVentasDulces({
 
   // vendedores para KPI listado + filtro
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
+  // Hacer accesible la lista de sellers globalmente para normalizeMany
+  if (typeof window !== "undefined") {
+    (window as any).__SELLERS__ = sellers;
+  }
 
   const [customersById, setCustomersById] = useState<Record<string, string>>(
     {},
@@ -652,6 +678,12 @@ export default function CierreVentasDulces({
   // ✅ helper comisión por venta (YA VIENE EN LA VENTA)
   const getCommissionAmount = (s: SaleData): number => {
     return round2(Number(s.vendorCommissionAmount ?? 0) || 0);
+  };
+
+  // Origen de la comisión: 'venta' si la venta trae vendorCommissionAmount, sino 'uvxpaq' calculada
+  const getCommissionOrigin = (s: SaleData): "venta" | "uvxpaq" => {
+    const explicit = Number(s.vendorCommissionAmount ?? NaN);
+    return Number.isFinite(explicit) ? "venta" : "uvxpaq";
   };
 
   // utilidad del vendedor (helper)
@@ -1079,6 +1111,128 @@ export default function CierreVentasDulces({
     }
   };
 
+  const backfillLegacySales = async () => {
+    if (!isAdmin) return;
+    if (
+      !window.confirm(
+        "¿Backfill: calcular y persistir uNetaPorPaquete, vendorGain, inversorGain en ventas del periodo?",
+      )
+    )
+      return;
+
+    try {
+      setMessage("");
+      const qSales = query(
+        collection(db, "sales_candies"),
+        where("date", ">=", startDate),
+        where("date", "<=", endDate),
+        orderBy("date", "asc"),
+      );
+      const snap = await getDocs(qSales);
+
+      const vendorIds = Array.from(
+        new Set(
+          snap.docs
+            .map((d) => String((d.data() as any)?.vendorId || "").trim())
+            .filter(Boolean),
+        ),
+      );
+
+      const upaMap = vendorIds.length ? await buildUpaqueteMap(vendorIds) : {};
+      const uvMap = vendorIds.length ? await buildUvxpaqMap(vendorIds) : {};
+
+      let batch = writeBatch(db);
+      let pending = 0;
+      let updatedDocs = 0;
+
+      for (const d of snap.docs) {
+        const data = d.data() as any;
+        const vendorId = String(data?.vendorId || "").trim();
+        const items = Array.isArray(data?.items) ? data.items : [];
+
+        let changed = false;
+        const nextItems = items.map((it: any) => {
+          const qtyPaq = Number(it?.packages ?? it?.qty ?? it?.quantity ?? 0);
+          const pname = String(it?.productName || data?.productName || "");
+          const key = normKey(pname);
+
+          const uNetaFromMap = upaMap?.[vendorId]?.[key];
+          const uNetaPorPaquete = Number.isFinite(Number(uNetaFromMap))
+            ? Number(uNetaFromMap)
+            : Number.isFinite(Number(it?.uNetaPorPaquete ?? NaN))
+              ? Number(it.uNetaPorPaquete)
+              : Number.isFinite(Number(it?.uNeta ?? NaN)) && qtyPaq > 0
+                ? round2(Number(it.uNeta) / qtyPaq)
+                : undefined;
+
+          const uvFromMap = uvMap?.[vendorId]?.[key];
+          const uvxpaqFinal = Number.isFinite(Number(it?.uvXpaq ?? NaN))
+            ? Number(it.uvXpaq)
+            : Number.isFinite(Number(uvFromMap))
+              ? Number(uvFromMap)
+              : undefined;
+
+          const vendorGain = round2(
+            Number(uvxpaqFinal || 0) * Number(qtyPaq || 0),
+          );
+          const inversorGain = round2(
+            Number(uNetaPorPaquete || 0) * Number(qtyPaq || 0),
+          );
+
+          const provider = Number(it?.providerPricePerPackage ?? 0);
+          const unitPrice = Number(it?.unitPricePackage ?? it?.unitPrice ?? 0);
+          const computedUBruta = round2((unitPrice - provider) * qtyPaq);
+
+          const newIt = {
+            ...it,
+            uNetaPorPaquete: uNetaPorPaquete ?? it.uNetaPorPaquete,
+            uvXpaq: Number.isFinite(Number(uvxpaqFinal))
+              ? round2(Number(uvxpaqFinal))
+              : it.uvXpaq,
+            vendorGain,
+            inversorGain,
+            uBruta: it.uBruta || computedUBruta,
+          };
+
+          if (
+            newIt.uNetaPorPaquete !== it.uNetaPorPaquete ||
+            newIt.uvXpaq !== it.uvXpaq ||
+            newIt.vendorGain !== it.vendorGain ||
+            newIt.inversorGain !== it.inversorGain ||
+            newIt.uBruta !== it.uBruta
+          ) {
+            changed = true;
+          }
+
+          return newIt;
+        });
+
+        if (changed) {
+          batch.update(doc(db, "sales_candies", d.id), {
+            items: nextItems,
+            legacyCorrected: true,
+            uvxpaqUpdatedAt: Timestamp.now(),
+          });
+          pending += 1;
+          updatedDocs += 1;
+        }
+
+        if (pending >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          pending = 0;
+        }
+      }
+
+      if (pending > 0) await batch.commit();
+
+      setMessage(`✅ Backfill completo. Docs actualizados: ${updatedDocs}`);
+    } catch (e) {
+      console.error(e);
+      setMessage("❌ Error durante backfill de ventas.");
+    }
+  };
+
   const cashSales = React.useMemo(
     () => visibleSales.filter((s) => s.type !== "CREDITO"),
     [visibleSales],
@@ -1144,30 +1298,21 @@ export default function CierreVentasDulces({
     }
   });
 
-  const commissionGroupMap = new Map<
-    string,
-    { qty: number; sample: SaleData; type: SaleType }
-  >();
+  // Calcular comisiones totales por venta,
+  // preferir `vendorCommissionAmount` cuando venga en la venta,
+  // si no, usar `uvXpaq * qty` como fallback.
+  let tCommCash = 0;
+  let tCommCredito = 0;
   visibleSales.forEach((s) => {
-    const key = `${s.type}|${s.vendorId || ""}|${normKey(s.productName || "")}`;
-    const current = commissionGroupMap.get(key);
-    if (current) {
-      current.qty += Number(s.quantity || 0);
-    } else {
-      commissionGroupMap.set(key, {
-        qty: Number(s.quantity || 0),
-        sample: s,
-        type: s.type,
-      });
-    }
+    const explicit = Number(s.vendorCommissionAmount ?? NaN);
+    const saleComm = Number.isFinite(explicit)
+      ? round2(explicit)
+      : round2(getUvXpaqForSale(s) * Number(s.quantity || 0));
+    if (s.type === "CREDITO") tCommCredito += saleComm;
+    else tCommCash += saleComm;
   });
-  commissionGroupMap.forEach((entry) => {
-    const uv = getUvXpaqForSale(entry.sample);
-    const total = round2(uv * entry.qty);
-    if (total <= 0) return;
-    if (entry.type === "CREDITO") totalCommissionCredito += total;
-    else totalCommissionCash += total;
-  });
+  totalCommissionCash = round2(tCommCash);
+  totalCommissionCredito = round2(tCommCredito);
   totalCommission = round2(totalCommissionCash + totalCommissionCredito);
 
   totalPendienteCredito = round2(totalPendienteCredito);
@@ -1188,13 +1333,16 @@ export default function CierreVentasDulces({
         vendorId: string;
         name: string;
         total: number;
-        products: Map<string, { qty: number; sample: SaleData }>;
+        products: Map<
+          string,
+          { qty: number; sample: SaleData; commission?: number }
+        >;
       }
     >();
     for (const s of visibleSales) {
       const vid = (s.vendorId || "").trim();
       if (!vid) continue;
-      if (s.type === "CREDITO") continue; // ✅ solo cash
+      if (s.type === "CREDITO") continue; // solo cash
       const seller = sellers.find((x) => x.id === vid);
       if (!map.has(vid)) {
         map.set(vid, {
@@ -1204,27 +1352,26 @@ export default function CierreVentasDulces({
           products: new Map(),
         });
       }
-      const entry = map.get(vid);
-      if (!entry) continue;
+      const entry = map.get(vid)!;
       const pkey = normKey(s.productName || "");
       const current = entry.products.get(pkey);
+      const explicit = Number(s.vendorCommissionAmount ?? NaN);
+      const saleComm = Number.isFinite(explicit)
+        ? round2(explicit)
+        : round2(getUvXpaqForSale(s) * Number(s.quantity || 0));
+
       if (current) {
         current.qty += Math.round(s.quantity || 0);
+        current.commission = round2((current.commission || 0) + saleComm);
       } else {
         entry.products.set(pkey, {
           qty: Math.round(s.quantity || 0),
           sample: s,
+          commission: saleComm,
         });
       }
+      entry.total = round2((entry.total || 0) + saleComm);
     }
-    map.forEach((entry) => {
-      let total = 0;
-      entry.products.forEach((p) => {
-        const uv = getUvXpaqForSale(p.sample);
-        total += round2(uv * p.qty);
-      });
-      entry.total = round2(total);
-    });
     return Array.from(map.values())
       .filter((x) => x.total > 0)
       .sort((a, b) => b.total - a.total);
@@ -1237,13 +1384,16 @@ export default function CierreVentasDulces({
         vendorId: string;
         name: string;
         total: number;
-        products: Map<string, { qty: number; sample: SaleData }>;
+        products: Map<
+          string,
+          { qty: number; sample: SaleData; commission?: number }
+        >;
       }
     >();
     for (const s of visibleSales) {
       const vid = (s.vendorId || "").trim();
       if (!vid) continue;
-      if (s.type !== "CREDITO") continue; // ✅ solo crédito
+      if (s.type !== "CREDITO") continue; // solo crédito
       const seller = sellers.find((x) => x.id === vid);
       if (!map.has(vid)) {
         map.set(vid, {
@@ -1253,74 +1403,84 @@ export default function CierreVentasDulces({
           products: new Map(),
         });
       }
-      const entry = map.get(vid);
-      if (!entry) continue;
+      const entry = map.get(vid)!;
       const pkey = normKey(s.productName || "");
       const current = entry.products.get(pkey);
+      const explicit = Number(s.vendorCommissionAmount ?? NaN);
+      const saleComm = Number.isFinite(explicit)
+        ? round2(explicit)
+        : round2(getUvXpaqForSale(s) * Number(s.quantity || 0));
+
       if (current) {
         current.qty += Math.round(s.quantity || 0);
+        current.commission = round2((current.commission || 0) + saleComm);
       } else {
         entry.products.set(pkey, {
           qty: Math.round(s.quantity || 0),
           sample: s,
+          commission: saleComm,
         });
       }
+      entry.total = round2((entry.total || 0) + saleComm);
     }
-    map.forEach((entry) => {
-      let total = 0;
-      entry.products.forEach((p) => {
-        const uv = getUvXpaqForSale(p.sample);
-        total += round2(uv * p.qty);
-      });
-      entry.total = round2(total);
-    });
     return Array.from(map.values())
       .filter((x) => x.total > 0)
       .sort((a, b) => b.total - a.total);
   }, [visibleSales, sellers]);
 
-  // Consolidado por producto (en paquetes + comisión)
+  // Consolidado por producto (desglose Cash / Crédito)
   const productMap: Record<
     string,
     {
-      totalQuantity: number;
-      totalAmount: number;
-      totalCommission: number;
-      totalCommissionUv: number;
+      paqCash: number;
+      paqCredito: number;
+      montoCash: number;
+      montoCredito: number;
+      commCash: number;
+      commCredito: number;
     }
   > = {};
+
   visibleSales.forEach((s) => {
     const key = s.productName || "(sin nombre)";
     if (!productMap[key])
       productMap[key] = {
-        totalQuantity: 0,
-        totalAmount: 0,
-        totalCommission: 0,
-        totalCommissionUv: 0,
+        paqCash: 0,
+        paqCredito: 0,
+        montoCash: 0,
+        montoCredito: 0,
+        commCash: 0,
+        commCredito: 0,
       };
-    productMap[key].totalQuantity = Math.round(
-      productMap[key].totalQuantity + Math.round(s.quantity || 0),
-    );
-    productMap[key].totalAmount = round2(
-      productMap[key].totalAmount + (s.amount || 0),
-    );
-    productMap[key].totalCommission = round2(
-      productMap[key].totalCommission + getCommissionAmount(s),
-    );
-    productMap[key].totalCommissionUv = round2(
-      productMap[key].totalCommissionUv +
-        getUvXpaqForSale(s) * Number(s.quantity || 0),
-    );
+
+    const qty = Math.round(s.quantity || 0);
+    const amt = Number(s.amount || 0);
+    const comm = Number(getCommissionAmount(s) || 0);
+
+    if (s.type === "CREDITO") {
+      productMap[key].paqCredito = Math.round(productMap[key].paqCredito + qty);
+      productMap[key].montoCredito = round2(productMap[key].montoCredito + amt);
+      productMap[key].commCredito = round2(productMap[key].commCredito + comm);
+    } else {
+      productMap[key].paqCash = Math.round(productMap[key].paqCash + qty);
+      productMap[key].montoCash = round2(productMap[key].montoCash + amt);
+      productMap[key].commCash = round2(productMap[key].commCash + comm);
+    }
   });
 
   const productSummaryArray = Object.entries(productMap).map(
     ([productName, v]) => ({
       productName,
       category: productCategoryMap[normKey(productName)] || "(sin categoría)",
-      totalQuantity: Math.round(v.totalQuantity),
-      totalAmount: v.totalAmount,
-      totalCommission: v.totalCommissionUv, // AJUSTE: ahora la comisión es uvXpaq * paquetes
-      totalCommissionUv: v.totalCommissionUv,
+      paqCash: Math.round(v.paqCash),
+      paqCredito: Math.round(v.paqCredito),
+      montoCash: round2(v.montoCash),
+      montoCredito: round2(v.montoCredito),
+      commCash: round2(v.commCash),
+      commCredito: round2(v.commCredito),
+      totalQuantity: Math.round(v.paqCash + v.paqCredito),
+      totalAmount: round2(v.montoCash + v.montoCredito),
+      totalCommission: round2(v.commCash + v.commCredito),
     }),
   );
 
@@ -1352,10 +1512,10 @@ export default function CierreVentasDulces({
         map[cat].totalQuantity + Math.round(row.totalQuantity || 0),
       );
       map[cat].totalAmount = round2(
-        map[cat].totalAmount + (row.totalAmount || 0),
+        map[cat].totalAmount + (row.montoCash || 0) + (row.montoCredito || 0),
       );
       map[cat].totalCommission = round2(
-        map[cat].totalCommission + (row.totalCommission || 0),
+        map[cat].totalCommission + (row.commCash || 0) + (row.commCredito || 0),
       );
     }
 
@@ -1639,6 +1799,7 @@ export default function CierreVentasDulces({
       "vendorNetUtility",
 
       "date",
+      "origenComision",
       "processedDate",
       "vendor",
       "status",
@@ -1653,6 +1814,9 @@ export default function CierreVentasDulces({
       Number(s.commissionFromItems ?? 0).toFixed(2),
       Number(s.vendorNetUtility ?? 0).toFixed(2),
       s.date,
+      Number.isFinite(Number(s.vendorCommissionAmount ?? NaN))
+        ? "venta"
+        : "uvxpaq",
       s.processedDate ?? "",
       s.userEmail ?? "",
       s.status,
@@ -1678,40 +1842,57 @@ export default function CierreVentasDulces({
     const rows = visibleSales.map((s) => {
       const key = normKey(s.productName || "");
       const qty = Number(s.quantity || 0);
-      // Precio
-      let precio = "";
+
+      // Precio (numérico)
+      let precioNum: number | null = null;
       if (typeof s.price === "number" && !isNaN(s.price)) {
-        precio = `C$${money(s.price)}`;
+        precioNum = round2(s.price);
       } else if (qty > 0 && typeof s.amount === "number") {
-        precio = `C$${money(s.amount / qty)}`;
+        precioNum = round2(s.amount / qty);
       }
-      // UN x Paq
+
+      // UN x Paq (numérico)
       const u = upaqueteMap[s.vendorId || ""]?.[key];
-      // UV x Paq
+      // UV x Paq (numérico)
       const uv = getUvXpaqForSale(s);
-      // Comision
-      const comision = uv > 0 ? round2(uv * qty) : "";
-      // U. Neta
-      const uneta = u && qty > 0 ? round2(Number(u) * qty) : "";
-      return {
+      // Comision: prefer vendorCommissionAmount, fallback to uv*qty
+      const explicit = Number(s.vendorCommissionAmount ?? NaN);
+      const saleComm = Number.isFinite(explicit)
+        ? round2(explicit)
+        : uv > 0
+          ? round2(uv * qty)
+          : null;
+      // U. Neta (numérico)
+      const uneta = u && qty > 0 ? round2(Number(u) * qty) : null;
+
+      const origenComision = Number.isFinite(
+        Number(s.vendorCommissionAmount ?? NaN),
+      )
+        ? "venta"
+        : "uvxpaq";
+
+      const base: Record<string, unknown> = {
         Estado: s.status,
         Producto: s.productName,
         Tipo: s.type === "CREDITO" ? "Crédito" : "Cash",
-        Paquetes: qty3(s.quantity),
-        Precio: precio,
-        Monto: `C$${money(s.amount)}`,
-        ...(isAdmin
-          ? {
-              "UN x Paq":
-                u && Number(u) !== 0 ? `C$${money(round2(Number(u)))}` : "—",
-              "UV x Paq": uv > 0 ? `C$${money(round2(uv))}` : "—",
-              Comision: comision ? `C$${money(comision)}` : "—",
-              "U. Neta": u && uneta ? `C$${money(uneta)}` : "—",
-            }
-          : {}),
+        Paquetes: qty,
+        Precio: precioNum,
+        Monto: round2(Number(s.amount || 0)),
+        "Origen Comisión": origenComision,
         "Fecha venta": s.date,
         Vendedor: s.userEmail,
       };
+
+      if (isAdmin) {
+        base["UN x Paq"] = Number.isFinite(Number(u))
+          ? round2(Number(u))
+          : null;
+        base["UV x Paq"] = uv > 0 ? round2(uv) : null;
+        base["Comision"] = saleComm !== null ? round2(Number(saleComm)) : null;
+        base["U. Neta"] = uneta !== null ? round2(Number(uneta)) : null;
+      }
+
+      return base;
     });
 
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -1745,7 +1926,7 @@ export default function CierreVentasDulces({
         {isAdmin && (
           <button
             onClick={handleSaveClosure}
-            className="bg-blue-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-blue-700"
+            className="bg-blue-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-blue-700"
           >
             Procesar
           </button>
@@ -1754,26 +1935,34 @@ export default function CierreVentasDulces({
           <button
             onClick={backfillUvXpaqInSales}
             disabled={isBackfillingUv}
-            className="bg-emerald-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-emerald-700 disabled:opacity-60"
+            className="hidden md:inline-flex bg-emerald-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-emerald-700 disabled:opacity-60"
           >
             {isBackfillingUv ? "Actualizando UVxPaq..." : "Actualizar UVxPaq"}
           </button>
         )}
+        {isAdmin && (
+          <button
+            onClick={backfillLegacySales}
+            className="hidden md:inline-flex bg-rose-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-rose-700"
+          >
+            Backfill ventas (legacy)
+          </button>
+        )}
         <button
           onClick={handleDownloadPDF}
-          className="bg-green-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-green-700"
+          className="bg-green-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-green-700"
         >
           PDF
         </button>
         <button
           onClick={handleExportCSV}
-          className="bg-slate-700 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-slate-800"
+          className="bg-slate-700 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-slate-800"
         >
           CSV
         </button>
         <button
           onClick={handleExportXLSX}
-          className="bg-amber-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-amber-700"
+          className="bg-amber-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-amber-700"
         >
           Excel
         </button>
@@ -1802,37 +1991,27 @@ export default function CierreVentasDulces({
             {isAdmin && (
               <button
                 onClick={handleSaveClosure}
-                className="bg-blue-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-blue-700"
+                className="bg-blue-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-blue-700"
               >
                 Procesar
               </button>
             )}
-            {isAdmin && (
-              <button
-                onClick={backfillUvXpaqInSales}
-                disabled={isBackfillingUv}
-                className="bg-emerald-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-emerald-700 disabled:opacity-60"
-              >
-                {isBackfillingUv
-                  ? "Actualizando UVxPaq..."
-                  : "Actualizar UVxPaq"}
-              </button>
-            )}
+            {/* 'Actualizar UVxPaq' hidden on mobile; visible on desktop */}
             <button
               onClick={handleDownloadPDF}
-              className="bg-green-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-green-700"
+              className="bg-green-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-green-700"
             >
               PDF
             </button>
             <button
               onClick={handleExportCSV}
-              className="bg-slate-700 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-slate-800"
+              className="bg-slate-700 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-slate-800"
             >
               CSV
             </button>
             <button
               onClick={handleExportXLSX}
-              className="bg-amber-600 text-white px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm hover:bg-amber-700"
+              className="bg-amber-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-amber-700"
             >
               Excel
             </button>
@@ -2236,10 +2415,24 @@ export default function CierreVentasDulces({
                                 {(() => {
                                   const qty = Number(s.quantity || 0);
                                   const uv = getUvXpaqForSale(s);
-                                  const total = Number(uv || 0) * qty;
-                                  return uv && total > 0
-                                    ? `C$${money(round2(total))}`
-                                    : "—";
+                                  const explicit = Number(
+                                    s.vendorCommissionAmount ?? NaN,
+                                  );
+                                  const saleComm = Number.isFinite(explicit)
+                                    ? round2(explicit)
+                                    : round2((uv || 0) * qty);
+                                  const origin = Number.isFinite(explicit)
+                                    ? "venta"
+                                    : "uvxpaq";
+                                  return saleComm > 0 ? (
+                                    <span
+                                      title={`Origen comisión: ${origin === "venta" ? "venta" : "calculada (uvXpaq)"}`}
+                                    >
+                                      {`C$${money(saleComm)}`}
+                                    </span>
+                                  ) : (
+                                    "—"
+                                  );
                                 })()}
                               </td>
                             )}
@@ -2396,13 +2589,20 @@ export default function CierreVentasDulces({
 
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Comisión</span>
-                          <strong>
+                          <strong
+                            title={`Origen comisión: ${getCommissionOrigin(s) === "venta" ? "venta" : "calculada (uvXpaq)"}`}
+                          >
                             {(() => {
                               const qty = Number(s.quantity || 0);
                               const uv = getUvXpaqForSale(s);
-                              const total = Number(uv || 0) * qty;
-                              return uv && total > 0
-                                ? `C$${money(round2(total))}`
+                              const explicit = Number(
+                                s.vendorCommissionAmount ?? NaN,
+                              );
+                              const saleComm = Number.isFinite(explicit)
+                                ? round2(explicit)
+                                : round2((uv || 0) * qty);
+                              return saleComm > 0
+                                ? `C$${money(saleComm)}`
                                 : "—";
                             })()}
                           </strong>
@@ -2619,10 +2819,24 @@ export default function CierreVentasDulces({
                                 {(() => {
                                   const qty = Number(s.quantity || 0);
                                   const uv = getUvXpaqForSale(s);
-                                  const total = Number(uv || 0) * qty;
-                                  return uv && total > 0
-                                    ? `C$${money(round2(total))}`
-                                    : "—";
+                                  const explicit = Number(
+                                    s.vendorCommissionAmount ?? NaN,
+                                  );
+                                  const saleComm = Number.isFinite(explicit)
+                                    ? round2(explicit)
+                                    : round2((uv || 0) * qty);
+                                  const origin = Number.isFinite(explicit)
+                                    ? "venta"
+                                    : "uvxpaq";
+                                  return saleComm > 0 ? (
+                                    <span
+                                      title={`Origen comisión: ${origin === "venta" ? "venta" : "calculada (uvXpaq)"}`}
+                                    >
+                                      {`C$${money(saleComm)}`}
+                                    </span>
+                                  ) : (
+                                    "—"
+                                  );
                                 })()}
                               </td>
                             )}
@@ -2776,13 +2990,20 @@ export default function CierreVentasDulces({
 
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Comisión</span>
-                          <strong>
+                          <strong
+                            title={`Origen comisión: ${getCommissionOrigin(s) === "venta" ? "venta" : "calculada (uvXpaq)"}`}
+                          >
                             {(() => {
                               const qty = Number(s.quantity || 0);
                               const uv = getUvXpaqForSale(s);
-                              const total = Number(uv || 0) * qty;
-                              return uv && total > 0
-                                ? `C$${money(round2(total))}`
+                              const explicit = Number(
+                                s.vendorCommissionAmount ?? NaN,
+                              );
+                              const saleComm = Number.isFinite(explicit)
+                                ? round2(explicit)
+                                : round2((uv || 0) * qty);
+                              return saleComm > 0
+                                ? `C$${money(saleComm)}`
                                 : "—";
                             })()}
                           </strong>
@@ -3084,6 +3305,10 @@ export default function CierreVentasDulces({
               <div className="text-lg font-semibold">
                 C${money(totalCommission)}
               </div>
+              <div className="text-xs text-slate-500 mt-1">
+                Cash: C${money(totalCommissionCash)} · Crédito: C$
+                {money(totalCommissionCredito)}
+              </div>
             </div>
           </div>
 
@@ -3163,13 +3388,22 @@ export default function CierreVentasDulces({
                                     Producto
                                   </th>
                                   <th className="px-3 py-2 text-left text-xs font-semibold">
-                                    Paquetes vendidos
+                                    Paq cash
                                   </th>
                                   <th className="px-3 py-2 text-left text-xs font-semibold">
-                                    Monto total
+                                    Paq credito
                                   </th>
                                   <th className="px-3 py-2 text-left text-xs font-semibold">
-                                    Comisión
+                                    Monto cash
+                                  </th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold">
+                                    Monto credito
+                                  </th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold">
+                                    Comision cash
+                                  </th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold">
+                                    Comision credito
                                   </th>
                                 </tr>
                               </thead>
@@ -3183,14 +3417,25 @@ export default function CierreVentasDulces({
                                       {row.productName}
                                     </td>
                                     <td className="px-3 py-2">
-                                      {qty3(row.totalQuantity)}
+                                      {qty3(row.paqCash)}
                                     </td>
                                     <td className="px-3 py-2">
-                                      C${money(row.totalAmount)}
+                                      {qty3(row.paqCredito)}
                                     </td>
                                     <td className="px-3 py-2">
-                                      {row.totalCommission > 0
-                                        ? `C$${money(row.totalCommission)}`
+                                      C${money(row.montoCash)}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      C${money(row.montoCredito)}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {row.commCash > 0
+                                        ? `C$${money(row.commCash)}`
+                                        : "—"}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {row.commCredito > 0
+                                        ? `C$${money(row.commCredito)}`
                                         : "—"}
                                     </td>
                                   </tr>
@@ -3212,23 +3457,45 @@ export default function CierreVentasDulces({
                               <div className="mt-2 text-sm space-y-1">
                                 <div className="flex justify-between gap-3">
                                   <span className="text-slate-600">
-                                    Paquetes vendidos
+                                    Paq cash
                                   </span>
-                                  <strong>{qty3(row.totalQuantity)}</strong>
+                                  <strong>{qty3(row.paqCash)}</strong>
                                 </div>
                                 <div className="flex justify-between gap-3">
                                   <span className="text-slate-600">
-                                    Monto total
+                                    Paq credito
                                   </span>
-                                  <strong>C${money(row.totalAmount)}</strong>
+                                  <strong>{qty3(row.paqCredito)}</strong>
                                 </div>
                                 <div className="flex justify-between gap-3">
                                   <span className="text-slate-600">
-                                    Comisión
+                                    Monto cash
+                                  </span>
+                                  <strong>C${money(row.montoCash)}</strong>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-slate-600">
+                                    Monto credito
+                                  </span>
+                                  <strong>C${money(row.montoCredito)}</strong>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-slate-600">
+                                    Comision cash
                                   </span>
                                   <strong>
-                                    {row.totalCommissionUv > 0
-                                      ? `C$${money(row.totalCommissionUv)}`
+                                    {row.commCash > 0
+                                      ? `C$${money(row.commCash)}`
+                                      : "—"}
+                                  </strong>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-slate-600">
+                                    Comision credito
+                                  </span>
+                                  <strong>
+                                    {row.commCredito > 0
+                                      ? `C$${money(row.commCredito)}`
                                       : "—"}
                                   </strong>
                                 </div>

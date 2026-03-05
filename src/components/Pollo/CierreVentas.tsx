@@ -278,6 +278,7 @@ export default function CierreVentas({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [ventasOpen, setVentasOpen] = useState(false);
   const [consolidadoOpen, setConsolidadoOpen] = useState(false);
+  const [indicadoresOpen, setIndicadoresOpen] = useState(false);
 
   // ✅ NUEVO: filtro por producto
   const [productFilter, setProductFilter] = useState<string>("");
@@ -1089,122 +1090,162 @@ export default function CierreVentas({
             <div className="space-y-6">
               {showCashTable && (
                 <div className="mt-8">
-                  <div className="mb-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm">
-                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
-                      <div className="text-xs text-emerald-700">
-                        Total libras Cash
-                      </div>
-                      <div className="text-base font-semibold text-emerald-900">
-                        {qty3(totalLbsCash)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
-                      <div className="text-xs text-emerald-700">
-                        Total Unidades Cash
-                      </div>
-                      <div className="text-base font-semibold text-emerald-900">
-                        {qty3(totalUnitsCash)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
-                      <div className="text-xs text-amber-700">
-                        Total libras Credito
-                      </div>
-                      <div className="text-base font-semibold text-amber-900">
-                        {qty3(totalLbsCredit)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
-                      <div className="text-xs text-amber-700">
-                        Total Unidades Credito
-                      </div>
-                      <div className="text-base font-semibold text-amber-900">
-                        {qty3(totalUnitsCredit)}
-                      </div>
-                    </div>
+                  <div className="mb-6">
+                    <SectionHeader
+                      title="Indicadores financieros"
+                      open={pdfMode ? true : indicadoresOpen}
+                      onToggle={() => setIndicadoresOpen((v) => !v)}
+                      right={
+                        <span className="ml-1">
+                          Totales • C${money(totalSalesAll)}
+                        </span>
+                      }
+                    />
 
-                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
-                      <div className="text-xs text-emerald-700">
-                        Total facturado Cash
-                      </div>
-                      <div className="text-base font-semibold text-emerald-900">
-                        C${money(totalCOGSCash)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
-                      <div className="text-xs text-amber-700">
-                        Total facturado Credito
-                      </div>
-                      <div className="text-base font-semibold text-amber-900">
-                        C${money(totalCOGSCredit)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
-                      <div className="text-xs text-emerald-700">
-                        Total venta Cash
-                      </div>
-                      <div className="text-base font-semibold text-emerald-900">
-                        C${money(totalSalesCash)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
-                      <div className="text-xs text-amber-700">
-                        Total venta Credito
-                      </div>
-                      <div className="text-base font-semibold text-amber-900">
-                        C${money(totalSalesCredit)}
-                      </div>
-                    </div>
+                    {(pdfMode || indicadoresOpen) && (
+                      <div className="mt-3">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* Card 1: Libras & Unidades (cash / credito) */}
+                          <div className="p-4 rounded-lg border bg-blue-50 border-blue-200">
+                            <div className="text-sm font-semibold text-blue-800">
+                              Libras / Unidades
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-3">
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Libras Cash
+                                </div>
+                                <div className="text-xl font-bold text-blue-800">
+                                  {qty3(totalLbsCash)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Libras Credito
+                                </div>
+                                <div className="text-xl font-bold text-amber-800">
+                                  {qty3(totalLbsCredit)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Unidades Cash
+                                </div>
+                                <div className="text-xl font-bold text-green-800">
+                                  {qty3(totalUnitsCash)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Unidades Credito
+                                </div>
+                                <div className="text-xl font-bold text-amber-800">
+                                  {qty3(totalUnitsCredit)}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
 
-                    <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50">
-                      <div className="text-xs text-emerald-700">
-                        Utilidad bruta Cash
-                      </div>
-                      <div className="text-base font-semibold text-emerald-900">
-                        C${money(grossProfitCash)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
-                      <div className="text-xs text-amber-700">
-                        Utilidad bruta Credito
-                      </div>
-                      <div className="text-base font-semibold text-amber-900">
-                        C${money(grossProfitCredit)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50">
-                      <div className="text-xs text-indigo-700">
-                        Total libras (Cash + Credito)
-                      </div>
-                      <div className="text-base font-semibold text-indigo-900">
-                        {qty3(totalLbsAll)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50">
-                      <div className="text-xs text-indigo-700">
-                        Total unidades (Cash + Credito)
-                      </div>
-                      <div className="text-base font-semibold text-indigo-900">
-                        {qty3(totalUnitsAll)}
-                      </div>
-                    </div>
+                          {/* Card 2: Facturado / Vendido / Utilidad bruta */}
+                          <div className="p-4 rounded-lg border bg-amber-50 border-amber-200">
+                            <div className="text-sm font-semibold text-amber-800">
+                              Facturado / Vendido / Utilidad
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-3">
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Facturado Cash
+                                </div>
+                                <div className="mt-1 text-sm font-semibold text-emerald-800">
+                                  C${money(totalCOGSCash)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Facturado Credito
+                                </div>
+                                <div className="mt-1 text-sm font-semibold text-amber-800">
+                                  C${money(totalCOGSCredit)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Vendido Cash
+                                </div>
+                                <div className="mt-1 text-sm font-semibold text-emerald-900">
+                                  C${money(totalSalesCash)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Vendido Credito
+                                </div>
+                                <div className="mt-1 text-sm font-semibold text-amber-900">
+                                  C${money(totalSalesCredit)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Utilidad bruta Cash
+                                </div>
+                                <div className="mt-1 text-sm font-semibold text-emerald-900">
+                                  C${money(grossProfitCash)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Utilidad bruta Credito
+                                </div>
+                                <div className="mt-1 text-sm font-semibold text-amber-900">
+                                  C${money(grossProfitCredit)}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
 
-                    <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50">
-                      <div className="text-xs text-indigo-700">
-                        Total ventas (Cash + Credito)
+                          {/* Card 3: Totales */}
+                          <div className="p-4 rounded-lg border bg-indigo-50 border-indigo-200">
+                            <div className="text-sm font-semibold text-indigo-800">
+                              Totales
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-3">
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Total facturado (precio compra)
+                                </div>
+                                <div className="mt-1 text-xl font-bold text-emerald-900">
+                                  C${money(totalCOGSVisible)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Ventas total (Cash + Crédito)
+                                </div>
+                                <div className="mt-1 text-xl font-bold text-amber-900">
+                                  C${money(totalSalesAll)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Libras totales (Cash + Crédito)
+                                </div>
+                                <div className="mt-1 text-xl font-bold text-blue-800">
+                                  {qty3(totalLbsAll)}
+                                </div>
+                              </div>
+                              <div className="p-3 rounded bg-white border">
+                                <div className="text-xs text-slate-600">
+                                  Unidades totales (Cash + Crédito)
+                                </div>
+                                <div className="mt-1 text-xl font-bold text-green-800">
+                                  {qty3(totalUnitsAll)}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-base font-semibold text-indigo-900">
-                        C${money(totalSalesAll)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
-                      <div className="text-xs text-slate-600">
-                        Total facturado a precio compra
-                      </div>
-                      <div className="text-base font-semibold text-slate-900">
-                        C${money(totalCOGSVisible)}
-                      </div>
-                    </div>
+                    )}
                   </div>
 
                   <div className="mt-4">

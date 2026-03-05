@@ -16,6 +16,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
+import LoadingOverlay from "../common/LoadingOverlay";
 import jsPDF from "jspdf";
 import { set } from "date-fns";
 
@@ -109,6 +110,8 @@ interface SelectedItem {
   margenVendedor?: number; // comisión calculada sobre la ganancia bruta
   uBruta?: number; // utilidad bruta por ítem
   uvXpaq?: number; // utilidad por paquete desde orden de vendedor (si existe)
+  uNetaPorPaquete?: number; // utilidad neta por paquete (desde orden de vendedor)
+  uNeta?: number; // utilidad neta total por línea (opcional)
 }
 
 interface VoucherItem {
@@ -465,6 +468,10 @@ export default function SalesCandiesPOS({
   const [stockByProduct, setStockByProduct] = useState<Record<string, number>>(
     {},
   );
+  // detalles completos por productId desde inventory_candies_sellers (uvXpaq, uNetaPorPaquete, etc.)
+  const [stockDetailsByProduct, setStockDetailsByProduct] = useState<
+    Record<string, any>
+  >({});
 
   // Generales
   const [clientType, setClientType] = useState<ClientType>("CONTADO");
@@ -527,6 +534,9 @@ export default function SalesCandiesPOS({
 
   // Modal cliente
   const [showModal, setShowModal] = useState(false);
+  // Modal para campos faltantes al guardar
+  const [missingFieldsModalOpen, setMissingFieldsModalOpen] = useState(false);
+  const [missingFieldsList, setMissingFieldsList] = useState<string[]>([]);
   const [mName, setMName] = useState("");
   const [mPhone, setMPhone] = useState("+505 ");
   const [mPlace, setMPlace] = useState<Place | "">("");
@@ -977,6 +987,7 @@ export default function SalesCandiesPOS({
 
     const sSnap = await getDocs(qStockVendor);
     const map: Record<string, number> = {};
+    const details: Record<string, any> = {};
 
     sSnap.forEach((d) => {
       const b = d.data() as any;
@@ -987,9 +998,12 @@ export default function SalesCandiesPOS({
       if (rem <= 0) return; // ✅ mejora: no guardamos ceros
 
       map[pid] = (map[pid] || 0) + rem;
+      // keep last doc data for this product (may be merged from multiple rows)
+      details[pid] = { ...(details[pid] || {}), ...b };
     });
 
     setStockByProduct(map);
+    setStockDetailsByProduct(details);
 
     // ✅ mejora: si algún producto ya no tiene stock, lo sacamos de la lista seleccionada
     setItems((prev) => {
@@ -1313,7 +1327,10 @@ export default function SalesCandiesPOS({
     try {
       setSaving(true);
 
-      const itemsToSave = items
+      // First compute chosen values (prefer vendor detail), validate required fields,
+      // then build the final items array to save. This enforces that uvxpaq and
+      // uNetaPorPaquete exist (fail with clear message otherwise).
+      const processed = items
         .filter((it) => (it.qtyPackages || 0) > 0)
         .map((it) => {
           const unitsPerPackage = it.unitsPerPackage || 1;
@@ -1328,18 +1345,58 @@ export default function SalesCandiesPOS({
           );
           const facturadoCosto = providerPricePerPackage * qtyPaq;
           const uBruta = lineGross - facturadoCosto;
-          // Prefer uvXpaq if available for per-item commission
-          const margenVendedor =
-            Number.isFinite(Number(it.uvXpaq)) && it.uvXpaq !== undefined
-              ? round2((it.qtyPackages || 0) * Number(it.uvXpaq || 0))
-              : calcVendorMarginFromUBruta(uBruta);
+
+          const vendorDetail = stockDetailsByProduct[it.productId] || {};
+
+          const detailUv = Number(
+            vendorDetail?.uvXpaq ??
+              vendorDetail?.uvxpaq ??
+              vendorDetail?.uVxPaq ??
+              vendorDetail?.u_vxpaq ??
+              vendorDetail?.upaquete ??
+              NaN,
+          );
+
+          const uvxpaqFinal = Number.isFinite(Number(it.uvXpaq ?? NaN))
+            ? Number(it.uvXpaq)
+            : Number.isFinite(detailUv)
+              ? Number(detailUv)
+              : undefined;
+
+          const detailUNeta = Number(
+            vendorDetail?.uNetaPorPaquete ??
+              vendorDetail?.uNeta ??
+              vendorDetail?.u_neta ??
+              NaN,
+          );
+
+          const uNetaPorPaquete = Number.isFinite(
+            Number(it.uNetaPorPaquete ?? NaN),
+          )
+            ? Number(it.uNetaPorPaquete)
+            : Number.isFinite(detailUNeta)
+              ? Number(detailUNeta)
+              : Number.isFinite(Number(it.uNeta ?? NaN)) &&
+                  (it.qtyPackages || 0) > 0
+                ? round2(Number(it.uNeta) / (it.qtyPackages || 1))
+                : undefined;
+
+          const margenVendedor = Number.isFinite(Number(uvxpaqFinal ?? NaN))
+            ? round2((it.qtyPackages || 0) * Number(uvxpaqFinal || 0))
+            : calcVendorMarginFromUBruta(uBruta);
+
+          const vendorGain = round2((uvxpaqFinal || 0) * (it.qtyPackages || 0));
+          const inversorGain = round2(
+            (uNetaPorPaquete || 0) * (it.qtyPackages || 0),
+          );
 
           return {
+            _raw: it,
             productId: it.productId,
             productName: it.productName,
             sku: it.sku || "",
-            qty: qtyUnits, // UNIDADES (para inventario / restore)
-            packages: qtyPaq, // paquetes visibles
+            qty: qtyUnits,
+            packages: qtyPaq,
             unitsPerPackage,
             branch,
             unitPricePackage: Number(it.pricePerPackage) || 0,
@@ -1347,14 +1404,49 @@ export default function SalesCandiesPOS({
             total: Math.floor(lineNet * 100) / 100,
             providerPricePerPackage,
             margenVendedor,
-            // Persist vendor utility per package for later use
-            uvXpaq:
-              it.uvXpaq !== undefined && it.uvXpaq !== null
-                ? Number(it.uvXpaq)
-                : null,
+            uvxpaqFinal,
             uBruta,
+            uNetaPorPaquete,
+            vendorGain,
+            inversorGain,
           };
         });
+
+      // Validate required invariants: vendorId present and fields from vendor order exist
+      const missing: string[] = [];
+      if (!vendorId) missing.push("vendorId");
+      for (const p of processed) {
+        if (p.uvxpaqFinal === undefined || p.uvxpaqFinal === null)
+          missing.push(`${p.productName}: uvXpaq`);
+        if (p.uNetaPorPaquete === undefined || p.uNetaPorPaquete === null)
+          missing.push(`${p.productName}: uNetaPorPaquete`);
+      }
+      if (missing.length > 0) {
+        setSaving(false);
+        setMissingFieldsList(missing);
+        setMissingFieldsModalOpen(true);
+        return;
+      }
+
+      const itemsToSave = processed.map((p) => ({
+        productId: p.productId,
+        productName: p.productName,
+        sku: p.sku || "",
+        qty: p.qty,
+        packages: p.packages,
+        unitsPerPackage: p.unitsPerPackage,
+        branch: p.branch,
+        unitPricePackage: p.unitPricePackage,
+        discount: p.discount,
+        total: p.total,
+        providerPricePerPackage: p.providerPricePerPackage,
+        margenVendedor: p.margenVendedor,
+        uvXpaq: Number(p.uvxpaqFinal),
+        uBruta: Number(p.uBruta || 0),
+        uNetaPorPaquete: Number(p.uNetaPorPaquete),
+        vendorGain: Number(p.vendorGain || 0),
+        inversorGain: Number(p.inversorGain || 0),
+      }));
 
       const payload: any = {
         type: clientType,
@@ -1366,7 +1458,7 @@ export default function SalesCandiesPOS({
         quantity: Number(totalUnitsSold) || 0, // UNIDADES totales
         packagesTotal: Number(totalPackages) || 0,
         items: itemsToSave,
-        vendorId,
+        vendorId: vendorId ?? null,
       };
 
       const vendorObj = vendors.find((v) => v.id === vendorId);
@@ -1619,7 +1711,7 @@ export default function SalesCandiesPOS({
     const safeAmt = parseFloat(amt.toFixed(2));
     const newRow: PendingAbono = {
       id: String(Date.now()),
-      date: saleDate,
+      date: abonoDate,
       amount: safeAmt,
       customerId: abonoCustomerId,
       customerName: selectedAbonoCustomer?.name || "",
@@ -2198,7 +2290,7 @@ export default function SalesCandiesPOS({
                           <div className="col-span-2 text-right">Saldo</div>
                           <div className="col-span-2 text-right">Abono</div>
                           <div className="col-span-3 text-right">
-                            Saldo pend.
+                            Saldo Pendiente
                           </div>
                           <div className="col-span-1 text-center">Quitar</div>
                         </div>
@@ -2227,7 +2319,7 @@ export default function SalesCandiesPOS({
                                   <div className="col-span-3">
                                     {a.customerName || "—"}
                                   </div>
-                                  <div className="col-span-1">{saleDate}</div>
+                                  <div className="col-span-1">{a.date}</div>
                                   <div className="col-span-2 text-right">
                                     {money(base)}
                                   </div>
@@ -2783,17 +2875,46 @@ export default function SalesCandiesPOS({
                                   key={a.id}
                                   className="border rounded-lg p-2 bg-gray-50 text-sm"
                                 >
-                                  <div className="flex items-center justify-between">
-                                    <div>{a.customerName || "—"}</div>
-                                    <div>{saleDate}</div>
-                                    <div className="font-semibold">
-                                      {money(base)}
+                                  <div className="space-y-1">
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-600">
+                                        Cliente
+                                      </span>
+                                      <strong className="text-right">
+                                        {a.customerName || "—"}
+                                      </strong>
                                     </div>
-                                    <div className="font-semibold">
-                                      {money(a.amount)}
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-600">
+                                        Fecha
+                                      </span>
+                                      <strong className="text-right">
+                                        {a.date}
+                                      </strong>
                                     </div>
-                                    <div className="font-semibold">
-                                      {money(saldoPend)}
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-600">
+                                        Saldo
+                                      </span>
+                                      <strong className="text-right">
+                                        {money(base)}
+                                      </strong>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-600">
+                                        Abono
+                                      </span>
+                                      <strong className="text-right">
+                                        {money(a.amount)}
+                                      </strong>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-600">
+                                        Saldo Pendiente
+                                      </span>
+                                      <strong className="text-right">
+                                        {money(saldoPend)}
+                                      </strong>
                                     </div>
                                   </div>
                                   <div className="mt-2 text-right">
@@ -3018,33 +3139,36 @@ export default function SalesCandiesPOS({
         onDetected={onDetectedFromScanner}
       />
 
-      {/* Overlay de guardado */}
-      {saving && (
-        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-2">
-          <div className="bg-white rounded-lg shadow-xl border px-4 py-3 flex items-center gap-3">
-            <svg
-              className="h-5 w-5 animate-spin"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-              />
-            </svg>
-            <span className="font-medium">Guardando venta…</span>
+      {/* Modal: Campos faltantes (errores de validación de vendor fields) */}
+      {missingFieldsModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl border w-[90%] max-w-md p-4">
+            <h3 className="text-lg font-bold mb-2">Campos faltantes</h3>
+            <p className="text-sm text-gray-700 mb-3">
+              No se puede guardar la venta porque faltan campos requeridos en la
+              orden del vendedor:
+            </p>
+            <ul className="list-disc list-inside text-sm text-red-600 mb-4">
+              {missingFieldsList.map((m, i) => (
+                <li key={i}>{m}</li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button
+                className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => {
+                  setMissingFieldsModalOpen(false);
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}
+
+      {/* Overlay de guardado (reutiliza LoadingOverlay global) */}
+      {saving && <LoadingOverlay message={"Guardando venta..."} />}
     </div>
   );
 }
