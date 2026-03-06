@@ -529,6 +529,28 @@ export default function CierreVentasDulces({
   const [productCardOpen, setProductCardOpen] = useState(false);
   const [abonosCardOpen, setAbonosCardOpen] = useState(false);
   const [isBackfillingUv, setIsBackfillingUv] = useState(false);
+  // bulk revert preview state
+  const [bulkPreviewOpen, setBulkPreviewOpen] = useState(false);
+  const [bulkPreviewItems, setBulkPreviewItems] = useState<SaleData[]>([]);
+  const [bulkPreviewForCredit, setBulkPreviewForCredit] = useState(false);
+  const [bulkPreviewCount, setBulkPreviewCount] = useState(0);
+  // bulk delete preview state
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleteItems, setBulkDeleteItems] = useState<SaleData[]>([]);
+  const [bulkDeleteForCredit, setBulkDeleteForCredit] = useState(false);
+  const [bulkDeleteCount, setBulkDeleteCount] = useState(0);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState(0);
+  // processing (guardar cierre) preview + progress
+  const [processPreviewOpen, setProcessPreviewOpen] = useState(false);
+  const [processPreviewItems, setProcessPreviewItems] = useState<SaleData[]>([]);
+  const [processPreviewCount, setProcessPreviewCount] = useState(0);
+  const [processing, setProcessing] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState(0);
+
+  // generic single-operation working overlay
+  const [working, setWorking] = useState(false);
+  const [workingMessage, setWorkingMessage] = useState("");
 
   const pdfRef = useRef<HTMLDivElement>(null);
 
@@ -1601,16 +1623,33 @@ export default function CierreVentasDulces({
   // - procesa SOLO FLOTANTES visibles del periodo
   // - fecha proceso = hoy (aunque date venta sea vieja)
   const handleSaveClosure = async () => {
+    // Open preview modal instead of immediate processing
     if (!isAdmin) return;
+    const toProcess = visibleSales.filter((s) => s.status === "FLOTANTE");
+    if (toProcess.length === 0) {
+      setMessage("No hay ventas flotantes para procesar en este período.");
+      return;
+    }
+
+    setProcessPreviewItems(toProcess.slice(0, 10));
+    setProcessPreviewCount(toProcess.length);
+    setProcessPreviewOpen(true);
+  };
+
+  // perform processing after confirm in modal
+  const performProcessClosure = async () => {
+    if (!isAdmin) return;
+    const toProcess = visibleSales.filter((s) => s.status === "FLOTANTE");
+    if (toProcess.length === 0) {
+      setMessage("No hay ventas flotantes para procesar en este período.");
+      setProcessPreviewOpen(false);
+      return;
+    }
 
     try {
-      const toProcess = visibleSales.filter((s) => s.status === "FLOTANTE");
-
-      if (toProcess.length === 0) {
-        setMessage("No hay ventas flotantes para procesar en este período.");
-        return;
-      }
-
+      setProcessing(true);
+      setProcessingProgress(0);
+      // create closure doc first
       const totals = {
         totalCharged: round2(
           toProcess.reduce((a, s) => a + (s.amount || 0), 0),
@@ -1665,7 +1704,7 @@ export default function CierreVentasDulces({
       };
 
       const ref = await addDoc(collection(db, "daily_closures_candies"), {
-        date: today, // fecha proceso
+        date: today,
         createdAt: Timestamp.now(),
         periodStart: startDate,
         periodEnd: endDate,
@@ -1695,33 +1734,22 @@ export default function CierreVentasDulces({
           cogsAmount: s.cogsAmount ?? 0,
           avgUnitCost: s.avgUnitCost ?? null,
           allocations: s.allocations ?? [],
-          date: s.date, // fecha venta
-
-          // ✅ NUEVOS (para Liquidaciones)
+          date: s.date,
           type: s.type ?? "CONTADO",
           vendorId: s.vendorId ?? "",
           vendorCommissionAmount: Number(s.vendorCommissionAmount ?? 0) || 0,
-
-          // ✅ proceso
           processedDate: today,
         })),
-
         productSummary: Object.entries(
-          toProcess.reduce(
-            (acc, s) => {
-              const k = s.productName || "(sin nombre)";
-              if (!acc[k]) acc[k] = { totalQuantity: 0, totalAmount: 0 };
-              acc[k].totalQuantity = round3(
-                acc[k].totalQuantity + (s.quantity || 0),
-              );
-              acc[k].totalAmount = round2(acc[k].totalAmount + (s.amount || 0));
-              return acc;
-            },
-            {} as Record<
-              string,
-              { totalQuantity: number; totalAmount: number }
-            >,
-          ),
+          toProcess.reduce((acc, s) => {
+            const k = s.productName || "(sin nombre)";
+            if (!acc[k]) acc[k] = { totalQuantity: 0, totalAmount: 0 };
+            acc[k].totalQuantity = round3(
+              acc[k].totalQuantity + (s.quantity || 0),
+            );
+            acc[k].totalAmount = round2(acc[k].totalAmount + (s.amount || 0));
+            return acc;
+          }, {} as Record<string, { totalQuantity: number; totalAmount: number }>),
         ).map(([productName, v]) => ({
           productName,
           totalQuantity: v.totalQuantity,
@@ -1729,26 +1757,32 @@ export default function CierreVentasDulces({
         })),
       });
 
-      const batch = writeBatch(db);
+      // update each sale individually to provide progress feedback
+      let processed = 0;
+      for (const s of toProcess) {
+        try {
+          await updateDoc(doc(db, "sales_candies", s.id.split("#")[0]), {
+            status: "PROCESADA",
+            closureId: ref.id,
+            closureDate: today,
+            processedDate: today,
+            processedAt: Timestamp.now(),
+          });
+        } catch (e) {
+          console.error("Error procesando venta", s.id, e);
+        }
+        processed += 1;
+        setProcessingProgress(processed);
+      }
 
-      toProcess.forEach((s) => {
-        batch.update(doc(db, "sales_candies", s.id.split("#")[0]), {
-          status: "PROCESADA",
-          closureId: ref.id,
-          closureDate: today,
-          processedDate: today,
-          processedAt: Timestamp.now(),
-        });
-      });
-
-      await batch.commit();
-
-      setMessage(
-        `✅ Cierre guardado. Ventas procesadas: ${toProcess.length}. (Proceso: ${today})`,
-      );
+      setMessage(`✅ Cierre guardado. Ventas procesadas: ${toProcess.length}. (Proceso: ${today})`);
     } catch (error) {
       console.error(error);
       setMessage("❌ Error al guardar el cierre de dulces.");
+    } finally {
+      setProcessing(false);
+      setProcessingProgress(0);
+      setProcessPreviewOpen(false);
     }
   };
 
@@ -1758,8 +1792,9 @@ export default function CierreVentasDulces({
       !window.confirm("¿Revertir esta venta? Esta acción no se puede deshacer.")
     )
       return;
-
     try {
+      setWorking(true);
+      setWorkingMessage("Revirtiendo venta...");
       await updateDoc(doc(db, "sales_candies", saleId.split("#")[0]), {
         status: "FLOTANTE",
         closureId: null,
@@ -1771,8 +1806,117 @@ export default function CierreVentasDulces({
     } catch (e) {
       console.error(e);
       setMessage("❌ No se pudo revertir la venta.");
+    } finally {
+      setWorking(false);
+      setWorkingMessage("");
     }
   };
+
+  // Revertir ventas procesadas en lote (por tipo) — ahora abre un modal de previsualización
+  const handleBulkRevert = async (forCredit: boolean) => {
+    if (!isAdmin) return;
+    const toRevert = visibleSales.filter(
+      (s) =>
+        s.status === "PROCESADA" &&
+        (forCredit ? s.type === "CREDITO" : s.type !== "CREDITO"),
+    );
+
+    if (toRevert.length === 0) {
+      const label = forCredit ? "Crédito" : "Cash";
+      setMessage(`No hay ventas procesadas de ${label} para revertir.`);
+      return;
+    }
+
+    // Mostrar modal con previsualización (hasta 10 filas)
+    setBulkPreviewItems(toRevert.slice(0, 10));
+    setBulkPreviewCount(toRevert.length);
+    setBulkPreviewForCredit(forCredit);
+    setBulkPreviewOpen(true);
+  };
+
+  // Ejecuta la reversión después de confirmación en modal
+  const performBulkRevert = async () => {
+    if (!isAdmin) return;
+    const forCredit = bulkPreviewForCredit;
+    const toRevert = visibleSales.filter(
+      (s) =>
+        s.status === "PROCESADA" &&
+        (forCredit ? s.type === "CREDITO" : s.type !== "CREDITO"),
+    );
+    if (toRevert.length === 0) {
+      setMessage("No hay ventas para revertir.");
+      setBulkPreviewOpen(false);
+      return;
+    }
+    try {
+      setWorking(true);
+      setWorkingMessage("Revirtiendo ventas...");
+      const batch = writeBatch(db);
+      toRevert.forEach((s) => {
+        batch.update(doc(db, "sales_candies", s.id.split("#")[0]), {
+          status: "FLOTANTE",
+          closureId: null,
+          closureDate: null,
+          processedDate: null,
+          processedAt: null,
+        });
+      });
+      await batch.commit();
+      setMessage(
+        `↩️ Revertidas ${toRevert.length} ventas (${forCredit ? "Crédito" : "Cash"}).`,
+      );
+    } catch (e) {
+      console.error(e);
+      setMessage("❌ Error al revertir ventas en lote.");
+    } finally {
+      setBulkPreviewOpen(false);
+      setWorking(false);
+      setWorkingMessage("");
+    }
+  };
+
+    // Ejecuta la eliminación masiva (usa mismo proceso que el botón individual)
+    const performBulkDelete = async () => {
+      if (!isAdmin) return;
+      setBulkDeleting(true);
+      setBulkDeleteProgress(0);
+      const forCredit = bulkDeleteForCredit;
+      const toDelete = (forCredit ? creditSales : cashSales).filter(
+        (s) => s.status === "FLOTANTE",
+      );
+
+      if (toDelete.length === 0) {
+        setMessage("No hay ventas para eliminar.");
+        setBulkDeleteOpen(false);
+        setBulkDeleting(false);
+        return;
+      }
+
+      let restoredTotal = 0;
+      let successCount = 0;
+      let failCount = 0;
+      let processed = 0;
+
+      for (const s of toDelete) {
+        const baseSaleId = (s.id || "").split("#")[0];
+        try {
+          const { restored } = await restoreCandySaleAndDelete(baseSaleId);
+          await deleteARMovesBySaleId(baseSaleId);
+          restoredTotal += Number(restored || 0);
+          successCount += 1;
+        } catch (e) {
+          console.error("Error eliminando", baseSaleId, e);
+          failCount += 1;
+        }
+        processed += 1;
+        setBulkDeleteProgress(processed);
+      }
+
+      setMessage(`🗑️ Eliminadas ${successCount} ventas. Restauradas unidades: ${restoredTotal}. Errores: ${failCount}`);
+      setBulkDeleting(false);
+      setBulkDeleteOpen(false);
+      setBulkDeleteProgress(0);
+    };
 
   const openEdit = (s: SaleData) => {
     if (!isAdmin) return;
@@ -1812,6 +1956,8 @@ export default function CierreVentasDulces({
     )
       return;
     try {
+      setWorking(true);
+      setWorkingMessage("Eliminando venta y restaurando stock...");
       const baseSaleId = saleId.split("#")[0];
       const { restored } = await restoreCandySaleAndDelete(baseSaleId);
       await deleteARMovesBySaleId(baseSaleId);
@@ -1823,6 +1969,9 @@ export default function CierreVentasDulces({
     } catch (e) {
       console.error(e);
       setMessage("❌ No se pudo eliminar la venta de dulces.");
+    } finally {
+      setWorking(false);
+      setWorkingMessage("");
     }
   };
 
@@ -1961,6 +2110,38 @@ export default function CierreVentasDulces({
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ventas");
+
+    // Construir consolidado por producto usando `productSummaryArray` (mismas columnas que la tabla web)
+    const prodData: any[] = [
+      [
+        "Producto",
+        "Paq cash",
+        "Paq credito",
+        "Monto cash",
+        "Monto credito",
+        "Comision cash",
+        "Comision credito",
+      ],
+    ];
+
+    productSummaryArray
+      .slice()
+      .sort((a, b) => (a.productName || "").localeCompare(b.productName || ""))
+      .forEach((row) => {
+        prodData.push([
+          row.productName,
+          Number(row.paqCash || 0),
+          Number(row.paqCredito || 0),
+          Number(row.montoCash || 0),
+          Number(row.montoCredito || 0),
+          Number(row.commCash || 0),
+          Number(row.commCredito || 0),
+        ]);
+      });
+
+    const prodWs = XLSX.utils.aoa_to_sheet(prodData);
+    XLSX.utils.book_append_sheet(wb, prodWs, "Consolidado por producto");
+
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
     const blob = new Blob([wbout], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
@@ -2029,6 +2210,64 @@ export default function CierreVentasDulces({
         >
           Excel
         </button>
+        {isAdmin && (
+          <button
+            onClick={() => handleBulkRevert(false)}
+            className="hidden md:inline-flex bg-rose-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-rose-700"
+          >
+            Revertir Cash (masivo)
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            onClick={() => handleBulkRevert(true)}
+            className="hidden md:inline-flex bg-rose-700 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-rose-800"
+          >
+            Revertir Crédito (masivo)
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            onClick={() => {
+              const forCredit = false;
+              const toDelete = (forCredit ? creditSales : cashSales).filter(
+                (s) => s.status === "FLOTANTE",
+              );
+                          if (toDelete.length === 0) {
+                            setMessage("No hay ventas en FLOTANTE de Cash para eliminar.");
+                return;
+                          }
+              setBulkDeleteItems(toDelete.slice(0, 10));
+              setBulkDeleteCount(toDelete.length);
+              setBulkDeleteForCredit(forCredit);
+              setBulkDeleteOpen(true);
+            }}
+            className="hidden md:inline-flex bg-red-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-red-700"
+          >
+            Eliminar Cash (masivo)
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            onClick={() => {
+              const forCredit = true;
+              const toDelete = (forCredit ? creditSales : cashSales).filter(
+                (s) => s.status === "FLOTANTE",
+              );
+              if (toDelete.length === 0) {
+                setMessage("No hay ventas en FLOTANTE de Crédito para eliminar.");
+                return;
+              }
+              setBulkDeleteItems(toDelete.slice(0, 10));
+              setBulkDeleteCount(toDelete.length);
+              setBulkDeleteForCredit(forCredit);
+              setBulkDeleteOpen(true);
+            }}
+            className="hidden md:inline-flex bg-red-700 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-red-800"
+          >
+            Eliminar Crédito (masivo)
+          </button>
+        )}
       </div>
 
       {/* filtros por periodo + estado + vendedor */}
@@ -2078,6 +2317,64 @@ export default function CierreVentasDulces({
             >
               Excel
             </button>
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  const forCredit = false;
+                  const toDelete = (forCredit ? creditSales : cashSales).filter(
+                    (s) => s.status === "FLOTANTE",
+                  );
+                  if (toDelete.length === 0) {
+                    setMessage("No hay ventas en FLOTANTE de Cash para eliminar.");
+                    return;
+                  }
+                  setBulkDeleteItems(toDelete.slice(0, 10));
+                  setBulkDeleteCount(toDelete.length);
+                  setBulkDeleteForCredit(forCredit);
+                  setBulkDeleteOpen(true);
+                }}
+                className="bg-red-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-red-700"
+              >
+                Eliminar Cash (masivo)
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  const forCredit = true;
+                  const toDelete = (forCredit ? creditSales : cashSales).filter(
+                    (s) => s.status === "FLOTANTE",
+                  );
+                  if (toDelete.length === 0) {
+                    setMessage("No hay ventas en FLOTANTE de Crédito para eliminar.");
+                    return;
+                  }
+                  setBulkDeleteItems(toDelete.slice(0, 10));
+                  setBulkDeleteCount(toDelete.length);
+                  setBulkDeleteForCredit(forCredit);
+                  setBulkDeleteOpen(true);
+                }}
+                className="bg-red-700 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-red-800"
+              >
+                Eliminar Crédito (masivo)
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => handleBulkRevert(false)}
+                className="bg-rose-600 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-rose-700"
+              >
+                Revertir Cash (masivo)
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => handleBulkRevert(true)}
+                className="bg-rose-700 text-white px-2 py-1 text-xs font-medium rounded-sm shadow-sm hover:bg-rose-800"
+              >
+                Revertir Crédito (masivo)
+              </button>
+            )}
           </div>
           <div className="flex flex-col md:flex-row md:items-end gap-3">
             <div className="flex items-center gap-2">
@@ -3585,6 +3882,203 @@ export default function CierreVentasDulces({
       {/* Eliminado: botones ahora están arriba */}
 
       {message && <p className="mt-2 text-sm">{message}</p>}
+      {message && <p className="mt-2 text-sm">{message}</p>}
+
+      {/* Modal de previsualización para PROCESAR cierre (Guardar) */}
+      {processPreviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-4 relative">
+            <h4 className="font-semibold text-lg">Confirmar procesar ventas</h4>
+            <div className="text-sm text-slate-600 mt-2">
+              Se van a procesar <strong>{processPreviewCount}</strong> ventas (estado FLOTANTE) en el período seleccionado.
+            </div>
+            <div className="mt-3 text-xs text-slate-600">Muestras (hasta 10 filas):</div>
+            <div className="mt-2 max-h-48 overflow-auto border rounded p-2 text-sm bg-slate-50">
+              {processPreviewItems.length === 0 ? (
+                <div className="text-slate-500">Sin filas a mostrar.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr>
+                      <th className="text-left">ID</th>
+                      <th className="text-left">Producto</th>
+                      <th className="text-right">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {processPreviewItems.map((s) => (
+                      <tr key={s.id}>
+                        <td className="pr-2">{(s.id || "").split("#")[0]}</td>
+                        <td className="pr-2">{s.productName || "(sin producto)"}</td>
+                        <td className="text-right">C${money(Number(s.amount || 0))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {processing && (
+              <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+                <div className="text-center">
+                  <div className="font-semibold mb-2">Procesando ventas...</div>
+                  <div className="text-sm text-slate-600">{processingProgress} / {processPreviewCount}</div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setProcessPreviewOpen(false)}
+                disabled={processing}
+                className={`px-3 py-1 border rounded text-sm ${processing ? 'opacity-60 cursor-not-allowed' : ''}`}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={performProcessClosure}
+                disabled={processing}
+                className={`px-3 py-1 bg-blue-600 text-white rounded text-sm ${processing ? 'opacity-60 cursor-not-allowed' : ''}`}
+              >
+                {processing ? `Procesando ${processingProgress}/${processPreviewCount}` : `Procesar ${processPreviewCount} ventas`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal de previsualización para reversión masiva */}
+      {bulkPreviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-4 relative">
+            <h4 className="font-semibold text-lg">
+              Confirmar reversión masiva
+            </h4>
+            <div className="text-sm text-slate-600 mt-2">
+              Se van a revertir <strong>{bulkPreviewCount}</strong> ventas de{" "}
+              <strong>{bulkPreviewForCredit ? "Crédito" : "Cash"}</strong> que
+              aparecen en la tabla.
+            </div>
+            <div className="mt-3 text-xs text-slate-600">
+              Muestras (hasta 10 filas):
+            </div>
+            <div className="mt-2 max-h-48 overflow-auto border rounded p-2 text-sm bg-slate-50">
+              {bulkPreviewItems.length === 0 ? (
+                <div className="text-slate-500">Sin filas a mostrar.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr>
+                      <th className="text-left">ID</th>
+                      <th className="text-left">Producto</th>
+                      <th className="text-right">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkPreviewItems.map((s) => (
+                      <tr key={s.id}>
+                        <td className="pr-2">{(s.id || "").split("#")[0]}</td>
+                        <td className="pr-2">
+                          {s.productName || "(sin producto)"}
+                        </td>
+                        <td className="text-right">
+                          C${money(Number(s.amount || 0))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setBulkPreviewOpen(false)}
+                className="px-3 py-1 border rounded text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={performBulkRevert}
+                className="px-3 py-1 bg-rose-600 text-white rounded text-sm"
+              >
+                Revertir {bulkPreviewCount} ventas
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal de previsualización para ELIMINAR masivo */}
+      {bulkDeleteOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-4">
+            <h4 className="font-semibold text-lg">Confirmar eliminación masiva</h4>
+            <div className="text-sm text-slate-600 mt-2">
+              Se van a eliminar <strong>{bulkDeleteCount}</strong> ventas de <strong>{bulkDeleteForCredit ? "Crédito" : "Cash"}</strong> que aparecen en la tabla. Esto restaurará el stock y eliminará los documentos de venta.
+            </div>
+            <div className="mt-3 text-xs text-slate-600">Muestras (hasta 10 filas):</div>
+            <div className="mt-2 max-h-48 overflow-auto border rounded p-2 text-sm bg-slate-50">
+              {bulkDeleteItems.length === 0 ? (
+                <div className="text-slate-500">Sin filas a mostrar.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr>
+                      <th className="text-left">ID</th>
+                      <th className="text-left">Producto</th>
+                      <th className="text-right">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkDeleteItems.map((s) => (
+                      <tr key={s.id}>
+                        <td className="pr-2">{(s.id || "").split("#")[0]}</td>
+                        <td className="pr-2">{s.productName || "(sin producto)"}</td>
+                        <td className="text-right">C${money(Number(s.amount || 0))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {bulkDeleting && (
+              <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+                <div className="text-center">
+                  <div className="font-semibold mb-2">Eliminando ventas...</div>
+                  <div className="text-sm text-slate-600">{bulkDeleteProgress} / {bulkDeleteCount}</div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setBulkDeleteOpen(false)}
+                disabled={bulkDeleting}
+                className={`px-3 py-1 border rounded text-sm ${bulkDeleting ? 'opacity-60 cursor-not-allowed' : ''}`}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={performBulkDelete}
+                disabled={bulkDeleting}
+                className={`px-3 py-1 bg-red-600 text-white rounded text-sm ${bulkDeleting ? 'opacity-60 cursor-not-allowed' : ''}`}
+              >
+                {bulkDeleting ? `Eliminando ${bulkDeleteProgress}/${bulkDeleteCount}` : `Eliminar ${bulkDeleteCount} ventas`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global working overlay for single/bulk operations */}
+      {working && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6 text-center">
+            <div className="font-semibold mb-2">{workingMessage || "Procesando..."}</div>
+            <div className="text-sm text-slate-600">Por favor espere.</div>
+          </div>
+        </div>
+      )}
 
       {/* Panel de edición */}
       {editing && isAdmin && (

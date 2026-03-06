@@ -1206,6 +1206,52 @@ export default function TransactionsPollo({
     const ws = XLSX.utils.aoa_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ventas por Producto");
+
+    // Construir consolidado por producto en segunda hoja
+    const productMap: Record<
+      string,
+      { totalQuantity: number; totalAmount: number }
+    > = {};
+    for (const s of filteredSales) {
+      const itemsArr = extractItems(s._raw || {});
+      if (itemsArr.length === 0) {
+        const name = s._raw?.productName || "(sin producto)";
+        const qty = Number(s.quantity || 0) || 0;
+        const total = Number(s.total || 0) || 0;
+        if (!productMap[name])
+          productMap[name] = { totalQuantity: 0, totalAmount: 0 };
+        productMap[name].totalQuantity += qty;
+        productMap[name].totalAmount += total;
+      } else {
+        for (const it of itemsArr) {
+          const productName = String(
+            it.productName || it.product || it.name || "(sin nombre)",
+          );
+          const qty = Number(it.qty ?? it.quantity ?? it.lbs ?? 0) || 0;
+          const totalCandidate = parseNum(
+            it.total ?? it.lineFinal ?? it.amount ?? it.monto ?? it.line_total,
+          );
+          const totalVal = !isNaN(totalCandidate)
+            ? totalCandidate
+            : Number(it.total ?? 0) || 0;
+          if (!productMap[productName])
+            productMap[productName] = { totalQuantity: 0, totalAmount: 0 };
+          productMap[productName].totalQuantity += qty;
+          productMap[productName].totalAmount += totalVal;
+        }
+      }
+    }
+
+    const prodData: any[] = [["Producto", "Total cantidad", "Total monto"]];
+    Object.entries(productMap)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([productName, v]) => {
+        prodData.push([productName, v.totalQuantity, Number(v.totalAmount)]);
+      });
+
+    const prodWs = XLSX.utils.aoa_to_sheet(prodData);
+    XLSX.utils.book_append_sheet(wb, prodWs, "Consolidado por producto");
+
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
     const blob = new Blob([wbout], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
