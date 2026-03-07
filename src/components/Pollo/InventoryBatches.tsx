@@ -71,6 +71,8 @@ type GroupRow = {
   lbsRem: number;
   udsIn: number;
   udsRem: number;
+  cajillasIn: number;
+  cajillasRem: number;
 
   totalFacturado: number;
   totalEsperado: number;
@@ -548,6 +550,11 @@ export default function InventoryBatches({
         ? "PENDIENTE"
         : "PAGADO";
 
+      const isCajilla = (u: string) =>
+        String(u || "")
+          .toLowerCase()
+          .trim() === "cajilla";
+
       const lbsIn = roundQty(
         ordered.reduce(
           (acc, x) => acc + (isPounds(x.unit) ? Number(x.quantity || 0) : 0),
@@ -560,15 +567,37 @@ export default function InventoryBatches({
           0,
         ),
       );
+
+      const cajillasIn = roundQty(
+        ordered.reduce(
+          (acc, x) => acc + (isCajilla(x.unit) ? Number(x.quantity || 0) : 0),
+          0,
+        ),
+      );
+      const cajillasRem = roundQty(
+        ordered.reduce(
+          (acc, x) => acc + (isCajilla(x.unit) ? Number(x.remaining || 0) : 0),
+          0,
+        ),
+      );
+
       const udsIn = roundQty(
         ordered.reduce(
-          (acc, x) => acc + (!isPounds(x.unit) ? Number(x.quantity || 0) : 0),
+          (acc, x) =>
+            acc +
+            (!isPounds(x.unit) && !isCajilla(x.unit)
+              ? Number(x.quantity || 0)
+              : 0),
           0,
         ),
       );
       const udsRem = roundQty(
         ordered.reduce(
-          (acc, x) => acc + (!isPounds(x.unit) ? Number(x.remaining || 0) : 0),
+          (acc, x) =>
+            acc +
+            (!isPounds(x.unit) && !isCajilla(x.unit)
+              ? Number(x.remaining || 0)
+              : 0),
           0,
         ),
       );
@@ -595,6 +624,8 @@ export default function InventoryBatches({
         lbsRem,
         udsIn,
         udsRem,
+        cajillasIn,
+        cajillasRem,
         totalFacturado,
         totalEsperado,
         utilidadBruta,
@@ -728,7 +759,7 @@ export default function InventoryBatches({
     }
 
     setProductId("");
-    setQuantity(0);
+    setQuantity(NaN);
     setPurchasePrice(NaN);
     setSalePrice(0);
   };
@@ -786,6 +817,37 @@ export default function InventoryBatches({
         0,
       ),
     );
+    const isCajilla = (u: string) =>
+      String(u || "")
+        .toLowerCase()
+        .trim() === "cajilla";
+    const isUnit = (u: string) => !isPounds(u) && !isCajilla(u);
+
+    const unitsIn = roundQty(
+      orderItems.reduce(
+        (acc, it) => acc + (isUnit(it.unit) ? Number(it.quantity || 0) : 0),
+        0,
+      ),
+    );
+    const unitsRem = roundQty(
+      orderItems.reduce(
+        (acc, it) => acc + (isUnit(it.unit) ? Number(it.remaining || 0) : 0),
+        0,
+      ),
+    );
+
+    const cajillasIn = roundQty(
+      orderItems.reduce(
+        (acc, it) => acc + (isCajilla(it.unit) ? Number(it.quantity || 0) : 0),
+        0,
+      ),
+    );
+    const cajillasRem = roundQty(
+      orderItems.reduce(
+        (acc, it) => acc + (isCajilla(it.unit) ? Number(it.remaining || 0) : 0),
+        0,
+      ),
+    );
 
     const totalFacturado = Number(
       orderItems
@@ -799,7 +861,17 @@ export default function InventoryBatches({
     );
     const utilidadBruta = Number((totalEsperado - totalFacturado).toFixed(2));
 
-    return { lbsIn, lbsRem, totalFacturado, totalEsperado, utilidadBruta };
+    return {
+      lbsIn,
+      lbsRem,
+      unitsIn,
+      unitsRem,
+      cajillasIn,
+      cajillasRem,
+      totalFacturado,
+      totalEsperado,
+      utilidadBruta,
+    };
   }, [orderItems]);
 
   const resetOrderModal = () => {
@@ -1838,25 +1910,31 @@ export default function InventoryBatches({
                 Fecha
               </th>
               <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Libras ingresadas
+                Lb Ing.
               </th>
               <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Libras restantes
+                Lb Rest
               </th>
               <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Unidades ingresadas
+                Un. Ing
               </th>
               <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Unidades restantes
+                Un. Rest
               </th>
               <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Total Facturado
+                Caj In
               </th>
               <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Total esperado
+                Caj Rest
               </th>
               <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Utilidad bruta
+                Facturado
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Esperado
+              </th>
+              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+                Utilidad
               </th>
               <th className="p-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
                 Estado
@@ -1870,13 +1948,13 @@ export default function InventoryBatches({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} className="p-4 text-center">
+                <td colSpan={12} className="p-4 text-center">
                   Cargando…
                 </td>
               </tr>
             ) : groupedRows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="p-4 text-center">
+                <td colSpan={12} className="p-4 text-center">
                   Sin lotes
                 </td>
               </tr>
@@ -1922,6 +2000,12 @@ export default function InventoryBatches({
                   </td>
                   <td className="p-3 align-middle text-right">
                     {g.udsRem.toFixed(3)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {g.cajillasIn.toFixed(3)}
+                  </td>
+                  <td className="p-3 align-middle text-right">
+                    {g.cajillasRem.toFixed(3)}
                   </td>
                   <td className="p-3 align-middle text-right">
                     {money(g.totalFacturado)}
@@ -1995,13 +2079,32 @@ export default function InventoryBatches({
                 <h3 className="text-lg font-bold">
                   {editingGroupId ? "Editar pedido" : "Crear pedido"}
                 </h3>
-                <button
-                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                  onClick={() => setShowCreateModal(false)}
-                  type="button"
-                >
-                  Cerrar
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                    onClick={() => setShowCreateModal(false)}
+                  >
+                    Cancelar
+                  </button>
+
+                  <button
+                    type="button"
+                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                    onClick={saveOrder}
+                    disabled={orderItems.length === 0}
+                  >
+                    {editingGroupId ? "Editar pedido" : "Crear pedido"}
+                  </button>
+
+                  <button
+                    className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                    onClick={() => setShowCreateModal(false)}
+                    type="button"
+                  >
+                    Cerrar
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -2046,9 +2149,10 @@ export default function InventoryBatches({
                         setSalePrice(0);
                       }}
                     >
-                      <option value="lb">lb</option>
-                      <option value="unidad">unidad</option>
-                      <option value="kg">kg</option>
+                      <option value="lb">Libras</option>
+                      <option value="unidad">Unidad</option>
+                      <option value="cajilla">Cajilla</option>
+                      <option value="kg">Kilogramo</option>
                     </select>
                   </div>
 
@@ -2072,14 +2176,17 @@ export default function InventoryBatches({
 
                   <div>
                     <label className="block text-sm font-semibold">
-                      Libras a ingresar
+                      Ingrese cantidad
                     </label>
                     <input
                       type="number"
                       step="0.01"
                       inputMode="decimal"
                       className="w-full border p-2 rounded"
-                      value={quantity === 0 ? "" : quantity}
+                      value={Number.isNaN(quantity) ? "" : quantity}
+                      onFocus={() => {
+                        if (quantity === 0) setQuantity(NaN);
+                      }}
                       onChange={(e) => {
                         const raw = e.target.value.replace(",", ".");
                         const num = parseFloat(raw);
@@ -2174,7 +2281,22 @@ export default function InventoryBatches({
                   <button
                     type="button"
                     onClick={addItemToOrder}
-                    className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    disabled={
+                      !(
+                        productId &&
+                        Number(quantity) > 0 &&
+                        Number.isFinite(Number(purchasePrice)) &&
+                        Number(purchasePrice) > 0
+                      )
+                    }
+                    className={`px-3 py-2 rounded ${
+                      productId &&
+                      Number(quantity) > 0 &&
+                      Number.isFinite(Number(purchasePrice)) &&
+                      Number(purchasePrice) > 0
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "bg-gray-300 text-gray-600 cursor-not-allowed"
+                    }`}
                   >
                     Agregar producto al pedido
                   </button>
@@ -2186,8 +2308,8 @@ export default function InventoryBatches({
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
                       <th className="p-2 border">Producto</th>
-                      <th className="p-2 border">Libras ingresadas</th>
-                      <th className="p-2 border">Libras restantes</th>
+                      <th className="p-2 border">Ingresado</th>
+                      <th className="p-2 border">Existencias</th>
                       <th className="p-2 border">Precio proveedor</th>
                       <th className="p-2 border">Precio venta</th>
                       <th className="p-2 border">Total facturado</th>
@@ -2318,15 +2440,48 @@ export default function InventoryBatches({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
                 <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Libras ingresadas</div>
-                  <div className="text-lg font-semibold">
-                    {orderKpis.lbsIn.toFixed(3)}
-                  </div>
-                  <div className="text-xs text-gray-600 mt-2">
-                    Libras restantes
-                  </div>
-                  <div className="text-lg font-semibold">
-                    {orderKpis.lbsRem.toFixed(3)}
+                  <div className="mt-0 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <div className="text-xs text-gray-600">
+                      Libras ingresadas
+                    </div>
+                    <div className="text-lg font-semibold text-right">
+                      {orderKpis.lbsIn.toFixed(3)}
+                    </div>
+
+                    <div className="text-xs text-gray-600">
+                      Libras restantes
+                    </div>
+                    <div className="text-lg font-semibold text-right">
+                      {orderKpis.lbsRem.toFixed(3)}
+                    </div>
+
+                    <div className="text-xs text-gray-600">
+                      Unidades ingresadas
+                    </div>
+                    <div className="text-lg font-semibold text-right">
+                      {orderKpis.unitsIn.toFixed(3)}
+                    </div>
+
+                    <div className="text-xs text-gray-600">
+                      Unidades restantes
+                    </div>
+                    <div className="text-lg font-semibold text-right">
+                      {orderKpis.unitsRem.toFixed(3)}
+                    </div>
+
+                    <div className="text-xs text-gray-600">
+                      Cajillas ingresadas
+                    </div>
+                    <div className="text-lg font-semibold text-right">
+                      {orderKpis.cajillasIn.toFixed(3)}
+                    </div>
+
+                    <div className="text-xs text-gray-600">
+                      Cajillas restantes
+                    </div>
+                    <div className="text-lg font-semibold text-right">
+                      {orderKpis.cajillasRem.toFixed(3)}
+                    </div>
                   </div>
                 </div>
 
@@ -2350,24 +2505,7 @@ export default function InventoryBatches({
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 mt-4">
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                  onClick={() => setShowCreateModal(false)}
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  type="button"
-                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                  onClick={saveOrder}
-                  disabled={orderItems.length === 0}
-                >
-                  {editingGroupId ? "Editar pedido" : "Crear pedido"}
-                </button>
-              </div>
+              {/* Footer buttons moved to header for quicker access */}
             </div>
           </div>,
           document.body,

@@ -305,6 +305,7 @@ export default function ProductForm() {
                 >
                   <option value="">Selecciona</option>
                   <option value="lb">Libra</option>
+                  <option value="cajilla">Cajilla</option>
                   <option value="kg">Kilogramo</option>
                   <option value="unidad">Unidad</option>
                 </select>
@@ -439,6 +440,7 @@ export default function ProductForm() {
                         >
                           <option value="">Selecciona</option>
                           <option value="lb">Libra</option>
+                          <option value="cajilla">Cajilla</option>
                           <option value="kg">Kilogramo</option>
                           <option value="unidad">Unidad</option>
                         </select>
