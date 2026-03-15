@@ -4989,7 +4989,15 @@ export default function VendorCandyOrders({
                                   </span>
                                 </td>
                                 <td className="p-2 border-b text-right">
-                                  <span className={zeroClass(uNetaDisplay)}>
+                                  <span
+                                    className={`${zeroClass(uNetaDisplay)} ${
+                                      uNetaDisplay === uVendorDisplay
+                                        ? "text-amber-700"
+                                        : uNetaDisplay < uVendorDisplay
+                                          ? "text-red-700"
+                                          : "text-green-700"
+                                    } font-semibold`}
+                                  >
                                     {money(uNetaDisplay)}
                                   </span>
                                 </td>
