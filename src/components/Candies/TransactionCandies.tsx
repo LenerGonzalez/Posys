@@ -11,6 +11,7 @@ import {
   query,
   Timestamp,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
@@ -19,6 +20,11 @@ import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+const normKey = (v: unknown) =>
+  String(v ?? "")
+    .trim()
+    .toLowerCase();
 
 interface Customer {
   id: string;
@@ -54,6 +60,7 @@ interface SaleDoc {
   vendorCommissionAmount?: number;
   // Suma de margenVendedor por ítems (cuando la venta tiene items[])
   commissionFromItems?: number;
+  uvXpaq?: number;
 }
 
 // ----------------- Helpers de fecha / normalización -----------------
@@ -78,21 +85,21 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     Array.isArray(d.items) && d.items.length > 0
       ? d.items
       : d.item
-        ? [d.item]
-        : [];
+      ? [d.item]
+      : [];
 
   const productNames = itemsArray.length
     ? itemsArray
         .map((it: any) => String(it.productName || it.name || "").trim())
         .filter(Boolean)
     : d.productName
-      ? [String(d.productName).trim()]
-      : [];
+    ? [String(d.productName).trim()]
+    : [];
 
   // Si la venta tiene items[] (multi-producto)
   let commissionFromItems = 0;
   if (itemsArray.length > 0) {
-    // 👇 Paquetes: usamos campo packages, si no, qty/quantity (fallback)
+    // Paquetes: usamos campo packages, si no, qty/quantity (fallback)
     quantity = itemsArray.reduce(
       (acc: number, it: any) =>
         acc + (Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0),
@@ -101,8 +108,7 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     total = Number(d.total ?? d.itemsTotal ?? 0) || 0;
     if (!total) {
       total = itemsArray.reduce(
-        (acc: number, it: any) =>
-          acc + (Number(it.total ?? it.lineFinal ?? 0) || 0),
+        (acc: number, it: any) => acc + (Number(it.total ?? it.lineFinal ?? 0) || 0),
         0,
       );
     }
@@ -136,6 +142,9 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     vendorCommissionPercent: Number(d.vendorCommissionPercent || 0) || 0,
     vendorCommissionAmount: Number(d.vendorCommissionAmount || 0) || 0,
     commissionFromItems: Number(commissionFromItems || 0) || 0,
+    uvXpaq: Number.isFinite(Number(d.uvXpaq ?? d.uvxpaq ?? d.upaquete ?? NaN))
+      ? Number(d.uvXpaq ?? d.uvxpaq ?? d.upaquete)
+      : undefined,
     productNames,
   };
 }
@@ -218,16 +227,58 @@ export default function TransactionsReportCandies({
           ? [data.item]
           : [];
 
-      const rows = arr.map((it: any) => ({
-        productName: String(it.productName || ""),
-        qty: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
-        unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? 0),
-        discount: Number(it.discount || 0),
-        total: Number(it.total ?? it.lineFinal ?? 0),
-        commission: Number(
-          it.margenVendedor ?? it.vendorGain ?? it.vendorCommissionAmount ?? 0,
-        ),
-      }));
+      const rows = arr.map((it: any) => {
+        const productName = String(it.productName || "");
+        const qty = Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0;
+        const unitPrice = Number(it.unitPricePackage ?? it.unitPrice ?? 0) || 0;
+        const discount = Number(it.discount || 0) || 0;
+        const total = Number(it.total ?? it.lineFinal ?? 0) || 0;
+
+        // Mostrar el valor del campo `uvXpaq` (uv por paquete) cuando exista;
+        // si no existe, intentar lookup en `uvxpaqMap`; como último recurso usar margenVendedor
+        let commission = 0;
+        const uvFromItem = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
+        let uv: number | undefined = Number.isFinite(uvFromItem) ? uvFromItem : undefined;
+
+        if (uv === undefined) {
+          // prefer sale-level uvXpaq if sale was backfilled
+          const saleUv = Number(data?.uvXpaq ?? data?.uvxpaq ?? data?.upaquete ?? NaN);
+          if (Number.isFinite(saleUv)) {
+            uv = saleUv;
+          } else {
+            try {
+              const vendedorId = String(data?.vendorId || data?.vendor || data?.vendorId || "").trim();
+                const prodKey = normKey(it.productName || it.name || it.productId || "");
+              const mapForVendor = uvxpaqMap[vendedorId] || {};
+              if (mapForVendor[prodKey] !== undefined) uv = Number(mapForVendor[prodKey]);
+              else {
+                const allKeys = Object.keys(mapForVendor);
+                const match = allKeys.find((k) => k.replace(/\s+/g, "") === prodKey.replace(/\s+/g, ""));
+                if (match) uv = Number(mapForVendor[match]);
+              }
+            } catch (e) {
+              uv = undefined;
+            }
+          }
+        }
+
+        if (uv !== undefined && Number.isFinite(uv)) {
+          // mostramos UV x PAQ (uv por paquete * cantidad de paquetes)
+          commission = round2(uv * qty);
+        } else {
+          const itemMargin = Number(it.margenVendedor ?? it.vendorGain ?? NaN);
+          commission = Number.isFinite(itemMargin) ? round2(itemMargin) : 0;
+        }
+
+        return {
+          productName,
+          qty,
+          unitPrice,
+          discount,
+          total,
+          commission,
+        };
+      });
 
       setItemsModalRows(rows);
     } catch (e) {
@@ -247,6 +298,9 @@ export default function TransactionsReportCandies({
 
   // NUEVO: vendedores con comisión (mismo esquema que consolidado)
   const [sellers, setSellers] = useState<Seller[]>([]);
+  const [uvxpaqMap, setUvxpaqMap] = useState<
+    Record<string, Record<string, number>>
+  >({});
 
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
@@ -311,18 +365,62 @@ export default function TransactionsReportCandies({
 
           if (arr.length > 0) {
             for (const it of arr) {
-              const itemCommission = Number(
-                it.margenVendedor ??
-                  it.vendorGain ??
-                  it.vendorCommissionAmount ??
-                  0,
+              const itemMargin = Number(
+                it.margenVendedor ?? it.vendorGain ?? NaN,
               );
-              const origen =
-                itemCommission > 0
-                  ? "item"
-                  : Number(s.vendorCommissionAmount || 0) > 0
-                    ? "venta"
-                    : "calculado";
+              let itemCommission = 0;
+              let origen = "calculado";
+              if (Number.isFinite(itemMargin) && itemMargin !== 0) {
+                itemCommission = round2(itemMargin);
+                origen = "item";
+              } else {
+                // intentar uv desde item o lookup en mapa
+                const uvFromItem = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
+                let uv: number | undefined = Number.isFinite(uvFromItem)
+                  ? uvFromItem
+                  : undefined;
+                if (uv === undefined) {
+                  // prefer sale-level uv if backfilled
+                  const saleUv = Number(data?.uvXpaq ?? data?.uvxpaq ?? data?.upaquete ?? NaN);
+                  if (Number.isFinite(saleUv)) {
+                    uv = saleUv;
+                  } else {
+                    try {
+                      const vendedorId = String(
+                        s.vendorId || s.vendor || "",
+                      ).trim();
+                      const prodKey = normKey(
+                        it.productName || it.name || it.productId || "",
+                      );
+                      const mapForVendor = uvxpaqMap[vendedorId] || {};
+                      if (mapForVendor[prodKey] !== undefined)
+                        uv = Number(mapForVendor[prodKey]);
+                      else {
+                        const allKeys = Object.keys(mapForVendor);
+                        const match = allKeys.find(
+                          (k) =>
+                            k.replace(/\s+/g, "") === prodKey.replace(/\s+/g, ""),
+                        );
+                        if (match) uv = Number(mapForVendor[match]);
+                      }
+                    } catch (e) {
+                      uv = undefined;
+                    }
+                  }
+                }
+
+                const qty = Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0;
+                // mostrar UV x PAQ (uv por paquete * cantidad de paquetes)
+                    if (uv !== undefined && Number.isFinite(uv)) {
+                      itemCommission = round2(uv * qty);
+                      origen = "calculado";
+                    } else {
+                      // fallback to item margin
+                      const itemMargin = Number(it.margenVendedor ?? it.vendorGain ?? NaN);
+                      itemCommission = Number.isFinite(itemMargin) ? round2(itemMargin) : 0;
+                      origen = itemCommission > 0 ? "item" : "calculado";
+                    }
+              }
 
               rows.push({
                 Fecha: s.date,
@@ -340,9 +438,7 @@ export default function TransactionsReportCandies({
               });
             }
           } else {
-            const saleCommission = Number(
-              (s as any).commissionFromItems || s.vendorCommissionAmount || 0,
-            );
+            const saleCommission = getCommissionAmount(s);
             const saleOrigen =
               (s as any).commissionFromItems > 0
                 ? "items"
@@ -390,23 +486,211 @@ export default function TransactionsReportCandies({
     }
   };
 
-  // ✅ Comisión HISTÓRICA desde la venta (si existe),
-  // fallback a cálculo por sellers_candies
+  // Backfill ventas en rango (por mes). Actualiza uvXpaq/uvxpaq/upaquete en ventas e ítems.
+  const handleBackfillMonth = async () => {
+    if (!window.confirm(`¿Rellenar uvXpaq en ventas desde ${fromDate} a ${toDate}? Esto modificará documentos en Firestore.`)) return;
+    setLoading(true);
+    setMsg("");
+    try {
+      const q = query(
+        collection(db, "sales_candies"),
+        where("date", ">=", fromDate),
+        where("date", "<=", toDate),
+      );
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        setMsg("No hay ventas en el rango.");
+        return;
+      }
+
+      // Ensure uvxpaqMap is populated; if empty, try to build it now
+      if (!uvxpaqMap || Object.keys(uvxpaqMap).length === 0) {
+        setMsg("Cargando mapa uvxpaq antes de backfill...");
+        console.debug("uvxpaqMap vacío — reconstruyendo desde inventory_candies_sellers...");
+        try {
+          const vendorIds = sellers.map((v) => v.id).filter(Boolean);
+          const map: Record<string, Record<string, number>> = {};
+          const chunk = (arr: string[], size = 10) => {
+            const out: string[][] = [];
+            for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+            return out;
+          };
+          const chunks = chunk(vendorIds, 10);
+          for (const c of chunks) {
+            const q2 = query(
+              collection(db, "inventory_candies_sellers"),
+              where("sellerId", "in", c),
+            );
+            const snap2 = await getDocs(q2);
+            snap2.forEach((doc2) => {
+              const x = doc2.data() as any;
+              const sid = String(x.sellerId || "").trim();
+              if (!sid) return;
+              map[sid] = map[sid] || {};
+              const pname = String(x.productName || x.productId || "");
+              const key = pname ? normKey(pname) : String(x.productId || "");
+              const explicit = Number(x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? NaN);
+              let val = NaN as number;
+              if (Number.isFinite(explicit)) val = explicit;
+              else {
+                const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
+                const packs = Math.max(1, Number(x.packages ?? 0));
+                val = packs > 0 ? gross / packs : 0;
+              }
+              map[sid][key] = Number(val || 0);
+            });
+          }
+          setUvxpaqMap(map);
+          console.debug("uvxpaqMap rebuilt; sellers:", Object.keys(map).length);
+        } catch (e) {
+          console.error("Error al reconstruir uvxpaqMap:", e);
+        }
+      }
+
+      console.debug("Ventas encontradas para backfill:", snap.size);
+
+      let batch = writeBatch(db);
+      let ops = 0;
+      let updated = 0;
+
+      for (const d of snap.docs) {
+        const data = d.data() as any;
+        const id = d.id;
+        console.debug("Procesando venta:", id);
+        const items = Array.isArray(data.items) ? data.items : data.item ? [data.item] : [];
+        const vendorId = String(data.vendorId || data.vendor || "").trim();
+        const upd: any = {};
+
+        if (items.length === 1) {
+          const it = items[0];
+          const itemUv = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
+          let uv = Number.isFinite(itemUv) ? itemUv : undefined;
+          const saleUv = Number(data.uvXpaq ?? data.uvxpaq ?? data.upaquete ?? NaN);
+          if (uv === undefined) {
+            if (Number.isFinite(saleUv)) uv = saleUv;
+            else {
+              // lookup in uvxpaqMap
+              try {
+                const key = normKey(it.productName || it.name || it.productId || "");
+                const mapForVendor = uvxpaqMap[vendorId] || {};
+                if (mapForVendor[key] !== undefined) uv = Number(mapForVendor[key]);
+                else {
+                  const match = Object.keys(mapForVendor).find((k) => k.replace(/\s+/g, "") === key.replace(/\s+/g, ""));
+                  if (match) uv = Number(mapForVendor[match]);
+                }
+              } catch (e) {}
+            }
+          }
+
+          if (uv !== undefined && Number.isFinite(uv)) {
+            if (!Number.isFinite(saleUv)) {
+              upd.uvXpaq = uv;
+              upd.uvxpaq = uv;
+              upd.upaquete = uv;
+            }
+            if (!Number.isFinite(itemUv)) {
+              const newItems = items.slice();
+              newItems[0] = Object.assign({}, it, { uvXpaq: uv, uvxpaq: uv, upaquete: uv });
+              upd.items = newItems;
+            }
+          }
+        } else if (items.length > 1) {
+          const newItems = items.slice();
+          let any = false;
+          for (let i = 0; i < items.length; i++) {
+            const it = items[i];
+            const itemUv = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
+            if (!Number.isFinite(itemUv)) {
+              let uv = undefined;
+              try {
+                const key = normKey(it.productName || it.name || it.productId || "");
+                const mapForVendor = uvxpaqMap[vendorId] || {};
+                if (mapForVendor[key] !== undefined) uv = Number(mapForVendor[key]);
+                else {
+                  const match = Object.keys(mapForVendor).find((k) => k.replace(/\s+/g, "") === key.replace(/\s+/g, ""));
+                  if (match) uv = Number(mapForVendor[match]);
+                }
+              } catch (e) {}
+
+              if (uv !== undefined && Number.isFinite(uv)) {
+                newItems[i] = Object.assign({}, it, { uvXpaq: uv, uvxpaq: uv, upaquete: uv });
+                any = true;
+              } else {
+                const vendorGain = Number(it.vendorGain ?? it.margenVendedor ?? NaN);
+                const packs = Math.max(1, Number(it.packages ?? it.qty ?? it.quantity ?? 1));
+                if (Number.isFinite(vendorGain) && vendorGain !== 0) {
+                  const uv2 = Math.round((vendorGain / packs) * 100) / 100;
+                  newItems[i] = Object.assign({}, it, { uvXpaq: uv2, uvxpaq: uv2, upaquete: uv2 });
+                  any = true;
+                }
+              }
+            }
+          }
+          if (any) upd.items = newItems;
+        }
+
+        if (Object.keys(upd).length > 0) {
+          console.debug("Actualización preparada para:", id, upd);
+          batch.update(doc(db, "sales_candies", id), upd);
+          ops++;
+          updated++;
+          if (ops >= 400) {
+            await batch.commit();
+            batch = writeBatch(db);
+            ops = 0;
+          }
+        }
+      }
+
+      if (ops > 0) await batch.commit();
+      setMsg(`✅ Backfilled ${updated} venta(s) en rango`);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error durante backfill");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const UVXPAQ_CUTOFF_DATE = "2026-02-25";
+
+  const getUvXpaqForSale = (
+    s: SaleDoc | undefined,
+    productName?: string,
+    productId?: string,
+  ): number => {
+    if (!s) return 0;
+    const key = normKey(
+      productName || (s.productNames && s.productNames[0]) || s.productName || "",
+    );
+    const candidates = [s.vendorId || "", sellerCandyId || ""].filter(Boolean);
+    const isHistoric = String(s.date || "") <= UVXPAQ_CUTOFF_DATE;
+
+    if (isHistoric) {
+      for (const cid of candidates) {
+        const vmap = uvxpaqMap[cid || ""];
+        const val = vmap ? vmap[key] : undefined;
+        if (val !== undefined && val !== null) return round2(Number(val || 0));
+      }
+    } else {
+      const explicit = Number((s as any).uvXpaq ?? NaN);
+      if (Number.isFinite(explicit)) return round2(Number(explicit || 0));
+    }
+
+    const qty = Math.max(1, Number(s.quantity || 0));
+    const uVend = Number((s as any).commissionFromItems || 0);
+    return uVend > 0 ? round2(uVend / qty) : 0;
+  };
+
+  // Comisión reportada: preferir suma por ítems (commissionFromItems),
+  // sino calcular como UV por paquete * cantidad usando uvxpaq fallback
   const getCommissionAmount = (s: SaleDoc): number => {
-    // Prefer item-level commission when available
     const itemsCommission = Number((s as any).commissionFromItems || 0);
-    if (itemsCommission > 0) return Number(itemsCommission.toFixed(2));
+    if (itemsCommission > 0) return round2(itemsCommission);
 
-    const stored = Number((s as any).vendorCommissionAmount || 0);
-    if (stored > 0) return Number(stored.toFixed(2));
-
-    if (!s.vendorId) return 0;
-    const v = sellersById[s.vendorId];
-    if (!v || !v.commissionPercent) return 0;
-
-    const calc =
-      ((Number(s.total) || 0) * (Number(v.commissionPercent) || 0)) / 100;
-    return Number(calc.toFixed(2));
+    const uv = getUvXpaqForSale(s);
+    const qty = Math.max(0, Number(s.quantity || 0));
+    return round2(uv * qty);
   };
 
   // Carga inicial y recarga al cambiar rango de fechas
@@ -435,6 +719,52 @@ export default function TransactionsReportCandies({
           });
         });
         setSellers(vList);
+
+        // build uvxpaq map for sellers (fallback like in CierreVentasDulces)
+        try {
+          const vendorIds = vList.map((v) => v.id).filter(Boolean);
+          const map: Record<string, Record<string, number>> = {};
+          if (vendorIds.length > 0) {
+            const chunk = (arr: string[], size = 10) => {
+              const out: string[][] = [];
+              for (let i = 0; i < arr.length; i += size)
+                out.push(arr.slice(i, i + size));
+              return out;
+            };
+            const chunks = chunk(vendorIds, 10);
+            for (const c of chunks) {
+              const q = query(
+                collection(db, "inventory_candies_sellers"),
+                where("sellerId", "in", c),
+              );
+              const snap = await getDocs(q);
+              snap.forEach((d) => {
+                const x = d.data() as any;
+                const sid = String(x.sellerId || "").trim();
+                if (!sid) return;
+                map[sid] = map[sid] || {};
+                const pname = String(
+                  x.productName || x.productName?.toString() || "",
+                );
+                const key = pname ? normKey(pname) : String(x.productId || "");
+                const explicit = Number(
+                  x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? NaN,
+                );
+                let val = NaN as number;
+                if (Number.isFinite(explicit)) val = explicit;
+                else {
+                  const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
+                  const packs = Math.max(1, Number(x.packages ?? 0));
+                  val = packs > 0 ? gross / packs : 0;
+                }
+                map[sid][key] = Number(val || 0);
+              });
+            }
+          }
+          setUvxpaqMap(map);
+        } catch (e) {
+          setUvxpaqMap({});
+        }
 
         // ventas (dulces)
         const sSnap = await getDocs(
@@ -857,6 +1187,13 @@ export default function TransactionsReportCandies({
                 onClick={handleExportXLSXAllProducts}
               >
                 Exportar Excel (Sábana)
+              </button>
+              <button
+                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-yellow-500 text-white hover:bg-yellow-600 w-full"
+                onClick={() => handleBackfillMonth()}
+                title="Rellenar uvXpaq/upaquete en ventas del rango"
+              >
+                Backfill mes
               </button>
             </div>
           </div>
