@@ -63,6 +63,7 @@ export default function AdminLayout({
   const [openDashboardClothes, setOpenDashboardClothes] = useState(false);
 
   //Operaciones dulces
+  const [openReportes, setOpenReportes] = useState(false);
   const [openDulces, setOpenDulces] = useState(false);
   const [openDulcesInv, setOpenDulcesInv] = useState(false);
   const [openDulcesVendors, setOpenDulcesVendors] = useState(false);
@@ -989,6 +990,48 @@ export default function AdminLayout({
                               >
                                 Venta
                               </NavLink>
+                              {/* Reportes Dropdown */}
+                              <div className="relative">
+                                <button
+                                  className="w-full text-left px-2 py-1 rounded-md font-semibold text-sm hover:bg-slate-100 focus:outline-none"
+                                  type="button"
+                                  onClick={() => setOpenReportes((v) => !v)}
+                                >
+                                  Reportes {openReportes ? "▲" : "▼"}
+                                </button>
+                                {openReportes && (
+                                  <div className="absolute left-0 mt-1 w-48 bg-white border border-slate-200 rounded-md shadow-lg z-20">
+                                    <NavLink
+                                      to={`${base}/transactionCandies`}
+                                      className={linkCls}
+                                      onClick={() => setOpenReportes(false)}
+                                    >
+                                      Ventas Totales
+                                    </NavLink>
+                                    <NavLink
+                                      to={`${base}/cierreVentasCandies`}
+                                      className={linkCls}
+                                      onClick={() => setOpenReportes(false)}
+                                    >
+                                      Ventas diarias
+                                    </NavLink>
+                                    <NavLink
+                                      to={`${base}/estadoCuentaCandies`}
+                                      className={linkCls}
+                                      onClick={() => setOpenReportes(false)}
+                                    >
+                                      Estado de cuenta
+                                    </NavLink>
+                                    <NavLink
+                                      to={`${base}/dashboardCandies`}
+                                      className={linkCls}
+                                      onClick={() => setOpenReportes(false)}
+                                    >
+                                      Dashboard
+                                    </NavLink>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           )}
                           {openDulcesVendors && (

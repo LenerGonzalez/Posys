@@ -85,16 +85,16 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     Array.isArray(d.items) && d.items.length > 0
       ? d.items
       : d.item
-      ? [d.item]
-      : [];
+        ? [d.item]
+        : [];
 
   const productNames = itemsArray.length
     ? itemsArray
         .map((it: any) => String(it.productName || it.name || "").trim())
         .filter(Boolean)
     : d.productName
-    ? [String(d.productName).trim()]
-    : [];
+      ? [String(d.productName).trim()]
+      : [];
 
   // Si la venta tiene items[] (multi-producto)
   let commissionFromItems = 0;
@@ -108,7 +108,8 @@ function normalizeSale(d: any, id: string): SaleDoc | null {
     total = Number(d.total ?? d.itemsTotal ?? 0) || 0;
     if (!total) {
       total = itemsArray.reduce(
-        (acc: number, it: any) => acc + (Number(it.total ?? it.lineFinal ?? 0) || 0),
+        (acc: number, it: any) =>
+          acc + (Number(it.total ?? it.lineFinal ?? 0) || 0),
         0,
       );
     }
@@ -238,22 +239,33 @@ export default function TransactionsReportCandies({
         // si no existe, intentar lookup en `uvxpaqMap`; como último recurso usar margenVendedor
         let commission = 0;
         const uvFromItem = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
-        let uv: number | undefined = Number.isFinite(uvFromItem) ? uvFromItem : undefined;
+        let uv: number | undefined = Number.isFinite(uvFromItem)
+          ? uvFromItem
+          : undefined;
 
         if (uv === undefined) {
           // prefer sale-level uvXpaq if sale was backfilled
-          const saleUv = Number(data?.uvXpaq ?? data?.uvxpaq ?? data?.upaquete ?? NaN);
+          const saleUv = Number(
+            data?.uvXpaq ?? data?.uvxpaq ?? data?.upaquete ?? NaN,
+          );
           if (Number.isFinite(saleUv)) {
             uv = saleUv;
           } else {
             try {
-              const vendedorId = String(data?.vendorId || data?.vendor || data?.vendorId || "").trim();
-                const prodKey = normKey(it.productName || it.name || it.productId || "");
+              const vendedorId = String(
+                data?.vendorId || data?.vendor || data?.vendorId || "",
+              ).trim();
+              const prodKey = normKey(
+                it.productName || it.name || it.productId || "",
+              );
               const mapForVendor = uvxpaqMap[vendedorId] || {};
-              if (mapForVendor[prodKey] !== undefined) uv = Number(mapForVendor[prodKey]);
+              if (mapForVendor[prodKey] !== undefined)
+                uv = Number(mapForVendor[prodKey]);
               else {
                 const allKeys = Object.keys(mapForVendor);
-                const match = allKeys.find((k) => k.replace(/\s+/g, "") === prodKey.replace(/\s+/g, ""));
+                const match = allKeys.find(
+                  (k) => k.replace(/\s+/g, "") === prodKey.replace(/\s+/g, ""),
+                );
                 if (match) uv = Number(mapForVendor[match]);
               }
             } catch (e) {
@@ -375,20 +387,22 @@ export default function TransactionsReportCandies({
                 origen = "item";
               } else {
                 // intentar uv desde item o lookup en mapa
-                const uvFromItem = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
+                const uvFromItem = Number(
+                  it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN,
+                );
                 let uv: number | undefined = Number.isFinite(uvFromItem)
                   ? uvFromItem
                   : undefined;
                 if (uv === undefined) {
                   // prefer sale-level uv if backfilled
-                  const saleUv = Number(data?.uvXpaq ?? data?.uvxpaq ?? data?.upaquete ?? NaN);
+                  const saleUv = Number(
+                    data?.uvXpaq ?? data?.uvxpaq ?? data?.upaquete ?? NaN,
+                  );
                   if (Number.isFinite(saleUv)) {
                     uv = saleUv;
                   } else {
                     try {
-                      const vendedorId = String(
-                        s.vendorId || s.vendor || "",
-                      ).trim();
+                      const vendedorId = String(s.vendorId || "").trim();
                       const prodKey = normKey(
                         it.productName || it.name || it.productId || "",
                       );
@@ -399,7 +413,8 @@ export default function TransactionsReportCandies({
                         const allKeys = Object.keys(mapForVendor);
                         const match = allKeys.find(
                           (k) =>
-                            k.replace(/\s+/g, "") === prodKey.replace(/\s+/g, ""),
+                            k.replace(/\s+/g, "") ===
+                            prodKey.replace(/\s+/g, ""),
                         );
                         if (match) uv = Number(mapForVendor[match]);
                       }
@@ -409,17 +424,22 @@ export default function TransactionsReportCandies({
                   }
                 }
 
-                const qty = Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0;
+                const qty =
+                  Number(it.packages ?? it.qty ?? it.quantity ?? 0) || 0;
                 // mostrar UV x PAQ (uv por paquete * cantidad de paquetes)
-                    if (uv !== undefined && Number.isFinite(uv)) {
-                      itemCommission = round2(uv * qty);
-                      origen = "calculado";
-                    } else {
-                      // fallback to item margin
-                      const itemMargin = Number(it.margenVendedor ?? it.vendorGain ?? NaN);
-                      itemCommission = Number.isFinite(itemMargin) ? round2(itemMargin) : 0;
-                      origen = itemCommission > 0 ? "item" : "calculado";
-                    }
+                if (uv !== undefined && Number.isFinite(uv)) {
+                  itemCommission = round2(uv * qty);
+                  origen = "calculado";
+                } else {
+                  // fallback to item margin
+                  const itemMargin = Number(
+                    it.margenVendedor ?? it.vendorGain ?? NaN,
+                  );
+                  itemCommission = Number.isFinite(itemMargin)
+                    ? round2(itemMargin)
+                    : 0;
+                  origen = itemCommission > 0 ? "item" : "calculado";
+                }
               }
 
               rows.push({
@@ -488,7 +508,12 @@ export default function TransactionsReportCandies({
 
   // Backfill ventas en rango (por mes). Actualiza uvXpaq/uvxpaq/upaquete en ventas e ítems.
   const handleBackfillMonth = async () => {
-    if (!window.confirm(`¿Rellenar uvXpaq en ventas desde ${fromDate} a ${toDate}? Esto modificará documentos en Firestore.`)) return;
+    if (
+      !window.confirm(
+        `¿Actualizar ventas viejas con campos nuevos desde las órdenes de vendedor (${fromDate} a ${toDate})? Esto modificará documentos en Firestore.`,
+      )
+    )
+      return;
     setLoading(true);
     setMsg("");
     try {
@@ -503,52 +528,6 @@ export default function TransactionsReportCandies({
         return;
       }
 
-      // Ensure uvxpaqMap is populated; if empty, try to build it now
-      if (!uvxpaqMap || Object.keys(uvxpaqMap).length === 0) {
-        setMsg("Cargando mapa uvxpaq antes de backfill...");
-        console.debug("uvxpaqMap vacío — reconstruyendo desde inventory_candies_sellers...");
-        try {
-          const vendorIds = sellers.map((v) => v.id).filter(Boolean);
-          const map: Record<string, Record<string, number>> = {};
-          const chunk = (arr: string[], size = 10) => {
-            const out: string[][] = [];
-            for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-            return out;
-          };
-          const chunks = chunk(vendorIds, 10);
-          for (const c of chunks) {
-            const q2 = query(
-              collection(db, "inventory_candies_sellers"),
-              where("sellerId", "in", c),
-            );
-            const snap2 = await getDocs(q2);
-            snap2.forEach((doc2) => {
-              const x = doc2.data() as any;
-              const sid = String(x.sellerId || "").trim();
-              if (!sid) return;
-              map[sid] = map[sid] || {};
-              const pname = String(x.productName || x.productId || "");
-              const key = pname ? normKey(pname) : String(x.productId || "");
-              const explicit = Number(x.uvXpaq ?? x.uvxpaq ?? x.uVxPaq ?? NaN);
-              let val = NaN as number;
-              if (Number.isFinite(explicit)) val = explicit;
-              else {
-                const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
-                const packs = Math.max(1, Number(x.packages ?? 0));
-                val = packs > 0 ? gross / packs : 0;
-              }
-              map[sid][key] = Number(val || 0);
-            });
-          }
-          setUvxpaqMap(map);
-          console.debug("uvxpaqMap rebuilt; sellers:", Object.keys(map).length);
-        } catch (e) {
-          console.error("Error al reconstruir uvxpaqMap:", e);
-        }
-      }
-
-      console.debug("Ventas encontradas para backfill:", snap.size);
-
       let batch = writeBatch(db);
       let ops = 0;
       let updated = 0;
@@ -556,81 +535,53 @@ export default function TransactionsReportCandies({
       for (const d of snap.docs) {
         const data = d.data() as any;
         const id = d.id;
-        console.debug("Procesando venta:", id);
-        const items = Array.isArray(data.items) ? data.items : data.item ? [data.item] : [];
+        const items = Array.isArray(data.items)
+          ? data.items
+          : data.item
+            ? [data.item]
+            : [];
         const vendorId = String(data.vendorId || data.vendor || "").trim();
         const upd: any = {};
 
-        if (items.length === 1) {
-          const it = items[0];
-          const itemUv = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
-          let uv = Number.isFinite(itemUv) ? itemUv : undefined;
-          const saleUv = Number(data.uvXpaq ?? data.uvxpaq ?? data.upaquete ?? NaN);
-          if (uv === undefined) {
-            if (Number.isFinite(saleUv)) uv = saleUv;
-            else {
-              // lookup in uvxpaqMap
-              try {
-                const key = normKey(it.productName || it.name || it.productId || "");
-                const mapForVendor = uvxpaqMap[vendorId] || {};
-                if (mapForVendor[key] !== undefined) uv = Number(mapForVendor[key]);
-                else {
-                  const match = Object.keys(mapForVendor).find((k) => k.replace(/\s+/g, "") === key.replace(/\s+/g, ""));
-                  if (match) uv = Number(mapForVendor[match]);
-                }
-              } catch (e) {}
+        // Actualizar cada producto vendido usando for...of
+        const newItems = [];
+        for (const it of items) {
+          const productId = String(it.productId || "").trim();
+          let sellerDoc: any = null;
+          try {
+            const qSeller = query(
+              collection(db, "inventory_candies_sellers"),
+              where("sellerId", "==", vendorId),
+              where("productId", "==", productId),
+            );
+            const sellerSnap = await getDocs(qSeller);
+            if (!sellerSnap.empty) {
+              sellerDoc = sellerSnap.docs[0].data();
             }
+          } catch (e) {
+            sellerDoc = null;
           }
+          if (sellerDoc) {
+            newItems.push({
+              ...it,
+              uInvestor: sellerDoc.uInvestor,
+              uNeta: sellerDoc.uNeta,
+              uNetaPorPaquete: sellerDoc.uNetaPorPaquete,
+              uVendor: sellerDoc.uVendor,
+              upaquete: sellerDoc.upaquete,
+              uvXpaq: sellerDoc.uvXpaq,
+              vendorMarginPercent: sellerDoc.vendorMarginPercent,
+            });
+          } else {
+            newItems.push(it);
+          }
+        }
 
-          if (uv !== undefined && Number.isFinite(uv)) {
-            if (!Number.isFinite(saleUv)) {
-              upd.uvXpaq = uv;
-              upd.uvxpaq = uv;
-              upd.upaquete = uv;
-            }
-            if (!Number.isFinite(itemUv)) {
-              const newItems = items.slice();
-              newItems[0] = Object.assign({}, it, { uvXpaq: uv, uvxpaq: uv, upaquete: uv });
-              upd.items = newItems;
-            }
-          }
-        } else if (items.length > 1) {
-          const newItems = items.slice();
-          let any = false;
-          for (let i = 0; i < items.length; i++) {
-            const it = items[i];
-            const itemUv = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
-            if (!Number.isFinite(itemUv)) {
-              let uv = undefined;
-              try {
-                const key = normKey(it.productName || it.name || it.productId || "");
-                const mapForVendor = uvxpaqMap[vendorId] || {};
-                if (mapForVendor[key] !== undefined) uv = Number(mapForVendor[key]);
-                else {
-                  const match = Object.keys(mapForVendor).find((k) => k.replace(/\s+/g, "") === key.replace(/\s+/g, ""));
-                  if (match) uv = Number(mapForVendor[match]);
-                }
-              } catch (e) {}
-
-              if (uv !== undefined && Number.isFinite(uv)) {
-                newItems[i] = Object.assign({}, it, { uvXpaq: uv, uvxpaq: uv, upaquete: uv });
-                any = true;
-              } else {
-                const vendorGain = Number(it.vendorGain ?? it.margenVendedor ?? NaN);
-                const packs = Math.max(1, Number(it.packages ?? it.qty ?? it.quantity ?? 1));
-                if (Number.isFinite(vendorGain) && vendorGain !== 0) {
-                  const uv2 = Math.round((vendorGain / packs) * 100) / 100;
-                  newItems[i] = Object.assign({}, it, { uvXpaq: uv2, uvxpaq: uv2, upaquete: uv2 });
-                  any = true;
-                }
-              }
-            }
-          }
-          if (any) upd.items = newItems;
+        if (newItems.length > 0) {
+          upd.items = newItems;
         }
 
         if (Object.keys(upd).length > 0) {
-          console.debug("Actualización preparada para:", id, upd);
           batch.update(doc(db, "sales_candies", id), upd);
           ops++;
           updated++;
@@ -643,7 +594,9 @@ export default function TransactionsReportCandies({
       }
 
       if (ops > 0) await batch.commit();
-      setMsg(`✅ Backfilled ${updated} venta(s) en rango`);
+      setMsg(
+        `✅ Backfilled ${updated} venta(s) actualizadas con campos nuevos`,
+      );
     } catch (e) {
       console.error(e);
       setMsg("❌ Error durante backfill");
@@ -661,7 +614,7 @@ export default function TransactionsReportCandies({
   ): number => {
     if (!s) return 0;
     const key = normKey(
-      productName || (s.productNames && s.productNames[0]) || s.productName || "",
+      productName || (s.productNames && s.productNames[0]) || "",
     );
     const candidates = [s.vendorId || "", sellerCandyId || ""].filter(Boolean);
     const isHistoric = String(s.date || "") <= UVXPAQ_CUTOFF_DATE;
@@ -1741,7 +1694,7 @@ export default function TransactionsReportCandies({
       {/* Modal: Detalle de piezas de la venta */}
       {itemsModalOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-[95%] max-w-3xl p-4">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-[98%] max-w-5xl p-6">
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h3 className="text-lg font-bold">

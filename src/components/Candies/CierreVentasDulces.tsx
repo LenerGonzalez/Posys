@@ -2751,77 +2751,187 @@ export default function CierreVentasDulces({
         <div
           className={`collapsible-content ${kpiCardOpen ? "block" : "hidden"} border-t p-4`}
         >
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-7 gap-3">
-            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">Ventas flotantes</div>
-              <div className="text-2xl font-bold">{kpiFloCount}</div>
-              <div className="text-xs text-slate-500 mt-1">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
+            {/* Card 1: Ventas flotantes y procesadas */}
+            <div className="border rounded-xl p-3 shadow-sm bg-blue-50 border-blue-200 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                {/* Kite icon outline */}
+                <svg
+                  className="text-blue-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M4 20l8-16 8 16" />
+                  <path d="M12 4v16" />
+                </svg>
+                <span className="text-xs text-blue-700 font-semibold">
+                  Ventas flotantes
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  {kpiFloCount}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Check icon outline */}
+                <svg
+                  className="text-green-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="text-xs text-green-700 font-semibold">
+                  Ventas procesadas
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  {kpiProCount}
+                </span>
+              </div>
+              <div className="text-xs text-blue-700/70 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">Ventas procesadas</div>
-              <div className="text-2xl font-bold">{kpiProCount}</div>
-              <div className="text-xs text-slate-500 mt-1">
-                Período: {startDate} → {endDate}
+            {/* Card 2: Ventas cash y crédito */}
+            <div className="border rounded-xl p-3 shadow-sm bg-emerald-50 border-emerald-200 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                {/* Cash icon outline */}
+                <svg
+                  className="text-emerald-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="2" y="7" width="20" height="10" rx="2" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                <span className="text-xs text-emerald-700 font-semibold">
+                  Ventas cash
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  {kpiCashCount}
+                </span>
               </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-amber-50 border-amber-200">
-              <div className="text-xs text-amber-700">Ventas credito</div>
-              <div className="text-2xl font-bold">{kpiCreditoCount}</div>
-              <div className="text-xs text-amber-700/70 mt-1">
-                Período: {startDate} → {endDate}
+              <div className="flex items-center gap-2">
+                {/* Credit card icon outline */}
+                <svg
+                  className="text-amber-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="2" y="6" width="20" height="12" rx="2" />
+                  <path d="M2 10h20" />
+                </svg>
+                <span className="text-xs text-amber-700 font-semibold">
+                  Ventas crédito
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  {kpiCreditoCount}
+                </span>
               </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-emerald-50 border-emerald-200">
-              <div className="text-xs text-emerald-700">Ventas cash</div>
-              <div className="text-2xl font-bold">{kpiCashCount}</div>
               <div className="text-xs text-emerald-700/70 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">Paquetes Cash</div>
-              <div className="text-2xl font-bold">{qty3(totalPacksCash)}</div>
-              <div className="text-xs text-slate-500 mt-1">
+            {/* Card 3: Paquetes cash y crédito */}
+            <div className="border rounded-xl p-3 shadow-sm bg-purple-50 border-purple-200 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                {/* Box icon outline */}
+                <svg
+                  className="text-purple-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18" />
+                  <path d="M9 21V9" />
+                </svg>
+                <span className="text-xs text-purple-700 font-semibold">
+                  Paquetes cash
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  {qty3(totalPacksCash)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Gift icon outline */}
+                <svg
+                  className="text-pink-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <rect x="2" y="7" width="20" height="10" rx="2" />
+                  <path d="M12 7v10" />
+                  <path d="M7 7c0-2.5 5-2.5 5 0" />
+                  <path d="M17 7c0-2.5-5-2.5-5 0" />
+                </svg>
+                <span className="text-xs text-pink-700 font-semibold">
+                  Paquetes crédito
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  {qty3(totalPacksCredito)}
+                </span>
+              </div>
+              <div className="text-xs text-purple-700/70 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
 
-            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">Paquetes Credito</div>
-              <div className="text-2xl font-bold">
-                {qty3(totalPacksCredito)}
+            {/* Card 4: Comisión cash y crédito */}
+            <div className="border rounded-xl p-3 shadow-sm bg-yellow-50 border-yellow-200 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                {/* Money bag icon outline */}
+                <svg
+                  className="text-yellow-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M12 2v2" />
+                  <path d="M7 7c0 5 10 5 10 0" />
+                  <ellipse cx="12" cy="17" rx="7" ry="5" />
+                </svg>
+                <span className="text-xs text-yellow-700 font-semibold">
+                  Comisión cash
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  C${money(totalCommissionCash)}
+                </span>
               </div>
-              <div className="text-xs text-slate-500 mt-1">
-                Período: {startDate} → {endDate}
+              <div className="flex items-center gap-2">
+                {/* Coin icon outline */}
+                <svg
+                  className="text-orange-600 w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
+                  <circle cx="12" cy="12" r="8" />
+                  <path d="M12 8v8" />
+                  <path d="M8 12h8" />
+                </svg>
+                <span className="text-xs text-orange-700 font-semibold">
+                  Comisión crédito
+                </span>
+                <span className="text-2xl font-bold ml-auto">
+                  C${money(totalCommissionCredito)}
+                </span>
               </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">
-                Comisión cash (período)
-              </div>
-              <div className="text-2xl font-bold">
-                C${money(totalCommissionCash)}
-              </div>
-              <div className="text-xs text-slate-500 mt-1">
-                Período: {startDate} → {endDate}
-              </div>
-            </div>
-
-            <div className="border rounded-xl p-3 shadow-sm bg-slate-50">
-              <div className="text-xs text-slate-600">
-                Comisión crédito (período)
-              </div>
-              <div className="text-2xl font-bold">
-                C${money(totalCommissionCredito)}
-              </div>
-              <div className="text-xs text-slate-500 mt-1">
+              <div className="text-xs text-yellow-700/70 mt-1">
                 Período: {startDate} → {endDate}
               </div>
             </div>
