@@ -67,6 +67,7 @@ import PreciosVenta from "./components/Candies/PreciosVenta";
 import EstadoCuentaCandies from "./components/Candies/EstadoCuentaCandies";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
+import ArqueoProducto from "./components/Pollo/ArqueoProducto";
 
 // Definición de roles
 type Role =
@@ -269,6 +270,14 @@ export default function App() {
             element={
               <PrivateRoute allowedRoles={["admin", "contador"]}>
                 <StatusAccount role={role} roles={roles} />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="auditProductsPollo"
+            element={
+              <PrivateRoute allowedRoles={["admin", "contador"]}>
+                <ArqueoProducto role={role} roles={roles} />
               </PrivateRoute>
             }
           />

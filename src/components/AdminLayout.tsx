@@ -839,6 +839,12 @@ export default function AdminLayout({
                               >
                                 Evolutivo Libras
                               </NavLink>
+                              <NavLink
+                                to={`${base}/auditProductsPollo`}
+                                className={linkCls}
+                              >
+                                Arqueo Productos
+                              </NavLink>
                             </div>
                           )}
 
@@ -1319,33 +1325,41 @@ export default function AdminLayout({
                             <SubSectionBtn
                               open={contadorMenuFinanzas}
                               onClick={() => setContadorMenuFinanzas((v) => !v)}
-                              title="Contabilidad"
+                              title={
+                                <span className="font-bold">Contabilidad</span>
+                              }
                             />
-
                             {contadorMenuFinanzas && (
                               <div className="ml-4 mt-1 space-y-1">
                                 {canPath(subject, "billing") && (
                                   <NavLink
                                     to={`${base}/billing`}
                                     className={linkCls}
+                                    onClick={() =>
+                                      setContadorMenuFinanzas(false)
+                                    }
                                   >
                                     Facturacion
                                   </NavLink>
                                 )}
-
                                 {canPath(subject, "customersPollo") && (
                                   <NavLink
                                     to={`${base}/customersPollo`}
                                     className={linkCls}
+                                    onClick={() =>
+                                      setContadorMenuFinanzas(false)
+                                    }
                                   >
                                     Saldos Pendientes
                                   </NavLink>
                                 )}
-
                                 {canPath(subject, "statusAccount") && (
                                   <NavLink
                                     to={`${base}/statusAccount`}
                                     className={linkCls}
+                                    onClick={() =>
+                                      setContadorMenuFinanzas(false)
+                                    }
                                   >
                                     Estado de Cuenta
                                   </NavLink>
@@ -1354,14 +1368,31 @@ export default function AdminLayout({
                                   <NavLink
                                     to={`${base}/statusInventory`}
                                     className={linkCls}
+                                    onClick={() =>
+                                      setContadorMenuFinanzas(false)
+                                    }
                                   >
                                     Evolutivo de Libras
+                                  </NavLink>
+                                )}
+                                {canPath(subject, "auditProductsPollo") && (
+                                  <NavLink
+                                    to={`${base}/auditProductsPollo`}
+                                    className={linkCls}
+                                    onClick={() =>
+                                      setContadorMenuFinanzas(false)
+                                    }
+                                  >
+                                    Arqueo Productos
                                   </NavLink>
                                 )}
                                 {canPath(subject, "expenses") && (
                                   <NavLink
                                     to={`${base}/expenses`}
                                     className={linkCls}
+                                    onClick={() =>
+                                      setContadorMenuFinanzas(false)
+                                    }
                                   >
                                     Gastos
                                   </NavLink>
