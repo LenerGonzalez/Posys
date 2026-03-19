@@ -107,6 +107,8 @@ type SavedAudit = {
   }>;
 };
 
+type SavedAuditRow = NonNullable<SavedAudit["rows"]>[number];
+
 function isLbUnit(unit: unknown): boolean {
   const s = String(unit || "")
     .toLowerCase()
@@ -169,6 +171,7 @@ function getCreatedByLabel(a: SavedAudit) {
   const email = a.createdBy?.email || "";
   const name = a.createdBy?.name || a.createdBy?.displayName || "";
   if (name) return name;
+  if (email) return email;
   const uid = a.createdBy?.uid || "";
   return uid || "—";
 }
@@ -179,12 +182,36 @@ function diffClass(n: number) {
   return "text-gray-800";
 }
 
+function calcEditedAuditRow(
+  row: SavedAuditRow,
+  realLbs: number | null,
+): SavedAuditRow {
+  const salePrice = round2(row.salePrice);
+  const theoreticalLbs = round3(row.theoreticalLbs);
+  const theoreticalAmount = round2(theoreticalLbs * salePrice);
+  const realLbsNum = realLbs == null ? null : round3(realLbs);
+  const realAmount = round2((realLbsNum ?? 0) * salePrice);
+  const differenceLbs = round3((realLbsNum ?? 0) - theoreticalLbs);
+  const differenceAmount = round2(differenceLbs * salePrice);
+
+  return {
+    ...row,
+    salePrice,
+    costPrice: round2(row.costPrice),
+    theoreticalLbs,
+    theoreticalAmount,
+    realLbs: realLbsNum,
+    realAmount,
+    differenceLbs,
+    differenceAmount,
+  };
+}
+
 export default function ArqueoProducto(): React.ReactElement {
   const [openMenu, setOpenMenu] = useState<{
     id: string | null;
     rect: DOMRect | null;
   }>({ id: null, rect: null });
-  const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
   const handleDeleteAudit = async (auditId: string) => {
@@ -209,7 +236,7 @@ export default function ArqueoProducto(): React.ReactElement {
   const [createOpen, setCreateOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedAudit, setSelectedAudit] = useState<SavedAudit | null>(null);
-  const [editRows, setEditRows] = useState<SavedAudit["rows"]>([]);
+  const [editRows, setEditRows] = useState<SavedAuditRow[]>([]);
   const [editGeneralObservation, setEditGeneralObservation] =
     useState<string>("");
   const [editSaving, setEditSaving] = useState(false);
@@ -240,17 +267,120 @@ export default function ArqueoProducto(): React.ReactElement {
     setDiffFilter("ALL");
   };
 
-  // Basic placeholders to satisfy references and keep TS happy.
   const loadRows = async () => {
+    if (!from || !to) {
+      window.alert("Debes seleccionar fecha inicio y fecha final.");
+      return;
+    }
+
+    if (from > to) {
+      window.alert("La fecha inicio no puede ser mayor que la fecha final.");
+      return;
+    }
+
     setLoadingProducts(true);
+    setLoaded(false);
+
     try {
-      // TODO: implement actual product loading logic
-      setRows([]);
+      const qInv = query(
+        collection(db, "inventory_batches"),
+        where("date", ">=", from),
+        where("date", "<=", to),
+        orderBy("date", "asc"),
+      );
+
+      const snap = await getDocs(qInv);
+
+      const grouped = new Map<
+        string,
+        {
+          productId: string;
+          productName: string;
+          theoreticalLbs: number;
+          salePriceWeightedSum: number;
+          costPriceWeightedSum: number;
+          weightForPrices: number;
+          batchCount: number;
+        }
+      >();
+
+      snap.forEach((d) => {
+        const b = d.data() as InventoryBatchDoc;
+
+        const category = String(b.category || "")
+          .toLowerCase()
+          .trim();
+        if (category !== "pollo") return;
+        if (!isLbUnit(b.unit)) return;
+
+        const productId = safeProductId(b);
+        if (!productId) return;
+
+        const productName = safeProductName(b);
+        const remaining = Number(b.remaining || 0) || 0;
+        const quantity = Number(b.quantity || 0) || 0;
+        const salePrice = getBatchSalePrice(b);
+        const costPrice = getBatchCostPrice(b);
+        const priceWeight =
+          quantity > 0 ? quantity : remaining > 0 ? remaining : 1;
+
+        const prev = grouped.get(productId) || {
+          productId,
+          productName,
+          theoreticalLbs: 0,
+          salePriceWeightedSum: 0,
+          costPriceWeightedSum: 0,
+          weightForPrices: 0,
+          batchCount: 0,
+        };
+
+        prev.productName = prev.productName || productName;
+        prev.theoreticalLbs += remaining;
+        prev.salePriceWeightedSum += salePrice * priceWeight;
+        prev.costPriceWeightedSum += costPrice * priceWeight;
+        prev.weightForPrices += priceWeight;
+        prev.batchCount += 1;
+
+        grouped.set(productId, prev);
+      });
+
+      const nextRows: AuditRow[] = Array.from(grouped.values())
+        .map((g) => {
+          const salePrice =
+            g.weightForPrices > 0
+              ? g.salePriceWeightedSum / g.weightForPrices
+              : 0;
+          const costPrice =
+            g.weightForPrices > 0
+              ? g.costPriceWeightedSum / g.weightForPrices
+              : 0;
+
+          return calcRow({
+            productId: g.productId,
+            productName: g.productName,
+            salePrice,
+            costPrice,
+            theoreticalLbs: g.theoreticalLbs,
+            realLbs: "",
+            observation: "",
+            batchCount: g.batchCount,
+          });
+        })
+        .sort((a, b) => a.productName.localeCompare(b.productName));
+
+      setRows(nextRows);
       setLoaded(true);
+
+      if (!nextRows.length) {
+        window.alert(
+          "No se encontraron productos de pollo en libras para ese rango.",
+        );
+      }
     } catch (err) {
-      console.error("Error cargando productos:", err);
+      console.error("Error cargando productos para arqueo:", err);
       setRows([]);
       setLoaded(false);
+      window.alert("No se pudo cargar la data del arqueo. Revisa la consola.");
     } finally {
       setLoadingProducts(false);
     }
@@ -280,10 +410,16 @@ export default function ArqueoProducto(): React.ReactElement {
 
   const saveEditedAudit = async () => {
     if (!selectedAudit) return;
+
+    if (!editRows.length) {
+      window.alert("Debe quedar al menos un producto en el arqueo.");
+      return;
+    }
+
     setEditSaving(true);
     try {
       const docRef = doc(db, "inventory_audits_pollo", selectedAudit.id);
-      const rowsToSave = (editRows || []).map((r) => ({
+      const rowsToSave = editRows.map((r) => ({
         productId: r.productId,
         productName: r.productName,
         salePrice: round2(r.salePrice),
@@ -294,8 +430,8 @@ export default function ArqueoProducto(): React.ReactElement {
         realAmount: round2(r.realAmount),
         differenceLbs: round3(r.differenceLbs),
         differenceAmount: round2(r.differenceAmount),
-        observation: (r as any).observation || null,
-        batchCount: (r as any).batchCount || 0,
+        observation: r.observation?.trim() || null,
+        batchCount: r.batchCount || 0,
       }));
 
       const summaryObj = {
@@ -314,6 +450,7 @@ export default function ArqueoProducto(): React.ReactElement {
         updatedAt: serverTimestamp(),
       });
 
+      window.alert("Arqueo actualizado correctamente.");
       setEditOpen(false);
       setSelectedAudit(null);
       refresh();
@@ -401,7 +538,11 @@ export default function ArqueoProducto(): React.ReactElement {
 
   useEffect(() => {
     if (editOpen && selectedAudit) {
-      setEditRows((selectedAudit.rows || []).map((r) => ({ ...r })));
+      setEditRows(
+        (selectedAudit.rows || []).map((r) =>
+          calcEditedAuditRow({ ...r }, r.realLbs ?? null),
+        ),
+      );
       setEditGeneralObservation(selectedAudit.generalObservation || "");
     } else {
       setEditRows([]);
@@ -456,225 +597,6 @@ export default function ArqueoProducto(): React.ReactElement {
       document.removeEventListener("keydown", onKey);
     };
   }, [createOpen, detailOpen, editOpen]);
-
-  useEffect(() => {
-    if (!openMenu.id) return;
-
-    const onDown = (ev: Event) => {
-      const target = ev.target as Node;
-      if (actionMenuRef.current && !actionMenuRef.current.contains(target)) {
-        setOpenMenu({ id: null, rect: null });
-      }
-    };
-
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") setOpenMenu({ id: null, rect: null });
-    };
-
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("scroll", onDown, true);
-    document.addEventListener("keydown", onKey);
-
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("scroll", onDown, true);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [openMenu.id]);
-
-  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
-    <div>
-      <label className="block text-sm text-gray-600 mb-1">Desde</label>
-      <input
-        type="date"
-        className="border rounded px-3 py-2 w-full"
-        value={fromFilter}
-        onChange={(e) => setFromFilter(e.target.value)}
-      />
-    </div>
-
-    <div>
-      <label className="block text-sm text-gray-600 mb-1">Hasta</label>
-      <input
-        type="date"
-        className="border rounded px-3 py-2 w-full"
-        value={toFilter}
-        onChange={(e) => setToFilter(e.target.value)}
-      />
-    </div>
-  </div>;
-
-  {
-    /* modal editar arqueo */
-  }
-  {
-    editOpen && selectedAudit && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
-        <div className="absolute inset-0 bg-black/50" />
-
-        <div
-          ref={editModalRef}
-          className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] h-[96vh] overflow-hidden"
-        >
-          <div className="flex items-center justify-between border-b px-4 py-3">
-            <div>
-              <h3 className="text-lg sm:text-xl font-bold">Editar Arqueo</h3>
-              <div className="text-sm text-gray-500">
-                {selectedAudit.from || "—"} → {selectedAudit.to || "—"}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={saveEditedAudit}
-                className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm disabled:opacity-60"
-                disabled={editSaving}
-              >
-                {editSaving ? "Guardando..." : "Guardar cambios"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setEditOpen(false);
-                  setSelectedAudit(null);
-                }}
-                className="px-3 py-2 border rounded text-sm"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-
-          <div className="h-[calc(96vh-65px)] overflow-y-auto p-4">
-            <div className="mb-4">
-              <label className="block text-sm text-gray-600 mb-1">
-                Observación general
-              </label>
-              <textarea
-                className="border rounded px-3 py-2 w-full min-h-[90px]"
-                value={editGeneralObservation}
-                onChange={(e) => setEditGeneralObservation(e.target.value)}
-                placeholder="Notas generales del arqueo..."
-              />
-            </div>
-
-            <div className="hidden md:block overflow-x-auto">
-              <table className="min-w-full border text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="border p-2">Producto</th>
-                    <th className="border p-2">Precio venta</th>
-                    <th className="border p-2">Precio costo</th>
-                    <th className="border p-2">Libras teóricas</th>
-                    <th className="border p-2">Monto teórico</th>
-                    <th className="border p-2">Libras reales</th>
-                    <th className="border p-2">Monto real</th>
-                    <th className="border p-2">Diferencia lb</th>
-                    <th className="border p-2">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(editRows || []).map((r: any) => (
-                    <tr key={r.productId} className="text-center">
-                      <td className="border p-1 text-left">
-                        <div className="font-medium">{r.productName}</div>
-                        <div className="text-[11px] text-gray-500">
-                          {r.productId} • lotes: {r.batchCount}
-                        </div>
-                      </td>
-                      <td className="border p-1">{money(r.salePrice)}</td>
-                      <td className="border p-1">{money(r.costPrice)}</td>
-                      <td className="border p-1">{qty3(r.theoreticalLbs)}</td>
-                      <td className="border p-1">
-                        {money(r.theoreticalAmount)}
-                      </td>
-                      <td className="border p-1">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          className="border rounded px-2 py-1 w-28 text-right"
-                          value={r.realLbs == null ? "" : String(r.realLbs)}
-                          onChange={(e) =>
-                            updateEditRealLbs(r.productId, e.target.value)
-                          }
-                          placeholder="0.000"
-                        />
-                      </td>
-                      <td className="border p-1">{money(r.realAmount)}</td>
-                      <td
-                        className={`border p-1 ${diffClass(r.differenceLbs)}`}
-                      >
-                        {qty3(r.differenceLbs)}
-                      </td>
-                      <td className="border p-1">
-                        <button
-                          type="button"
-                          className="px-2 py-1 text-sm border rounded text-red-600"
-                          onClick={() => removeEditRow(r.productId)}
-                        >
-                          Eliminar
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="md:hidden space-y-3">
-              {(editRows || []).map((r: any) => (
-                <div
-                  key={r.productId}
-                  className="border rounded-xl p-3 bg-white shadow-sm"
-                >
-                  <div className="flex justify-between items-start gap-2">
-                    <div>
-                      <div className="text-sm font-semibold">
-                        {r.productName}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {r.productId} • lotes: {r.batchCount}
-                      </div>
-                    </div>
-
-                    <div className="text-right">
-                      <button
-                        type="button"
-                        className="px-2 py-1 text-sm border rounded text-red-600"
-                        onClick={() => removeEditRow(r.productId)}
-                      >
-                        Eliminar
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    <div className="border rounded p-2 bg-gray-50 col-span-2">
-                      <div className="text-xs text-gray-500 mb-1">
-                        Libras reales
-                      </div>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        className="border rounded px-3 py-2 w-full"
-                        value={r.realLbs == null ? "" : String(r.realLbs)}
-                        onChange={(e) =>
-                          updateEditRealLbs(r.productId, e.target.value)
-                        }
-                        placeholder="0.000"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   const summary: AuditSummary = useMemo(() => {
     return rows.reduce(
@@ -1009,31 +931,14 @@ export default function ArqueoProducto(): React.ReactElement {
         const normalized = value.replace(/,/g, ".").trim();
 
         if (normalized === "") {
-          return {
-            ...r,
-            realLbs: null,
-            realAmount: 0,
-            differenceLbs: round3(0 - Number(r.theoreticalLbs || 0)),
-            differenceAmount: 0,
-          } as any;
+          return calcEditedAuditRow(r, null);
         }
 
         if (!/^\d*(\.\d{0,3})?$/.test(normalized)) return r;
         const num = Number(normalized);
         if (!Number.isFinite(num) || num < 0) return r;
 
-        const salePrice = Number(r.salePrice || 0) || 0;
-        const realAmount = round2(num * salePrice);
-        const differenceLbs = round3(num - Number(r.theoreticalLbs || 0));
-        const differenceAmount = round2(differenceLbs * salePrice);
-
-        return {
-          ...r,
-          realLbs: round3(num),
-          realAmount,
-          differenceLbs,
-          differenceAmount,
-        } as any;
+        return calcEditedAuditRow(r, num);
       }),
     );
   };
@@ -1044,16 +949,6 @@ export default function ArqueoProducto(): React.ReactElement {
       (prev || []).filter((r) => r.productId !== productId),
     );
   };
-
-  useEffect(() => {
-    // debug: track edit modal state changes
-    // eslint-disable-next-line no-console
-    console.log("ArqueoProducto state change", {
-      editOpen,
-      selectedAuditId: selectedAudit?.id ?? null,
-      editRowsLength: (editRows || []).length,
-    });
-  }, [editOpen, selectedAudit, editRows]);
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
@@ -1193,10 +1088,11 @@ export default function ArqueoProducto(): React.ReactElement {
                       onClick={(e) => {
                         const btn = e.currentTarget as HTMLButtonElement;
                         const rect = btn.getBoundingClientRect();
-                        // debug: log opening intent
-                        // eslint-disable-next-line no-console
-                        console.log("menu button click", { id: a.id, rect });
-                        setOpenMenu({ id: a.id, rect });
+                        setOpenMenu((prev) =>
+                          prev.id === a.id
+                            ? { id: null, rect: null }
+                            : { id: a.id, rect },
+                        );
                       }}
                     >
                       <span className="sr-only">Abrir menú</span>
@@ -1246,13 +1142,9 @@ export default function ArqueoProducto(): React.ReactElement {
                         type="button"
                         className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                         onClick={() => {
-                          // open edit modal first, then close the menu shortly after
                           setSelectedAudit(a);
                           setEditOpen(true);
-                          setTimeout(
-                            () => setOpenMenu({ id: null, rect: null }),
-                            150,
-                          );
+                          setOpenMenu({ id: null, rect: null });
                         }}
                       >
                         Editar
@@ -1268,21 +1160,7 @@ export default function ArqueoProducto(): React.ReactElement {
                         Eliminar
                       </button>
                     </ActionMenu>
-                    {/* Direct edit shortcut (temporary) */}
-                    <button
-                      type="button"
-                      className="ml-2 px-2 py-1 border rounded text-sm"
-                      onClick={() => {
-                        // debug: direct edit click
-                        // eslint-disable-next-line no-console
-                        console.log("direct edit click", { id: a.id });
-                        setSelectedAudit(a);
-                        setEditOpen(true);
-                        setOpenMenu({ id: null, rect: null });
-                      }}
-                    >
-                      Editar
-                    </button>
+                   
                   </div>
                 </td>
               </tr>
@@ -1375,6 +1253,16 @@ export default function ArqueoProducto(): React.ReactElement {
                   className="px-3 py-1 border rounded text-sm"
                 >
                   Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAudit(a);
+                    setEditOpen(true);
+                  }}
+                  className="px-3 py-1 border rounded text-sm"
+                >
+                  Editar
                 </button>
               </div>
             </div>
@@ -1806,6 +1694,280 @@ export default function ArqueoProducto(): React.ReactElement {
                             }
                             placeholder="Observación"
                           />
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* modal editar */}
+      {editOpen && selectedAudit && (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center p-2 sm:p-4">
+          <div className="absolute inset-0 bg-black/50" />
+
+          <div
+            ref={editModalRef}
+            className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] h-[96vh] overflow-hidden"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3 gap-3">
+              <div>
+                <h3 className="text-lg sm:text-xl font-bold">Editar Arqueo</h3>
+                <div className="text-sm text-gray-500">
+                  {selectedAudit.from || "—"} → {selectedAudit.to || "—"}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={saveEditedAudit}
+                  className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm disabled:opacity-60"
+                  disabled={editSaving}
+                >
+                  {editSaving ? "Guardando..." : "Guardar cambios"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditOpen(false);
+                    setSelectedAudit(null);
+                  }}
+                  className="px-3 py-2 border rounded text-sm"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+
+            <div className="h-[calc(96vh-65px)] overflow-y-auto p-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+                <div className="border rounded-2xl p-3 bg-gray-50">
+                  <div className="text-xs text-gray-600">Productos</div>
+                  <div className="text-2xl font-bold">{editRows.length}</div>
+                </div>
+
+                <div className="border rounded-2xl p-3 bg-indigo-50">
+                  <div className="text-xs text-gray-600">Libras teóricas</div>
+                  <div className="text-2xl font-bold">
+                    {qty3(editSummary.totalTheoreticalLbs)}
+                  </div>
+                </div>
+
+                <div className="border rounded-2xl p-3 bg-blue-50">
+                  <div className="text-xs text-gray-600">Libras reales</div>
+                  <div className="text-2xl font-bold">
+                    {qty3(editSummary.totalRealLbs)}
+                  </div>
+                </div>
+
+                <div className="border rounded-2xl p-3 bg-amber-50">
+                  <div className="text-xs text-gray-600">Diferencia lb</div>
+                  <div
+                    className={`text-2xl font-bold ${diffClass(editSummary.totalDifferenceLbs)}`}
+                  >
+                    {qty3(editSummary.totalDifferenceLbs)}
+                  </div>
+                </div>
+
+                <div className="border rounded-2xl p-3 bg-red-50">
+                  <div className="text-xs text-gray-600">Monto diferencia</div>
+                  <div
+                    className={`text-2xl font-bold ${diffClass(editSummary.totalDifferenceAmount)}`}
+                  >
+                    {money(editSummary.totalDifferenceAmount)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm text-gray-600 mb-1">
+                  Observación general
+                </label>
+                <textarea
+                  className="border rounded px-3 py-2 w-full min-h-[90px]"
+                  value={editGeneralObservation}
+                  onChange={(e) => setEditGeneralObservation(e.target.value)}
+                  placeholder="Notas generales del arqueo..."
+                />
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
+                <table className="min-w-full border text-sm">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="border p-2">Producto</th>
+                      <th className="border p-2">Precio venta</th>
+                      <th className="border p-2">Libras teóricas</th>
+                      <th className="border p-2">Monto teórico</th>
+                      <th className="border p-2">Libras reales</th>
+                      <th className="border p-2">Monto real</th>
+                      <th className="border p-2">Diferencia lb</th>
+                      <th className="border p-2">Monto diferencia</th>
+                      <th className="border p-2">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {editRows.map((r) => (
+                      <tr key={r.productId} className="text-center">
+                        <td className="border p-1 text-left">
+                          <div className="font-medium">{r.productName}</div>
+                          <div className="text-[11px] text-gray-500">
+                            {r.productId} • lotes: {r.batchCount || 0}
+                          </div>
+                        </td>
+                        <td className="border p-1">{money(r.salePrice)}</td>
+                        <td className="border p-1">{qty3(r.theoreticalLbs)}</td>
+                        <td className="border p-1">
+                          {money(r.theoreticalAmount)}
+                        </td>
+                        <td className="border p-1">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="border rounded px-2 py-1 w-28 text-right"
+                            value={r.realLbs == null ? "" : String(r.realLbs)}
+                            onChange={(e) =>
+                              updateEditRealLbs(r.productId, e.target.value)
+                            }
+                            placeholder="0.000"
+                          />
+                        </td>
+                        <td className="border p-1">{money(r.realAmount)}</td>
+                        <td
+                          className={`border p-1 ${diffClass(r.differenceLbs)}`}
+                        >
+                          {qty3(r.differenceLbs)}
+                        </td>
+                        <td
+                          className={`border p-1 ${diffClass(r.differenceAmount)}`}
+                        >
+                          {money(r.differenceAmount)}
+                        </td>
+                        <td className="border p-1">
+                          <button
+                            type="button"
+                            className="px-2 py-1 text-sm border rounded text-red-600 hover:bg-red-50"
+                            onClick={() => removeEditRow(r.productId)}
+                          >
+                            Eliminar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {!editRows.length && (
+                      <tr>
+                        <td
+                          colSpan={9}
+                          className="p-3 text-center text-gray-500"
+                        >
+                          Este arqueo ya no tiene productos. Agregá al menos uno
+                          antes de guardar.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="md:hidden space-y-3">
+                {!editRows.length ? (
+                  <div className="text-center text-gray-500 text-sm py-6">
+                    Este arqueo ya no tiene productos.
+                  </div>
+                ) : (
+                  editRows.map((r) => (
+                    <div
+                      key={r.productId}
+                      className="border rounded-xl p-3 bg-white shadow-sm"
+                    >
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <div className="text-sm font-semibold">
+                            {r.productName}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {r.productId} • lotes: {r.batchCount || 0}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="px-2 py-1 text-sm border rounded text-red-600"
+                          onClick={() => removeEditRow(r.productId)}
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                        <div className="border rounded p-2 bg-gray-50">
+                          <div className="text-xs text-gray-500">
+                            Lbs teóricas
+                          </div>
+                          <div className="font-semibold">
+                            {qty3(r.theoreticalLbs)}
+                          </div>
+                        </div>
+
+                        <div className="border rounded p-2 bg-gray-50">
+                          <div className="text-xs text-gray-500">
+                            Monto teórico
+                          </div>
+                          <div className="font-semibold">
+                            {money(r.theoreticalAmount)}
+                          </div>
+                        </div>
+
+                        <div className="border rounded p-2 bg-blue-50 col-span-2">
+                          <div className="text-xs text-gray-500 mb-1">
+                            Libras reales
+                          </div>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="border rounded px-3 py-2 w-full"
+                            value={r.realLbs == null ? "" : String(r.realLbs)}
+                            onChange={(e) =>
+                              updateEditRealLbs(r.productId, e.target.value)
+                            }
+                            placeholder="0.000"
+                          />
+                        </div>
+
+                        <div className="border rounded p-2 bg-emerald-50">
+                          <div className="text-xs text-gray-500">Monto real</div>
+                          <div className="font-semibold">
+                            {money(r.realAmount)}
+                          </div>
+                        </div>
+
+                        <div className="border rounded p-2 bg-amber-50">
+                          <div className="text-xs text-gray-500">
+                            Diferencia lb
+                          </div>
+                          <div
+                            className={`font-semibold ${diffClass(r.differenceLbs)}`}
+                          >
+                            {qty3(r.differenceLbs)}
+                          </div>
+                        </div>
+
+                        <div className="col-span-2 border rounded p-2 bg-red-50">
+                          <div className="text-xs text-gray-500">
+                            Monto diferencia
+                          </div>
+                          <div
+                            className={`font-semibold ${diffClass(r.differenceAmount)}`}
+                          >
+                            {money(r.differenceAmount)}
+                          </div>
                         </div>
                       </div>
                     </div>

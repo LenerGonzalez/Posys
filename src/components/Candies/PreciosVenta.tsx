@@ -967,7 +967,7 @@ export default function PrecioVentas() {
     <div className="max-w-7xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Precio Ventas</h2>
+        <h2 className="text-xl font-bold">Precio Ventas</h2>
         <div className="flex gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
         </div>

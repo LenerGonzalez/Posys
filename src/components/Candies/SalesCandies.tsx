@@ -1758,7 +1758,7 @@ export default function SalesCandiesPOS({
     <div className="max-w-6xl mx-auto">
       {/* ✅ Responsive header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-        <h2 className="text-2xl font-bold">Ventas (Dulces)</h2>
+        <h2 className="text-xl font-bold">Ventas</h2>
         <button
           type="button"
           className="hidden md:inline-flex px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"

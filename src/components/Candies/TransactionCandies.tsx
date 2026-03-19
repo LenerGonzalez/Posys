@@ -187,8 +187,9 @@ export default function TransactionsReportCandies({
   roles,
 }: TransactionsReportCandiesProps & { roles?: string[] }) {
   const subject = roles && roles.length ? roles : role;
+  const isAdmin = hasRole(subject, "admin");
   const isVendor = hasRole(subject, "vendedor_dulces");
-  const canDelete = hasRole(subject, "admin");
+  const canDelete = isAdmin;
 
   // NUEVO: ahora hay una columna extra (Comisión)
   const columnsCount = canDelete ? 8 : 7;
@@ -997,7 +998,7 @@ export default function TransactionsReportCandies({
   // ----------------- Render principal -----------------
   return (
     <div className="max-w-6xl mx-auto">
-      <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
+      <h2 className="text-xl font-bold mb-3">Ventas del dia</h2>
 
       {/* Filtros (colapsables) */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
@@ -1129,25 +1130,29 @@ export default function TransactionsReportCandies({
                 </select>
               </div>
 
-              <button
-                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 w-full"
-                onClick={handleExportPDF}
-              >
-                Exportar PDF
-              </button>
-              <button
-                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 w-full"
-                onClick={handleExportXLSXAllProducts}
-              >
-                Exportar Excel (Sábana)
-              </button>
-              <button
-                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-yellow-500 text-white hover:bg-yellow-600 w-full"
-                onClick={() => handleBackfillMonth()}
-                title="Rellenar uvXpaq/upaquete en ventas del rango"
-              >
-                Backfill mes
-              </button>
+              {isAdmin && (
+                <>
+                  <button
+                    className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 w-full"
+                    onClick={handleExportPDF}
+                  >
+                    Exportar PDF
+                  </button>
+                  <button
+                    className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 w-full"
+                    onClick={handleExportXLSXAllProducts}
+                  >
+                    Exportar Excel (Sábana)
+                  </button>
+                  <button
+                    className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-yellow-500 text-white hover:bg-yellow-600 w-full"
+                    onClick={() => handleBackfillMonth()}
+                    title="Rellenar uvXpaq/upaquete en ventas del rango"
+                  >
+                    Backfill mes
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}

@@ -21,15 +21,12 @@
   }
 } */
 
-/* Estilos base para tu app React */
-#root {
-  min-height: 100%;
-}
-
 html,
 body {
   height: 100%;
   overscroll-behavior-y: none;
+  color-scheme: light;
+  background: #f8fafc;
 }
 body {
   margin: 0;
@@ -37,6 +34,22 @@ body {
   background: #f8fafc;
   color: #222;
   -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  background: #f8fafc;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+#root {
+  min-height: 100%;
+  background: #f8fafc;
+}
+
+body,
+#root {
+  overflow-x: hidden;
 }
 
 @keyframes logoutFadeOut {

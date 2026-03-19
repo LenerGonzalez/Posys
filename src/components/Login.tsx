@@ -235,16 +235,16 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 grid place-items-center px-4 py-8 relative overflow-hidden">
+    <div className="min-h-[100svh] bg-slate-900 grid place-items-center px-4 py-8 relative overflow-hidden">
       <div className="absolute inset-0 md:hidden bg-gradient-to-br from-rose-600 via-amber-500 to-pink-600" />
       <div className="absolute inset-0 hidden md:block bg-slate-900" />
-      <div className="w-full max-w-4xl grid md:grid-cols-2 rounded-3xl overflow-hidden shadow-2xl bg-white relative z-10">
-        <div className="p-7 sm:p-10">
+      <div className="relative z-10 grid w-full max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl md:grid-cols-2">
+        <div className="p-6 sm:p-10">
           <div className="flex flex-col items-center text-center mb-6">
             <img
               src="/logo_black.svg"
               alt="Logo Multiservicios Ortiz"
-              className="h-36 w-auto mb-3"
+              className="mb-3 h-28 w-auto sm:h-36"
             />
             <h1 className="text-xl font-bold text-slate-900">
               Multiservicios Ortiz
@@ -270,10 +270,10 @@ export default function Login() {
               <label className="block text-sm font-semibold text-slate-700">
                 Contraseña
               </label>
-              <div className="flex gap-2 mt-1">
+              <div className="mt-1 flex flex-col gap-2 sm:flex-row">
                 <input
                   type={showPw ? "text" : "password"}
-                  className="flex-1 border border-slate-200 rounded-2xl px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  className="min-w-0 flex-1 border border-slate-200 rounded-2xl px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   minLength={6}
@@ -281,7 +281,7 @@ export default function Login() {
                 />
                 <button
                   type="button"
-                  className="px-3 py-2 rounded-2xl bg-slate-900 text-white hover:bg-slate-800"
+                  className="w-full shrink-0 whitespace-nowrap rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 sm:w-auto"
                   onClick={() => setShowPw((v) => !v)}
                 >
                   {showPw ? "Ocultar" : "Mostrar"}

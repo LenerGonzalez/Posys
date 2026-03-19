@@ -771,6 +771,24 @@ export default function CierreVentasDulces({
     return round2(Number(s.vendorCommissionAmount ?? 0) || 0);
   };
 
+  const getSalePriceLabel = (s: SaleData): string => {
+    if (typeof s.price === "number" && !Number.isNaN(s.price)) {
+      return `C$${money(s.price)}`;
+    }
+
+    const qty = Number(s.quantity || 0);
+    if (qty > 0 && typeof s.amount === "number") {
+      return `C$${money(s.amount / qty)}`;
+    }
+
+    return "—";
+  };
+
+  const getSaleCommissionLabel = (s: SaleData): string => {
+    const commission = getUvXpaqForSale(s);
+    return commission > 0 ? `C$${money(round2(commission))}` : "—";
+  };
+
   // Origen de la comisión: 'venta' si la venta trae vendorCommissionAmount, sino 'uvxpaq' calculada
   const getCommissionOrigin = (s: SaleData): "venta" | "uvxpaq" => {
     const explicit = Number(s.vendorCommissionAmount ?? NaN);
@@ -2189,7 +2207,7 @@ export default function CierreVentasDulces({
         .pdf-print-mode .collapsible-content { display: block !important; }
       `}</style>
 
-      <h2 className="text-2xl font-bold mb-4">
+      <h2 className="text-xl font-bold mb-4">
         Cierre de Ventas de Dulces - Proceso: {today}
       </h2>
 
@@ -3007,52 +3025,74 @@ export default function CierreVentasDulces({
       ) : (
         <div ref={pdfRef}>
           {/* Unified KPIs: moved above Transacciones Cash */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 shadow-sm">
-              <div className="text-xs font-semibold text-amber-700">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3 mb-4">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 md:p-4 shadow-sm">
+              <div className="text-xs md:text-xs font-semibold text-amber-700">
                 Paquetes
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-4 items-center">
+              <div className="mt-1.5 md:mt-3 grid grid-cols-2 gap-1.5 md:gap-4 items-center">
                 <div className="text-center">
-                  <div className="text-sm text-amber-600">Cash</div>
-                  <div className="text-2xl font-extrabold text-amber-800">
+                  <div className="text-xs md:text-sm text-amber-600">Cash</div>
+                  <div className="text-xl md:text-2xl font-extrabold text-amber-800 leading-none">
                     {qty3(totalPacksCash)}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="text-sm text-amber-600">Crédito</div>
-                  <div className="text-2xl font-extrabold text-amber-800">
+                  <div className="text-xs md:text-sm text-amber-600">
+                    Crédito
+                  </div>
+                  <div className="text-xl md:text-2xl font-extrabold text-amber-800 leading-none">
                     {qty3(totalPacksCredito)}
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 shadow-sm">
-              <div className="text-xs font-semibold text-emerald-700">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5 md:p-4 shadow-sm">
+              <div className="text-xs md:text-xs font-semibold text-emerald-700">
                 Total pendiente crédito
               </div>
-              <div className="text-3xl font-extrabold text-emerald-800">
-                C${money(totalPendienteCredito)}
-              </div>
-              <div className="mt-2 text-xs text-emerald-600">
-                Abonos al período
-              </div>
-              <div className="text-lg font-semibold text-emerald-700">
-                C${money(totalAbonos)}
+              <div className="mt-1.5 md:mt-3 grid grid-cols-2 gap-1.5 md:gap-4 items-center">
+                <div className="text-center">
+                  <div className="text-xs md:text-sm text-emerald-600">
+                    Pendiente
+                  </div>
+                  <div className="text-lg md:text-3xl font-extrabold text-emerald-800 leading-none">
+                    C${money(totalPendienteCredito)}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xs md:text-sm text-emerald-600">
+                    Abonos
+                  </div>
+                  <div className="text-base md:text-lg font-semibold text-emerald-700 leading-none">
+                    C${money(totalAbonos)}
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-indigo-50 border border-indigo-200 shadow-sm">
-              <div className="text-xs font-semibold text-indigo-700">
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-2.5 md:p-4 shadow-sm">
+              <div className="text-xs md:text-xs font-semibold text-indigo-700">
                 Total cobrado
               </div>
-              <div className="text-3xl font-extrabold text-indigo-800">
-                C${money(totalCobrado)}
-              </div>
-              <div className="mt-2 text-xs text-indigo-600">Total comisión</div>
-              <div className="text-lg font-semibold text-indigo-700">
-                C${money(totalCommission)}
+              <div className="mt-1.5 md:mt-3 grid grid-cols-2 gap-1.5 md:gap-4 items-center">
+                <div className="text-center">
+                  <div className="text-xs md:text-sm text-indigo-600">
+                    Cobrado
+                  </div>
+                  <div className="text-lg md:text-3xl font-extrabold text-indigo-800 leading-none">
+                    C${money(totalCobrado)}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xs md:text-sm text-indigo-600">
+                    Comisión
+                  </div>
+                  <div className="text-base md:text-lg font-semibold text-indigo-700 leading-none">
+                    C${money(totalCommission)}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -3105,14 +3145,12 @@ export default function CierreVentasDulces({
                             Un.Paq
                           </th>
                         )}
-                        {isAdmin && (
-                          <th
-                            title="Calcula la Utilidad vendedor por paquete"
-                            className="px-3 py-2 text-left text-xs font-semibold"
-                          >
-                            Comisión
-                          </th>
-                        )}
+                        <th
+                          title="Calcula la Utilidad vendedor por paquete"
+                          className="px-3 py-2 text-left text-xs font-semibold"
+                        >
+                          Comisión
+                        </th>
                         {/* Columna 'Comision' oculta por solicitud del usuario */}
                         {isAdmin && (
                           <th className="px-3 py-2 text-left text-xs font-semibold">
@@ -3193,20 +3231,14 @@ export default function CierreVentasDulces({
                                 })()}
                               </td>
                             )}
-                            {isAdmin && (
-                              <td className="px-3 py-2">
-                                {(() => {
-                                  const qty = Math.max(
-                                    1,
-                                    Number(s.quantity || 0),
-                                  );
-                                  const uv = getUvXpaqForSale(s);
-                                  return uv > 0
-                                    ? `C$${money(round2(uv))}`
-                                    : "—";
-                                })()}
-                              </td>
-                            )}
+                            <td className="px-3 py-2">
+                              {(() => {
+                                const uv = getUvXpaqForSale(s);
+                                return uv > 0
+                                  ? `C$${money(round2(uv))}`
+                                  : "—";
+                              })()}
+                            </td>
                             {/* Columna 'Comision' oculta */}
 
                             {isAdmin && (
@@ -3281,7 +3313,7 @@ export default function CierreVentasDulces({
                       {cashSales.length === 0 && (
                         <tr>
                           <td
-                            colSpan={isAdmin ? 11 : 10}
+                            colSpan={isAdmin ? 12 : 10}
                             className="px-3 py-6 text-center text-slate-500"
                           >
                             Sin ventas cash para mostrar.
@@ -3306,7 +3338,7 @@ export default function CierreVentasDulces({
                     >
                       <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
                         <div className="min-w-0">
-                          <div className="font-semibold truncate">
+                          <div className="text-sm font-semibold truncate">
                             {s.productName}
                           </div>
                           <div className="text-xs text-slate-500">
@@ -3332,6 +3364,16 @@ export default function CierreVentasDulces({
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Paquetes</span>
                           <strong>{Math.trunc(Number(s.quantity || 0))}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">Precio</span>
+                          <strong>{getSalePriceLabel(s)}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">Comisión</span>
+                          <strong>{getSaleCommissionLabel(s)}</strong>
                         </div>
 
                         {/* <div className="flex justify-between gap-3">
@@ -3468,14 +3510,12 @@ export default function CierreVentasDulces({
                             Un.Paq
                           </th>
                         )}
-                        {isAdmin && (
-                          <th
-                            title="Calcula la Utilidad vendedor por paquete"
-                            className="px-3 py-2 text-left text-xs font-semibold"
-                          >
-                            Comisión
-                          </th>
-                        )}
+                        <th
+                          title="Calcula la Utilidad vendedor por paquete"
+                          className="px-3 py-2 text-left text-xs font-semibold"
+                        >
+                          Comisión
+                        </th>
                         {/* Columna 'Comision' oculta por solicitud del usuario */}
                         {isAdmin && (
                           <th className="px-3 py-2 text-left text-xs font-semibold">
@@ -3548,20 +3588,14 @@ export default function CierreVentasDulces({
                                 })()}
                               </td>
                             )}
-                            {isAdmin && (
-                              <td className="px-3 py-2">
-                                {(() => {
-                                  const qty = Math.max(
-                                    1,
-                                    Number(s.quantity || 0),
-                                  );
-                                  const uv = getUvXpaqForSale(s);
-                                  return uv > 0
-                                    ? `C$${money(round2(uv))}`
-                                    : "—";
-                                })()}
-                              </td>
-                            )}
+                            <td className="px-3 py-2">
+                              {(() => {
+                                const uv = getUvXpaqForSale(s);
+                                return uv > 0
+                                  ? `C$${money(round2(uv))}`
+                                  : "—";
+                              })()}
+                            </td>
                             {/* Columna 'Comision' oculta */}
                             {isAdmin && (
                               <td className="px-3 py-2">
@@ -3633,7 +3667,7 @@ export default function CierreVentasDulces({
                       {creditSales.length === 0 && (
                         <tr>
                           <td
-                            colSpan={isAdmin ? 11 : 10}
+                            colSpan={isAdmin ? 12 : 10}
                             className="px-3 py-6 text-center text-slate-500"
                           >
                             Sin ventas crédito para mostrar.
@@ -3658,7 +3692,7 @@ export default function CierreVentasDulces({
                     >
                       <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
                         <div className="min-w-0">
-                          <div className="font-semibold truncate">
+                          <div className="text-sm font-semibold truncate">
                             {s.productName}
                           </div>
                           <div className="text-xs text-slate-500">
@@ -3684,6 +3718,16 @@ export default function CierreVentasDulces({
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Paquetes</span>
                           <strong>{Math.trunc(Number(s.quantity || 0))}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">Precio</span>
+                          <strong>{getSalePriceLabel(s)}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">Comisión</span>
+                          <strong>{getSaleCommissionLabel(s)}</strong>
                         </div>
 
                         {/* <div className="flex justify-between gap-3">

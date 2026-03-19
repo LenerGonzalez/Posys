@@ -288,11 +288,14 @@ export default function MobileTabsLayout({
         } else if (isVendDulces) {
           built = [
             { key: "venta", label: "Vender", to: `${base}/salesCandies` },
+            { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
+            { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
             {
               key: "precios",
               label: "Precios",
               to: `${base}/productsPricesCandies`,
             },
+
             {
               key: "ped",
               label: "Inventario",
@@ -308,8 +311,6 @@ export default function MobileTabsLayout({
               label: "Estado Cuenta",
               to: `${base}/estadoCuentaCandies`,
             },
-            { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
-            { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
           ];
         } else if (hasDulces) {
           const dulcesTabs = [] as Array<{
@@ -440,6 +441,17 @@ export default function MobileTabsLayout({
         built = [
           { key: "venta", label: "Vender", to: `${base}/salesCandies` },
           {
+            key: "cier",
+            label: "Ventas diarias",
+            to: `${base}/cierreVentasCandies`,
+          },
+          {
+            key: "trx",
+            label: "Reporte Ventas",
+            to: `${base}/transactionCandies`,
+          },
+
+          {
             key: "precios",
             label: "Precios",
             to: `${base}/productsPricesCandies`,
@@ -453,16 +465,6 @@ export default function MobileTabsLayout({
             key: "cli",
             label: "Saldos Pendientes",
             to: `${base}/customersCandies`,
-          },
-          {
-            key: "trx",
-            label: "Reporte Ventas",
-            to: `${base}/transactionCandies`,
-          },
-          {
-            key: "cier",
-            label: "Ventas diarias",
-            to: `${base}/cierreVentasCandies`,
           },
         ];
       } else {

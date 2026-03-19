@@ -1227,7 +1227,7 @@ export default function CustomersCandy({
   return (
     <div className="max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Clientes (Dulces)</h2>
+        <h2 className="text-xl font-bold">Clientes</h2>
         <button
           className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
           onClick={() => {
