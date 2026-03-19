@@ -28,6 +28,7 @@ type CandyProduct = {
   unitsPerPackage: number; // und por paquete
   barcode?: string; // ✅ NUEVO (opcional)
   packaging?: string; // Empaque: Tarro, Bolsa, Ristra, Caja, Vaso, Pana
+  boxesCount?: number; // Cantidad Cajas (opcional)
   createdAt?: any;
 };
 
@@ -314,6 +315,7 @@ export default function ProductsCandies() {
   const [unitsPerPackage, setUnitsPerPackage] = useState<number>(1);
   const [barcode, setBarcode] = useState(""); // ✅ NUEVO
   const [packaging, setPackaging] = useState<string>(""); // Empaque (create)
+  const [boxesCount, setBoxesCount] = useState<number>(1); // Cantidad Cajas
 
   // edición inline
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -323,6 +325,8 @@ export default function ProductsCandies() {
   const [editUnitsPerPackage, setEditUnitsPerPackage] = useState<number>(1);
   const [editBarcode, setEditBarcode] = useState(""); // ✅ NUEVO
   const [editPackaging, setEditPackaging] = useState<string>("");
+  const [editBoxesCount, setEditBoxesCount] = useState<number>(0);
+  const [editModalOpen, setEditModalOpen] = useState(false);
 
   // filtros
   const [search, setSearch] = useState("");
@@ -399,6 +403,7 @@ export default function ProductsCandies() {
             providerPrice: Number(x.providerPrice || 0),
             unitsPerPackage: Number(x.unitsPerPackage || 1),
             barcode: bc,
+            boxesCount: Number(x.boxesCount || 0),
             packaging:
               String(x.packaging || x.empaque || "").trim() || undefined,
             createdAt: x.createdAt,
@@ -582,6 +587,7 @@ export default function ProductsCandies() {
     setUnitsPerPackage(1);
     setBarcode("");
     setPackaging("");
+    setBoxesCount(1);
   };
 
   const createProduct = async (e: React.FormEvent) => {
@@ -593,6 +599,7 @@ export default function ProductsCandies() {
     const n = String(name || "").trim();
     const pp = Math.max(0, toNum(providerPrice, 0));
     const upp = roundInt(unitsPerPackage, 1);
+    const boxes = Math.max(0, roundInt(boxesCount, 0));
     const bc = String(barcode || "").trim();
 
     if (!c) return setMsg("⚠️ La categoría es requerida.");
@@ -665,6 +672,7 @@ export default function ProductsCandies() {
         unitsPerPackage: upp,
         createdAt: Timestamp.now(),
       };
+      if (boxes > 0) payload.boxesCount = boxes;
       if (bc) payload.barcode = bc;
       const pk = String(packaging || "").trim();
       if (pk) payload.packaging = pk;
@@ -690,7 +698,9 @@ export default function ProductsCandies() {
     setEditUnitsPerPackage(p.unitsPerPackage || 1);
     setEditBarcode(String(p.barcode || ""));
     setEditPackaging(String(p.packaging || ""));
+    setEditBoxesCount(Number(p.boxesCount || 0));
     setMsg("");
+    setEditModalOpen(true);
   };
 
   const cancelEdit = () => {
@@ -701,6 +711,8 @@ export default function ProductsCandies() {
     setEditUnitsPerPackage(1);
     setEditBarcode("");
     setEditPackaging("");
+    setEditBoxesCount(0);
+    setEditModalOpen(false);
   };
 
   const saveEdit = async () => {
@@ -713,6 +725,7 @@ export default function ProductsCandies() {
     const upp = roundInt(editUnitsPerPackage, 1);
     const bc = String(editBarcode || "").trim();
     const pk = String(editPackaging || "").trim();
+    const boxes = Math.max(0, roundInt(editBoxesCount, 0));
 
     if (!c) return setMsg("⚠️ La categoría es requerida.");
     if (!n) return setMsg("⚠️ El nombre del producto es requerido.");
@@ -748,6 +761,7 @@ export default function ProductsCandies() {
         updatedAt: Timestamp.now(),
       };
 
+      payload.boxesCount = boxes;
       payload.barcode = bc || "";
       payload.packaging = pk || "";
 
@@ -765,6 +779,7 @@ export default function ProductsCandies() {
                   unitsPerPackage: upp,
                   barcode: bc || undefined,
                   packaging: pk || undefined,
+                  boxesCount: boxes || undefined,
                 }
               : p,
           )
@@ -773,6 +788,7 @@ export default function ProductsCandies() {
 
       if (isMobile) setMsg("✅ Producto guardado.");
       cancelEdit();
+      setEditModalOpen(false);
     } catch (e) {
       console.error(e);
       setMsg("❌ Error actualizando producto.");
@@ -1247,7 +1263,7 @@ export default function ProductsCandies() {
             className="absolute inset-0 bg-black/50"
             onClick={() => setCreateOpen(false)}
           />
-          <div className="relative z-10 w-full max-w-3xl bg-white rounded-2xl shadow-lg border border-slate-200 p-5">
+          <div className="relative z-10 w-full max-w-5xl bg-white rounded-2xl shadow-lg border border-slate-200 p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold text-slate-900">
                 Crear producto
@@ -1341,9 +1357,22 @@ export default function ProductsCandies() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700">
+                  Cantidad Cajas
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  className="w-full border rounded-md px-3 py-2 text-right"
+                  value={boxesCount}
+                  onChange={(e) => setBoxesCount(roundInt(e.target.value, 0))}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
                   Código (opcional)
                 </label>
-                <div className="flex gap-2">
+                <div className="flex gap-2 md:col-span-2">
                   <input
                     className="flex-1 min-w-[220px] border rounded-md px-3 py-2"
                     value={barcode}
@@ -1440,7 +1469,7 @@ export default function ProductsCandies() {
                 Escanear producto
               </button>
             </div>
-            <div className="mt-2 md:mt-0">
+            <div className="mt-2 md:ml-2">
               <button
                 type="button"
                 className="w-full md:w-auto px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
@@ -1790,7 +1819,8 @@ export default function ProductsCandies() {
                 </tr>
               ) : (
                 paged.map((p) => {
-                  const isEd = editingId === p.id;
+                  const isEditingThis = editingId === p.id;
+                  const isEd = isEditingThis && !editModalOpen;
                   const hasCode = !!String(p.barcode || "").trim();
 
                   return (
@@ -1994,6 +2024,167 @@ export default function ProductsCandies() {
         code={codeModalValue}
         onClose={() => setCodeModalOpen(false)}
       />
+
+      {/* MODAL EDICIÓN */}
+      {editModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setEditModalOpen(false)}
+          />
+          <div className="relative z-10 w-full max-w-3xl bg-white rounded-2xl shadow-lg border border-slate-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-slate-900">
+                Editar producto
+              </h3>
+              <button
+                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+                onClick={() => setEditModalOpen(false)}
+                type="button"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                saveEdit();
+              }}
+              className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Categoría
+                </label>
+                <input
+                  className="w-full border rounded-md px-3 py-2"
+                  value={editCategory}
+                  onChange={(e) => setEditCategory(e.target.value)}
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Producto
+                </label>
+                <input
+                  className="w-full border rounded-md px-3 py-2"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Empaque
+                </label>
+                <select
+                  className="w-full border rounded-md px-3 py-2"
+                  value={editPackaging}
+                  onChange={(e) => setEditPackaging(e.target.value)}
+                >
+                  <option value="">Seleccionar</option>
+                  <option value="Tarro">Tarro</option>
+                  <option value="Bolsa">Bolsa</option>
+                  <option value="Ristra">Ristra</option>
+                  <option value="Caja">Caja</option>
+                  <option value="Vaso">Vaso</option>
+                  <option value="Pana">Pana</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Precio proveedor (paq)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  className="w-full border rounded-md px-3 py-2 text-right"
+                  value={
+                    Number.isNaN(editProviderPrice) ? "" : editProviderPrice
+                  }
+                  onChange={(e) =>
+                    setEditProviderPrice(Math.max(0, toNum(e.target.value, 0)))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Und x paquete
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  className="w-full border rounded-md px-3 py-2 text-right"
+                  value={editUnitsPerPackage}
+                  onChange={(e) =>
+                    setEditUnitsPerPackage(roundInt(e.target.value, 1))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Cantidad Cajas
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  className="w-full border rounded-md px-3 py-2 text-right"
+                  value={editBoxesCount}
+                  onChange={(e) =>
+                    setEditBoxesCount(roundInt(e.target.value, 0))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Código (opcional)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 min-w-[220px] border rounded-md px-3 py-2"
+                    value={editBarcode}
+                    onChange={(e) => setEditBarcode(e.target.value)}
+                    placeholder="EAN/UPC"
+                  />
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black whitespace-nowrap"
+                    onClick={() => {
+                      setScanTarget("edit");
+                      setScanOpen(true);
+                    }}
+                  >
+                    Escanear
+                  </button>
+                </div>
+              </div>
+
+              <div className="md:col-span-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  onClick={cancelEdit}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                  Guardar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL ESCÁNER */}
       <BarcodeScanModal
