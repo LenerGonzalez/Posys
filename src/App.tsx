@@ -100,6 +100,9 @@ function PwaUpdatePrompt(): React.ReactElement | null {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
   } = useRegisterSW({
+    onRegisteredSW(_swUrl, registration) {
+      registration?.update();
+    },
     onRegisterError(error) {
       console.error("Error registrando service worker:", error);
     },
@@ -108,14 +111,17 @@ function PwaUpdatePrompt(): React.ReactElement | null {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
-    const intervalId = window.setInterval(async () => {
+    const checkForUpdates = async () => {
       try {
         const registration = await navigator.serviceWorker.getRegistration();
         await registration?.update();
       } catch (error) {
         console.warn("No se pudo buscar una nueva version de la app:", error);
       }
-    }, 60_000);
+    };
+
+    checkForUpdates();
+    const intervalId = window.setInterval(checkForUpdates, 60_000);
 
     return () => window.clearInterval(intervalId);
   }, []);
@@ -127,6 +133,47 @@ function PwaUpdatePrompt(): React.ReactElement | null {
   }, [offlineReady, setOfflineReady]);
 
   if (!offlineReady && !needRefresh) return null;
+
+  if (needRefresh) {
+    return (
+      <div className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/75 px-4 backdrop-blur-sm">
+        <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-2xl">
+          <div className="bg-gradient-to-r from-sky-50 via-white to-blue-50 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold text-white">
+                P
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-900">
+                  Posys
+                </div>
+                <div className="text-xs text-slate-500">
+                  Actualizacion disponible
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4">
+            <div className="text-sm leading-6 text-slate-700">
+              Hola, hay una nueva actualizacion, por favor presiona
+              Actualizar para disfrutar de una nueva y mejorada experiencia.
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => updateServiceWorker(true)}
+                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                Actualizar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-x-0 bottom-4 z-[250] flex justify-center px-4">
@@ -149,32 +196,18 @@ function PwaUpdatePrompt(): React.ReactElement | null {
 
         <div className="p-4">
           <div className="text-sm leading-6 text-slate-700">
-            {needRefresh
-              ? "Hola, hay una nueva actualizacion, por favor presiona Actualizar para disfrutar de una nueva y mejorada experiencia."
-              : "La app ya puede funcionar offline y seguira usando el tema claro original."}
+            La app ya puede funcionar offline y seguira usando el tema claro
+            original.
           </div>
 
           <div className="mt-3 flex justify-end gap-2">
             <button
               type="button"
-              onClick={() => {
-                setOfflineReady(false);
-                setNeedRefresh(false);
-              }}
+              onClick={() => setOfflineReady(false)}
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
             >
               Cerrar
             </button>
-
-            {needRefresh && (
-              <button
-                type="button"
-                onClick={() => updateServiceWorker(true)}
-                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                Actualizar
-              </button>
-            )}
           </div>
         </div>
       </div>
