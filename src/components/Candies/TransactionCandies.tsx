@@ -1699,7 +1699,7 @@ export default function TransactionsReportCandies({
       {/* Modal: Detalle de piezas de la venta */}
       {itemsModalOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-[98%] max-w-5xl p-6">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-[98%] max-w-5xl p-6 max-h-[90vh] overflow-auto md:max-h-none md:overflow-visible">
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h3 className="text-lg font-bold">
@@ -1734,7 +1734,7 @@ export default function TransactionsReportCandies({
               </button>
             </div>
 
-            <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+            <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto overflow-y-auto max-h-[60vh] md:max-h-none">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-100 sticky top-0 z-10">
                   <tr className="text-[11px] uppercase tracking-wider text-slate-600">

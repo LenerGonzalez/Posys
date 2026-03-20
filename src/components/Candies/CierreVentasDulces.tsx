@@ -2208,7 +2208,7 @@ export default function CierreVentasDulces({
       `}</style>
 
       <h2 className="text-xl font-bold mb-4">
-        Cierre de Ventas de Dulces - Proceso: {today}
+        Ventas Diarias
       </h2>
 
       {/* Botones de acción arriba de filtros */}
@@ -2483,7 +2483,7 @@ export default function CierreVentasDulces({
         >
           {/* Botones de acción también dentro del card de filtros en mobile */}
           <div className="mb-4 md:hidden space-y-2">
-            <button
+            {/* <button
               type="button"
               onClick={() => setMobileActionsOpen((v) => !v)}
               disabled={!hasVisibleSales}
@@ -2498,7 +2498,7 @@ export default function CierreVentasDulces({
                   : "bg-slate-500 text-white opacity-60 cursor-not-allowed"
               }`}
             >
-              Acciones
+              Opciones
               <span
                 className={`text-[10px] transition-transform ${
                   mobileActionsOpen ? "rotate-180" : ""
@@ -2506,7 +2506,7 @@ export default function CierreVentasDulces({
               >
                 ▼
               </span>
-            </button>
+            </button> */}
 
             {mobileActionsOpen && (
               <div className="space-y-2">
