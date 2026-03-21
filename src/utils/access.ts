@@ -31,7 +31,8 @@ export type PathKey =
   | "cierreVentasCandies"
   | "customersCandies"
   | "estadoCuentaCandies"
-  | "auditProductsPollo";
+  | "auditProductsPollo"
+  | "stockPedidosCandies";
 
 type Permission = Partial<Record<Action, boolean>>;
 
@@ -69,6 +70,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     transactionCandies: { view: true, edit: false },
     cierreVentasCandies: { view: true, edit: false },
     auditProductsPollo: { view: true, edit: true },
+    stockPedidosCandies: { view: true, edit: true },
   },
 
   vendedor_pollo: {
@@ -88,6 +90,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     cierreVentasCandies: { view: true, edit: false },
     customersCandies: { view: true, edit: true },
     estadoCuentaCandies: { view: true, edit: false },
+    stockPedidosCandies: { view: true, edit: true },
   },
 
   vendedor_ropa: {},
@@ -151,7 +154,9 @@ const FINE_PERMISSIONS: Record<Role, Partial<Record<PathKey, FinePerm>>> = {
     productsVendorsCandies: { create: true, update: false, delete: false },
     customersCandies: { update: true },
     productsPricesCandies: { price_edit: false },
+    stockPedidosCandies: { create: true, update: true, delete: true },
   },
+
 
   vendedor_ropa: {},
 };

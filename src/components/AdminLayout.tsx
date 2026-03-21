@@ -1060,7 +1060,6 @@ export default function AdminLayout({
                               </NavLink>
                             </div>
                           )}
-
                           <SubSectionBtn
                             open={openDulcesInv}
                             onClick={() => setOpenDulcesInv((v) => !v)}
@@ -1106,7 +1105,16 @@ export default function AdminLayout({
                               </NavLink>
                             </div>
                           )}
-
+                          {openDulcesInv && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              <NavLink
+                                to={`${base}/stockPedidosCandies`}
+                                className={linkCls}
+                              >
+                                Stock - Pedidos
+                              </NavLink>
+                            </div>
+                          )}
                           <SubSectionBtn
                             open={openDulcesFin}
                             onClick={() => setOpenDulcesFin((v) => !v)}
@@ -1462,7 +1470,7 @@ export default function AdminLayout({
                               to={`${base}/productsVendorsCandies`}
                               className={linkCls}
                             >
-                              Pedidos
+                              Inventario
                             </NavLink>
                           )}
                         </div>
@@ -1496,6 +1504,16 @@ export default function AdminLayout({
                               className={linkCls}
                             >
                               Precios Venta
+                            </NavLink>
+                          )}
+                        </div>
+                        <div className="ml-4 mt-1 space-y-1">
+                          {canPath(subject, "productsPricesCandies") && (
+                            <NavLink
+                              to={`${base}/stockPedidosCandies`}
+                              className={linkCls}
+                            >
+                              Stock - Pedidos
                             </NavLink>
                           )}
                         </div>

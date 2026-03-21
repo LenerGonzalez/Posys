@@ -68,7 +68,8 @@ export default function MobileTabsLayout({
     canPath(subject, "productsPricesCandies", "view") ||
     canPath(subject, "transactionCandies", "view") ||
     canPath(subject, "cierreVentasCandies", "view") ||
-    canPath(subject, "estadoCuentaCandies", "view");
+    canPath(subject, "estadoCuentaCandies", "view") ||
+    canPath(subject, "stockPedidosCandies", "view");
 
   // Mostrar selector cuando el usuario tenga acceso a ambos rubros
   const hasBoth = hasPollo && hasDulces;
@@ -264,6 +265,17 @@ export default function MobileTabsLayout({
               to: `${base}/cierreVentasCandies`,
             },
             {
+              key: "estadoCuenta",
+              label: "Estado Cuenta",
+              to: `${base}/estadoCuentaCandies`,
+            },
+            {
+              key: "stockPedidos",
+              label: "Stock Pedidos",
+              to: `${base}/stockPedidosCandies`,
+            },
+            {
+
               key: "cash",
               label: "Entregas Efectivo ",
               to: `${base}/cashDeliveries`,
@@ -310,6 +322,11 @@ export default function MobileTabsLayout({
               key: "estadoCuenta",
               label: "Estado Cuenta",
               to: `${base}/estadoCuentaCandies`,
+            },
+            {
+              key: "stockPedidos",
+              label: "Stock Pedidos",
+              to: `${base}/stockPedidosCandies`,
             },
           ];
         } else if (hasDulces) {
@@ -359,6 +376,13 @@ export default function MobileTabsLayout({
               key: "cier",
               label: "Ventas diarias",
               to: `${base}/cierreVentasCandies`,
+            });
+          }
+          if (canPath(subject, "stockPedidosCandies", "view")) {
+            dulcesTabs.push({
+              key: "stockPedidos",
+              label: "Stock Pedidos",
+              to: `${base}/stockPedidosCandies`,
             });
           }
 
@@ -457,6 +481,11 @@ export default function MobileTabsLayout({
             to: `${base}/productsPricesCandies`,
           },
           {
+            key: "stockPedidos",
+            label: "Stock - Pedidos",
+            to: `${base}/stockPedidosCandies`,
+          },
+          {
             key: "ped",
             label: "Inventario",
             to: `${base}/productsVendorsCandies`,
@@ -495,6 +524,7 @@ export default function MobileTabsLayout({
       "cierreVentasCandies",
       "customersCandies",
       "estadoCuentaCandies",
+      "stockPedidosCandies"
     ]);
 
     const filtered = built.filter((t) => {
