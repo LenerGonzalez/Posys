@@ -24,6 +24,7 @@ type PriceRow = {
   priceIsla: number;
   priceRivas: number;
   unitsPerPackage?: number;
+  providerPrice?: number;
   _sortKey: number;
 };
 
@@ -275,6 +276,9 @@ export default function PrecioVentas() {
             const unitsPerPackage = Number(
               it?.unitsPerPackage || it?.unitsPerPack || 1,
             );
+            const providerPrice = Number(
+              it?.providerPrice || it?.providerPricePerUnit || 0,
+            );
 
             const current = map.get(productId);
             if (!current || sortKey >= current._sortKey) {
@@ -285,6 +289,7 @@ export default function PrecioVentas() {
                 priceIsla,
                 priceRivas,
                 unitsPerPackage,
+                providerPrice,
                 _sortKey: sortKey,
               });
             }
@@ -963,6 +968,8 @@ export default function PrecioVentas() {
     setMsg(isMobile ? "✅ Producto guardado." : "");
   };
 
+  const webColCount = isAdmin ? 10 : 9;
+
   return (
     <div className="max-w-7xl mx-auto">
       {/* Header */}
@@ -1197,9 +1204,12 @@ export default function PrecioVentas() {
                       {items.map((r) => {
                         const expanded = openCardId === r.productId;
                         const isEditing = editingId === r.productId;
-                        const providerPrice =
-                          providerPriceMap[r.productId] || 0;
-                        const utilidad = r.priceIsla - providerPrice;
+                        const providerPrice = Number.isFinite(
+                          Number(r.providerPrice),
+                        )
+                          ? (r.providerPrice as number)
+                          : providerPriceMap[r.productId] || 0;
+                        const utilidad = r.priceIsla - (providerPrice || 0);
                         const uvKey = normKey(r.productName || r.productId);
                         const uvXpaq = uvxpaqMap[uvKey];
                         const uvAvg = uvxpaqAvgMap[uvKey];
@@ -1252,29 +1262,8 @@ export default function PrecioVentas() {
                                       <div className="text-[12px] text-gray-600">
                                         Categoría
                                       </div>
-                                      <div className="text-sm">
+                                      <div className="text-sm font-semibold">
                                         {r.category}
-                                      </div>
-
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
-                                          Unidades x paquete
-                                        </div>
-                                        <div className="text-sm">
-                                          {String(r.unitsPerPackage || 1)}
-                                        </div>
-                                      </div>
-
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
-                                          Precio x Unidad
-                                        </div>
-                                        <div className="text-sm tabular-nums">
-                                          {money(
-                                            r.priceIsla /
-                                              (r.unitsPerPackage || 1),
-                                          )}
-                                        </div>
                                       </div>
 
                                       <div className="mt-2">
@@ -1297,6 +1286,38 @@ export default function PrecioVentas() {
                                             {money(r.priceIsla)}
                                           </div>
                                         )}
+                                      </div>
+
+                                      <div className="mt-2">
+                                        <div className="text-[12px] text-gray-600">
+                                          Precio x Unidad
+                                        </div>
+                                        <div className="text-sm font-semibold tabular-nums">
+                                          {money(
+                                            r.priceIsla /
+                                              (r.unitsPerPackage || 1),
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {isAdmin && (
+                                        <div className="mt-2">
+                                          <div className="text-[12px] text-gray-600">
+                                            Costo Paq
+                                          </div>
+                                          <div className="text-sm font-semibold tabular-nums">
+                                            {money(providerPrice || 0)}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      <div className="mt-2">
+                                        <div className="text-[12px] text-gray-600">
+                                          Unidades x paquete
+                                        </div>
+                                        <div className="text-sm font-semibold">
+                                          {String(r.unitsPerPackage || 1)}
+                                        </div>
                                       </div>
                                     </div>
 
@@ -1489,6 +1510,7 @@ export default function PrecioVentas() {
               <th className="p-3 border-b text-left">Empaque</th>
               <th className="p-3 border-b text-right">Und x paquete</th>
               <th className="p-3 border-b text-right">Precio x unidad</th>
+              {isAdmin && <th className="p-3 border-b text-right">Costo</th>}
               <th className="p-3 border-b text-right">Precio Isla</th>
               <th className="p-3 border-b text-right">Precio Rivas</th>
               <th className="p-3 border-b text-right">UV x paquete</th>
@@ -1498,13 +1520,13 @@ export default function PrecioVentas() {
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-center" colSpan={9}>
+                <td className="p-4 text-center" colSpan={webColCount}>
                   Cargando…
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td className="p-4 text-center" colSpan={9}>
+                <td className="p-4 text-center" colSpan={webColCount}>
                   Sin resultados.
                 </td>
               </tr>
@@ -1538,6 +1560,18 @@ export default function PrecioVentas() {
                   <td className="p-3 border-b text-right tabular-nums">
                     {money(r.priceIsla / (r.unitsPerPackage || 1))}
                   </td>
+                  {isAdmin && (
+                    <td className="p-3 border-b text-right tabular-nums">
+                      {(() => {
+                        const rowProvider = Number.isFinite(
+                          Number(r.providerPrice),
+                        )
+                          ? (r.providerPrice as number)
+                          : providerPriceMap[r.productId] || 0;
+                        return money(rowProvider || 0);
+                      })()}
+                    </td>
+                  )}
                   <td className="p-3 border-b text-right tabular-nums">
                     {editingId === r.productId ? (
                       <input
