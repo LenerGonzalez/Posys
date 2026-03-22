@@ -41,6 +41,7 @@ interface SaleDataRaw {
   change?: string | number;
   status?: "FLOTANTE" | "PROCESADA";
   timestamp?: FireTimestamp;
+  createdAt?: FireTimestamp;
   allocations?: {
     batchId: string;
     qty: number;
