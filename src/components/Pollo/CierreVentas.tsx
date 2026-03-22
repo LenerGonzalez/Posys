@@ -59,6 +59,7 @@ interface SaleData {
   amount: number;
   amountSuggested: number;
   date: string;
+  createdAt?: string; // fecha+hora de ingreso (creación)
   userEmail: string;
   clientName: string;
   amountReceived: number;
@@ -188,6 +189,13 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
 
   const saleType: "CREDITO" | "CONTADO" = raw.type ?? "CONTADO";
 
+  // compute createdAt datetime from timestamp or createdAt
+  const createdAtDt = raw.timestamp?.toDate
+    ? format(raw.timestamp.toDate()!, "yyyy-MM-dd HH:mm")
+    : raw.createdAt?.toDate
+      ? format(raw.createdAt.toDate(), "yyyy-MM-dd HH:mm")
+      : "";
+
   if (Array.isArray(raw.items) && raw.items.length > 0) {
     return raw.items.map((it, idx) => {
       const qty = Number(it?.qty ?? 0);
@@ -205,6 +213,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         amount: round2(lineFinal),
         amountSuggested: Number(raw.amountSuggested ?? 0),
         date,
+        createdAt: createdAtDt,
         userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
         clientName: raw.clientName ?? "",
         amountReceived: Number(raw.amountReceived ?? 0),
@@ -229,6 +238,7 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       amount: Number(raw.amount ?? raw.amountCharged ?? 0),
       amountSuggested: Number(raw.amountSuggested ?? 0),
       date,
+      createdAt: createdAtDt,
       userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
       clientName: raw.clientName ?? "",
       amountReceived: Number(raw.amountReceived ?? 0),
@@ -890,6 +900,7 @@ export default function CierreVentas({
         <thead className="bg-slate-100 sticky top-0 z-10">
           <tr className="text-[11px] uppercase tracking-wider text-slate-600">
             <th className="p-3 border-b text-left">Estado</th>
+            <th className="p-3 border-b text-left">Fecha ingreso</th>
             <th className="p-3 border-b text-left">Fecha venta</th>
             <th className="p-3 border-b text-left">Tipo</th>
             <th className="p-3 border-b text-left">Producto</th>
@@ -916,6 +927,7 @@ export default function CierreVentas({
                   {s.status}
                 </span>
               </td>
+              <td className="p-3 border-b text-left">{s.createdAt || "—"}</td>
               <td className="p-3 border-b text-left">{s.date}</td>
               <td className="p-3 border-b text-left">
                 {s.type === "CREDITO" ? "Crédito" : "Cash"}
@@ -969,7 +981,7 @@ export default function CierreVentas({
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={8} className="p-3 text-center text-gray-500">
+              <td colSpan={9} className="p-3 text-center text-gray-500">
                 Sin ventas para mostrar.
               </td>
             </tr>
@@ -1468,6 +1480,13 @@ export default function CierreVentas({
                         <span className="text-gray-600">Cliente</span>
                         <strong className="text-right break-all">
                           {s.clientName || "—"}
+                        </strong>
+                      </div>
+
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-600">Fecha ingreso</span>
+                        <strong className="text-right break-all">
+                          {s.createdAt || "—"}
                         </strong>
                       </div>
 
