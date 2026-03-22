@@ -185,6 +185,8 @@ export default function CandyStockPedidosPage({
   roles,
   sellerCandyId = "",
 }: CandyStockPedidosPageProps) {
+  const STOCK_PAGE_SIZE = 10;
+  const [stockPage, setStockPage] = useState<number>(1);
   const subject = roles && roles.length ? roles : role;
   const isAdmin = hasRole(subject, "admin");
   const isVendDulces = hasRole(subject, "vendedor_dulces");
@@ -207,6 +209,76 @@ export default function CandyStockPedidosPage({
   const [stockCategoryFilter, setStockCategoryFilter] = useState("");
   const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [filtersOpenMobile, setFiltersOpenMobile] = useState(false);
+  const [mobileOpenSections, setMobileOpenSections] = useState<
+    Record<string, boolean>
+  >({ vendedor: false, cliente: false, pedido: false, listado: false });
+
+  const [assignedByNameMap, setAssignedByNameMap] = useState<
+    Record<string, string>
+  >({});
+
+  const [globalFiltersOpenMobile, setGlobalFiltersOpenMobile] = useState(false);
+
+  function ProductCard({ product }: { product: MasterProductAgg }) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="font-semibold text-slate-900">
+              {product.productName}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              {product.category || "—"}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-slate-500">Precio Isla</div>
+            <div className="font-semibold">{money(product.priceIsla)}</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
+          <div className="rounded-xl bg-slate-50 p-3">
+            <div className="text-xs text-slate-500">Stock</div>
+            <div className="font-bold text-lg">
+              {Number(product.stockPackages || 0)}
+            </div>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3">
+            <div className="text-xs text-slate-500">Unidades</div>
+            <div className="font-bold text-lg">
+              {Number(product.stockUnits || 0)}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-2 flex-wrap mt-4">
+          <span
+            className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
+              product.available ? "available" : "out",
+            )}`}
+          >
+            {product.available ? "Disponible" : "Agotado"}
+          </span>
+          <span
+            className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
+              assignedByNameMap[String(product.productId)]
+                ? "assigned"
+                : "unassigned",
+            )}`}
+          >
+            {assignedByNameMap[String(product.productId)]
+              ? `Asignado ${assignedByNameMap[String(product.productId)]}`
+              : "No asignado"}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  const [categoryOpenMap, setCategoryOpenMap] = useState<
+    Record<string, boolean>
+  >({});
 
   // selección vendedor para pantalla
   const [selectedSellerId, setSelectedSellerId] = useState<string>("");
@@ -255,14 +327,15 @@ export default function CandyStockPedidosPage({
 
       setVendors(activeOrAll);
 
-      // seleccionar vendedor por defecto
+      // seleccionar vendedor por defecto: dejar en "Todos" para la mayoría
+      // salvo cuando hay un sellerCandyId forzado (vendedor logueado)
       const nextDefaultSeller =
         sellerCandyId && activeOrAll.some((v) => v.id === sellerCandyId)
           ? sellerCandyId
           : selectedSellerId &&
               activeOrAll.some((v) => v.id === selectedSellerId)
             ? selectedSellerId
-            : activeOrAll[0]?.id || "";
+            : "";
 
       setSelectedSellerId(nextDefaultSeller);
 
@@ -316,12 +389,37 @@ export default function CandyStockPedidosPage({
       const assignedBySeller: Record<string, Set<string>> = {};
       sellerInvSnap.forEach((d) => {
         const x = d.data() as any;
-        const sid = String(x.sellerId || "").trim();
-        const pid = String(x.productId || "").trim();
+        const sid = String(x.sellerId || x.seller || "").trim();
+        const pid = String(
+          x.productId || x.product || x.id || (x.product && x.product.id) || "",
+        ).trim();
         if (!sid || !pid) return;
         if (!assignedBySeller[sid]) assignedBySeller[sid] = new Set<string>();
         assignedBySeller[sid].add(pid);
       });
+
+      // build map productId -> sellerName for badges
+      const sellerNameById: Record<string, string> = {};
+      activeOrAll.forEach((v) => {
+        if (v.id) sellerNameById[v.id] = v.name || "";
+      });
+
+      const assignedNameMap: Record<string, string> = {};
+      sellerInvSnap.forEach((d) => {
+        const x = d.data() as any;
+        const sid = String(x.sellerId || x.seller || "").trim();
+        const pid = String(
+          x.productId || x.product || x.id || (x.product && x.product.id) || "",
+        ).trim();
+        if (pid && sid) {
+          const name = sellerNameById[sid] || "";
+          if (name) {
+            if (!assignedNameMap[pid]) assignedNameMap[pid] = name;
+          }
+        }
+      });
+
+      setAssignedByNameMap(assignedNameMap);
 
       const map = new Map<string, MasterProductAgg>();
 
@@ -490,6 +588,20 @@ export default function CandyStockPedidosPage({
       return okProduct && okCategory && okAvailable;
     });
   }, [masterProducts, stockProductFilter, stockCategoryFilter, onlyAvailable]);
+
+  // pagination for stock (web + mobile)
+  const totalStockPages = Math.max(
+    1,
+    Math.ceil(filteredStock.length / STOCK_PAGE_SIZE),
+  );
+  useEffect(() => {
+    setStockPage(1);
+  }, [filteredStock]);
+
+  const paginatedStock = useMemo(() => {
+    const start = (stockPage - 1) * STOCK_PAGE_SIZE;
+    return filteredStock.slice(start, start + STOCK_PAGE_SIZE);
+  }, [filteredStock, stockPage]);
 
   const stockKpis = useMemo(() => {
     return {
@@ -842,10 +954,14 @@ export default function CandyStockPedidosPage({
                       </span>
                       <span
                         className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
-                          r.assigned ? "assigned" : "unassigned",
+                          assignedByNameMap[String(r.productId)]
+                            ? "assigned"
+                            : "unassigned",
                         )}`}
                       >
-                        {r.assigned ? "Asignado" : "No asignado"}
+                        {assignedByNameMap[String(r.productId)]
+                          ? `Asignado ${assignedByNameMap[String(r.productId)]}`
+                          : "No asignado"}
                       </span>
                     </div>
                   </td>
@@ -865,59 +981,59 @@ export default function CandyStockPedidosPage({
           No hay productos para ese filtro.
         </div>
       ) : (
-        filteredStock.map((r) => (
-          <div
-            key={r.productId}
-            className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="font-semibold text-slate-900">
-                  {r.productName}
-                </div>
-                <div className="text-xs text-slate-500 mt-0.5">
-                  {r.category || "—"}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-slate-500">Precio Isla</div>
-                <div className="font-semibold">{money(r.priceIsla)}</div>
-              </div>
-            </div>
+        // Group paginated products by category and render collapsible category cards (mobile only)
+        (() => {
+          const cats = Array.from(
+            new Set(paginatedStock.map((p) => p.category).filter(Boolean)),
+          ).sort((a, b) => String(a).localeCompare(String(b), "es"));
 
-            <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
-              <div className="rounded-xl bg-slate-50 p-3">
-                <div className="text-xs text-slate-500">Stock</div>
-                <div className="font-bold text-lg">
-                  {Number(r.stockPackages || 0)}
-                </div>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-3">
-                <div className="text-xs text-slate-500">Unidades</div>
-                <div className="font-bold text-lg">
-                  {Number(r.stockUnits || 0)}
-                </div>
-              </div>
-            </div>
+          return cats.map((c) => {
+            const products = paginatedStock.filter(
+              (p) => (p.category || "") === c,
+            );
+            return (
+              <div key={c} className="space-y-2">
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCategoryOpenMap((s) => ({ ...s, [c]: !s[c] }))
+                    }
+                    className={`w-full px-4 py-3 rounded-2xl flex items-center justify-between ${
+                      categoryOpenMap[c]
+                        ? "bg-yellow-50 border-yellow-200"
+                        : "bg-white"
+                    }`}
+                  >
+                    <div className="text-left">
+                      <div className="font-semibold">{c}</div>
+                      <div className="text-xs text-slate-500">
+                        {products.length} productos
+                      </div>
+                    </div>
+                    <div className="text-sm font-semibold">
+                      {categoryOpenMap[c] ? "Cerrar" : "Abrir"}
+                    </div>
+                  </button>
 
-            <div className="flex gap-2 flex-wrap mt-4">
-              <span
-                className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
-                  r.available ? "available" : "out",
-                )}`}
-              >
-                {r.available ? "Disponible" : "Agotado"}
-              </span>
-              <span
-                className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
-                  r.assigned ? "assigned" : "unassigned",
-                )}`}
-              >
-                {r.assigned ? "Asignado" : "No asignado"}
-              </span>
-            </div>
-          </div>
-        ))
+                  <div className={`${categoryOpenMap[c] ? "" : "hidden"} p-3`}>
+                    {products.length === 0 ? (
+                      <div className="text-sm text-slate-500">
+                        No hay productos en esta categoría.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {products.map((p) => (
+                          <ProductCard key={p.productId} product={p} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          });
+        })()
       )}
     </div>
   );
@@ -1144,71 +1260,122 @@ export default function CandyStockPedidosPage({
         </div>
       </div>
 
-      {/* filtros globales */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700">
-              Desde
-            </label>
-            <input
-              type="date"
-              className="w-full border rounded-xl px-3 py-2"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </div>
+      {/* filtros globales (visible en móvil para PEDIDOS y STOCK) */}
+      {tab === "PEDIDOS" || tab === "STOCK" ? (
+        <div className="md:hidden mb-3">
+          <button
+            type="button"
+            onClick={() => setGlobalFiltersOpenMobile((v) => !v)}
+            className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+              globalFiltersOpenMobile
+                ? "bg-yellow-50 border-yellow-200"
+                : "bg-white border-slate-200"
+            }`}
+          >
+            <div className="text-left">
+              <div className="font-semibold">Filtros</div>
+              <div className="text-xs text-slate-500">
+                Desde / Hasta / Vendedor
+              </div>
+            </div>
+            <div className="text-sm font-semibold">
+              {globalFiltersOpenMobile ? "Cerrar" : "Abrir"}
+            </div>
+          </button>
+        </div>
+      ) : null}
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700">
-              Hasta
-            </label>
-            <input
-              type="date"
-              className="w-full border rounded-xl px-3 py-2"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </div>
+      <div className={`${globalFiltersOpenMobile ? "" : "hidden"} md:block`}>
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Desde
+              </label>
+              <input
+                type="date"
+                className="w-full border rounded-xl px-3 py-2"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+              />
+            </div>
 
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-slate-700">
-              Vendedor
-            </label>
-            <select
-              className="w-full border rounded-xl px-3 py-2"
-              value={selectedSellerId}
-              onChange={(e) => setSelectedSellerId(e.target.value)}
-              disabled={Boolean(sellerCandyId && (isVendDulces || !isAdmin))}
-            >
-              <option value="">Todos</option>
-              {vendors.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Hasta
+              </label>
+              <input
+                type="date"
+                className="w-full border rounded-xl px-3 py-2"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+              />
+            </div>
 
-          <div className="flex items-end">
-            <div className="text-xs text-slate-500">
-              {loading ? "Cargando..." : "Datos actualizados"}
+            <div className="md:col-span-2">
+              <label className="block text-xs font-semibold text-slate-700">
+                Vendedor
+              </label>
+              <select
+                className="w-full border rounded-xl px-3 py-2"
+                value={selectedSellerId}
+                onChange={(e) => setSelectedSellerId(e.target.value)}
+                disabled={Boolean(sellerCandyId && (isVendDulces || !isAdmin))}
+              >
+                <option value="">Todos</option>
+                {vendors.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-end">
+              <div className="text-xs text-slate-500">
+                {loading ? "Cargando..." : "Datos actualizados"}
+              </div>
             </div>
           </div>
-        </div>
 
-        {msg ? (
-          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            {msg}
-          </div>
-        ) : null}
+          {msg ? (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              {msg}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {tab === "STOCK" ? (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          {/* Desktop/tablet: two KPI cards. Mobile: single card with two columns */}
+          <div className="hidden md:grid grid-cols-2 gap-3 mb-4">
             <KpiCard label="Stock" value={stockKpis.stockPackages} />
             <KpiCard label="Productos" value={stockKpis.productsCount} />
+          </div>
+
+          <div className="md:hidden mb-4">
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Stock
+                  </div>
+                  <div className="mt-1 text-2xl font-bold text-slate-900">
+                    {stockKpis.stockPackages}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Productos
+                  </div>
+                  <div className="mt-1 text-2xl font-bold text-slate-900">
+                    {stockKpis.productsCount}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* filtros stock mobile */}
@@ -1373,6 +1540,41 @@ export default function CandyStockPedidosPage({
 
           {renderStockTable()}
           {renderStockMobile()}
+
+          {/* Paginación stock */}
+          <div className="mt-3 flex items-center justify-between">
+            <div className="text-sm text-slate-500">
+              {filteredStock.length === 0
+                ? "Sin resultados"
+                : `Mostrando ${Math.min(filteredStock.length, STOCK_PAGE_SIZE)} de ${filteredStock.length}`}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setStockPage((s) => Math.max(1, s - 1))}
+                disabled={stockPage <= 1}
+                className={`px-3 py-2 rounded-lg text-sm border ${stockPage <= 1 ? "text-slate-400 border-slate-200 bg-white" : "bg-white hover:bg-slate-50 text-slate-700"}`}
+              >
+                Anterior
+              </button>
+
+              <div className="text-sm text-slate-700">
+                Página {stockPage} / {totalStockPages}
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setStockPage((s) => Math.min(totalStockPages, s + 1))
+                }
+                disabled={stockPage >= totalStockPages}
+                className={`px-3 py-2 rounded-lg text-sm border ${stockPage >= totalStockPages ? "text-slate-400 border-slate-200 bg-white" : "bg-white hover:bg-slate-50 text-slate-700"}`}
+              >
+                Siguiente
+              </button>
+            </div>
+          </div>
         </>
       ) : (
         <div className="space-y-4">
@@ -1399,52 +1601,114 @@ export default function CandyStockPedidosPage({
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
               {/* vendedor */}
               <div className="space-y-4">
-                <SectionCard title="Datos del vendedor">
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700">
-                        Vendedor
-                      </label>
-                      <select
-                        className="w-full border rounded-xl px-3 py-2"
-                        value={orderSellerId}
-                        onChange={(e) => setOrderSellerId(e.target.value)}
-                        disabled={Boolean(
-                          sellerCandyId && (isVendDulces || !isAdmin),
-                        )}
-                      >
-                        <option value="">Seleccionar</option>
-                        {vendors.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700">
-                        Fecha de pedido
-                      </label>
-                      <input
-                        type="date"
-                        className="w-full border rounded-xl px-3 py-2"
-                        value={orderDate}
-                        onChange={(e) => setOrderDate(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="rounded-xl bg-slate-50 p-3 text-sm">
+                <div className="md:hidden mb-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMobileOpenSections((s) => ({
+                        ...s,
+                        vendedor: !s.vendedor,
+                      }))
+                    }
+                    className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+                      mobileOpenSections.vendedor
+                        ? "bg-yellow-50 border-yellow-200"
+                        : "bg-white border-slate-200"
+                    }`}
+                  >
+                    <div className="text-left">
+                      <div className="font-semibold">Datos del vendedor</div>
                       <div className="text-xs text-slate-500">
-                        Contenedor vendedor
+                        Seleccioná vendedor y fecha de pedido
                       </div>
-                      <div className="font-semibold text-slate-900 mt-1">
-                        {orderSeller?.name || "Sin seleccionar"}
+                    </div>
+                    <div className="text-sm font-semibold">
+                      {mobileOpenSections.vendedor ? "Cerrar" : "Abrir"}
+                    </div>
+                  </button>
+                </div>
+
+                <div
+                  className={`${mobileOpenSections.vendedor ? "" : "hidden"} md:block`}
+                >
+                  <SectionCard title="Datos del vendedor">
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700">
+                          Vendedor
+                        </label>
+                        <select
+                          className="w-full border rounded-xl px-3 py-2"
+                          value={orderSellerId}
+                          onChange={(e) => setOrderSellerId(e.target.value)}
+                          disabled={Boolean(
+                            sellerCandyId && (isVendDulces || !isAdmin),
+                          )}
+                        >
+                          <option value="">Seleccionar</option>
+                          {vendors.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.name}
+                            </option>
+                          ))}
+                        </select>
                       </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700">
+                          Fecha de pedido
+                        </label>
+                        <input
+                          type="date"
+                          className="w-full border rounded-xl px-3 py-2"
+                          value={orderDate}
+                          onChange={(e) => setOrderDate(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="rounded-xl bg-slate-50 p-3 text-sm">
+                        <div className="text-xs text-slate-500">
+                          Contenedor vendedor
+                        </div>
+                        <div className="font-semibold text-slate-900 mt-1">
+                          {orderSeller?.name || "Sin seleccionar"}
+                        </div>
+                      </div>
+                    </div>
+                  </SectionCard>
+                </div>
+              </div>
+
+              <div className="md:hidden mb-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMobileOpenSections((s) => ({
+                      ...s,
+                      cliente: !s.cliente,
+                    }))
+                  }
+                  className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+                    mobileOpenSections.cliente
+                      ? "bg-yellow-50 border-yellow-200"
+                      : "bg-white border-slate-200"
+                  }`}
+                >
+                  <div className="text-left">
+                    <div className="font-semibold">Datos del cliente</div>
+                    <div className="text-xs text-slate-500">
+                      Nombre, teléfono y dirección
                     </div>
                   </div>
-                </SectionCard>
+                  <div className="text-sm font-semibold">
+                    {mobileOpenSections.cliente ? "Cerrar" : "Abrir"}
+                  </div>
+                </button>
+              </div>
 
+              <div
+                className={`${mobileOpenSections.cliente ? "" : "hidden"} md:block`}
+              >
                 <SectionCard title="Datos del cliente">
                   <div className="space-y-3">
                     <div>
@@ -1485,9 +1749,37 @@ export default function CandyStockPedidosPage({
                   </div>
                 </SectionCard>
               </div>
+            </div>
 
-              {/* productos */}
-              <div className="xl:col-span-2 space-y-4">
+            {/* productos */}
+            <div className="xl:col-span-2 space-y-4">
+              <div className="md:hidden mb-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMobileOpenSections((s) => ({ ...s, pedido: !s.pedido }))
+                  }
+                  className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+                    mobileOpenSections.pedido
+                      ? "bg-yellow-50 border-yellow-200"
+                      : "bg-white border-slate-200"
+                  }`}
+                >
+                  <div className="text-left">
+                    <div className="font-semibold">Datos del pedido</div>
+                    <div className="text-xs text-slate-500">
+                      Podés agregar productos aunque su stock sea 0
+                    </div>
+                  </div>
+                  <div className="text-sm font-semibold">
+                    {mobileOpenSections.pedido ? "Cerrar" : "Abrir"}
+                  </div>
+                </button>
+              </div>
+
+              <div
+                className={`${mobileOpenSections.pedido ? "" : "hidden"} md:block`}
+              >
                 <SectionCard
                   title="Datos del pedido"
                   subtitle="Podés agregar productos aunque su stock sea 0"
@@ -1781,57 +2073,85 @@ export default function CandyStockPedidosPage({
             </div>
           </SectionCard>
 
-          <SectionCard
-            title="Listado de pedidos"
-            subtitle="Acciones: editar, eliminar y finalizar"
+          <div className="md:hidden mb-3">
+            <button
+              type="button"
+              onClick={() =>
+                setMobileOpenSections((s) => ({ ...s, listado: !s.listado }))
+              }
+              className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+                mobileOpenSections.listado
+                  ? "bg-yellow-50 border-yellow-200"
+                  : "bg-white border-slate-200"
+              }`}
+            >
+              <div className="text-left">
+                <div className="font-semibold">Listado de pedidos</div>
+                <div className="text-xs text-slate-500">
+                  Acciones: editar, eliminar y finalizar
+                </div>
+              </div>
+              <div className="text-sm font-semibold">
+                {mobileOpenSections.listado ? "Cerrar" : "Abrir"}
+              </div>
+            </button>
+          </div>
+
+          <div
+            className={`${mobileOpenSections.listado ? "" : "hidden"} md:block`}
           >
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Buscar
-                </label>
-                <input
-                  className="w-full border rounded-xl px-3 py-2"
-                  value={ordersSearch}
-                  onChange={(e) => setOrdersSearch(e.target.value)}
-                  placeholder="Cliente, producto, teléfono..."
-                />
+            <SectionCard
+              title="Listado de pedidos"
+              subtitle="Acciones: editar, eliminar y finalizar"
+            >
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Buscar
+                  </label>
+                  <input
+                    className="w-full border rounded-xl px-3 py-2"
+                    value={ordersSearch}
+                    onChange={(e) => setOrdersSearch(e.target.value)}
+                    placeholder="Cliente, producto, teléfono..."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Estado
+                  </label>
+                  <select
+                    className="w-full border rounded-xl px-3 py-2"
+                    value={ordersStatusFilter}
+                    onChange={(e) =>
+                      setOrdersStatusFilter(e.target.value as "" | PedidoStatus)
+                    }
+                  >
+                    <option value="">Todos</option>
+                    <option value="PENDIENTE">Pendiente</option>
+                    <option value="FINALIZADO">Finalizado</option>
+                  </select>
+                </div>
+
+                <div className="md:col-span-2 flex items-end">
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold"
+                    onClick={() => {
+                      setOrdersSearch("");
+                      setOrdersStatusFilter("");
+                    }}
+                  >
+                    Limpiar filtros
+                  </button>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Estado
-                </label>
-                <select
-                  className="w-full border rounded-xl px-3 py-2"
-                  value={ordersStatusFilter}
-                  onChange={(e) =>
-                    setOrdersStatusFilter(e.target.value as "" | PedidoStatus)
-                  }
-                >
-                  <option value="">Todos</option>
-                  <option value="PENDIENTE">Pendiente</option>
-                  <option value="FINALIZADO">Finalizado</option>
-                </select>
-              </div>
-
-              <div className="md:col-span-2 flex items-end">
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold"
-                  onClick={() => {
-                    setOrdersSearch("");
-                    setOrdersStatusFilter("");
-                  }}
-                >
-                  Limpiar filtros
-                </button>
-              </div>
-            </div>
-
-            {renderOrdersTable()}
-            {renderOrdersMobile()}
-          </SectionCard>
+              {renderOrdersTable()}
+              {renderOrdersMobile()}
+            </SectionCard>
+          </div>
         </div>
       )}
     </div>
