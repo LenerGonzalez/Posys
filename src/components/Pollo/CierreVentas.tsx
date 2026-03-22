@@ -17,6 +17,7 @@ import { format } from "date-fns";
 import { hasRole } from "../../utils/roles";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+import * as XLSX from "xlsx";
 import { restoreSaleAndDelete } from "../../Services/inventory";
 import RefreshButton from "../../components/common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
@@ -97,76 +98,19 @@ interface ClosureData {
   grossProfit?: number;
 }
 
+interface CombinedDailyRow {
+  date: string;
+  totalLbs: number;
+  totalUnits: number;
+  totalAmount: number;
+  product?: string;
+}
+
 // helpers
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
-
-// Normaliza UNA venta en MÚLTIPLES filas si trae items[]
-// const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
-//   const date =
-//     raw.date ??
-//     (raw.timestamp?.toDate
-//       ? format(raw.timestamp.toDate()!, "yyyy-MM-dd")
-//       : "");
-//   if (!date) return [];
-//
-//   const saleType: "CREDITO" | "CONTADO" = raw.type ?? "CONTADO";
-//
-//   if (Array.isArray(raw.items) && raw.items.length > 0) {
-//     return raw.items.map((it, idx) => {
-//       const qty = Number(it?.qty ?? 0);
-//       const lineFinal =
-//         Number(it?.lineFinal ?? 0) ||
-//         Math.max(
-//           0,
-//           Number(it?.unitPrice || 0) * qty - Number(it?.discount || 0),
-//         );
-//       return {
-//         id: `${id}#${idx}`,
-//         productName: String(it?.productName ?? "(sin nombre)"),
-//         quantity: qty,
-//         amount: round2(lineFinal),
-//         amountSuggested: Number(raw.amountSuggested ?? 0),
-//         date,
-//         userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
-//         clientName: raw.clientName ?? "",
-//         amountReceived: Number(raw.amountReceived ?? 0),
-//         change: String(raw.change ?? "0"),
-//         status: (raw.status as any) ?? "FLOTANTE",
-//         type: saleType,
-//         measurement: String(it?.measurement ?? raw.measurement ?? ""),
-//         allocations: Array.isArray(it?.allocations)
-//           ? it.allocations
-//           : raw.allocations,
-//         avgUnitCost: Number(it?.avgUnitCost ?? raw.avgUnitCost ?? 0),
-//         cogsAmount: Number(it?.cogsAmount ?? 0),
-//       };
-//     });
-//   }
-//
-//   return [
-//     {
-//       id,
-//       productName: raw.productName ?? "(sin nombre)",
-//       quantity: Number(raw.quantity ?? 0),
-//       amount: Number(raw.amount ?? raw.amountCharged ?? 0),
-//       amountSuggested: Number(raw.amountSuggested ?? 0),
-//       date,
-//       userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
-//       clientName: raw.clientName ?? "",
-//       amountReceived: Number(raw.amountReceived ?? 0),
-//       change: String(raw.change ?? "0"),
-//       status: (raw.status as any) ?? "FLOTANTE",
-//       type: saleType,
-//       measurement: String(raw.measurement ?? ""),
-//       allocations: raw.allocations,
-//       avgUnitCost: raw.avgUnitCost,
-//       cogsAmount: raw.cogsAmount,
-//     },
-//   ];
-// };
 
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const dateFromField = raw.date ? String(raw.date) : "";
@@ -301,6 +245,7 @@ export default function CierreVentas({
   const [pdfMode, setPdfMode] = useState(false);
   const [cashTableOpen, setCashTableOpen] = useState(true);
   const [creditTableOpen, setCreditTableOpen] = useState(true);
+  const [combinedTableOpen, setCombinedTableOpen] = useState(true);
 
   const pdfRef = useRef<HTMLDivElement>(null);
   const { refreshKey, refresh } = useManualRefresh();
@@ -531,9 +476,11 @@ export default function CierreVentas({
     operationFilter === "ALL" || operationFilter === "CONTADO";
   const showCreditTable =
     operationFilter === "ALL" || operationFilter === "CREDITO";
+  const showCombinedTable = operationFilter === "ALL";
 
   const cashOpenEffective = pdfMode ? true : cashTableOpen;
   const creditOpenEffective = pdfMode ? true : creditTableOpen;
+  const combinedOpenEffective = pdfMode ? true : combinedTableOpen;
 
   const cashRowsForTable = pdfMode ? cashSales : pagedCashSales;
   const creditRowsForTable = pdfMode ? creditSales : pagedCreditSales;
@@ -579,6 +526,34 @@ export default function CierreVentas({
   const totalUnitsAll = round3(totalUnitsCash + totalUnitsCredit);
   const totalLbsAll = round3(totalLbsCash + totalLbsCredit);
   const totalSalesAll = round2(totalSalesCash + totalSalesCredit);
+
+  const combinedDailyRows = React.useMemo(() => {
+    const map: Record<string, CombinedDailyRow> = {};
+
+    visibleSales.forEach((s) => {
+      const productName = s.productName || "(sin nombre)";
+      const key = `${s.date || "—"}||${productName}`;
+      if (!map[key]) {
+        map[key] = {
+          date: s.date || "—",
+          product: productName,
+          totalLbs: 0,
+          totalUnits: 0,
+          totalAmount: 0,
+        };
+      }
+
+      if (isUnitMeasure(s.measurement)) {
+        map[key].totalUnits = round3(map[key].totalUnits + (s.quantity || 0));
+      } else {
+        map[key].totalLbs = round3(map[key].totalLbs + (s.quantity || 0));
+      }
+
+      map[key].totalAmount = round2(map[key].totalAmount + (s.amount || 0));
+    });
+
+    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+  }, [visibleSales]);
 
   // Consolidado por producto
   const productMap: Record<
@@ -818,6 +793,29 @@ export default function CierreVentas({
     }
   };
 
+  const exportToXLSX = () => {
+    try {
+      const data = visibleSales.map((s) => ({
+        Estado: s.status,
+        Fecha_ingreso: s.createdAt || "",
+        Fecha_venta: s.date,
+        Tipo: s.type === "CREDITO" ? "Crédito" : "Cash",
+        Producto: s.productName,
+        "Libras - Unidad": s.quantity,
+        Monto: s.amount,
+        Vendedor: displaySeller(s.userEmail),
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Transacciones");
+      XLSX.writeFile(wb, `transacciones_${startDate}_to_${endDate}.xlsx`);
+    } catch (e) {
+      console.error("Error exporting XLSX:", e);
+      setMessage("❌ Error al exportar XLSX.");
+    }
+  };
+
   const renderProPager = (
     page: number,
     totalPages: number,
@@ -895,94 +893,222 @@ export default function CierreVentas({
     );
   };
 
-  const renderSalesTable = (rows: SaleData[]) => (
+  const renderSalesTable = (rows: SaleData[]) => {
+    const totalQty = round3(
+      rows.reduce((sum, s) => sum + (s.quantity || 0), 0),
+    );
+    const totalAmount = round2(
+      rows.reduce((sum, s) => sum + (s.amount || 0), 0),
+    );
+
+    return (
+      <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
+        <table className="min-w-full w-full text-sm">
+          <thead className="bg-slate-100 sticky top-0 z-10">
+            <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+              <th className="p-3 border-b text-left">Estado</th>
+              <th className="p-3 border-b text-left">Fecha ingreso</th>
+              <th className="p-3 border-b text-left">Fecha venta</th>
+              <th className="p-3 border-b text-left">Tipo</th>
+              <th className="p-3 border-b text-left">Producto</th>
+              <th className="p-3 border-b text-right">Libras - Unidad</th>
+              <th className="p-3 border-b text-right">Monto</th>
+              <th className="p-3 border-b text-left">Vendedor</th>
+              <th className="p-3 border-b text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((s) => (
+              <tr
+                key={s.id}
+                className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
+              >
+                <td className="p-3 border-b text-left">
+                  <span
+                    className={`px-2 py-0.5 rounded text-xs ${
+                      s.status === "PROCESADA"
+                        ? "bg-green-100 text-green-700"
+                        : "bg-yellow-100 text-yellow-700"
+                    }`}
+                    title={s.status}
+                    aria-label={s.status}
+                  >
+                    {s.status === "PROCESADA" ? (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-4 w-4 inline"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                    ) : (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-4 w-4 inline"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <path d="M6 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1zM14 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1z" />
+                      </svg>
+                    )}
+                  </span>
+                </td>
+                <td className="p-3 border-b text-left">{s.createdAt || "—"}</td>
+                <td className="p-3 border-b text-left">{s.date}</td>
+                <td className="p-3 border-b text-left">
+                  {s.type === "CREDITO" ? "Crédito" : "Cash"}
+                </td>
+                <td className="p-3 border-b text-left">{s.productName}</td>
+                <td className="p-3 border-b text-right">{qty3(s.quantity)}</td>
+                <td className="p-3 border-b text-right">C${money(s.amount)}</td>
+                <td className="p-3 border-b text-left">
+                  {displaySeller(s.userEmail)}
+                </td>
+                <td className="p-3 border-b text-right">
+                  {s.status === "FLOTANTE" ? (
+                    <div className="flex gap-2 justify-end">
+                      {isAdmin ? (
+                        <>
+                          <button
+                            onClick={() => openEdit(s)}
+                            className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => deleteSale(s.id)}
+                            className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                          >
+                            Eliminar
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </div>
+                  ) : s.status === "PROCESADA" ? (
+                    <div className="flex gap-2 justify-end">
+                      {isAdmin ? (
+                        <button
+                          onClick={() => handleRevert(s.id)}
+                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
+                          title="Revertir"
+                          aria-label="Revertir"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-4 w-4 inline"
+                            viewBox="0 0 20 20"
+                            fill="currentColor"
+                            aria-hidden="true"
+                          >
+                            <g transform="translate(20 0) scale(-1 1)">
+                              <path
+                                fillRule="evenodd"
+                                d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
+                                clipRule="evenodd"
+                              />
+                            </g>
+                          </svg>
+                        </button>
+                      ) : (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-gray-400 text-xs">No options</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={9} className="p-3 text-center text-gray-500">
+                  Sin ventas para mostrar.
+                </td>
+              </tr>
+            )}
+
+            {rows.length > 0 && (
+              <tr className="text-center bg-slate-100/70">
+                <td
+                  colSpan={5}
+                  className="p-3 border-b text-left font-semibold"
+                >
+                  Totales
+                </td>
+                <td className="p-3 border-b text-right font-semibold">
+                  {qty3(totalQty)}
+                </td>
+                <td className="p-3 border-b text-right font-semibold">
+                  C${money(totalAmount)}
+                </td>
+                <td colSpan={2} />
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderCombinedDailyTable = (rows: CombinedDailyRow[]) => (
     <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
       <table className="min-w-full w-full text-sm">
         <thead className="bg-slate-100 sticky top-0 z-10">
           <tr className="text-[11px] uppercase tracking-wider text-slate-600">
-            <th className="p-3 border-b text-left">Estado</th>
-            <th className="p-3 border-b text-left">Fecha ingreso</th>
             <th className="p-3 border-b text-left">Fecha venta</th>
-            <th className="p-3 border-b text-left">Tipo</th>
             <th className="p-3 border-b text-left">Producto</th>
-            <th className="p-3 border-b text-right">Libras - Unidad</th>
+            <th className="p-3 border-b text-right">Libras</th>
+            <th className="p-3 border-b text-right">Unidades</th>
             <th className="p-3 border-b text-right">Monto</th>
-            <th className="p-3 border-b text-left">Vendedor</th>
-            <th className="p-3 border-b text-right">Acciones</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((s) => (
+          {rows.map((r) => (
             <tr
-              key={s.id}
+              key={`${r.date}||${r.product}`}
               className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
             >
+              <td className="p-3 border-b text-left">{r.date}</td>
               <td className="p-3 border-b text-left">
-                <span
-                  className={`px-2 py-0.5 rounded text-xs ${
-                    s.status === "PROCESADA"
-                      ? "bg-green-100 text-green-700"
-                      : "bg-yellow-100 text-yellow-700"
-                  }`}
-                >
-                  {s.status}
-                </span>
+                {r.product || "(sin nombre)"}
               </td>
-              <td className="p-3 border-b text-left">{s.createdAt || "—"}</td>
-              <td className="p-3 border-b text-left">{s.date}</td>
-              <td className="p-3 border-b text-left">
-                {s.type === "CREDITO" ? "Crédito" : "Cash"}
-              </td>
-              <td className="p-3 border-b text-left">{s.productName}</td>
-              <td className="p-3 border-b text-right">{qty3(s.quantity)}</td>
-              <td className="p-3 border-b text-right">C${money(s.amount)}</td>
-              <td className="p-3 border-b text-left">
-                {displaySeller(s.userEmail)}
-              </td>
+              <td className="p-3 border-b text-right">{qty3(r.totalLbs)}</td>
+              <td className="p-3 border-b text-right">{qty3(r.totalUnits)}</td>
               <td className="p-3 border-b text-right">
-                {s.status === "FLOTANTE" ? (
-                  <div className="flex gap-2 justify-end">
-                    {isAdmin ? (
-                      <>
-                        <button
-                          onClick={() => openEdit(s)}
-                          className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={() => deleteSale(s.id)}
-                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                        >
-                          Eliminar
-                        </button>
-                      </>
-                    ) : (
-                      <span className="text-gray-400 text-xs">—</span>
-                    )}
-                  </div>
-                ) : s.status === "PROCESADA" ? (
-                  <div className="flex gap-2 justify-end">
-                    {isAdmin ? (
-                      <button
-                        onClick={() => handleRevert(s.id)}
-                        className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                      >
-                        Revertir
-                      </button>
-                    ) : (
-                      <span className="text-gray-400 text-xs">—</span>
-                    )}
-                  </div>
-                ) : (
-                  <span className="text-gray-400 text-xs">No options</span>
-                )}
+                C${money(r.totalAmount)}
               </td>
             </tr>
           ))}
+
+          {rows.length > 0 && (
+            <tr className="text-center bg-slate-100/70">
+              <td colSpan={2} className="p-3 border-b text-left font-semibold">
+                Totales
+              </td>
+              <td className="p-3 border-b text-right font-semibold">
+                {qty3(rows.reduce((sum, r) => sum + r.totalLbs, 0))}
+              </td>
+              <td className="p-3 border-b text-right font-semibold">
+                {qty3(rows.reduce((sum, r) => sum + r.totalUnits, 0))}
+              </td>
+              <td className="p-3 border-b text-right font-semibold">
+                C${money(rows.reduce((sum, r) => sum + r.totalAmount, 0))}
+              </td>
+            </tr>
+          )}
+
           {rows.length === 0 && (
             <tr>
-              <td colSpan={9} className="p-3 text-center text-gray-500">
+              <td colSpan={5} className="p-3 text-center text-gray-500">
                 Sin ventas para mostrar.
               </td>
             </tr>
@@ -1007,6 +1133,44 @@ export default function CierreVentas({
 
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} />
+
+          <button
+            type="button"
+            onClick={handleSaveClosure}
+            disabled={!cierreVentas}
+            title="Cerrar ventas del día"
+            aria-label="Cerrar ventas del día"
+            className="bg-green-600 text-white p-2 rounded hover:bg-green-700"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M12 2v2a8 8 0 108 8h2a10 10 0 11-10-10z" />
+              <path d="M12 6v6l4-3-4-3z" opacity="0.9" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            onClick={exportToXLSX}
+            title="Exportar transacciones (XLSX)"
+            aria-label="Exportar transacciones (XLSX)"
+            className="bg-gray-100 text-gray-800 p-2 rounded hover:bg-gray-200"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M19 8h-2V3H7v5H5l7 7 7-7zM5 18h14v2H5z" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -1337,6 +1501,36 @@ export default function CierreVentas({
                       </div>
                     )}
                   </div>
+
+                  {showCombinedTable && (
+                    <div className="mt-6">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="text-sm font-semibold text-slate-700">
+                          Transacciones Contado + Crédito
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs text-slate-500">
+                            {combinedDailyRows.length} día(s)
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setCombinedTableOpen((v) => !v)}
+                            className={`text-xs px-3 py-1.5 rounded border font-semibold transition ${
+                              combinedOpenEffective
+                                ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700"
+                                : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+                            }`}
+                          >
+                            {combinedOpenEffective ? "Cerrar" : "Ver"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {combinedOpenEffective &&
+                        renderCombinedDailyTable(combinedDailyRows)}
+                    </div>
+                  )}
+
                   <div className="mt-6 flex items-center justify-between mb-3">
                     <div className="text-sm font-semibold text-slate-700">
                       Contado
@@ -1451,8 +1645,34 @@ export default function CierreVentas({
                               ? "bg-green-100 text-green-700"
                               : "bg-yellow-100 text-yellow-700"
                           }`}
+                          title={s.status}
+                          aria-label={s.status}
                         >
-                          {s.status}
+                          {s.status === "PROCESADA" ? (
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              className="h-4 w-4 inline"
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                              aria-hidden="true"
+                            >
+                              <path
+                                fillRule="evenodd"
+                                d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                          ) : (
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              className="h-4 w-4 inline"
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                              aria-hidden="true"
+                            >
+                              <path d="M6 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1zM14 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1z" />
+                            </svg>
+                          )}
                         </span>
                       </div>
                     </summary>
@@ -1521,8 +1741,24 @@ export default function CierreVentas({
                               <button
                                 onClick={() => handleRevert(s.id)}
                                 className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
+                                title="Revertir"
+                                aria-label="Revertir"
                               >
-                                Revertir
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  className="h-5 w-5 inline"
+                                  viewBox="0 0 20 20"
+                                  fill="currentColor"
+                                  aria-hidden="true"
+                                >
+                                  <g transform="translate(20 0) scale(-1 1)">
+                                    <path
+                                      fillRule="evenodd"
+                                      d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
+                                      clipRule="evenodd"
+                                    />
+                                  </g>
+                                </svg>
                               </button>
                             ) : (
                               <div className="text-gray-400 text-xs w-full text-center">
@@ -1551,22 +1787,7 @@ export default function CierreVentas({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2 mt-4">
-        <button
-          disabled={!cierreVentas}
-          onClick={handleSaveClosure}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-        >
-          Cerrar ventas del día
-        </button>
-
-        <button
-          onClick={handleDownloadPDF}
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-        >
-          Descargar PDF
-        </button>
-      </div>
+      {/* acciones ahora en la cabecera: cerrar ventas y exportar XLSX */}
 
       {message && <p className="mt-2 text-sm">{message}</p>}
 
