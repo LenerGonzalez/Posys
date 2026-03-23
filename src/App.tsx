@@ -70,6 +70,7 @@ import CandyStockPedidosPage from "./components/Candies/CandyStockPedidosPage";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
 import ArqueoProducto from "./components/Pollo/ArqueoProducto";
+import InventarioOrdenesMaestras from "./components/Candies/InventarioOrdenesMaestras";
 
 // Definición de roles
 type Role =
@@ -332,7 +333,6 @@ export default function App() {
           }
         >
           <Route index element={<AdminIndexRedirect />} />
-
           {/* ======== POLLO ======== */}
           <Route
             path="bills"
@@ -406,6 +406,15 @@ export default function App() {
               </PrivateRoute>
             }
           />
+          <Route
+            path="inventoryMainOrderCandies"
+            element={
+              <PrivateRoute allowedRoles={["admin", "contador"]}>
+                <InventarioOrdenesMaestras role={role} roles={roles} />
+              </PrivateRoute>
+            }
+          />
+
           <Route
             path="statusInventory"
             element={
@@ -500,7 +509,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           <Route
             path="customersPollo"
             element={
@@ -521,7 +529,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           {/* ======== CANDIES ======== */}
           <Route
             path="datacenter"
@@ -736,7 +743,6 @@ export default function App() {
               </PrivateRoute>
             }
           />
-
           {/* ======== ROPA ======== */}
           <Route
             path="salesClothes"

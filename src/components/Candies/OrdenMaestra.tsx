@@ -384,8 +384,9 @@ export default function CandyMainOrders() {
     setEditingMarginIslaMap((prev) => ({ ...prev, [id]: false }));
 
   // selección producto
-  const [orderCategory, setOrderCategory] = useState<string>("");
+  const [orderCategory, setOrderCategory] = useState<string>("Todas");
   const [orderProductId, setOrderProductId] = useState<string>("");
+  const [productSearch, setProductSearch] = useState<string>("");
 
   // auto-llenados desde catálogo (solo lectura)
   const [orderProviderPrice, setOrderProviderPrice] = useState<string>("");
@@ -467,7 +468,7 @@ export default function CandyMainOrders() {
 
   useEffect(() => {
     if (!orderCategory && catalogCategories.length > 0) {
-      setOrderCategory(catalogCategories[0]);
+      setOrderCategory("Todas");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalogCategories]);
@@ -508,11 +509,28 @@ export default function CandyMainOrders() {
 
   const catalogByCategory = useMemo(() => {
     const list =
-      orderCategory.trim().length > 0
-        ? catalog.filter((p) => p.category === orderCategory)
-        : catalog;
+      orderCategory === "Todas" ||
+      String(orderCategory || "").trim().length === 0
+        ? catalog
+        : catalog.filter((p) => p.category === orderCategory);
     return list.sort((a, b) => a.name.localeCompare(b.name, "es"));
   }, [catalog, orderCategory]);
+
+  const productsForSelect = useMemo(() => {
+    const q = String(productSearch || "")
+      .trim()
+      .toLowerCase();
+    if (!q) return catalogByCategory;
+    return catalogByCategory.filter(
+      (p) =>
+        String(p.name || "")
+          .toLowerCase()
+          .includes(q) ||
+        String(p.id || "")
+          .toLowerCase()
+          .includes(q),
+    );
+  }, [catalogByCategory, productSearch]);
 
   // al seleccionar producto, auto-llenar datos
   useEffect(() => {
@@ -542,7 +560,7 @@ export default function CandyMainOrders() {
     setEditingMarginRivasMap({});
     setEditingMarginIslaMap({});
 
-    setOrderCategory(catalogCategories[0] || "");
+    setOrderCategory("Todas");
     setOrderProductId("");
     setOrderProviderPrice("");
     setOrderPackages("0");
@@ -2441,16 +2459,31 @@ export default function CandyMainOrders() {
                               : "No hay categorías en catálogo"}
                           </option>
                         ) : (
-                          catalogCategories.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
+                          <>
+                            <option key="todas" value="Todas">
+                              Todas
                             </option>
-                          ))
+                            {catalogCategories.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </>
                         )}
                       </select>
                     </div>
 
                     <div className="md:col-span-2">
+                      <label className="block text-sm font-semibold">
+                        Buscar producto
+                      </label>
+                      <input
+                        className="w-full border p-2 rounded mb-2"
+                        placeholder="Buscar producto..."
+                        value={productSearch}
+                        onChange={(e) => setProductSearch(e.target.value)}
+                      />
+
                       <label className="block text-sm font-semibold">
                         Producto (catálogo)
                       </label>
@@ -2464,7 +2497,7 @@ export default function CandyMainOrders() {
                             ? "Cargando catálogo..."
                             : "Selecciona producto"}
                         </option>
-                        {catalogByCategory.map((p) => (
+                        {productsForSelect.map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.name}
                           </option>

@@ -3063,7 +3063,6 @@ export default function VendorCandyOrders({
       "U. Bruta",
       "U x paq",
       "UV x paq",
-      "U. Vendedor",
       "U. Neta",
       "P. Isla",
       "Total Isla",
@@ -3112,7 +3111,6 @@ export default function VendorCandyOrders({
           Number(grossProfitBase || 0),
           Number(Number(uXpaq || 0).toFixed(2)),
           Number(Number(uvXpaq || 0).toFixed(2)),
-          Number(uVendor || 0),
           Number(uNeta || 0),
           Number(it.unitPriceIsla || 0),
           Number(it.totalIsla || 0),
@@ -3911,14 +3909,14 @@ export default function VendorCandyOrders({
   // =========================
   // Solo admin puede cambiar el vendedor en el selector
   const disableSellerSelect = !isAdmin;
-  const desktopColumns = isAdmin ? 12 : 9;
+  const desktopColumns = isAdmin ? 11 : 8;
   const zeroClass = (v: number) => (Number(v) <= 0 ? "text-red-500" : "");
 
   // =========================
   // RENDER
   // =========================
   return (
-    <div className="p-3 md:p-6 overflow-x-hidden">
+    <div className="p-3 md:p-6 overflow-x-visible">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-3">
         <div className="flex-1">
@@ -3939,14 +3937,6 @@ export default function VendorCandyOrders({
               className="px-3 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-700"
             >
               Traslados
-            </button>
-          )}
-          {!isReadOnly && (
-            <button
-              onClick={openNewOrder}
-              className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
-            >
-              + Nuevo pedido
             </button>
           )}
         </div>
@@ -3981,7 +3971,7 @@ export default function VendorCandyOrders({
       {!loading && (
         <>
           {/* Desktop table */}
-          <div className="hidden md:block bg-white border border-slate-200 rounded-xl shadow-sm overflow-x-hidden max-w-full">
+          <div className="hidden md:block bg-white border border-slate-200 rounded-xl shadow-sm overflow-x-auto max-w-full">
             <div className="p-3 border-b flex items-center justify-between">
               <div className="text-sm text-gray-700">
                 Total pedidos: <b>{orderSummaries.length}</b>
@@ -4006,6 +3996,14 @@ export default function VendorCandyOrders({
                 )} */}
                 {isAdmin && (
                   <>
+                    <button
+                      className="px-3 py-2 rounded border text-sm bg-blue-600 text-white hover:bg-blue-700"
+                      onClick={() => openNewOrder()}
+                      title="Nuevo pedido"
+                      aria-label="Nuevo pedido"
+                    >
+                      +
+                    </button>
                     <button
                       className={`px-3 py-2 rounded border text-sm ${
                         isSyncingAll
@@ -4047,7 +4045,7 @@ export default function VendorCandyOrders({
             </div>
 
             <div className="overflow-x-auto max-w-full w-full">
-              <table className="min-w-[1100px] w-full text-xs">
+              <table className="w-full table-fixed text-xs">
                 <thead className="bg-slate-100 sticky top-0 z-10">
                   <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
                     <th className="text-left p-3 border-b">Nombre</th>
@@ -4066,8 +4064,6 @@ export default function VendorCandyOrders({
                     {isAdmin && (
                       <th className="text-right p-3 border-b">Gastos</th>
                     )}
-
-                    <th className="text-right p-3 border-b">U. Vendedor</th>
                     <th className="text-right p-3 border-b">Trasl. Salida</th>
                     <th className="text-right p-3 border-b">Trasl. Entrada</th>
                     <th className="text-left p-3 border-b">Acciones</th>
@@ -4090,10 +4086,14 @@ export default function VendorCandyOrders({
                     return (
                       <tr
                         key={o.orderKey}
-                        className="hover:bg-slate-50 whitespace-nowrap odd:bg-white even:bg-slate-50"
+                        className="hover:bg-slate-50 odd:bg-white even:bg-slate-50"
                       >
-                        <td className="p-3 border-b">{o.orderName || "—"}</td>
-                        <td className="p-3 border-b">{o.date}</td>
+                        <td className="p-3 border-b max-w-[240px] whitespace-normal break-words">
+                          {o.orderName || "—"}
+                        </td>
+                        <td className="p-3 border-b text-sm text-gray-600">
+                          {o.date}
+                        </td>
                         <td className="p-3 border-b">{o.sellerName}</td>
                         <td className="p-3 border-b text-right">
                           <span className={zeroClass(o.totalPackages)}>
@@ -4124,12 +4124,6 @@ export default function VendorCandyOrders({
                             {money((o.gastosActive ?? o.gastos) || 0)}
                           </td>
                         )}
-
-                        <td className="p-3 border-b text-right">
-                          <span className={zeroClass(vendorProfitVal)}>
-                            {money(vendorProfitVal)}
-                          </span>
-                        </td>
                         <td className="p-3 border-b text-right">
                           <span className={zeroClass(transferredOutVal)}>
                             {o.transferredOut}
@@ -4143,10 +4137,24 @@ export default function VendorCandyOrders({
                         <td className="p-3 border-b">
                           <div className="flex gap-2">
                             <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
                               onClick={() => openEditOrder(o.orderKey)}
+                              aria-label="Editar pedido"
+                              title="Editar"
                             >
-                              Ver / Editar
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                className="w-4 h-4"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth={1.5}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                              </svg>
                             </button>
                             {/* recalc button removed per request */}
                             {isAdmin && (
@@ -4159,8 +4167,10 @@ export default function VendorCandyOrders({
                                     deleteOrder(o.orderKey);
                                   }
                                 }}
+                                aria-label="Eliminar pedido"
+                                title="Eliminar"
                               >
-                                Eliminar
+                                ×
                               </button>
                             )}
                           </div>
@@ -4242,15 +4252,17 @@ export default function VendorCandyOrders({
 
                   {isAdmin && (
                     <button
-                      className="px-3 py-2 rounded border text-sm text-red-600"
+                      className="px-3 py-2 rounded bg-red-600 text-white text-sm hover:bg-red-700"
                       onClick={(e) => {
                         e.stopPropagation();
                         if (confirm("¿Eliminar este pedido completo?")) {
                           deleteOrder(o.orderKey);
                         }
                       }}
+                      aria-label="Eliminar pedido"
+                      title="Eliminar"
                     >
-                      Eliminar
+                      ×
                     </button>
                   )}
                 </div>
@@ -4287,16 +4299,7 @@ export default function VendorCandyOrders({
                         </div>
                       </div>
                     )}
-                    <div className="border rounded p-2">
-                      <div className="text-gray-600">U. Vendedor</div>
-                      <div
-                        className={`font-semibold ${zeroClass(
-                          Number(o.vendorProfitActive ?? o.vendorProfit ?? 0),
-                        )}`}
-                      >
-                        {money(o.vendorProfitActive ?? o.vendorProfit)}
-                      </div>
-                    </div>
+                    {/* U. Vendedor column removed */}
                   </div>
                 </div>
               </div>
@@ -4702,7 +4705,7 @@ export default function VendorCandyOrders({
                             </th>
                           </>
                         )}
-                        <th className="text-right p-2 border-b">U. Vendedor</th>
+                        {/* U. Vendedor column removed */}
                         {isAdmin && (
                           <>
                             <th className="text-right p-2 border-b">
@@ -4801,11 +4804,24 @@ export default function VendorCandyOrders({
                                     </span>
                                     <button
                                       type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
                                       onClick={() => openPackageEdit(it.id)}
                                       aria-label="Editar paquetes"
+                                      title="Editar paquetes"
                                     >
-                                      ✏️
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="w-4 h-4"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth={1.5}
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                        <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                      </svg>
                                     </button>
                                   </div>
                                 )
@@ -4864,11 +4880,24 @@ export default function VendorCandyOrders({
                                     </span>
                                     <button
                                       type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
                                       onClick={() => openRemainingEdit(it.id)}
                                       aria-label="Editar restantes"
+                                      title="Editar restantes"
                                     >
-                                      ✏️
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="w-4 h-4"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth={1.5}
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                        <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                      </svg>
                                     </button>
                                   </div>
                                 )
@@ -4972,11 +5001,7 @@ export default function VendorCandyOrders({
                               </>
                             )}
 
-                            <td className="p-2 border-b text-right">
-                              <span className={zeroClass(uVendorDisplay)}>
-                                {money(uVendorDisplay)}
-                              </span>
-                            </td>
+                            {/* U. Vendedor cell removed */}
                             {isAdmin && (
                               <>
                                 <td className="p-2 border-b text-right">
@@ -5052,11 +5077,24 @@ export default function VendorCandyOrders({
                                     </span>
                                     <button
                                       type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
                                       onClick={() => openMarginEdit(it.id)}
                                       aria-label="Editar margen"
+                                      title="Editar margen"
                                     >
-                                      ✏️
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="w-4 h-4"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth={1.5}
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                        <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                      </svg>
                                     </button>
                                   </div>
                                 )
@@ -5089,7 +5127,7 @@ export default function VendorCandyOrders({
                                   }}
                                   aria-label="Eliminar producto"
                                 >
-                                  <span className="leading-none">✖</span>
+                                  <span className="leading-none">×</span>
                                 </button>
                               )}
                             </td>
@@ -5224,13 +5262,26 @@ export default function VendorCandyOrders({
                                             </span>
                                             <button
                                               type="button"
-                                              className="text-xs text-gray-600 hover:text-gray-900"
+                                              className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
                                               onClick={() =>
                                                 openPackageEdit(it.id)
                                               }
                                               aria-label="Editar paquetes"
+                                              title="Editar paquetes"
                                             >
-                                              ✏️
+                                              <svg
+                                                xmlns="http://www.w3.org/2000/svg"
+                                                className="w-4 h-4"
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth={1.5}
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                              >
+                                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                              </svg>
                                             </button>
                                           </div>
                                         )
@@ -5296,13 +5347,26 @@ export default function VendorCandyOrders({
                                               </span>
                                               <button
                                                 type="button"
-                                                className="text-xs text-gray-600 hover:text-gray-900"
+                                                className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
                                                 onClick={() =>
                                                   openRemainingEdit(it.id)
                                                 }
                                                 aria-label="Editar restantes"
+                                                title="Editar restantes"
                                               >
-                                                ✏️
+                                                <svg
+                                                  xmlns="http://www.w3.org/2000/svg"
+                                                  className="w-4 h-4"
+                                                  viewBox="0 0 24 24"
+                                                  fill="none"
+                                                  stroke="currentColor"
+                                                  strokeWidth={1.5}
+                                                  strokeLinecap="round"
+                                                  strokeLinejoin="round"
+                                                >
+                                                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                                  <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                                </svg>
                                               </button>
                                             </div>
                                           )
@@ -5489,13 +5553,26 @@ export default function VendorCandyOrders({
                                             </span>
                                             <button
                                               type="button"
-                                              className="text-xs text-gray-600 hover:text-gray-900"
+                                              className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
                                               onClick={() =>
                                                 openMarginEdit(it.id)
                                               }
                                               aria-label="Editar margen"
+                                              title="Editar margen"
                                             >
-                                              ✏️
+                                              <svg
+                                                xmlns="http://www.w3.org/2000/svg"
+                                                className="w-4 h-4"
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth={1.5}
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                              >
+                                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                              </svg>
                                             </button>
                                           </div>
                                         )
@@ -5531,7 +5608,7 @@ export default function VendorCandyOrders({
                                         }}
                                         aria-label="Eliminar producto"
                                       >
-                                        <span className="leading-none">✖</span>
+                                        <span className="leading-none">×</span>
                                       </button>
                                     )}
                                   </div>

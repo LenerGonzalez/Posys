@@ -7,6 +7,7 @@ import {
   doc,
   query,
   where,
+  onSnapshot,
   Timestamp,
   addDoc,
   serverTimestamp,
@@ -113,6 +114,34 @@ export default function FinancialDashboard(): React.ReactElement {
   const [priceVenta, setPriceVenta] = useState<Record<string, number>>({});
 
   const { refreshKey, refresh } = useManualRefresh();
+
+  // Listen to customers and AR movements so dashboard updates when edited elsewhere
+  useEffect(() => {
+    const unsubCust = onSnapshot(collection(db, "customers_pollo"), () => {
+      try {
+        refresh();
+      } catch (e) {
+        console.warn("Failed to call refresh from customers snapshot:", e);
+      }
+    });
+
+    const unsubMov = onSnapshot(collection(db, "ar_movements_pollo"), () => {
+      try {
+        refresh();
+      } catch (e) {
+        console.warn("Failed to call refresh from movements snapshot:", e);
+      }
+    });
+
+    return () => {
+      try {
+        unsubCust();
+      } catch {}
+      try {
+        unsubMov();
+      } catch {}
+    };
+  }, [refresh]);
 
   // UI: estado de expansión en mobile
   const [openProducts, setOpenProducts] = useState<Record<string, boolean>>({});

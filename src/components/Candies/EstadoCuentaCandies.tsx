@@ -680,9 +680,29 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
   const rowsWithBalance = useMemo(() => {
     let bal = Number(saldoBase || 0);
+    let evol = 0; // acumulado de ventas mostrado en la tabla
+    let cumCom = 0; // acumulado de comisiones mostrado en la tabla
     return mergedRows.map((r) => {
-      bal = bal + Number(r.inAmount || 0) - Number(r.outAmount || 0);
-      return { ...r, balance: bal };
+      // sumar al evolutivo solo los montos de venta (saleAmount)
+      evol = evol + Number(r.saleAmount || 0);
+
+      // acumulador de comisiones (solo suma si existe comision en la fila)
+      cumCom = cumCom + Number(r.commission || 0);
+
+      // saldoBase ya incluye ventas (cash + downPayments) y abonosPeriodo,
+      // por eso NO debemos volver a sumar inAmount/outAmount de filas
+      // cuya fuente sea 'sales' o 'ar' — solo aplicamos cambios del ledger manual.
+      const isPrecounted = r.source === "sales" || r.source === "ar";
+      const delta = isPrecounted
+        ? 0
+        : Number(r.inAmount || 0) - Number(r.outAmount || 0);
+      bal = bal + delta;
+      return {
+        ...r,
+        balance: bal,
+        evolutive: evol,
+        commissionEvol: cumCom,
+      } as any;
     });
   }, [mergedRows, saldoBase]);
 
@@ -718,12 +738,17 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         : a;
     }, 0);
 
+    const depositSum = ledger.reduce((a, r) => {
+      return r.movement === "DEPOSITO" ? a + Number(r.outAmount || 0) : a;
+    }, 0);
+
     return {
       inSum,
       gastosSum,
       outSumNonGastos,
       abonoDueno,
       reabastecimientoSum,
+      depositSum,
     };
   }, [ledger]);
 
@@ -790,10 +815,12 @@ export default function EstadoCuentaCandies(): React.ReactElement {
       "Vendedor",
       "Cliente",
       "Venta",
-      "Comision",
       "Paquetes",
+      "Comision",
+      "Evolutivo",
       "Entrada",
       "Salida",
+      "Evolutivo",
       "Saldo",
       "Descripcion",
       "Referencia",
@@ -808,10 +835,12 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         r.vendorName || "",
         r.customerName || r.customerId || "",
         Number(r.saleAmount || 0),
-        Number(r.commission || 0),
         Number(r.packages || 0),
+        Number(r.commission || 0),
+        Number((r as any).commissionEvol || 0),
         Number(r.inAmount || 0),
         Number(r.outAmount || 0),
+        Number((r as any).evolutive || 0),
         Number(r.balance || 0),
         r.description || "",
         r.reference || "",
@@ -922,7 +951,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
     if (onlyOutTypes.includes(type)) setInAmount("");
     if (onlyInTypes.includes(type)) setOutAmount("");
 
-    if (type !== "PAGO_COMISION") setVendorId("");
+    if (type !== "PAGO_COMISION" && type !== "DEPOSITO") setVendorId("");
   }, [type]);
 
   // close modal/menu on outside click or Escape
@@ -967,9 +996,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
       <div className="flex items-center justify-between mb-3 gap-2">
-        <h2 className="text-xl sm:text-2xl font-bold">
-          Estado de Cuenta — Caramelos
-        </h2>
+        <h2 className="text-xl sm:text-2xl font-bold">Estado de Cuenta</h2>
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
           <button
@@ -977,7 +1004,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             onClick={exportToExcel}
             className="px-3 py-2 border rounded bg-white hover:bg-gray-50 text-sm"
           >
-            Exportar Excel
+            Excel
           </button>
         </div>
       </div>
@@ -1028,19 +1055,19 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               <div className="text-xs text-gray-600">
                 Paquetes vendidos Cash
               </div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {Number(base?.packsCash ?? 0)}
               </div>
 
               <div className="text-xs text-gray-600 mt-2">
                 Paquetes vendidos Crédito
               </div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {Number(base?.packsCredit ?? 0)}
               </div>
 
               <div className="text-xs text-gray-600 mt-2">Total Paquetes</div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {Number((base?.packsCash ?? 0) + (base?.packsCredit ?? 0))}
               </div>
             </div>
@@ -1055,21 +1082,21 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           {!collapseVentas && (
             <div className="mt-3 space-y-2">
               <div className="text-xs text-gray-600">Ventas Cash $</div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {money(base?.salesCash ?? 0)}
               </div>
 
               <div className="text-xs text-gray-600 mt-2">
                 Ventas Crédito $ (no caja)
               </div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {money(base?.salesCredit ?? 0)}
               </div>
 
               <div className="text-xs text-gray-600 mt-2">
                 Abonos al periodo $
               </div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {money(base?.abonosPeriodo ?? 0)}
               </div>
             </div>
@@ -1079,47 +1106,30 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         {/* Bloque KPIs principales */}
         <div className="sm:col-span-2 lg:col-span-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            <div className="border rounded-2xl p-3 bg-green-50">
-              <div className="text-xs text-gray-600">Prestamos a negocio</div>
-              <div className="text-2xl font-bold">
-                {money(totalsLedger.inSum)}
-              </div>
-            </div>
+            {/* Prestamo-related KPIs hidden */}
 
-            <div className="border rounded-2xl p-3 bg-emerald-50">
-              <div className="text-xs text-gray-600">Abonos a Prestamos</div>
-              <div className="text-2xl font-bold">
-                {money(totalsLedger.abonoDueno)}
-              </div>
-            </div>
-
-            <div className="border rounded-2xl p-3 bg-amber-50">
-              <div className="text-xs text-gray-600">Deuda a Prestamos</div>
-              <div className="text-2xl font-bold">{money(deudaDueno)}</div>
-            </div>
-
-            <div className="border rounded-2xl p-3 bg-red-50">
+            <div className="sm:col-span-2 lg:col-span-5 border rounded-2xl p-3 bg-red-50">
               <div className="text-xs text-gray-600">Gastos del periodo</div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {money(totalsLedger.gastosSum)}
               </div>
             </div>
 
-            <div className="border rounded-2xl p-3 bg-red-50">
+            <div className="sm:col-span-2 lg:col-span-5 border rounded-2xl p-3 bg-red-50">
               <div className="text-xs text-gray-600">
                 Salidas (Retiros, Depositos, Perdidas)
               </div>
-              <div className="text-2xl font-bold">
+              <div className="text-xl font-bold break-words max-w-full">
                 {money(totalsLedger.outSumNonGastos)}
               </div>
             </div>
           </div>
 
-          {/* Cards comisiones */}
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {/* Cards comisiones (fila 1) */}
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="border rounded-2xl p-3 bg-sky-50">
               <div className="text-xs text-gray-600">Comisiones Cash</div>
-              <div className="text-2xl font-bold">
+              <div className="text-2xl font-bold break-words max-w-full">
                 {money(totalComisionCash)}
               </div>
               <div className="mt-2 space-y-1 text-sm">
@@ -1131,10 +1141,14 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                   listComCash.map((v) => (
                     <div
                       key={v.sellerId}
-                      className="flex items-center justify-between border-b border-black/5 py-1"
+                      className="flex items-center justify-between border-b border-black/5 py-1 min-w-0"
                     >
-                      <span className="text-gray-800">{v.sellerName}</span>
-                      <span className="font-semibold">{money(v.amount)}</span>
+                      <span className="text-gray-800 truncate">
+                        {v.sellerName}
+                      </span>
+                      <span className="font-semibold truncate ml-2">
+                        {money(v.amount)}
+                      </span>
                     </div>
                   ))
                 )}
@@ -1143,7 +1157,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
             <div className="border rounded-2xl p-3 bg-violet-50">
               <div className="text-xs text-gray-600">Comisiones Crédito</div>
-              <div className="text-2xl font-bold">
+              <div className="text-2xl font-bold break-words max-w-full">
                 {money(totalComisionCredit)}
               </div>
               <div className="mt-2 space-y-1 text-sm">
@@ -1155,10 +1169,14 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                   listComCredit.map((v) => (
                     <div
                       key={v.sellerId}
-                      className="flex items-center justify-between border-b border-black/5 py-1"
+                      className="flex items-center justify-between border-b border-black/5 py-1 min-w-0"
                     >
-                      <span className="text-gray-800">{v.sellerName}</span>
-                      <span className="font-semibold">{money(v.amount)}</span>
+                      <span className="text-gray-800 truncate">
+                        {v.sellerName}
+                      </span>
+                      <span className="font-semibold truncate ml-2">
+                        {money(v.amount)}
+                      </span>
                     </div>
                   ))
                 )}
@@ -1166,25 +1184,53 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             </div>
           </div>
 
-          {/* KPIs finales */}
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-3">
+          {/* KPIs secundarios (fila 2) */}
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="border rounded-2xl p-3 bg-blue-50">
-              <div className="text-xs text-gray-600">Reabastecimiento</div>
-              <div className="text-2xl font-bold">
-                {money(totalsLedger.reabastecimientoSum || 0)}
+              <div className="text-xs text-gray-600">Arqueo Ventas</div>
+              <div className="text-2xl font-bold break-words max-w-full">
+                {money(totalsLedger.depositSum || 0)}
               </div>
-            </div>
-
-            <div className="border rounded-2xl p-3 bg-indigo-50">
-              <div className="text-xs text-gray-600">
-                Saldo Inicial (Ventas Cash + Abonos)
-              </div>
-              <div className="text-2xl font-bold">{money(saldoBase)}</div>
             </div>
 
             <div className="border rounded-2xl p-3 bg-gray-900 text-white">
               <div className="text-xs opacity-80">Saldo final (corriente)</div>
-              <div className="text-3xl font-extrabold">{money(saldoFinal)}</div>
+              <div className="text-3xl font-extrabold break-words max-w-full">
+                {money(saldoFinal)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* KPIs Mobile */}
+      <div className="md:hidden mb-4">
+        <div className="grid grid-cols-2 gap-2">
+          <div className="border rounded-2xl p-3 bg-sky-50 text-center">
+            <div className="text-xs text-gray-600">Comisiones Cash</div>
+            <div className="text-lg font-bold break-words max-w-full">
+              {money(totalComisionCash)}
+            </div>
+          </div>
+
+          <div className="border rounded-2xl p-3 bg-violet-50 text-center">
+            <div className="text-xs text-gray-600">Comisiones Crédito</div>
+            <div className="text-lg font-bold break-words max-w-full">
+              {money(totalComisionCredit)}
+            </div>
+          </div>
+
+          <div className="border rounded-2xl p-3 bg-blue-50 text-center">
+            <div className="text-xs text-gray-600">Arqueo Ventas</div>
+            <div className="text-lg font-bold break-words max-w-full">
+              {money(totalsLedger.depositSum || 0)}
+            </div>
+          </div>
+
+          <div className="border rounded-2xl p-3 bg-gray-900 text-white text-center">
+            <div className="text-xs opacity-80">Saldo final</div>
+            <div className="text-lg font-extrabold break-words max-w-full">
+              {money(saldoFinal)}
             </div>
           </div>
         </div>
@@ -1211,10 +1257,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         </button>
 
         <div className="flex flex-col sm:flex-row gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
             <label className="text-sm text-gray-700">Movimiento:</label>
             <select
-              className="border rounded px-2 py-2 text-sm"
+              className="border rounded px-2 py-2 text-sm w-full sm:w-auto"
               value={movementTypeFilter}
               onChange={(e) => setMovementTypeFilter(e.target.value)}
             >
@@ -1226,10 +1272,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             </select>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
             <label className="text-sm text-gray-700">Vendedor:</label>
             <select
-              className="border rounded px-2 py-2 text-sm"
+              className="border rounded px-2 py-2 text-sm w-full sm:w-auto max-w-full"
               value={vendorFilter}
               onChange={(e) => setVendorFilter(e.target.value)}
             >
@@ -1243,10 +1289,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           </div>
 
           {/* ✅ nuevo filtro Tipo */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
             <label className="text-sm text-gray-700">Tipo:</label>
             <select
-              className="border rounded px-2 py-2 text-sm"
+              className="border rounded px-2 py-2 text-sm w-full sm:w-auto"
               value={typeFilter}
               onChange={(e) =>
                 setTypeFilter(e.target.value as "ALL" | "Cash" | "Crédito")
@@ -1336,10 +1382,12 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                   className="border rounded px-3 py-2 w-full"
                   value={vendorId}
                   onChange={(e) => setVendorId(e.target.value)}
-                  disabled={type !== "PAGO_COMISION"}
+                  disabled={!(type === "PAGO_COMISION" || type === "DEPOSITO")}
                 >
                   <option value="">
-                    {type === "PAGO_COMISION" ? "Seleccionar..." : "—"}
+                    {type === "PAGO_COMISION" || type === "DEPOSITO"
+                      ? "Seleccionar..."
+                      : "—"}
                   </option>
                   {sellers.map((v) => (
                     <option key={v.id} value={v.id}>
@@ -1459,9 +1507,9 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         </div>
       )}
 
-      {/* Tabla desktop */}
-      <div className="hidden md:block overflow-x-auto">
-        <table className="min-w-full border text-sm">
+      {/* Tabla (desktop + móvil) */}
+      <div className="block overflow-x-auto">
+        <table className="min-w-full w-full border text-sm table-auto">
           <thead className="bg-gray-100">
             <tr>
               <th className="border p-2">Fecha</th>
@@ -1469,10 +1517,12 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               <th className="border p-2">Tipo</th>
               <th className="border p-2">Vendedor</th>
               <th className="border p-2">Venta</th>
-              <th className="border p-2">Comisión</th>
               <th className="border p-2">Paquetes</th>
+              <th className="border p-2">Comisión</th>
+              <th className="border p-2">Evolutivo</th>
               <th className="border p-2">Entrada</th>
               <th className="border p-2">Salida</th>
+              <th className="border p-2">Evolutivo</th>
               <th className="border p-2">Saldo</th>
               <th className="border p-2">Acciones</th>
             </tr>
@@ -1486,10 +1536,16 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               <td className="border p-1">SALDO_INICIAL</td>
               <td className="border p-1">—</td>
               <td className="border p-1">—</td>
-              <td className="border p-1">{money(0)}</td>
-              <td className="border p-1">{money(0)}</td>
+              <td className="border p-1">
+                <span className="text-green-600 font-medium">{money(0)}</span>
+              </td>
               <td className="border p-1">—</td>
+              <td className="border p-1">{money(0)}</td>
+              <td className="border p-1">
+                <span className="text-green-600 font-medium">{money(0)}</span>
+              </td>
               <td className="border p-1">{money(saldoBase)}</td>
+              <td className="border p-1">{money(0)}</td>
               <td className="border p-1">{money(0)}</td>
               <td className="border p-1 font-semibold">{money(saldoBase)}</td>
               <td className="border p-1">—</td>
@@ -1518,6 +1574,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                         ABONO
                       </span>
                     )
+                  ) : Number(r.outAmount || 0) > 0 ? (
+                    <span className="text-[11px] px-2 py-[2px] rounded-full bg-red-100 text-red-800 border border-red-200">
+                      {String(r.movement || "SALIDA").toUpperCase()}
+                    </span>
                   ) : r.movement === "PRESTAMO A NEGOCIO POR DUENO" ? (
                     <span className="text-[11px] px-2 py-[2px] rounded-full bg-red-100 text-red-800 border border-red-200">
                       PRESTAMO
@@ -1537,12 +1597,6 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                 <td className="border p-1">{money(r.saleAmount || 0)}</td>
 
                 <td className="border p-1">
-                  {typeof r.commission === "number" && r.commission > 0
-                    ? money(r.commission)
-                    : "—"}
-                </td>
-
-                <td className="border p-1">
                   {typeof r.packages === "number" && r.saleId ? (
                     <button
                       type="button"
@@ -1557,8 +1611,26 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                   )}
                 </td>
 
+                <td className="border p-1">
+                  {typeof r.commission === "number" && r.commission > 0
+                    ? money(r.commission)
+                    : "—"}
+                </td>
+
+                <td className="border p-1">
+                  <span className="text-green-600 font-medium">
+                    {money((r as any).commissionEvol || 0)}
+                  </span>
+                </td>
+
                 <td className="border p-1">{money(r.inAmount)}</td>
                 <td className="border p-1">{money(r.outAmount)}</td>
+
+                <td className="border p-1">
+                  <span className="text-green-600 font-medium">
+                    {money((r as any).evolutive || 0)}
+                  </span>
+                </td>
                 <td className="border p-1 font-semibold">{money(r.balance)}</td>
 
                 <td className="border p-1 relative">
@@ -1641,7 +1713,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
             {filteredRows.length === 0 && (
               <tr>
-                <td colSpan={11} className="p-3 text-center text-gray-500">
+                <td colSpan={13} className="p-3 text-center text-gray-500">
                   No hay datos en este rango.
                 </td>
               </tr>

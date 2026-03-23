@@ -17,6 +17,8 @@ import { Role } from "../../apis/apis";
 import { hasRole } from "../../utils/roles";
 import allocateFIFOAndUpdateBatches from "../../Services/allocateFIFO";
 import { roundQty, addQty, gteQty } from "../../Services/decimal";
+import RefreshButton from "../../components/common/RefreshButton";
+import useManualRefresh from "../../hooks/useManualRefresh";
 
 // --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
 async function fixBatchesProductIdByName(
@@ -119,11 +121,193 @@ export default function SaleForm({
 
   const [message, setMessage] = useState("");
 
+  const { refreshKey, refresh } = useManualRefresh();
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Recalcula los precios del carrito desde los lotes y actualiza items
+  const refreshCartPrices = async () => {
+    if (!items || items.length === 0) return;
+    try {
+      const updated: CartItem[] = [];
+      const changes: string[] = [];
+      for (const it of items) {
+        const resolved = await getSalePriceFromBatches(
+          it.productId,
+          Number(it.price || 0),
+        );
+        const newPrice = Number(resolved || it.price || 0);
+        if (Number(it.price || 0) !== newPrice) {
+          changes.push(
+            `${it.productName}: C$ ${Number(it.price).toFixed(2)} → C$ ${newPrice.toFixed(2)}`,
+          );
+        }
+        updated.push({ ...it, price: newPrice });
+      }
+      setItems(updated);
+
+      if (changes.length > 0) {
+        const note = `Precios actualizados: ${changes.join("; ")}`;
+        setMessage(note);
+        setTimeout(() => setMessage(""), 4000);
+      }
+    } catch (e) {
+      // no bloquear la UX por errores de precio
+      console.error("Error actualizando precios del carrito:", e);
+    }
+  };
+
+  // Extract loaders so handleRefresh can call them deterministically
+  const loadProducts = async () => {
+    const snap = await getDocs(collection(db, "products"));
+    const list: Product[] = [];
+    snap.forEach((docSnap) => {
+      const x = docSnap.data() as any;
+      if (x?.active === false) return;
+      list.push({
+        id: docSnap.id,
+        productName: x.name ?? x.productName ?? "(sin nombre)",
+        price: Number(x.price ?? 0),
+        measurement: x.measurement ?? "(sin unidad)",
+        category: x.category ?? "(sin categoría)",
+      });
+    });
+    setProducts(list);
+  };
+
+  const loadInventoryBatches = async () => {
+    const snap = await getDocs(collection(db, "inventory_batches"));
+    const m: Record<string, number> = {};
+    const batchesByProduct: Record<string, Array<any>> = {};
+    snap.forEach((d) => {
+      const x = d.data() as any;
+      const pid = x.productId;
+      const rem = Number(x.remaining || 0);
+      if (pid) m[pid] = addQty(m[pid] || 0, rem);
+      if (pid) {
+        batchesByProduct[pid] = batchesByProduct[pid] || [];
+        batchesByProduct[pid].push({ id: d.id, data: x });
+      }
+    });
+    Object.keys(m).forEach((k) => (m[k] = roundQty(m[k])));
+    setStockById(m);
+
+    const priceMap: Record<string, number> = {};
+    for (const pid of Object.keys(batchesByProduct)) {
+      const list = batchesByProduct[pid].slice().sort((a, b) => {
+        const da = (a.data.date ?? "") as string;
+        const dbs = (b.data.date ?? "") as string;
+        if (da !== dbs) return da > dbs ? -1 : 1;
+        const ca = a.data.createdAt?.seconds ?? 0;
+        const cb = b.data.createdAt?.seconds ?? 0;
+        return cb - ca;
+      });
+      for (const entry of list) {
+        const b = entry.data as any;
+        const candidate = Number(b.salePrice ?? b.sale_price ?? b.price ?? NaN);
+        if (!Number.isNaN(candidate)) {
+          priceMap[pid] = Number(candidate);
+          break;
+        }
+      }
+    }
+    setLatestPriceById(priceMap);
+  };
+
+  const loadUsers = async () => {
+    const snap = await getDocs(collection(db, "users"));
+    const list: Users[] = [];
+    snap.forEach((docSnap) => {
+      const x = docSnap.data() as any;
+      list.push({
+        id: docSnap.id,
+        email: x.email ?? "(sin email)",
+        role: x.role ?? "USER",
+      });
+    });
+    setUsers(list);
+  };
+
+  const loadCustomers = async () => {
+    try {
+      const cSnap = await getDocs(collection(db, "customers_pollo"));
+      const list: CustomerPollo[] = [];
+      cSnap.forEach((d) => {
+        const x = d.data() as any;
+        list.push({
+          id: d.id,
+          name: x.name ?? "",
+          phone: x.phone ?? "",
+          status: (x.status as Status) ?? "ACTIVO",
+          creditLimit: Number(x.creditLimit ?? 0),
+          vendorId: x.vendorId ?? "",
+          vendorName: x.vendorName ?? "",
+          balance: 0,
+        });
+      });
+
+      for (const c of list) {
+        try {
+          const qMov = query(
+            collection(db, "ar_movements_pollo"),
+            where("customerId", "==", c.id),
+          );
+          const mSnap = await getDocs(qMov);
+          let sum = 0;
+          mSnap.forEach((m) => {
+            sum += Number((m.data() as any).amount || 0);
+          });
+
+          const initialDebt = Number((c as any).initialDebt || 0);
+          c.balance = sum + initialDebt;
+        } catch {
+          c.balance = 0;
+        }
+      }
+
+      list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+      setCustomers(list);
+    } catch (e) {
+      console.error("Error cargando customers_pollo:", e);
+      setCustomers([]);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // deterministic reload of all main datasets used by this component
+      await loadProducts();
+      await loadInventoryBatches();
+      await loadUsers();
+      await loadCustomers();
+
+      // also call the global/manual refresh hook to notify other components
+      try {
+        refresh();
+      } catch (e) {
+        // non-fatal
+        console.warn("refresh() hook failed:", e);
+      }
+
+      // update cart prices after loads
+      await refreshCartPrices();
+      setMessage("✅ Datos actualizados.");
+      setTimeout(() => setMessage(""), 3000);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   // 🔵 overlay de guardado
   const [saving, setSaving] = useState(false);
 
   // 🔵 mapa de existencias por productId para filtrar el selector
   const [stockById, setStockById] = useState<Record<string, number>>({});
+  // mapa de precio más reciente por productId (desde inventory_batches)
+  const [latestPriceById, setLatestPriceById] = useState<
+    Record<string, number>
+  >({});
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
   const qty3 = (n: number) => roundQty(n).toFixed(3);
@@ -175,6 +359,43 @@ export default function SaleForm({
     return roundQty(total);
   };
 
+  // Obtener precio de venta preferido desde los lotes (si existe), si no, usar precio del catálogo
+  const getSalePriceFromBatches = async (
+    productId: string,
+    fallbackPrice = 0,
+  ) => {
+    try {
+      const q = query(
+        collection(db, "inventory_batches"),
+        where("productId", "==", productId),
+      );
+      const snap = await getDocs(q);
+      // Ordenar por fecha (date) desc, luego por createdAt desc para elegir lote más reciente
+      const docsSorted = snap.docs
+        .map((d) => ({ id: d.id, data: d.data() as any }))
+        .sort((a, b) => {
+          const da = (a.data.date ?? "") as string;
+          const dbs = (b.data.date ?? "") as string;
+          if (da !== dbs) return da > dbs ? -1 : 1;
+
+          const ca = a.data.createdAt?.seconds ?? 0;
+          const cb = b.data.createdAt?.seconds ?? 0;
+          return cb - ca;
+        });
+
+      for (const d of docsSorted) {
+        const b = d.data as any;
+        const candidate = Number(b.salePrice ?? b.sale_price ?? b.price ?? NaN);
+        if (!Number.isNaN(candidate)) {
+          return Number(candidate);
+        }
+      }
+      return Number(fallbackPrice ?? 0);
+    } catch (e) {
+      return Number(fallbackPrice ?? 0);
+    }
+  };
+
   const getDisponibleByName = async (productName: string) => {
     if (!productName) return 0;
     const all = await getDocs(collection(db, "inventory_batches"));
@@ -192,56 +413,18 @@ export default function SaleForm({
 
   // Cargar productos (activos)
   useEffect(() => {
-    (async () => {
-      const snap = await getDocs(collection(db, "products"));
-      const list: Product[] = [];
-      snap.forEach((docSnap) => {
-        const x = docSnap.data() as any;
-        if (x?.active === false) return;
-        list.push({
-          id: docSnap.id,
-          productName: x.name ?? x.productName ?? "(sin nombre)",
-          price: Number(x.price ?? 0),
-          measurement: x.measurement ?? "(sin unidad)",
-          category: x.category ?? "(sin categoría)",
-        });
-      });
-      setProducts(list);
-    })();
-  }, []);
+    loadProducts();
+  }, [refreshKey]);
 
   // cargar existencias por productId para filtrar el selector
   useEffect(() => {
-    (async () => {
-      const snap = await getDocs(collection(db, "inventory_batches"));
-      const m: Record<string, number> = {};
-      snap.forEach((d) => {
-        const x = d.data() as any;
-        const pid = x.productId;
-        const rem = Number(x.remaining || 0);
-        if (pid) m[pid] = addQty(m[pid] || 0, rem);
-      });
-      Object.keys(m).forEach((k) => (m[k] = roundQty(m[k])));
-      setStockById(m);
-    })();
-  }, []);
+    loadInventoryBatches();
+  }, [refreshKey]);
 
   // Cargar usuarios (igual que tenías)
   useEffect(() => {
-    (async () => {
-      const snap = await getDocs(collection(db, "users"));
-      const list: Users[] = [];
-      snap.forEach((docSnap) => {
-        const x = docSnap.data() as any;
-        list.push({
-          id: docSnap.id,
-          email: x.email ?? "(sin email)",
-          role: x.role ?? "USER",
-        });
-      });
-      setUsers(list);
-    })();
-  }, []);
+    loadUsers();
+  }, [refreshKey]);
 
   // Agregar producto al carrito (bloquea repetidos)
   const addSelectedProduct = async () => {
@@ -253,13 +436,17 @@ export default function SaleForm({
       return;
     }
     const stock = await getDisponibleByProductId(p.id);
+    const resolvedPrice = await getSalePriceFromBatches(
+      p.id,
+      Number(p.price || 0),
+    );
     setItems((prev) => [
       ...prev,
       {
         productId: p.id,
         productName: p.productName,
         measurement: p.measurement,
-        price: Number(p.price || 0),
+        price: Number(resolvedPrice || p.price || 0),
         specialPrice: 0, // ✅ NUEVO
         stock,
         qty: 0,
@@ -279,13 +466,17 @@ export default function SaleForm({
     if (!p) return;
     if (items.some((it) => it.productId === p.id)) return;
     const stock = await getDisponibleByProductId(p.id);
+    const resolvedPrice = await getSalePriceFromBatches(
+      p.id,
+      Number(p.price || 0),
+    );
     setItems((prev) => [
       ...prev,
       {
         productId: p.id,
         productName: p.productName,
         measurement: p.measurement,
-        price: Number(p.price || 0),
+        price: Number(resolvedPrice || p.price || 0),
         specialPrice: 0,
         stock,
         qty: 0,
@@ -448,54 +639,8 @@ export default function SaleForm({
 
   // ===== Cargar clientes (Pollo) + saldo desde CxC =====
   useEffect(() => {
-    (async () => {
-      try {
-        // clientes pollo
-        const cSnap = await getDocs(collection(db, "customers_pollo"));
-        const list: CustomerPollo[] = [];
-        cSnap.forEach((d) => {
-          const x = d.data() as any;
-          list.push({
-            id: d.id,
-            name: x.name ?? "",
-            phone: x.phone ?? "",
-            status: (x.status as Status) ?? "ACTIVO",
-            creditLimit: Number(x.creditLimit ?? 0),
-            vendorId: x.vendorId ?? "",
-            vendorName: x.vendorName ?? "",
-            balance: 0,
-          });
-        });
-
-        // saldos por cliente (ar_movements_pollo)
-        for (const c of list) {
-          try {
-            const qMov = query(
-              collection(db, "ar_movements_pollo"),
-              where("customerId", "==", c.id),
-            );
-            const mSnap = await getDocs(qMov);
-            let sum = 0;
-            mSnap.forEach((m) => {
-              sum += Number((m.data() as any).amount || 0);
-            });
-
-            const initialDebt = Number((c as any).initialDebt || 0);
-            c.balance = sum + initialDebt;
-          } catch {
-            c.balance = 0;
-          }
-        }
-
-        // orden alfabético
-        list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-        setCustomers(list);
-      } catch (e) {
-        console.error("Error cargando customers_pollo:", e);
-        setCustomers([]);
-      }
-    })();
-  }, []);
+    loadCustomers();
+  }, [refreshKey]);
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId) || null,
@@ -925,8 +1070,8 @@ export default function SaleForm({
                     value={p.id}
                     disabled={chosenIds.has(p.id)}
                   >
-                    {p.productName} | C$ {p.price} | Disp:{" "}
-                    {qty3(stockById[p.id] || 0)}
+                    {p.productName} | C$ {latestPriceById[p.id] ?? p.price} |
+                    Existencia: {qty3(stockById[p.id] || 0)}
                   </option>
                 ))}
               </select>
@@ -1082,6 +1227,9 @@ export default function SaleForm({
           <h2 className="text-xl sm:text-2xl font-bold text-blue-700 whitespace-nowrap">
             Registrar venta (Pollo)
           </h2>
+          <div className="ml-3">
+            <RefreshButton onClick={handleRefresh} loading={isRefreshing} />
+          </div>
         </div>
 
         {/* Selector de producto */}
@@ -1109,7 +1257,8 @@ export default function SaleForm({
                       : `Disponible: ${qty3(stockById[p.id] || 0)}`
                   }
                 >
-                  {p.productName} — {p.measurement} — C$ {p.price} (disp:{" "}
+                  {p.productName} — {p.measurement} — Precio C${" "}
+                  {latestPriceById[p.id] ?? p.price} (Existencia:{" "}
                   {qty3(stockById[p.id] || 0)})
                 </option>
               ))}

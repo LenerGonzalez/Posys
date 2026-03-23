@@ -9,6 +9,7 @@ import {
   getDoc,
   getDocs,
   orderBy,
+  limit,
   query,
   Timestamp,
   updateDoc,
@@ -16,6 +17,13 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
+import {
+  FiClock,
+  FiShoppingCart,
+  FiEdit,
+  FiTrash2,
+  FiFileText,
+} from "react-icons/fi";
 
 const PLACES = [
   "Altagracia",
@@ -47,6 +55,7 @@ interface CustomerRow {
   // para mobile (último abono)
   lastAbonoDate?: string; // yyyy-MM-dd
   lastAbonoAmount?: number; // positivo (monto del abono)
+  lastSaleDate?: string;
 }
 
 interface MovementRow {
@@ -70,6 +79,38 @@ const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
 const roundCurrency = (value: number) =>
   Math.round((Number(value) || 0) * 100) / 100;
+
+// Formatea un Timestamp/Date/string a YYYY-MM-DD en hora local (evita desfasajes UTC)
+const formatLocalDate = (v: any) => {
+  if (!v && v !== 0) return "";
+  if (typeof v === "string") {
+    // si ya viene en formato yyyy-MM-dd
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+    // intentar parsear cadenas legibles (ej: "20 mar 2026, 6:35:52.973 p.m.")
+    const parsed = new Date(v);
+    if (!Number.isNaN(parsed.getTime())) {
+      const d = parsed;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+        d.getDate(),
+      ).padStart(2, "0")}`;
+    }
+    return String(v).slice(0, 10);
+  }
+  if (v instanceof Date) {
+    const d = v;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")}`;
+  }
+  // Firestore Timestamp-like
+  if (v?.toDate && typeof v.toDate === "function") {
+    const d = v.toDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")}`;
+  }
+  return String(v).slice(0, 10);
+};
 
 const PAID_DEBT_FLAGS = new Set([
   "PAGADA",
@@ -424,7 +465,7 @@ export default function CustomersPollo({
   const [showAbono, setShowAbono] = useState(false);
   const [abonoAmount, setAbonoAmount] = useState<number>(0);
   const [abonoDate, setAbonoDate] = useState<string>(
-    new Date().toISOString().slice(0, 10),
+    formatLocalDate(new Date()),
   );
   const [abonoComment, setAbonoComment] = useState<string>("");
   const [savingAbono, setSavingAbono] = useState(false);
@@ -447,6 +488,9 @@ export default function CustomersPollo({
   const [expandedMovementId, setExpandedMovementId] = useState<string | null>(
     null,
   );
+
+  // sort mode for customer list: '' | 'lastAbono' | 'lastSale'
+  const [sortMode, setSortMode] = useState<"" | "lastAbono" | "lastSale">("");
 
   useEffect(() => {
     (async () => {
@@ -535,11 +579,7 @@ export default function CustomersPollo({
               }
 
               if (amt < 0) {
-                const d =
-                  x.date ??
-                  (x.createdAt?.toDate?.()
-                    ? x.createdAt.toDate().toISOString().slice(0, 10)
-                    : "");
+                const d = x.date ?? formatLocalDate(x.createdAt);
                 const ts = x.createdAt?.seconds
                   ? Number(x.createdAt.seconds)
                   : 0;
@@ -562,10 +602,140 @@ export default function CustomersPollo({
               c.lastAbonoDate = "";
               c.lastAbonoAmount = 0;
             }
+            // último venta (salesV2)
+            try {
+              const qS = query(
+                collection(db, "salesV2"),
+                where("customerId", "==", c.id),
+                orderBy("date", "desc"),
+                limit(1),
+              );
+              let sSnap = await getDocs(qS);
+              let sDoc = sSnap.docs[0];
+              // if no result, try ordering by timestamp or createdAt, then fallback to scanning
+              if (!sDoc) {
+                try {
+                  const q2 = query(
+                    collection(db, "salesV2"),
+                    where("customerId", "==", c.id),
+                    orderBy("timestamp", "desc"),
+                    limit(1),
+                  );
+                  sSnap = await getDocs(q2);
+                  sDoc = sSnap.docs[0];
+                } catch (e) {
+                  // ignore
+                }
+              }
+              if (!sDoc) {
+                try {
+                  const q3 = query(
+                    collection(db, "salesV2"),
+                    where("customerId", "==", c.id),
+                    orderBy("createdAt", "desc"),
+                    limit(1),
+                  );
+                  sSnap = await getDocs(q3);
+                  sDoc = sSnap.docs[0];
+                } catch (e) {
+                  // ignore
+                }
+              }
+              if (!sDoc) {
+                // last resort: fetch all for this customer and pick newest by known timestamp fields
+                try {
+                  const sAll = await getDocs(
+                    query(
+                      collection(db, "salesV2"),
+                      where("customerId", "==", c.id),
+                    ),
+                  );
+                  let best: any = null;
+                  let bestTs = 0;
+                  sAll.docs.forEach((dd) => {
+                    const sd = dd.data() as any;
+                    let candidateMs = 0;
+                    if (sd?.date) {
+                      if (typeof sd.date === "string") {
+                        const p = Date.parse(sd.date);
+                        if (!Number.isNaN(p)) candidateMs = p;
+                      } else if (sd.date?.toDate) {
+                        candidateMs = sd.date.toDate().getTime();
+                      }
+                    }
+                    if (!candidateMs && sd?.timestamp?.seconds) {
+                      candidateMs = Number(sd.timestamp.seconds) * 1000;
+                    }
+                    if (!candidateMs && sd?.createdAt?.seconds) {
+                      candidateMs = Number(sd.createdAt.seconds) * 1000;
+                    }
+                    if (candidateMs > bestTs) {
+                      bestTs = candidateMs;
+                      best = dd;
+                    }
+                  });
+                  sDoc = best;
+                } catch (e) {
+                  // ignore
+                }
+              }
+              if (sDoc) {
+                const sData: any = sDoc.data();
+                // prefer string date, otherwise try Timestamp fields
+                if (sData?.date) {
+                  c.lastSaleDate =
+                    typeof sData.date === "string"
+                      ? sData.date.slice(0, 10)
+                      : formatLocalDate(sData.date);
+                } else if (sData?.timestamp) {
+                  c.lastSaleDate = formatLocalDate(sData.timestamp);
+                } else if (sData?.createdAt) {
+                  c.lastSaleDate = formatLocalDate(sData.createdAt);
+                } else {
+                  c.lastSaleDate = "";
+                }
+              } else {
+                c.lastSaleDate = "";
+              }
+              // Debugging: log when we couldn't find a sale or when data looks unexpected
+              if (!sDoc) {
+                try {
+                  console.debug(
+                    "CustomersPollo: no sales found for customer",
+                    c.id,
+                  );
+                } catch (e) {
+                  /* ignore */
+                }
+              } else {
+                try {
+                  const sd = sDoc.data() as any;
+                  if (!sd) {
+                    console.debug(
+                      "CustomersPollo: sale doc has no data",
+                      sDoc.id,
+                      c.id,
+                    );
+                  } else if (!sd.date && !sd.timestamp && !sd.createdAt) {
+                    console.debug(
+                      "CustomersPollo: sale doc has no date fields",
+                      sDoc.id,
+                      c.id,
+                      sd,
+                    );
+                  }
+                } catch (e) {
+                  /* ignore */
+                }
+              }
+            } catch (e) {
+              c.lastSaleDate = "";
+            }
           } catch {
             c.balance = Number(c.initialDebt || 0);
             c.lastAbonoDate = "";
             c.lastAbonoAmount = 0;
+            c.lastSaleDate = "";
           }
         }
 
@@ -849,7 +1019,7 @@ export default function CustomersPollo({
 
     setShowAbono(false);
     setAbonoAmount(0);
-    setAbonoDate(new Date().toISOString().slice(0, 10));
+    setAbonoDate(formatLocalDate(new Date()));
     setAbonoComment("");
     setEditMovId(null);
 
@@ -865,9 +1035,7 @@ export default function CustomersPollo({
         const x = d.data() as any;
         const date =
           x.date ??
-          (x.createdAt?.toDate?.()
-            ? x.createdAt.toDate().toISOString().slice(0, 10)
-            : "");
+          (x.createdAt?.toDate?.() ? formatLocalDate(x.createdAt) : "");
         const amount = Number(x.amount || 0);
         list.push({
           id: d.id,
@@ -1005,7 +1173,7 @@ export default function CustomersPollo({
 
       setAbonoAmount(0);
       setAbonoComment("");
-      setAbonoDate(new Date().toISOString().slice(0, 10));
+      setAbonoDate(formatLocalDate(new Date()));
       setShowAbono(false);
       setMsg("✅ Abono registrado");
     } catch (e) {
@@ -1018,7 +1186,7 @@ export default function CustomersPollo({
 
   const startEditMovement = (m: MovementRow) => {
     setEditMovId(m.id);
-    setEMovDate(m.date || new Date().toISOString().slice(0, 10));
+    setEMovDate(m.date || formatLocalDate(new Date()));
     setEMovAmount(Math.abs(Number(m.amount || 0)));
     setEMovComment(m.comment || "");
   };
@@ -1281,7 +1449,7 @@ export default function CustomersPollo({
     const min = fMin.trim() === "" ? null : Number(fMin);
     const max = fMax.trim() === "" ? null : Number(fMax);
 
-    return orderedRows.filter((c) => {
+    let out = orderedRows.filter((c) => {
       const nameOk =
         !q ||
         String(c.name || "")
@@ -1296,7 +1464,30 @@ export default function CustomersPollo({
 
       return nameOk && statusOk && minOk && maxOk;
     });
-  }, [orderedRows, fClient, fStatus, fMin, fMax]);
+
+    // Apply sorting by selected mode
+    if (sortMode === "lastAbono") {
+      out = out.slice().sort((a, b) => {
+        const da = String(a.lastAbonoDate || "");
+        const db = String(b.lastAbonoDate || "");
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        return db.localeCompare(da);
+      });
+    } else if (sortMode === "lastSale") {
+      out = out.slice().sort((a, b) => {
+        const da = String(a.lastSaleDate || "");
+        const db = String(b.lastSaleDate || "");
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        return db.localeCompare(da);
+      });
+    }
+
+    return out;
+  }, [orderedRows, fClient, fStatus, fMin, fMax, sortMode]);
 
   const totalPendingBalance = useMemo(() => {
     return filteredRows.reduce((acc, row) => acc + Number(row.balance || 0), 0);
@@ -1358,6 +1549,34 @@ export default function CustomersPollo({
 
       <div className="bg-white border rounded shadow-sm p-4 mb-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className={`px-2 py-1 rounded border text-sm ${
+                sortMode === "lastAbono" ? "bg-blue-600 text-white" : ""
+              }`}
+              onClick={() =>
+                setSortMode((s) => (s === "lastAbono" ? "" : "lastAbono"))
+              }
+              title="Ordenar por último abono"
+            >
+              <span className="hidden sm:inline">Último abono</span>
+              <FiClock className="inline sm:hidden" />
+            </button>
+            <button
+              type="button"
+              className={`px-2 py-1 rounded border text-sm ${
+                sortMode === "lastSale" ? "bg-blue-600 text-white" : ""
+              }`}
+              onClick={() =>
+                setSortMode((s) => (s === "lastSale" ? "" : "lastSale"))
+              }
+              title="Ordenar por última compra"
+            >
+              <span className="hidden sm:inline">Última compra</span>
+              <FiShoppingCart className="inline sm:hidden" />
+            </button>
+          </div>
           <div className="flex-1">
             <label className="block text-sm font-semibold">
               Filtrar cliente
@@ -1447,13 +1666,17 @@ export default function CustomersPollo({
             <table className="min-w-full w-full text-sm">
               <thead className="bg-slate-100 sticky top-0 z-10">
                 <tr className="text-[11px] uppercase tracking-wider text-slate-600">
-                  <th className="p-3 border-b text-left">Fecha</th>
-                  <th className="p-3 border-b text-left">Nombre</th>
-                  <th className="p-3 border-b text-left">Teléfono</th>
-                  <th className="p-3 border-b text-left">Vendedor</th>
-                  <th className="p-3 border-b text-left">Lugar</th>
                   <th className="p-3 border-b text-left">Estado</th>
-                  <th className="p-3 border-b text-right">Límite</th>
+
+                  <th className="p-3 border-b text-left">Creado</th>
+
+                  <th className="p-3 border-b text-left">Ult. Compra</th>
+                  <th className="p-3 border-b text-left">Ult. Abono</th>
+                  <th className="p-3 border-b text-left">Nombre</th>
+                  {/* <th className="p-3 border-b text-left">Teléfono</th> */}
+                  <th className="p-3 border-b text-left">Vendedor</th>
+                  {/* <th className="p-3 border-b text-left">Lugar</th> */}
+                  {/* <th className="p-3 border-b text-right">Límite</th> */}
                   <th className="p-3 border-b text-right">Saldo</th>
                   <th className="p-3 border-b text-left">Comentario</th>
                   <th className="p-3 border-b text-right">Acciones</th>
@@ -1463,13 +1686,13 @@ export default function CustomersPollo({
               <tbody>
                 {loading ? (
                   <tr>
-                    <td className="p-4 text-center" colSpan={10}>
+                    <td className="p-4 text-center" colSpan={12}>
                       Cargando…
                     </td>
                   </tr>
                 ) : filteredRows.length === 0 ? (
                   <tr>
-                    <td className="p-4 text-center" colSpan={10}>
+                    <td className="p-4 text-center" colSpan={12}>
                       Sin clientes
                     </td>
                   </tr>
@@ -1481,77 +1704,6 @@ export default function CustomersPollo({
                         key={c.id}
                         className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
                       >
-                        <td className="p-3 border-b text-left">
-                          {c.createdAt?.toDate
-                            ? c.createdAt.toDate().toISOString().slice(0, 10)
-                            : "—"}
-                        </td>
-                        <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <input
-                              className="w-full border p-1 rounded"
-                              value={eName}
-                              onChange={(e) => setEName(e.target.value)}
-                            />
-                          ) : (
-                            <div className="font-medium text-slate-900">
-                              {c.name}
-                            </div>
-                          )}
-                        </td>
-                        <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <input
-                              className="w-full border p-1 rounded"
-                              value={ePhone}
-                              onChange={(e) =>
-                                setEPhone(normalizePhone(e.target.value))
-                              }
-                            />
-                          ) : (
-                            c.phone
-                          )}
-                        </td>
-                        <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <select
-                              className="w-full border p-1 rounded text-xs"
-                              value={isVendor ? sellerIdSafe : eVendorId}
-                              onChange={(e) => setEVendorId(e.target.value)}
-                              disabled={isVendor}
-                              title="Vendedor asociado"
-                            >
-                              <option value="">— Sin vendedor —</option>
-                              {sellers.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            c.vendorName || "—"
-                          )}
-                        </td>
-                        <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <select
-                              className="w-full border p-1 rounded"
-                              value={ePlace}
-                              onChange={(e) =>
-                                setEPlace(e.target.value as Place)
-                              }
-                            >
-                              <option value="">—</option>
-                              {PLACES.map((p) => (
-                                <option key={p} value={p}>
-                                  {p}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            c.place || "—"
-                          )}
-                        </td>
                         <td className="p-3 border-b text-left">
                           {isEditing ? (
                             <select
@@ -1572,7 +1724,85 @@ export default function CustomersPollo({
                             </span>
                           )}
                         </td>
-                        <td className="p-3 border-b text-right">
+                        <td className="p-3 border-b text-left">
+                          {c.createdAt?.toDate
+                            ? formatLocalDate(c.createdAt)
+                            : "—"}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {c.lastSaleDate ? c.lastSaleDate : "—"}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {c.lastAbonoDate ? c.lastAbonoDate : "—"}
+                        </td>
+                        <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <input
+                              className="w-full border p-1 rounded"
+                              value={eName}
+                              onChange={(e) => setEName(e.target.value)}
+                            />
+                          ) : (
+                            <div className="font-medium text-slate-900">
+                              {c.name}
+                            </div>
+                          )}
+                        </td>
+                        {/* <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <input
+                              className="w-full border p-1 rounded"
+                              value={ePhone}
+                              onChange={(e) =>
+                                setEPhone(normalizePhone(e.target.value))
+                              }
+                            />
+                          ) : (
+                            c.phone
+                          )}
+                        </td> */}
+                        <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <select
+                              className="w-full border p-1 rounded text-xs"
+                              value={isVendor ? sellerIdSafe : eVendorId}
+                              onChange={(e) => setEVendorId(e.target.value)}
+                              disabled={isVendor}
+                              title="Vendedor asociado"
+                            >
+                              <option value="">— Sin vendedor —</option>
+                              {sellers.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            c.vendorName || "—"
+                          )}
+                        </td>
+                        {/* <td className="p-3 border-b text-left">
+                          {isEditing ? (
+                            <select
+                              className="w-full border p-1 rounded"
+                              value={ePlace}
+                              onChange={(e) =>
+                                setEPlace(e.target.value as Place)
+                              }
+                            >
+                              <option value="">—</option>
+                              {PLACES.map((p) => (
+                                <option key={p} value={p}>
+                                  {p}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            c.place || "—"
+                          )}
+                        </td> */}
+
+                        {/* <td className="p-3 border-b text-right">
                           {isEditing ? (
                             <input
                               type="number"
@@ -1591,7 +1821,7 @@ export default function CustomersPollo({
                           ) : (
                             money(c.creditLimit || 0)
                           )}
-                        </td>
+                        </td> */}
                         <td className="p-3 border-b text-right font-semibold">
                           {money(c.balance || 0)}
                         </td>
@@ -1631,24 +1861,31 @@ export default function CustomersPollo({
                             ) : (
                               <>
                                 <button
-                                  className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                                  className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700 flex items-center justify-center"
                                   onClick={() => startEdit(c)}
+                                  title="Editar"
+                                  aria-label="Editar cliente"
                                 >
-                                  Editar
+                                  <FiEdit className="w-4 h-4" />
                                 </button>
                                 <button
-                                  className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                                  className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 flex items-center justify-center"
                                   onClick={() => handleDelete(c)}
                                   disabled={!isAdmin}
                                   title={!isAdmin ? "Solo admin" : "Borrar"}
+                                  aria-label={
+                                    isAdmin ? "Borrar cliente" : "Solo admin"
+                                  }
                                 >
-                                  Borrar
+                                  <FiTrash2 className="w-4 h-4" />
                                 </button>
                                 <button
-                                  className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
+                                  className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700 flex items-center justify-center"
                                   onClick={() => openStatement(c)}
+                                  title="Estado de cuenta"
+                                  aria-label="Ver estado de cuenta"
                                 >
-                                  Estado de cuenta
+                                  <FiFileText className="w-4 h-4" />
                                 </button>
                               </>
                             )}
@@ -1946,7 +2183,7 @@ export default function CustomersPollo({
                       className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
                       onClick={() => {
                         setAbonoAmount(0);
-                        setAbonoDate(new Date().toISOString().slice(0, 10));
+                        setAbonoDate(formatLocalDate(new Date()));
                         setAbonoComment("");
                         setShowAbono(true);
                       }}

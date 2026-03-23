@@ -235,10 +235,16 @@ export default function MobileTabsLayout({
         if (isAdmin) {
           built = [
             {
-              key: "dc",
-              label: "Data Center Reporte",
-              to: `${base}/datacenter`,
+              key: "cier",
+              label: "Ventas diarias",
+              to: `${base}/cierreVentasCandies`,
             },
+            {
+              key: "trx",
+              label: "Ventas del dia",
+              to: `${base}/transactionCandies`,
+            },
+
             {
               key: "maes",
               label: "Inventario Maestro",
@@ -254,16 +260,7 @@ export default function MobileTabsLayout({
               label: "Saldos Pendientes",
               to: `${base}/customersCandies`,
             },
-            {
-              key: "trx",
-              label: "Ventas del dia",
-              to: `${base}/transactionCandies`,
-            },
-            {
-              key: "cier",
-              label: "Ventas diarias",
-              to: `${base}/cierreVentasCandies`,
-            },
+
             {
               key: "estadoCuenta",
               label: "Estado Cuenta",
@@ -275,7 +272,6 @@ export default function MobileTabsLayout({
               to: `${base}/stockPedidosCandies`,
             },
             {
-
               key: "cash",
               label: "Entregas Efectivo ",
               to: `${base}/cashDeliveries`,
@@ -286,10 +282,11 @@ export default function MobileTabsLayout({
               label: "Precio Ventas",
               to: `${base}/productsPricesCandies`,
             },
+           
             {
-              key: "estadoCuenta",
-              label: "Estado Cuenta",
-              to: `${base}/estadoCuentaCandies`,
+              key: "dc",
+              label: "Data Center Reporte",
+              to: `${base}/datacenter`,
             },
             {
               key: "gonper",
