@@ -29,6 +29,8 @@ type TransactionItem = {
   totalSale: number;
   commissionPercent?: number;
   commissionAmount?: number;
+  // fecha y hora de registro (si está disponible)
+  registeredAt?: string | null;
 };
 
 type ExpenseItem = {
@@ -95,7 +97,7 @@ function computeTotals(inv: CandyInvoice) {
       const pk = Number(t.packages ?? 0);
       totalPackages += pk;
       totalProvider += Number(
-        t.totalProvider ?? pk * (t.providerPricePack ?? 0)
+        t.totalProvider ?? pk * (t.providerPricePack ?? 0),
       );
       totalSale += Number(t.totalSale ?? pk * (t.salePricePack ?? 0));
       const commission =
@@ -160,7 +162,7 @@ function getInvoiceVendorName(inv: CandyInvoice): string {
   const txs = inv.transactions || [];
   if (txs.length === 0) return "—";
   const names = Array.from(
-    new Set(txs.map((t) => t.vendorName || "Sin nombre"))
+    new Set(txs.map((t) => t.vendorName || "Sin nombre")),
   );
   if (names.length === 1) return names[0];
   return "Varios";
@@ -178,7 +180,7 @@ export default function BillingCandies() {
     setLoading(true);
     const qy = query(
       collection(db, "invoicesCandies"),
-      orderBy("date", "desc")
+      orderBy("date", "desc"),
     );
     const snap = await getDocs(qy);
     const list: CandyInvoice[] = [];
@@ -203,6 +205,7 @@ export default function BillingCandies() {
         transactions: (raw.transactions || []).map((t: any) => ({
           id: t.id,
           date: t.date,
+          registeredAt: t.registeredAt || null,
           vendorId: t.vendorId || null,
           vendorName: t.vendorName || "Sin nombre",
           sellerEmail: t.sellerEmail || null,
@@ -243,7 +246,7 @@ export default function BillingCandies() {
     const next = inv.status === "PAGADA" ? "PENDIENTE" : "PAGADA";
     await updateDoc(doc(db, "invoicesCandies", inv.id), { status: next });
     setRows((prev) =>
-      prev.map((x) => (x.id === inv.id ? { ...x, status: next } : x))
+      prev.map((x) => (x.id === inv.id ? { ...x, status: next } : x)),
     );
     if (selected?.id === inv.id) setSelected({ ...inv, status: next });
   };
@@ -507,6 +510,7 @@ export default function BillingCandies() {
               <thead className="bg-gray-100">
                 <tr>
                   <th className="p-2 border whitespace-nowrap">Fecha</th>
+                  <th className="p-2 border whitespace-nowrap">Registro</th>
                   <th className="p-2 border whitespace-nowrap">Vendedor</th>
                   <th className="p-2 border whitespace-nowrap">Producto</th>
                   <th className="p-2 border whitespace-nowrap">Paquetes</th>
@@ -529,6 +533,9 @@ export default function BillingCandies() {
                     <tr key={i} className="text-center">
                       <td className="p-2 border whitespace-nowrap">
                         {it.date}
+                      </td>
+                      <td className="p-2 border whitespace-nowrap">
+                        {it.registeredAt || "—"}
                       </td>
                       <td className="p-2 border whitespace-nowrap">
                         {it.vendorName}

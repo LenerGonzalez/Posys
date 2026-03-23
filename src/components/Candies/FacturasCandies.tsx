@@ -78,6 +78,8 @@ type CandyTransaction = {
   amount: number;
   cogsAmount: number;
   commissionUvPack?: number; // comisión UV x paquete
+  // fecha y hora de registro (ISO o formato legible)
+  registeredAt?: string | null;
   uNetaPorPaquete?: number;
   // Ganancia total del vendedor (si viene en la venta)
   vendorGain?: number;
@@ -116,6 +118,28 @@ function extractCandyTransactionsFromDoc(
     normalizeDate(data.processedDate) ||
     normalizeDate(data.closureDate) ||
     normalizeDate(data.createdAt);
+
+  function extractRegisteredAt(obj: any): string {
+    const cand =
+      obj?.registeredAt || obj?.createdAt || obj?.timestamp || obj?.processedAt;
+    if (!cand) return format(new Date(), "yyyy-MM-dd HH:mm");
+    try {
+      let d: any = cand;
+      if (typeof d === "object" && typeof d.toDate === "function")
+        d = d.toDate();
+      if (typeof d === "number") d = new Date(d);
+      if (typeof d === "string") {
+        const parsed = new Date(d);
+        if (!isNaN(parsed.getTime())) return format(parsed, "yyyy-MM-dd HH:mm");
+        return d;
+      }
+      if (d instanceof Date && !isNaN(d.getTime()))
+        return format(d, "yyyy-MM-dd HH:mm");
+    } catch (e) {
+      return format(new Date(), "yyyy-MM-dd HH:mm");
+    }
+    return format(new Date(), "yyyy-MM-dd HH:mm");
+  }
 
   // Caso 1: documento ya representa una sola venta
   const hasDirectProduct =
@@ -162,6 +186,7 @@ function extractCandyTransactionsFromDoc(
       {
         id: docId,
         date: baseDate,
+        registeredAt: extractRegisteredAt(data),
         productId: data.productId || null,
         productName: data.productName || data.name || "—",
         vendorName: pickVendorName(data),
@@ -223,6 +248,7 @@ function extractCandyTransactionsFromDoc(
       return {
         id: `${docId}_${it.productId || it.id || idx}`,
         date: normalizeDate(it.date) || normalizeDate(it.saleDate) || baseDate,
+        registeredAt: extractRegisteredAt(it) || extractRegisteredAt(data),
         productId: it.productId || it.id || null,
         productName: it.productName || it.name || "—",
         vendorName:
@@ -395,6 +421,13 @@ export default function InvoiceCandiesModal({
                 safeNum(t.vendorGain) ||
                 safeNum((t as any).vendorCommissionAmount) ||
                 safeNum((t.commissionUvPack || 0) * (t.packages || 0)),
+              registeredAt:
+                t.registeredAt ||
+                (t.createdAt
+                  ? typeof (t as any).createdAt.toDate === "function"
+                    ? format((t as any).createdAt.toDate(), "yyyy-MM-dd HH:mm")
+                    : format(new Date((t as any).createdAt), "yyyy-MM-dd HH:mm")
+                  : null),
             }))
           : [];
 

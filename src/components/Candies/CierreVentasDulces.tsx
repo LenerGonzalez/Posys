@@ -87,6 +87,8 @@ interface SaleData {
   amount: number;
   amountSuggested: number;
   date: string;
+  // fecha y hora de registro (si disponible)
+  registeredAt?: string | null;
   userEmail: string; // etiqueta que mostramos en la tabla (nombre / vendedor)
   sellerEmail?: string; // email real del usuario logueado que hizo la venta
   clientName: string;
@@ -252,6 +254,28 @@ const normalizeMany = (
       : "");
   if (!date) return [];
 
+  function extractRegisteredAt(obj: any): string {
+    const cand =
+      obj?.registeredAt || obj?.createdAt || obj?.timestamp || obj?.processedAt;
+    if (!cand) return format(new Date(), "yyyy-MM-dd HH:mm");
+    try {
+      let d: any = cand;
+      if (typeof d === "object" && typeof d.toDate === "function")
+        d = d.toDate();
+      if (typeof d === "number") d = new Date(d);
+      if (typeof d === "string") {
+        const parsed = new Date(d);
+        if (!isNaN(parsed.getTime())) return format(parsed, "yyyy-MM-dd HH:mm");
+        return d;
+      }
+      if (d instanceof Date && !isNaN(d.getTime()))
+        return format(d, "yyyy-MM-dd HH:mm");
+    } catch (e) {
+      return format(new Date(), "yyyy-MM-dd HH:mm");
+    }
+    return format(new Date(), "yyyy-MM-dd HH:mm");
+  }
+
   const sellerEmail = raw.userEmail ?? ""; // email real del usuario
   // Busca el nombre actualizado del vendedor usando vendorId
   let vendedorLabel = "(sin vendedor)";
@@ -396,6 +420,7 @@ const normalizeMany = (
       }
       return {
         id: `${id}#${idx}`,
+        registeredAt: extractRegisteredAt(it) || extractRegisteredAt(raw),
         productName: String(it?.productName ?? "(sin nombre)"),
         quantity: qtyPacks,
         amount: round2(lineFinal),
@@ -453,6 +478,7 @@ const normalizeMany = (
   return [
     {
       id,
+      registeredAt: extractRegisteredAt(it) || extractRegisteredAt(data),
       productName: raw.productName ?? "(sin nombre)",
       quantity: qtyPacksFallback,
       amount: amountFallback,
@@ -1830,6 +1856,21 @@ export default function CierreVentasDulces({
         })),
       });
 
+      // Log closure creation
+      try {
+        await addDoc(collection(db, "events"), {
+          type: "closure_candies",
+          action: "create",
+          entity: "daily_closures_candies",
+          entityId: ref.id,
+          user: currentUserEmail || null,
+          createdAt: Timestamp.now(),
+          meta: { periodStart: startDate, periodEnd: endDate },
+        });
+      } catch (e) {
+        console.warn("No se pudo registrar evento de cierre", e);
+      }
+
       // update each sale individually to provide progress feedback
       let processed = 0;
       for (const s of toProcess) {
@@ -1841,6 +1882,20 @@ export default function CierreVentasDulces({
             processedDate: today,
             processedAt: Timestamp.now(),
           });
+          // Log sale processed
+          try {
+            await addDoc(collection(db, "events"), {
+              type: "sale_candy",
+              action: "process",
+              entity: "sales_candies",
+              entityId: s.id.split("#")[0],
+              user: currentUserEmail || null,
+              createdAt: Timestamp.now(),
+              meta: { closureId: ref.id },
+            });
+          } catch (e) {
+            console.warn("No se pudo registrar evento de proceso de venta", e);
+          }
         } catch (e) {
           console.error("Error procesando venta", s.id, e);
         }
@@ -1878,6 +1933,18 @@ export default function CierreVentasDulces({
         processedAt: null,
       });
       setMessage("↩️ Venta revertida a FLOTANTE.");
+      try {
+        await addDoc(collection(db, "events"), {
+          type: "sale_candy",
+          action: "revert",
+          entity: "sales_candies",
+          entityId: saleId.split("#")[0],
+          user: currentUserEmail || null,
+          createdAt: Timestamp.now(),
+        });
+      } catch (e) {
+        console.warn("No se pudo registrar evento de revertir venta", e);
+      }
     } catch (e) {
       console.error(e);
       setMessage("❌ No se pudo revertir la venta.");
@@ -1940,6 +2007,21 @@ export default function CierreVentasDulces({
       setMessage(
         `↩️ Revertidas ${toRevert.length} ventas (${forCredit ? "Crédito" : "Cash"}).`,
       );
+      // Log bulk revert events
+      try {
+        for (const s of toRevert) {
+          await addDoc(collection(db, "events"), {
+            type: "sale_candy",
+            action: "revert",
+            entity: "sales_candies",
+            entityId: s.id.split("#")[0],
+            user: currentUserEmail || null,
+            createdAt: Timestamp.now(),
+          });
+        }
+      } catch (e) {
+        console.warn("No se pudieron registrar eventos de revertir en lote", e);
+      }
     } catch (e) {
       console.error(e);
       setMessage("❌ Error al revertir ventas en lote.");
@@ -1979,6 +2061,19 @@ export default function CierreVentasDulces({
         await deleteARMovesBySaleId(baseSaleId);
         restoredTotal += Number(restored || 0);
         successCount += 1;
+        // log deletion
+        try {
+          await addDoc(collection(db, "events"), {
+            type: "sale_candy",
+            action: "delete",
+            entity: "sales_candies",
+            entityId: baseSaleId,
+            user: currentUserEmail || null,
+            createdAt: Timestamp.now(),
+          });
+        } catch (e) {
+          console.warn("No se pudo registrar evento de eliminación", e);
+        }
       } catch (e) {
         console.error("Error eliminando", baseSaleId, e);
         failCount += 1;
@@ -2038,6 +2133,19 @@ export default function CierreVentasDulces({
       const baseSaleId = saleId.split("#")[0];
       const { restored } = await restoreCandySaleAndDelete(baseSaleId);
       await deleteARMovesBySaleId(baseSaleId);
+      // log single deletion
+      try {
+        await addDoc(collection(db, "events"), {
+          type: "sale_candy",
+          action: "delete",
+          entity: "sales_candies",
+          entityId: baseSaleId,
+          user: currentUserEmail || null,
+          createdAt: Timestamp.now(),
+        });
+      } catch (e) {
+        console.warn("No se pudo registrar evento de eliminación", e);
+      }
       setMessage(
         `🗑️ Venta eliminada. Stock restaurado (unidades internas): ${Number(
           restored,
@@ -3141,6 +3249,9 @@ export default function CierreVentasDulces({
                           Fecha venta
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Registro
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
                           Producto
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
@@ -3206,10 +3317,41 @@ export default function CierreVentasDulces({
                                     : "bg-amber-50 text-amber-700 ring-amber-200"
                                 }`}
                               >
-                                {s.status}
+                                {s.status === "PROCESADA" ? (
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="h-3 w-3"
+                                    viewBox="0 0 20 20"
+                                    fill="currentColor"
+                                    role="img"
+                                    aria-label="Procesada"
+                                  >
+                                    <title>Procesada</title>
+                                    <path
+                                      fillRule="evenodd"
+                                      d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z"
+                                      clipRule="evenodd"
+                                    />
+                                  </svg>
+                                ) : (
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="h-3 w-3"
+                                    viewBox="0 0 20 20"
+                                    fill="currentColor"
+                                    role="img"
+                                    aria-label="Flotante"
+                                  >
+                                    <title>Flotante</title>
+                                    <path d="M6 4h2v12H6zM12 4h2v12h-2z" />
+                                  </svg>
+                                )}
                               </span>
                             </td>
                             <td className="px-3 py-2">{s.date}</td>
+                            <td className="px-3 py-2">
+                              {s.registeredAt || "—"}
+                            </td>
                             <td className="px-3 py-2 text-left text-slate-700">
                               {s.productName}
                             </td>
@@ -3252,22 +3394,32 @@ export default function CierreVentasDulces({
                               })()}
                             </td>
                             <td className="px-3 py-2">
-                              {getVendorGainLabel(s)}
+                              {(() => {
+                                const v = getVendorGainLabel(s);
+                                return v && v !== "—" ? (
+                                  <span className="text-amber-800 font-bold">
+                                    {v}
+                                  </span>
+                                ) : (
+                                  "—"
+                                );
+                              })()}
                             </td>
                             {/* Columna 'Comision' oculta */}
 
                             {isAdmin && (
                               <td className="px-3 py-2">
                                 {(() => {
-                                  // UN x Paq * paquetes vendidos
                                   const key = normKey(s.productName || "");
                                   const un =
                                     upaqueteMap[s.vendorId || ""]?.[key];
                                   const qty = Number(s.quantity || 0);
                                   const total = Number(un || 0) * qty;
-                                  return un && total > 0
-                                    ? `C$${money(round2(total))}`
-                                    : "—";
+                                  return un && total > 0 ? (
+                                    <span className="text-emerald-700 font-bold">{`C$${money(round2(total))}`}</span>
+                                  ) : (
+                                    "—"
+                                  );
                                 })()}
                               </td>
                             )}
@@ -3283,14 +3435,42 @@ export default function CierreVentasDulces({
                                       <button
                                         onClick={() => openEdit(s)}
                                         className="text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 px-2 py-1 text-white shadow-sm hover:bg-indigo-700"
+                                        title="Editar"
+                                        aria-label="Editar"
                                       >
-                                        Editar
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          className="h-3 w-3"
+                                          viewBox="0 0 20 20"
+                                          fill="currentColor"
+                                          role="img"
+                                          aria-hidden="true"
+                                        >
+                                          <title>Editar</title>
+                                          <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
+                                        </svg>
                                       </button>
                                       <button
                                         onClick={() => deleteSale(s.id)}
                                         className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
+                                        title="Eliminar"
+                                        aria-label="Eliminar"
                                       >
-                                        Eliminar
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          className="h-3 w-3"
+                                          viewBox="0 0 20 20"
+                                          fill="currentColor"
+                                          role="img"
+                                          aria-hidden="true"
+                                        >
+                                          <title>Eliminar</title>
+                                          <path
+                                            fillRule="evenodd"
+                                            d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                                            clipRule="evenodd"
+                                          />
+                                        </svg>
                                       </button>
                                     </>
                                   ) : (
@@ -3305,8 +3485,26 @@ export default function CierreVentasDulces({
                                     <button
                                       onClick={() => handleRevert(s.id)}
                                       className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
+                                      title="Revertir"
+                                      aria-label="Revertir"
                                     >
-                                      Revertir
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="h-4 w-4"
+                                        viewBox="0 0 20 20"
+                                        fill="currentColor"
+                                        role="img"
+                                        aria-hidden="true"
+                                      >
+                                        <title>Revertir</title>
+                                        <g transform="translate(20 0) scale(-1 1)">
+                                          <path
+                                            fillRule="evenodd"
+                                            d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
+                                            clipRule="evenodd"
+                                          />
+                                        </g>
+                                      </svg>
                                     </button>
                                   ) : (
                                     <span className="text-slate-400 text-xs">
@@ -3391,7 +3589,9 @@ export default function CierreVentasDulces({
 
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Comision</span>
-                          <strong>{getVendorGainLabel(s)}</strong>
+                          <strong className="text-amber-800 font-bold">
+                            {getVendorGainLabel(s)}
+                          </strong>
                         </div>
 
                         {/* <div className="flex justify-between gap-3">
@@ -3429,14 +3629,42 @@ export default function CierreVentasDulces({
                                   <button
                                     onClick={() => openEdit(s)}
                                     className="flex-1 text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 py-2 text-white shadow-sm hover:bg-indigo-700"
+                                    title="Editar"
+                                    aria-label="Editar"
                                   >
-                                    Editar
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      className="h-4 w-4 mx-auto"
+                                      viewBox="0 0 20 20"
+                                      fill="currentColor"
+                                      role="img"
+                                      aria-hidden="true"
+                                    >
+                                      <title>Editar</title>
+                                      <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
+                                    </svg>
                                   </button>
                                   <button
                                     onClick={() => deleteSale(s.id)}
                                     className="flex-1 text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
+                                    title="Eliminar"
+                                    aria-label="Eliminar"
                                   >
-                                    Eliminar
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      className="h-4 w-4 mx-auto"
+                                      viewBox="0 0 20 20"
+                                      fill="currentColor"
+                                      role="img"
+                                      aria-hidden="true"
+                                    >
+                                      <title>Eliminar</title>
+                                      <path
+                                        fillRule="evenodd"
+                                        d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                                        clipRule="evenodd"
+                                      />
+                                    </svg>
                                   </button>
                                 </>
                               ) : (
@@ -3451,8 +3679,26 @@ export default function CierreVentasDulces({
                                 <button
                                   onClick={() => handleRevert(s.id)}
                                   className="w-full text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
+                                  title="Revertir"
+                                  aria-label="Revertir"
                                 >
-                                  Revertir
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="h-4 w-4 mx-auto"
+                                    viewBox="0 0 20 20"
+                                    fill="currentColor"
+                                    role="img"
+                                    aria-hidden="true"
+                                  >
+                                    <title>Revertir</title>
+                                    <g transform="translate(20 0) scale(-1 1)">
+                                      <path
+                                        fillRule="evenodd"
+                                        d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
+                                        clipRule="evenodd"
+                                      />
+                                    </g>
+                                  </svg>
                                 </button>
                               ) : (
                                 <div className="text-slate-400 text-xs w-full text-center">
@@ -3547,6 +3793,9 @@ export default function CierreVentasDulces({
                           Fecha venta
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Registro
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
                           Vendedor
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
@@ -3573,7 +3822,31 @@ export default function CierreVentasDulces({
                                     : "bg-amber-50 text-amber-700 ring-amber-200"
                                 }`}
                               >
-                                {s.status}
+                                {s.status === "PROCESADA" ? (
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="h-4 w-4"
+                                    viewBox="0 0 20 20"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      fillRule="evenodd"
+                                      d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z"
+                                      clipRule="evenodd"
+                                    />
+                                  </svg>
+                                ) : (
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="h-4 w-4"
+                                    viewBox="0 0 20 20"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <path d="M6 4h2v12H6zM12 4h2v12h-2z" />
+                                  </svg>
+                                )}
                               </span>
                             </td>
                             <td className="px-3 py-2 text-left text-slate-700">
@@ -3632,6 +3905,9 @@ export default function CierreVentasDulces({
                               </td>
                             )}
                             <td className="px-3 py-2">{s.date}</td>
+                            <td className="px-3 py-2">
+                              {s.registeredAt || "—"}
+                            </td>
                             <td className="px-3 py-2 text-left">
                               {getSellerDisplayName(s)}
                             </td>
@@ -3643,14 +3919,42 @@ export default function CierreVentasDulces({
                                       <button
                                         onClick={() => openEdit(s)}
                                         className="text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 px-2 py-1 text-white shadow-sm hover:bg-indigo-700"
+                                        title="Editar"
+                                        aria-label="Editar"
                                       >
-                                        Editar
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          className="h-4 w-4"
+                                          viewBox="0 0 20 20"
+                                          fill="currentColor"
+                                          role="img"
+                                          aria-hidden="true"
+                                        >
+                                          <title>Editar</title>
+                                          <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
+                                        </svg>
                                       </button>
                                       <button
                                         onClick={() => deleteSale(s.id)}
                                         className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
+                                        title="Eliminar"
+                                        aria-label="Eliminar"
                                       >
-                                        Eliminar
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          className="h-4 w-4"
+                                          viewBox="0 0 20 20"
+                                          fill="currentColor"
+                                          role="img"
+                                          aria-hidden="true"
+                                        >
+                                          <title>Eliminar</title>
+                                          <path
+                                            fillRule="evenodd"
+                                            d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                                            clipRule="evenodd"
+                                          />
+                                        </svg>
                                       </button>
                                     </>
                                   ) : (
@@ -3798,14 +4102,42 @@ export default function CierreVentasDulces({
                                   <button
                                     onClick={() => openEdit(s)}
                                     className="flex-1 text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 py-2 text-white shadow-sm hover:bg-indigo-700"
+                                    title="Editar"
+                                    aria-label="Editar"
                                   >
-                                    Editar
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      className="h-4 w-4 mx-auto"
+                                      viewBox="0 0 20 20"
+                                      fill="currentColor"
+                                      role="img"
+                                      aria-hidden="true"
+                                    >
+                                      <title>Editar</title>
+                                      <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
+                                    </svg>
                                   </button>
                                   <button
                                     onClick={() => deleteSale(s.id)}
                                     className="flex-1 text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
+                                    title="Eliminar"
+                                    aria-label="Eliminar"
                                   >
-                                    Eliminar
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      className="h-4 w-4 mx-auto"
+                                      viewBox="0 0 20 20"
+                                      fill="currentColor"
+                                      role="img"
+                                      aria-hidden="true"
+                                    >
+                                      <title>Eliminar</title>
+                                      <path
+                                        fillRule="evenodd"
+                                        d="M6 2a1 1 0 00-1 1v1H3a1 1 0 100 2h14a1 1 0 100-2h-2V3a1 1 0 00-1-1H6zm2 6a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z"
+                                        clipRule="evenodd"
+                                      />
+                                    </svg>
                                   </button>
                                 </>
                               ) : (
