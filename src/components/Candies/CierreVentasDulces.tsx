@@ -127,6 +127,9 @@ interface SaleData {
   uNeta?: number;
   uNetaPorPaquete?: number;
 
+  // Ganancia total del vendedor (uvXpaq * paquetes) si está persistida
+  vendorGain?: number;
+
   // ✅ fecha de proceso
   processedDate?: string;
 }
@@ -789,6 +792,21 @@ export default function CierreVentasDulces({
     return commission > 0 ? `C$${money(round2(commission))}` : "—";
   };
 
+  // Ganancia total del vendedor para la venta (vendorGain)
+  const getVendorGain = (s: SaleData): number => {
+    const explicit = Number(s.vendorGain ?? NaN);
+    if (Number.isFinite(explicit)) return round2(explicit);
+    const uv = getUvXpaqForSale(s);
+    const qty = Number(s.quantity || 0);
+    if (!uv || qty <= 0) return 0;
+    return round2(uv * qty);
+  };
+
+  const getVendorGainLabel = (s: SaleData): string => {
+    const g = getVendorGain(s);
+    return g > 0 ? `C$${money(g)}` : "—";
+  };
+
   // Origen de la comisión: 'venta' si la venta trae vendorCommissionAmount, sino 'uvxpaq' calculada
   const getCommissionOrigin = (s: SaleData): "venta" | "uvxpaq" => {
     const explicit = Number(s.vendorCommissionAmount ?? NaN);
@@ -1439,11 +1457,11 @@ export default function CierreVentasDulces({
     }
   });
 
-  // Calcular comisiones totales por venta: usar siempre UV x Paquetes
+  // Calcular comisiones totales por venta: usar vendorGain (persistido) o uvxpaq*paquetes
   let tCommCash = 0;
   let tCommCredito = 0;
   visibleSales.forEach((s) => {
-    const saleComm = round2(getUvXpaqForSale(s) * Number(s.quantity || 0));
+    const saleComm = round2(getVendorGain(s));
     if (s.type === "CREDITO") tCommCredito += saleComm;
     else tCommCash += saleComm;
   });
@@ -1491,8 +1509,8 @@ export default function CierreVentasDulces({
       const entry = map.get(vid)!;
       const pkey = normKey(s.productName || "");
       const current = entry.products.get(pkey);
-      // Siempre calcular la comisión para KPI como UV x Paquetes (valor real a pagar)
-      const saleComm = round2(getUvXpaqForSale(s) * Number(s.quantity || 0));
+      // Comisión KPI: usar vendorGain (persistido) o uvxpaq * paquetes como fallback
+      const saleComm = round2(getVendorGain(s));
 
       if (current) {
         current.qty += Math.round(s.quantity || 0);
@@ -1540,10 +1558,8 @@ export default function CierreVentasDulces({
       const entry = map.get(vid)!;
       const pkey = normKey(s.productName || "");
       const current = entry.products.get(pkey);
-      const explicit = Number(s.vendorCommissionAmount ?? NaN);
-      const saleComm = Number.isFinite(explicit)
-        ? round2(explicit)
-        : round2(getUvXpaqForSale(s) * Number(s.quantity || 0));
+      // Comisión KPI: usar vendorGain (persistido) o uvxpaq * paquetes como fallback
+      const saleComm = round2(getVendorGain(s));
 
       if (current) {
         current.qty += Math.round(s.quantity || 0);
@@ -2147,6 +2163,7 @@ export default function CierreVentasDulces({
         Paquetes: qty,
         Precio: precioNum,
         Monto: round2(Number(s.amount || 0)),
+        Comisión: round2(getVendorGain(s)),
         "Origen Comisión": origenComision,
         "Fecha venta": s.date,
         Vendedor: getSellerDisplayName(s),
@@ -2207,9 +2224,7 @@ export default function CierreVentasDulces({
         .pdf-print-mode .collapsible-content { display: block !important; }
       `}</style>
 
-      <h2 className="text-xl font-bold mb-4">
-        Ventas Diarias
-      </h2>
+      <h2 className="text-xl font-bold mb-4">Ventas Diarias</h2>
 
       {/* Botones de acción arriba de filtros */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -3123,6 +3138,9 @@ export default function CierreVentasDulces({
                           Estado
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Fecha venta
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
                           Producto
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
@@ -3142,14 +3160,17 @@ export default function CierreVentasDulces({
                             title="Calcula la Utilidad Neta por paquete"
                             className="px-3 py-2 text-left text-xs font-semibold"
                           >
-                            Un.Paq
+                            UNPaquete
                           </th>
                         )}
                         <th
                           title="Calcula la Utilidad vendedor por paquete"
                           className="px-3 py-2 text-left text-xs font-semibold"
                         >
-                          Comisión
+                          UVPaquete
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Comision
                         </th>
                         {/* Columna 'Comision' oculta por solicitud del usuario */}
                         {isAdmin && (
@@ -3157,15 +3178,7 @@ export default function CierreVentasDulces({
                             U. Neta
                           </th>
                         )}
-                        {/* <th className="px-3 py-2 text-left text-xs font-semibold">
-                          U. Vendedor
-                        </th> */}
-                        {/* <th className="px-3 py-2 text-left text-xs font-semibold">
-                          COMENTAR
-                        </th> */}
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
-                          Fecha venta
-                        </th>
+
                         <th className="px-3 py-2 text-left text-xs font-semibold">
                           Vendedor
                         </th>
@@ -3196,6 +3209,7 @@ export default function CierreVentasDulces({
                                 {s.status}
                               </span>
                             </td>
+                            <td className="px-3 py-2">{s.date}</td>
                             <td className="px-3 py-2 text-left text-slate-700">
                               {s.productName}
                             </td>
@@ -3234,10 +3248,11 @@ export default function CierreVentasDulces({
                             <td className="px-3 py-2">
                               {(() => {
                                 const uv = getUvXpaqForSale(s);
-                                return uv > 0
-                                  ? `C$${money(round2(uv))}`
-                                  : "—";
+                                return uv > 0 ? `C$${money(round2(uv))}` : "—";
                               })()}
+                            </td>
+                            <td className="px-3 py-2">
+                              {getVendorGainLabel(s)}
                             </td>
                             {/* Columna 'Comision' oculta */}
 
@@ -3256,8 +3271,6 @@ export default function CierreVentasDulces({
                                 })()}
                               </td>
                             )}
-
-                            <td className="px-3 py-2">{s.date}</td>
 
                             <td className="px-3 py-2 text-left">
                               {getSellerDisplayName(s)}
@@ -3313,7 +3326,7 @@ export default function CierreVentasDulces({
                       {cashSales.length === 0 && (
                         <tr>
                           <td
-                            colSpan={isAdmin ? 12 : 10}
+                            colSpan={isAdmin ? 13 : 11}
                             className="px-3 py-6 text-center text-slate-500"
                           >
                             Sin ventas cash para mostrar.
@@ -3372,8 +3385,13 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Comisión</span>
+                          <span className="text-slate-600">Uv x Paquete</span>
                           <strong>{getSaleCommissionLabel(s)}</strong>
+                        </div>
+
+                        <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">Comision</span>
+                          <strong>{getVendorGainLabel(s)}</strong>
                         </div>
 
                         {/* <div className="flex justify-between gap-3">
@@ -3514,7 +3532,10 @@ export default function CierreVentasDulces({
                           title="Calcula la Utilidad vendedor por paquete"
                           className="px-3 py-2 text-left text-xs font-semibold"
                         >
-                          Comisión
+                          UvPaquete
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Gan. vendedor
                         </th>
                         {/* Columna 'Comision' oculta por solicitud del usuario */}
                         {isAdmin && (
@@ -3591,9 +3612,7 @@ export default function CierreVentasDulces({
                             <td className="px-3 py-2">
                               {(() => {
                                 const uv = getUvXpaqForSale(s);
-                                return uv > 0
-                                  ? `C$${money(round2(uv))}`
-                                  : "—";
+                                return uv > 0 ? `C$${money(round2(uv))}` : "—";
                               })()}
                             </td>
                             {/* Columna 'Comision' oculta */}
@@ -3667,7 +3686,7 @@ export default function CierreVentasDulces({
                       {creditSales.length === 0 && (
                         <tr>
                           <td
-                            colSpan={isAdmin ? 12 : 10}
+                            colSpan={isAdmin ? 13 : 11}
                             className="px-3 py-6 text-center text-slate-500"
                           >
                             Sin ventas crédito para mostrar.
@@ -3726,7 +3745,7 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Comisión</span>
+                          <span className="text-slate-600">UvPaquete</span>
                           <strong>{getSaleCommissionLabel(s)}</strong>
                         </div>
 
