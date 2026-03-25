@@ -16,11 +16,48 @@ import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
+import KpiCard from "../common/KpiCard";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import {
   fetchBaseSummaryCandies,
   type BaseSummaryCandies,
 } from "../../Services/baseSummaryCandies";
+
+interface Seller {
+  id: string;
+  name: string;
+  commissionPercent?: number;
+}
+
+interface Customer {
+  id: string;
+  name: string;
+}
+
+type UnifiedRow = {
+  id: string;
+  date?: string;
+  movement?: string;
+  type?: string;
+  vendorId?: string;
+  vendorName?: string;
+  customerId?: string;
+  customerName?: string;
+  saleAmount?: number;
+  commission?: number;
+  packages?: number;
+  saleId?: string;
+  description?: string;
+  reference?: any;
+  inAmount?: number;
+  outAmount?: number;
+  source?: string;
+  createdAt?: any;
+  createdBy?: any;
+  balance?: number;
+  evolutive?: number;
+  commissionEvol?: number;
+};
 
 type SaleType = "CONTADO" | "CREDITO";
 const today = () => format(new Date(), "yyyy-MM-dd");
@@ -39,55 +76,16 @@ type LedgerType =
   | "RETIRO"
   | "DEPOSITO"
   | "PERDIDA"
+  | "PAGO_COMISION"
   | "PRESTAMO A NEGOCIO POR DUENO"
-  | "DEVOLUCION A DUENO POR PRESTAMO"
-  | "PAGO_COMISION";
-
-type SourceType = "ledger" | "expenses" | "sales" | "ar";
-
-type UnifiedRow = {
-  id: string;
-  date: string;
-  movement: string; // "Venta" | "Abono" | LedgerType
-  type?: "Cash" | "Crédito" | ""; // para UI / filtro
-
-  vendorId?: string;
-  vendorName?: string;
-
-  // ventas (informativo)
-  saleAmount?: number;
-  commission?: number;
-  packages?: number;
-  saleId?: string;
-
-  // abonos (informativo)
-  customerId?: string;
-  customerName?: string;
-
-  description: string;
-  reference?: string;
-
-  inAmount: number;
-  outAmount: number;
-
-  source: SourceType;
-
-  createdAt?: any;
-  createdBy?: { uid?: string | null; email?: string | null } | null;
-
-  balance?: number;
-};
-
-type Seller = { id: string; name: string; commissionPercent: number };
-type Customer = { id: string; name: string };
-
+  | "DEVOLUCION A DUENO POR PRESTAMO";
 function ensureDate(x: any): string {
   if (x?.date) return x.date;
   if (x?.createdAt?.toDate) return format(x.createdAt.toDate(), "yyyy-MM-dd");
   return "";
 }
 
-function normalizeSale(d: any, id: string) {
+function normalizeSale(d: any, id: string): any | null {
   const date = ensureDate(d);
   if (!date) return null;
 
@@ -299,11 +297,16 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   // colapsables de indicadores
   const [collapsePacks, setCollapsePacks] = useState(false);
   const [collapseVentas, setCollapseVentas] = useState(false);
-  const allCollapsed = collapsePacks && collapseVentas;
+  const [collapseGastos, setCollapseGastos] = useState(false);
+  const [collapseComisiones, setCollapseComisiones] = useState(false);
+  const allCollapsed =
+    collapsePacks && collapseVentas && collapseGastos && collapseComisiones;
   const toggleAllKpis = () => {
     const next = !allCollapsed;
     setCollapsePacks(next);
     setCollapseVentas(next);
+    setCollapseGastos(next);
+    setCollapseComisiones(next);
   };
 
   // filtros de tabla
@@ -320,6 +323,9 @@ export default function EstadoCuentaCandies(): React.ReactElement {
     lastAbonoDate: "",
     lastAbonoAmount: 0,
   });
+
+  // modal para ver detalle de comisiones por vendedor
+  const [comisionesModalOpen, setComisionesModalOpen] = useState(false);
 
   const getEffectiveInitialDebt = (
     initialDebtValue: number,
@@ -1032,8 +1038,8 @@ export default function EstadoCuentaCandies(): React.ReactElement {
       </div>
 
       {/* KPIs Desktop */}
-      <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-        <div className="sm:col-span-3 flex justify-end">
+      <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <div className="sm:col-span-4 flex justify-end">
           <button
             type="button"
             onClick={toggleAllKpis}
@@ -1045,62 +1051,134 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           </button>
         </div>
 
-        {/* Paquetes */}
-        <div className="border rounded-2xl p-3 bg-gray-50">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold">Paquetes</div>
-          </div>
-          {!collapsePacks && (
-            <div className="mt-3 space-y-2">
-              <div className="text-xs text-gray-600">
-                Paquetes vendidos Cash
+        {/* Agrupación de 4 KPI en un solo contenedor */}
+        <div className="sm:col-span-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* Ventas/Abonos */}
+            <div className="border rounded-2xl p-3 bg-white">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">Ventas / Abonos</div>
               </div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {Number(base?.packsCash ?? 0)}
-              </div>
+              {!collapseVentas && (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs text-gray-600">Ventas Cash $</div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {money(base?.salesCash ?? 0)}
+                  </div>
 
-              <div className="text-xs text-gray-600 mt-2">
-                Paquetes vendidos Crédito
-              </div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {Number(base?.packsCredit ?? 0)}
-              </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    Ventas Crédito $ (no caja)
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {money(base?.salesCredit ?? 0)}
+                  </div>
 
-              <div className="text-xs text-gray-600 mt-2">Total Paquetes</div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {Number((base?.packsCash ?? 0) + (base?.packsCredit ?? 0))}
-              </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    Abonos al periodo $
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {money(base?.abonosPeriodo ?? 0)}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Ventas/Abonos */}
-        <div className="border rounded-2xl p-3 bg-white">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold">Ventas / Abonos</div>
-          </div>
-          {!collapseVentas && (
-            <div className="mt-3 space-y-2">
-              <div className="text-xs text-gray-600">Ventas Cash $</div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {money(base?.salesCash ?? 0)}
+            {/* Paquetes (moved after Ventas/Abonos) */}
+            <div className="border rounded-2xl p-3 bg-gray-50">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">Paquetes</div>
               </div>
+              {!collapsePacks && (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs text-gray-600">
+                    Paquetes vendidos Cash
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {Number(base?.packsCash ?? 0)}
+                  </div>
 
-              <div className="text-xs text-gray-600 mt-2">
-                Ventas Crédito $ (no caja)
-              </div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {money(base?.salesCredit ?? 0)}
-              </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    Paquetes vendidos Crédito
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {Number(base?.packsCredit ?? 0)}
+                  </div>
 
-              <div className="text-xs text-gray-600 mt-2">
-                Abonos al periodo $
-              </div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {money(base?.abonosPeriodo ?? 0)}
-              </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    Total Paquetes
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {Number((base?.packsCash ?? 0) + (base?.packsCredit ?? 0))}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Comisiones (moved after Paquetes) */}
+            <div className="border rounded-2xl p-3 bg-white">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">Comisiones</div>
+                <button
+                  type="button"
+                  onClick={() => setComisionesModalOpen(true)}
+                  className="text-orange-500 hover:text-orange-600 ml-2"
+                  title="Ver comisiones por vendedor"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-5 w-5"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M18 10A8 8 0 11 2 10a8 8 0 0116 0zm-9-3a1 1 0 10-2 0 1 1 0 002 0zM9 9a1 1 0 00-1 1v4a1 1 0 102 0v-4a1 1 0 00-1-1z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </button>
+              </div>
+              {!collapseComisiones && (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs text-gray-600">Comisiones Cash</div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {money(totalComisionCash)}
+                  </div>
+
+                  <div className="text-xs text-gray-600 mt-2">
+                    Comisiones Crédito
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {money(totalComisionCredit)}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Gastos / Salidas */}
+            <div className="border rounded-2xl p-3 bg-white">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">Gastos / Salidas</div>
+              </div>
+              {!collapseGastos && (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs text-gray-600">
+                    Gastos del periodo
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {money(totalsLedger.gastosSum)}
+                  </div>
+
+                  <div className="text-xs text-gray-600 mt-2">
+                    Salidas (Retiros, Depositos, Perdidas)
+                  </div>
+                  <div className="text-xl font-bold break-words max-w-full">
+                    {money(totalsLedger.outSumNonGastos)}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Bloque KPIs principales */}
@@ -1108,81 +1186,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
             {/* Prestamo-related KPIs hidden */}
 
-            <div className="sm:col-span-2 lg:col-span-5 border rounded-2xl p-3 bg-red-50">
-              <div className="text-xs text-gray-600">Gastos del periodo</div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {money(totalsLedger.gastosSum)}
-              </div>
-            </div>
-
-            <div className="sm:col-span-2 lg:col-span-5 border rounded-2xl p-3 bg-red-50">
-              <div className="text-xs text-gray-600">
-                Salidas (Retiros, Depositos, Perdidas)
-              </div>
-              <div className="text-xl font-bold break-words max-w-full">
-                {money(totalsLedger.outSumNonGastos)}
-              </div>
-            </div>
+            {/* KPI cards moved above; old duplicated KPI blocks removed */}
           </div>
 
-          {/* Cards comisiones (fila 1) */}
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="border rounded-2xl p-3 bg-sky-50">
-              <div className="text-xs text-gray-600">Comisiones Cash</div>
-              <div className="text-2xl font-bold break-words max-w-full">
-                {money(totalComisionCash)}
-              </div>
-              <div className="mt-2 space-y-1 text-sm">
-                {listComCash.length === 0 ? (
-                  <div className="text-gray-500 text-sm">
-                    Sin comisiones cash en el rango.
-                  </div>
-                ) : (
-                  listComCash.map((v) => (
-                    <div
-                      key={v.sellerId}
-                      className="flex items-center justify-between border-b border-black/5 py-1 min-w-0"
-                    >
-                      <span className="text-gray-800 truncate">
-                        {v.sellerName}
-                      </span>
-                      <span className="font-semibold truncate ml-2">
-                        {money(v.amount)}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="border rounded-2xl p-3 bg-violet-50">
-              <div className="text-xs text-gray-600">Comisiones Crédito</div>
-              <div className="text-2xl font-bold break-words max-w-full">
-                {money(totalComisionCredit)}
-              </div>
-              <div className="mt-2 space-y-1 text-sm">
-                {listComCredit.length === 0 ? (
-                  <div className="text-gray-500 text-sm">
-                    Sin comisiones crédito en el rango.
-                  </div>
-                ) : (
-                  listComCredit.map((v) => (
-                    <div
-                      key={v.sellerId}
-                      className="flex items-center justify-between border-b border-black/5 py-1 min-w-0"
-                    >
-                      <span className="text-gray-800 truncate">
-                        {v.sellerName}
-                      </span>
-                      <span className="font-semibold truncate ml-2">
-                        {money(v.amount)}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
+          {/* Commission details removed (now summarized in the Comisiones card above) */}
 
           {/* KPIs secundarios (fila 2) */}
           <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1203,9 +1210,23 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         </div>
       </div>
 
-      {/* KPIs Mobile */}
+      {/* KPIs Mobile (Ventas -> Paquetes -> Comisiones -> Gastos) */}
       <div className="md:hidden mb-4">
         <div className="grid grid-cols-2 gap-2">
+          <div className="border rounded-2xl p-3 bg-blue-50 text-center">
+            <div className="text-xs text-gray-600">Ventas Cash</div>
+            <div className="text-lg font-bold break-words max-w-full">
+              {money(base?.salesCash ?? 0)}
+            </div>
+          </div>
+
+          <div className="border rounded-2xl p-3 bg-gray-50 text-center">
+            <div className="text-xs text-gray-600">Paquetes</div>
+            <div className="text-lg font-bold break-words max-w-full">
+              {Number((base?.packsCash ?? 0) + (base?.packsCredit ?? 0))}
+            </div>
+          </div>
+
           <div className="border rounded-2xl p-3 bg-sky-50 text-center">
             <div className="text-xs text-gray-600">Comisiones Cash</div>
             <div className="text-lg font-bold break-words max-w-full">
@@ -1213,24 +1234,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             </div>
           </div>
 
-          <div className="border rounded-2xl p-3 bg-violet-50 text-center">
-            <div className="text-xs text-gray-600">Comisiones Crédito</div>
+          <div className="border rounded-2xl p-3 bg-red-50 text-center">
+            <div className="text-xs text-gray-600">Gastos del periodo</div>
             <div className="text-lg font-bold break-words max-w-full">
-              {money(totalComisionCredit)}
-            </div>
-          </div>
-
-          <div className="border rounded-2xl p-3 bg-blue-50 text-center">
-            <div className="text-xs text-gray-600">Arqueo Ventas</div>
-            <div className="text-lg font-bold break-words max-w-full">
-              {money(totalsLedger.depositSum || 0)}
-            </div>
-          </div>
-
-          <div className="border rounded-2xl p-3 bg-gray-900 text-white text-center">
-            <div className="text-xs opacity-80">Saldo final</div>
-            <div className="text-lg font-extrabold break-words max-w-full">
-              {money(saldoFinal)}
+              {money(totalsLedger.gastosSum)}
             </div>
           </div>
         </div>
@@ -1501,6 +1508,75 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                 >
                   Guardar movimiento
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal comisiones por vendedor */}
+      {comisionesModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[80]">
+          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold">Comisiones por Vendedor</h3>
+              <button
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                onClick={() => setComisionesModalOpen(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="space-y-4 text-sm max-h-[60vh] overflow-auto">
+              <div>
+                <div className="font-semibold">Comisiones Cash</div>
+                {listComCash.length === 0 ? (
+                  <div className="text-gray-500">
+                    Sin comisiones en efectivo.
+                  </div>
+                ) : (
+                  <ul className="divide-y">
+                    {listComCash.map((it: any, idx: number) => (
+                      <li
+                        key={it.sellerId ?? it.id ?? idx}
+                        className="py-2 flex justify-between"
+                      >
+                        <span>
+                          {it.sellerName ?? it.name ?? it.sellerId ?? "—"}
+                        </span>
+                        <span className="font-mono">
+                          {money(it.amount ?? it.total ?? 0)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div>
+                <div className="font-semibold">Comisiones Crédito</div>
+                {listComCredit.length === 0 ? (
+                  <div className="text-gray-500">
+                    Sin comisiones en crédito.
+                  </div>
+                ) : (
+                  <ul className="divide-y">
+                    {listComCredit.map((it: any, idx: number) => (
+                      <li
+                        key={it.sellerId ?? it.id ?? idx}
+                        className="py-2 flex justify-between"
+                      >
+                        <span>
+                          {it.sellerName ?? it.name ?? it.sellerId ?? "—"}
+                        </span>
+                        <span className="font-mono">
+                          {money(it.amount ?? it.total ?? 0)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           </div>

@@ -3,6 +3,7 @@ import {
   addDoc,
   collection,
   getDocs,
+  getDoc,
   orderBy,
   query,
   serverTimestamp,
@@ -169,7 +170,50 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         const merged = [...ledgerRows, ...expenseRows].sort((a, b) =>
           (a.date || "").localeCompare(b.date || ""),
         );
-        setLedger(merged as LedgerRow[]);
+        // try to fill missing createdBy.name by reading `users` collection
+        const uids = Array.from(
+          new Set(
+            merged
+              .map((m) => m.createdBy?.uid)
+              .filter((x): x is string => Boolean(x) && x !== ""),
+          ),
+        );
+
+        if (uids.length) {
+          const updated = [...merged];
+          await Promise.all(
+            uids.map(async (uid) => {
+              const need = updated.some(
+                (r) => r.createdBy?.uid === uid && !r.createdBy?.name,
+              );
+              if (!need) return;
+              try {
+                const udoc = await getDoc(doc(db, "users", uid));
+                if (!udoc.exists()) return;
+                const udata = udoc.data() as any;
+                const uname =
+                  udata?.name || udata?.displayName || udata?.email || null;
+                if (!uname) return;
+                for (let i = 0; i < updated.length; i++) {
+                  if (updated[i].createdBy?.uid === uid) {
+                    updated[i] = {
+                      ...updated[i],
+                      createdBy: {
+                        ...(updated[i].createdBy || {}),
+                        name: updated[i].createdBy?.name || uname,
+                      },
+                    } as any;
+                  }
+                }
+              } catch (err) {
+                console.warn("No se pudo cargar user doc for uid", uid, err);
+              }
+            }),
+          );
+          setLedger(updated as LedgerRow[]);
+        } else {
+          setLedger(merged as LedgerRow[]);
+        }
       } catch (e) {
         console.error("Error ledger:", e);
         setLedger([]);
@@ -1203,6 +1247,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <th className="border p-2">Movimiento</th>
               <th className="border p-2">Descripción</th>
               <th className="border p-2">Referencia</th>
+              <th className="border p-2">Usuario</th>
               <th className="border p-2">Entrada (+)</th>
               <th className="border p-2">Salida (−)</th>
               <th className="border p-2">Saldo (CAJA)</th>
@@ -1218,6 +1263,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <td className="border p-1 text-left">
                 Ventas Cash + Abonos del periodo
               </td>
+              <td className="border p-1">—</td>
               <td className="border p-1">—</td>
               <td className="border p-1">{money(saldoBase)}</td>
               <td className="border p-1">{money(0)}</td>
@@ -1250,6 +1296,13 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                 </td>
                 <td className="border p-1 text-left">{r.description}</td>
                 <td className="border p-1">{r.reference || "—"}</td>
+                <td className="border p-1">
+                  {r.createdBy?.displayName ||
+                    r.createdBy?.name ||
+                    r.createdBy?.email ||
+                    r.createdBy?.uid ||
+                    "—"}
+                </td>
                 <td className="border p-1">{money(r.inAmount)}</td>
                 <td className="border p-1">{money(r.outAmount)}</td>
                 <td className="border p-1 font-semibold">{money(r.balance)}</td>
@@ -1335,7 +1388,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
             {filteredLedgerWithBalance.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-3 text-center text-gray-500">
+                <td colSpan={9} className="p-3 text-center text-gray-500">
                   No hay movimientos manuales en este rango.
                 </td>
               </tr>
@@ -1395,6 +1448,17 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                 <div>
                   <div className="text-xs text-gray-500">Saldo (CAJA)</div>
                   <div className="font-semibold">{money(r.balance)}</div>
+                </div>
+              </div>
+
+              <div className="mt-2 text-sm text-gray-700">
+                <div className="text-xs text-gray-500">Usuario</div>
+                <div>
+                  {r.createdBy?.displayName ||
+                    r.createdBy?.name ||
+                    r.createdBy?.email ||
+                    r.createdBy?.uid ||
+                    "—"}
                 </div>
               </div>
 

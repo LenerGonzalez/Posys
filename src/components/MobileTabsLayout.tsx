@@ -260,6 +260,11 @@ export default function MobileTabsLayout({
               label: "Saldos Pendientes",
               to: `${base}/customersCandies`,
             },
+            {
+              key: "cli",
+              label: "Saldos Externos",
+              to: `${base}/reporteCierresCandies`,
+            },
 
             {
               key: "estadoCuenta",
@@ -282,7 +287,7 @@ export default function MobileTabsLayout({
               label: "Precio Ventas",
               to: `${base}/productsPricesCandies`,
             },
-           
+
             {
               key: "dc",
               label: "Data Center Reporte",

@@ -397,6 +397,7 @@ export default function CandyMainOrders() {
   const [mobileTab, setMobileTab] = useState<MobileTab>("DATOS");
 
   const [itemSearch, setItemSearch] = useState("");
+  const [itemsGlobalMargin, setItemsGlobalMargin] = useState<string>("");
 
   const serializeOrderState = (items: CandyOrderItem[]) => {
     const normalizedItems = items
@@ -575,6 +576,7 @@ export default function CandyMainOrders() {
 
     setMobileTab("DATOS");
     setItemSearch("");
+    setItemsGlobalMargin("");
   };
 
   // =========================
@@ -2216,8 +2218,10 @@ export default function CandyMainOrders() {
               resetOrderForm();
               setOpenOrderModal(true);
             }}
+            aria-label="Nueva orden"
+            title="Nueva orden"
           >
-            + Nueva orden
+            +
           </button>
         </div>
       </div>
@@ -2606,12 +2610,61 @@ export default function CandyMainOrders() {
                       ) : null}
                     </div>
 
-                    <input
-                      value={itemSearch}
-                      onChange={(e) => setItemSearch(e.target.value)}
-                      placeholder="Buscar producto o categoría…"
-                      className="w-full md:w-80 border rounded px-3 py-2 text-sm"
-                    />
+                    <div className="flex items-center gap-2 w-full md:w-auto">
+                      <input
+                        value={itemSearch}
+                        onChange={(e) => setItemSearch(e.target.value)}
+                        placeholder="Buscar producto o categoría…"
+                        className="w-full md:w-80 border rounded px-3 py-2 text-sm"
+                      />
+
+                      <input
+                        type="number"
+                        value={itemsGlobalMargin}
+                        onChange={(e) => setItemsGlobalMargin(e.target.value)}
+                        placeholder="Margen %"
+                        className="w-24 border rounded px-2 py-2 text-sm"
+                        min={0}
+                      />
+
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                        onClick={() => {
+                          const v = Number(itemsGlobalMargin || "");
+                          if (!Number.isFinite(v)) return;
+                          const ok = confirm(
+                            `¿Aplicar margen ${v}% a ${orderItems.length} productos?`,
+                          );
+                          if (!ok) return;
+                          setOrderItems((prev) =>
+                            prev.map((it) => {
+                              const providerPriceNum = Number(
+                                it.providerPrice || 0,
+                              );
+                              const packagesNum = safeInt(it.packages || 0);
+                              const newVals = calcTotalsByMargins(
+                                providerPriceNum,
+                                packagesNum,
+                                {
+                                  marginR: v,
+                                  marginSJ: Number(it.marginSanJorge || 0),
+                                  marginIsla: v,
+                                },
+                              );
+                              return {
+                                ...it,
+                                marginRivas: v,
+                                marginIsla: v,
+                                ...newVals,
+                              };
+                            }),
+                          );
+                        }}
+                      >
+                        Aplicar
+                      </button>
+                    </div>
                   </div>
 
                   {/* Desktop: Tabla */}
@@ -3732,16 +3785,32 @@ export default function CandyMainOrders() {
 
                     <div className="flex gap-2">
                       <button
-                        className="px-3 py-2 rounded bg-blue-600 text-white text-xs"
+                        className="px-3 py-2 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
                         onClick={() => openOrderForEdit(o)}
+                        aria-label="Ver / Editar orden"
+                        title="Ver / Editar"
                       >
-                        Ver
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="w-4 h-4"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                          <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                        </svg>
                       </button>
                       <button
-                        className="px-3 py-2 rounded bg-red-600 text-white text-xs"
+                        className="px-3 py-2 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
                         onClick={() => handleDeleteOrder(o)}
+                        aria-label="Eliminar orden"
+                        title="Eliminar"
                       >
-                        Borrar
+                        ×
                       </button>
                     </div>
                   </div>
@@ -3899,16 +3968,32 @@ export default function CandyMainOrders() {
                         <td className="p-2 border-b">
                           <div className="flex gap-1 justify-center">
                             <button
-                              className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
                               onClick={() => openOrderForEdit(o)}
+                              aria-label="Ver / Editar orden"
+                              title="Ver / Editar"
                             >
-                              Ver / Editar
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                className="w-4 h-4"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth={1.5}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
+                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                              </svg>
                             </button>
                             <button
-                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
                               onClick={() => handleDeleteOrder(o)}
+                              aria-label="Eliminar orden"
+                              title="Eliminar"
                             >
-                              Borrar
+                              ×
                             </button>
                           </div>
                         </td>

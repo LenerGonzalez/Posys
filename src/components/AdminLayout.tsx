@@ -1166,7 +1166,7 @@ export default function AdminLayout({
                                 to={`${base}/reporteCierresCandies`}
                                 className={linkCls}
                               >
-                                Reporte Cierres
+                                Saldos Externos
                               </NavLink>
                             </div>
                           )}

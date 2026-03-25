@@ -106,6 +106,8 @@ export default function SaleForm({
   const [saleDate, setSaleDate] = useState<string>(
     format(new Date(), "yyyy-MM-dd"),
   );
+
+  const todayStr = format(new Date(), "yyyy-MM-dd");
   const [clientName, setClientName] = useState("");
 
   // mobile product search
@@ -946,6 +948,7 @@ export default function SaleForm({
               className="text-sm text-gray-700 border rounded px-2 py-1"
               value={saleDate}
               onChange={(e) => setSaleDate(e.target.value)}
+              max={todayStr}
               aria-label="Fecha de la venta"
             />
           </div>
@@ -1286,6 +1289,7 @@ export default function SaleForm({
               className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-400"
               value={saleDate}
               onChange={(e) => setSaleDate(e.target.value)}
+              max={todayStr}
             />
           </div>
 
