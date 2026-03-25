@@ -904,7 +904,7 @@ export default function PrecioVentas() {
   const onDetected = async (code: string) => {
     if (scanTarget === "search") {
       setSearchCode(code);
-      // try to open the matching product card immediately
+      // Buscar producto por código de barras o ID
       const byBarcode = Object.keys(barcodeMap).find(
         (id) => (barcodeMap[id] || "") === code,
       );
@@ -915,8 +915,12 @@ export default function PrecioVentas() {
       if (matchId) {
         setOpenCardId(matchId);
         setFiltersOpenMobile(false);
+        setMsg("");
+      } else {
+        setMsg("No se encontró producto para el código escaneado.");
       }
-      setScanOpen(false);
+      // Esperar un poco antes de cerrar el modal para evitar cortes de cámara prematuros
+      setTimeout(() => setScanOpen(false), 300);
       return;
     }
     if (scanTarget === "edit" && editingId) {
@@ -990,7 +994,7 @@ export default function PrecioVentas() {
           }`}
         >
           <div className="text-left">
-            <div className="font-semibold">Filtros</div>
+            <div className="font-semibold">Filtros avanzados</div>
             <div className="text-xs text-gray-600">
               {hasActiveFilters ? "Activos" : "Ninguno"}
               {" • "}
@@ -1005,16 +1009,6 @@ export default function PrecioVentas() {
         {filtersOpenMobile && (
           <div className="mt-2 bg-white border rounded-xl shadow-sm p-3 text-sm">
             <div className="grid grid-cols-1 gap-3">
-              <div>
-                <label className="block font-semibold">Producto</label>
-                <input
-                  className="w-full border rounded px-2 py-2"
-                  value={searchProduct}
-                  onChange={(e) => setSearchProduct(e.target.value)}
-                  placeholder="Ej: Conitos, Gomitas…"
-                />
-              </div>
-
               <div>
                 <label className="block font-semibold">Tipo empaque</label>
                 <select
@@ -1077,6 +1071,29 @@ export default function PrecioVentas() {
           </div>
         )}
       </div>
+      <div>
+        <label className="block font-semibold">Buscar producto</label>
+        <input
+          className="w-full border rounded-2xl px-5 py-3 shadow-sm mb-5"
+          value={searchProduct}
+          onChange={(e) => setSearchProduct(e.target.value)}
+          onClick={() => {
+            setSearchProduct("");
+            setSearchCode("");
+            setPackagingFilter("");
+            setMinPrice("");
+            setMaxPrice("");
+          }}
+          onFocus={() => {
+            setSearchProduct("");
+            setSearchCode("");
+            setPackagingFilter("");
+            setMinPrice("");
+            setMaxPrice("");
+          }}
+          placeholder="Ej: Conitos, Gomitas…"
+        />
+      </div>
 
       {/* ===== WEB: filtros siempre visibles (igual idea de antes) ===== */}
       <div className="hidden md:block bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-3 text-sm">
@@ -1089,6 +1106,20 @@ export default function PrecioVentas() {
               className="w-full border rounded-md px-3 py-2"
               value={searchProduct}
               onChange={(e) => setSearchProduct(e.target.value)}
+              onClick={() => {
+                setSearchProduct("");
+                setSearchCode("");
+                setPackagingFilter("");
+                setMinPrice("");
+                setMaxPrice("");
+              }}
+              onFocus={() => {
+                setSearchProduct("");
+                setSearchCode("");
+                setPackagingFilter("");
+                setMinPrice("");
+                setMaxPrice("");
+              }}
               placeholder="Ej: Conitos, Gomitas…"
             />
           </div>
