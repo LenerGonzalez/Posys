@@ -536,15 +536,14 @@ export default function SaleForm({
             ? String(qty)
             : qty === 0
               ? ""
-              : String(qty);
+              : String(roundQty(qty));
           return { ...it, qty, qtyInput: limitedInput };
         }
 
-        const nextInput = isUnit
-          ? String(qty)
-          : txt.endsWith(".")
-            ? txt
-            : String(qty);
+        // Para medidas en peso (no unidad) preservamos el texto tal como lo
+        // escribe el usuario (incluyendo ceros finales) para evitar que al
+        // teclear '0' se elimine el punto decimal (ej. 1.080).
+        const nextInput = isUnit ? String(qty) : txt;
 
         return { ...it, qty, qtyInput: nextInput };
       }),
