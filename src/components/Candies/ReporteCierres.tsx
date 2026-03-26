@@ -58,6 +58,11 @@ interface ClientSummary {
 
 const today = () => format(new Date(), "yyyy-MM-dd");
 
+const firstDayOfMonth = () => {
+  const d = new Date();
+  return format(new Date(d.getFullYear(), d.getMonth(), 1), "yyyy-MM-dd");
+};
+
 const money = (n: unknown) => {
   const v = Number(n ?? 0) || 0;
   return `C$ ${v.toLocaleString("en-US", {
@@ -85,17 +90,36 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   const [lastAbonoTo, setLastAbonoTo] = useState("");
   // filtros collapsed by default
   const [filtersCollapsed, setFiltersCollapsed] = useState(true);
+  // Ordenamiento por fecha para resumen: 'none' | 'lastAbono' | 'lastVenta'
+  const [orderByMode, setOrderByMode] = useState<
+    "none" | "lastAbono" | "lastVenta"
+  >("none");
   // resumen clientes collapsed by default
   const [summaryCollapsed, setSummaryCollapsed] = useState(true);
   // filtros detalle collapsed by default
   const [detailFiltersCollapsed, setDetailFiltersCollapsed] = useState(true);
 
   // filtros detalle
-  const [detailFrom, setDetailFrom] = useState("");
-  const [detailTo, setDetailTo] = useState("");
+  const [detailFrom, setDetailFrom] = useState<string>(() => firstDayOfMonth());
+  const [detailTo, setDetailTo] = useState<string>(() => today());
   const [detailTypeFilter, setDetailTypeFilter] = useState<"ALL" | RecordType>(
     "ALL",
   );
+
+  // detalle collapsed + pagination
+  const [detailCollapsed, setDetailCollapsed] = useState<boolean>(true);
+  const PAGE_SIZE = 10;
+  const [detailPage, setDetailPage] = useState<number>(1);
+
+  const resetDetailDates = () => {
+    setDetailFrom(firstDayOfMonth());
+    setDetailTo(today());
+  };
+
+  const clearDetailDates = () => {
+    setDetailFrom("");
+    setDetailTo("");
+  };
 
   // modal cliente
   const [clientModalOpen, setClientModalOpen] = useState(false);
@@ -302,7 +326,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   }, [clients, recordsWithBalance]);
 
   const filteredSummaries = useMemo(() => {
-    return clientSummaries.filter((c) => {
+    const list = clientSummaries.filter((c) => {
       if (clientFilter !== "ALL" && c.clientId !== clientFilter) return false;
 
       if (lastSaleFrom && (!c.lastSaleDate || c.lastSaleDate < lastSaleFrom)) {
@@ -324,6 +348,41 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
       return true;
     });
+
+    // Aplicar ordenamiento según selección: por fecha más reciente (desc)
+    try {
+      if (orderByMode === "lastAbono") {
+        list.sort((a, b) => {
+          const aa = String(a.lastAbonoDate || "");
+          const bb = String(b.lastAbonoDate || "");
+          if (aa === bb)
+            return String(a.clientName || "").localeCompare(
+              String(b.clientName || ""),
+            );
+          return bb.localeCompare(aa); // reciente primero
+        });
+      } else if (orderByMode === "lastVenta") {
+        list.sort((a, b) => {
+          const aa = String(a.lastSaleDate || "");
+          const bb = String(b.lastSaleDate || "");
+          if (aa === bb)
+            return String(a.clientName || "").localeCompare(
+              String(b.clientName || ""),
+            );
+          return bb.localeCompare(aa);
+        });
+      } else {
+        list.sort((a, b) =>
+          String(a.clientName || "").localeCompare(String(b.clientName || "")),
+        );
+      }
+    } catch (err) {
+      // si ocurre algún error en la ordenación, no romper la UI: devolver lista sin ordenar
+      // eslint-disable-next-line no-console
+      console.error("Error ordenando clientes:", err);
+    }
+
+    return list;
   }, [
     clientSummaries,
     clientFilter,
@@ -331,6 +390,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     lastSaleTo,
     lastAbonoFrom,
     lastAbonoTo,
+    orderByMode,
   ]);
 
   const filteredDetailRows = useMemo(() => {
@@ -355,6 +415,22 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     detailFrom,
     detailTo,
   ]);
+
+  // pagination for detalle
+  const totalDetailPages = Math.max(
+    1,
+    Math.ceil(filteredDetailRows.length / PAGE_SIZE),
+  );
+
+  const paginatedDetailRows = useMemo(() => {
+    const start = (detailPage - 1) * PAGE_SIZE;
+    return filteredDetailRows.slice(start, start + PAGE_SIZE);
+  }, [filteredDetailRows, detailPage]);
+
+  // reset page when filters change
+  useEffect(() => {
+    setDetailPage(1);
+  }, [detailFrom, detailTo, detailTypeFilter, filteredSummaries]);
 
   const generalKpis = useMemo(() => {
     const totalClientes = filteredSummaries.length;
@@ -754,7 +830,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
       <div className="flex items-center justify-between gap-2 mb-4">
-        <h2 className="text-xl sm:text-2xl font-bold">
+        <h2 className="text-sm sm:text-lg md:text-2xl font-bold">
           Saldos Pendientes Externos
         </h2>
 
@@ -771,11 +847,11 @@ export default function SaldosPendientesExternos(): React.ReactElement {
       </div>
 
       {/* acciones */}
-      <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-2">
+      <div className="mb-2 grid grid-cols-3 md:grid-cols-3 gap-2">
         <button
           type="button"
           onClick={openCreateClientModal}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          className="bg-blue-600 text-xs sm:text-sm text-white px-2 py-1 md:px-4 md:py-2 rounded-2xl hover:bg-blue-700"
         >
           Crear cliente
         </button>
@@ -783,62 +859,67 @@ export default function SaldosPendientesExternos(): React.ReactElement {
         <button
           type="button"
           onClick={() => openCreateRecordModal("CUENTA_NUEVA")}
-          className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700"
+          className="bg-emerald-600 text-xs sm:text-sm text-white px-2 py-1 md:px-4 md:py-2 rounded-2xl hover:bg-emerald-700"
         >
-          Agregar cuenta nueva
+          Nueva venta
         </button>
 
         <button
           type="button"
           onClick={() => openCreateRecordModal("ABONO")}
-          className="bg-violet-600 text-white px-4 py-2 rounded-lg hover:bg-violet-700"
+          className="bg-violet-600 text-xs sm:text-sm text-white px-2 py-1 md:px-4 md:py-2 rounded-2xl hover:bg-violet-700"
         >
-          Agregar abono
+          Abonar
         </button>
       </div>
 
       {/* KPI general */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         <div className="border rounded-2xl p-3 bg-sky-50">
-          <div className="text-xs text-gray-600">Clientes</div>
-          <div className="text-2xl font-bold">{generalKpis.totalClientes}</div>
+          <div className="text-[11px] sm:text-xs text-gray-600">Clientes</div>
+          <div className="text-lg sm:text-2xl font-bold">
+            {generalKpis.totalClientes}
+          </div>
         </div>
+        {/* <div className="border rounded-2xl p-3 bg-amber-50">
+          <div className="text-xs text-gray-600">Registros</div>
+          <div className="text-2xl font-bold">{generalKpis.totalRegistros}</div>
+        </div> */}
 
         <div className="border rounded-2xl p-3 bg-emerald-50">
-          <div className="text-xs text-gray-600">Cuentas nuevas</div>
-          <div className="text-2xl font-bold">
+          <div className="text-[11px] sm:text-xs text-gray-600">
+            Saldos iniciados
+          </div>
+          <div className="text-lg sm:text-2xl font-bold">
             {money(generalKpis.totalCuentas)}
           </div>
         </div>
 
         <div className="border rounded-2xl p-3 bg-violet-50">
-          <div className="text-xs text-gray-600">Abonos</div>
-          <div className="text-2xl font-bold">
+          <div className="text-[11px] sm:text-xs text-gray-600">Abonos</div>
+          <div className="text-lg sm:text-2xl font-bold">
             {money(generalKpis.totalAbonos)}
           </div>
         </div>
 
-        <div className="border rounded-2xl p-3 bg-amber-50">
-          <div className="text-xs text-gray-600">Registros</div>
-          <div className="text-2xl font-bold">{generalKpis.totalRegistros}</div>
-        </div>
-
         <div className="border rounded-2xl p-3 bg-gray-900 text-white">
-          <div className="text-xs opacity-80">Saldo pendiente general</div>
-          <div className="text-2xl font-extrabold">
+          <div className="text-[11px] sm:text-xs opacity-80">
+            Saldos pendientes
+          </div>
+          <div className="text-xl sm:text-2xl font-extrabold">
             {money(generalKpis.saldoPendiente)}
           </div>
         </div>
       </div>
 
       {/* filtros resumen (card colapsable) */}
-      <div className="mb-5">
+      {/* <div className="mb-5">
         <div className="border rounded-2xl overflow-hidden">
           <div className="flex items-center justify-between p-3 bg-gray-50">
             <h3 className="font-semibold">Filtros</h3>
             <button
               type="button"
-              onClick={() => setFiltersCollapsed((s) => !s)}
+              onClick={() => setFiltersCollapsed((s: boolean) => !s)}
               className="px-2 py-1 rounded bg-white border text-sm hover:bg-gray-100"
               aria-expanded={!filtersCollapsed}
             >
@@ -846,11 +927,36 @@ export default function SaldosPendientesExternos(): React.ReactElement {
             </button>
           </div>
 
-          {!filtersCollapsed && (
+          {!filtersCollapsed && <div className="p-4 bg-white"></div>}
+        </div>
+      </div> */}
+
+      {/* tabla resumen clientes (card colapsable) */}
+      <div className="mb-6">
+        <div className="border rounded-2xl overflow-hidden">
+          <div
+            className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer"
+            role="button"
+            tabIndex={0}
+            onClick={() => setSummaryCollapsed((s: boolean) => !s)}
+            onKeyDown={(e: any) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setSummaryCollapsed((s: boolean) => !s);
+              }
+            }}
+          >
+            <h3 className="font-semibold">Resumen por cliente</h3>
+            {/* Botón Mostrar/Ocultar eliminado — el header ahora es clickable */}
+          </div>
+
+          {!summaryCollapsed && (
             <div className="p-4 bg-white">
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">
+              {/* Mobile: cards */}
+              {/* Controls: cliente select + order buttons. Aligned on one row for md+ */}
+              <div className="mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="w-full md:w-1/3">
+                  <label className="block text-sm font-semibold text-blue-600 mb-1">
                     Cliente
                   </label>
                   <select
@@ -867,77 +973,40 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">
-                    Última venta desde
-                  </label>
-                  <input
-                    type="date"
-                    className="border rounded px-3 py-2 w-full bg-white"
-                    value={lastSaleFrom}
-                    onChange={(e) => setLastSaleFrom(e.target.value)}
-                  />
-                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOrderByMode((s: "none" | "lastAbono" | "lastVenta") =>
+                        s === "lastAbono" ? "none" : "lastAbono",
+                      )
+                    }
+                    className={`px-2 py-1 rounded text-xs sm:text-sm border ${
+                      orderByMode === "lastAbono"
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
+                    }`}
+                  >
+                    Último abono
+                  </button>
 
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">
-                    Última venta hasta
-                  </label>
-                  <input
-                    type="date"
-                    className="border rounded px-3 py-2 w-full bg-white"
-                    value={lastSaleTo}
-                    onChange={(e) => setLastSaleTo(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">
-                    Último abono desde
-                  </label>
-                  <input
-                    type="date"
-                    className="border rounded px-3 py-2 w-full bg-white"
-                    value={lastAbonoFrom}
-                    onChange={(e) => setLastAbonoFrom(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">
-                    Último abono hasta
-                  </label>
-                  <input
-                    type="date"
-                    className="border rounded px-3 py-2 w-full bg-white"
-                    value={lastAbonoTo}
-                    onChange={(e) => setLastAbonoTo(e.target.value)}
-                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOrderByMode((s: "none" | "lastAbono" | "lastVenta") =>
+                        s === "lastVenta" ? "none" : "lastVenta",
+                      )
+                    }
+                    className={`px-2 py-1 rounded text-xs sm:text-sm border ${
+                      orderByMode === "lastVenta"
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
+                    }`}
+                  >
+                    Última venta
+                  </button>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* tabla resumen clientes (card colapsable) */}
-      <div className="mb-6">
-        <div className="border rounded-2xl overflow-hidden">
-          <div className="flex items-center justify-between p-3 bg-gray-50">
-            <h3 className="font-semibold">Resumen por cliente</h3>
-            <button
-              type="button"
-              onClick={() => setSummaryCollapsed((s) => !s)}
-              className="px-2 py-1 rounded bg-white border text-sm hover:bg-gray-100"
-              aria-expanded={!summaryCollapsed}
-            >
-              {summaryCollapsed ? "Mostrar" : "Ocultar"}
-            </button>
-          </div>
-
-          {!summaryCollapsed && (
-            <div className="p-4 bg-white">
-              {/* Mobile: cards */}
               <div className="md:hidden space-y-3 mb-3">
                 {filteredSummaries.length === 0 ? (
                   <div className="p-3 text-center text-gray-500">
@@ -1024,7 +1093,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 )}
               </div>
 
-              {/* Desktop: full table */}
+              {/* WEB: resumen por cliente — tabla completa (visible en md+) */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="min-w-full w-full border text-sm table-auto">
                   <thead className="bg-gray-100">
@@ -1136,54 +1205,58 @@ export default function SaldosPendientesExternos(): React.ReactElement {
         </div>
       </div>
 
-      {/* filtros detalle (card colapsable) */}
-      <div className="mb-4">
+      {/* tabla detalle (card colapsable) */}
+      <div className="mb-6">
         <div className="border rounded-2xl overflow-hidden">
-          <div className="flex items-center justify-between p-3 bg-gray-50">
-            <h3 className="font-semibold">Filtros del detalle</h3>
-            <button
-              type="button"
-              onClick={() => setDetailFiltersCollapsed((s) => !s)}
-              className="px-2 py-1 rounded bg-white border text-sm hover:bg-gray-100"
-              aria-expanded={!detailFiltersCollapsed}
-            >
-              {detailFiltersCollapsed ? "Mostrar" : "Ocultar"}
-            </button>
+          <div
+            className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer"
+            role="button"
+            tabIndex={0}
+            onClick={() => setDetailCollapsed((s: boolean) => !s)}
+            onKeyDown={(e: any) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setDetailCollapsed((s: boolean) => !s);
+              }
+            }}
+          >
+            <h3 className="font-semibold">Detalle de registros</h3>
+            {/* header clicable, botón eliminado */}
           </div>
 
-          {!detailFiltersCollapsed && (
+          {!detailCollapsed && (
             <div className="p-4 bg-white">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3 rounded-2xl">
                 <div>
-                  <label className="block text-sm text-gray-600 mb-1">
+                  <label className="block text-xs md:text-sm text-gray-600 mb-1">
                     Desde
                   </label>
                   <input
                     type="date"
-                    className="border rounded px-3 py-2 w-full bg-white"
+                    className="border rounded px-2 py-1 md:px-3 md:py-2 w-full bg-white text-xs md:text-sm"
                     value={detailFrom}
                     onChange={(e) => setDetailFrom(e.target.value)}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm text-gray-600 mb-1">
+                  <label className="block text-xs md:text-sm text-gray-600 mb-1">
                     Hasta
                   </label>
                   <input
                     type="date"
-                    className="border rounded px-3 py-2 w-full bg-white"
+                    className="border rounded px-2 py-1 md:px-3 md:py-2 w-full bg-white text-xs md:text-sm"
                     value={detailTo}
                     onChange={(e) => setDetailTo(e.target.value)}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm text-gray-600 mb-1">
+                  <label className="block text-xs md:text-sm text-gray-600 mb-1">
                     Tipo
                   </label>
                   <select
-                    className="border rounded px-3 py-2 w-full bg-white"
+                    className="border rounded px-2 py-1 md:px-3 md:py-2 w-full bg-white text-xs md:text-sm"
                     value={detailTypeFilter}
                     onChange={(e) =>
                       setDetailTypeFilter(e.target.value as "ALL" | RecordType)
@@ -1195,106 +1268,170 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                   </select>
                 </div>
               </div>
+
+              <div className="flex gap-1 md:gap-2 mt-2 mb-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetDetailDates();
+                    if (detailCollapsed) setDetailCollapsed(false);
+                  }}
+                  className="px-2 py-0.5 md:py-1 rounded-2xl bg-blue-600 text-white text-xs hover:bg-blue-700"
+                >
+                  Reiniciar fechas
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearDetailDates();
+                    if (detailCollapsed) setDetailCollapsed(false);
+                  }}
+                  className="px-2 py-0.5 md:py-1 rounded-2xl bg-gray-100 text-gray-700 text-xs hover:bg-gray-200"
+                >
+                  Limpiar fechas
+                </button>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full w-full border text-sm table-auto">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="border p-2">Cliente</th>
+                      <th className="border p-2">Movimiento</th>
+                      <th className="border p-2">Fecha</th>
+                      <th className="border p-2">Monto</th>
+                      <th className="border p-2">Saldo final</th>
+                      <th className="border p-2">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedDetailRows.map((r) => (
+                      <tr key={r.id} className="text-center">
+                        <td className="border p-2 text-left">{r.clientName}</td>
+                        <td className="border p-2">
+                          {r.type === "CUENTA_NUEVA" ? (
+                            <span className="text-[11px] px-2 py-[2px] rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              CUENTA NUEVA
+                            </span>
+                          ) : (
+                            <span className="text-[11px] px-2 py-[2px] rounded-full bg-violet-100 text-violet-800 border border-violet-200">
+                              ABONO
+                            </span>
+                          )}
+                        </td>
+                        <td className="border p-2">{r.date}</td>
+                        <td className="border p-2">{money(r.amount)}</td>
+                        <td className="border p-2 font-semibold">
+                          {money((r as any).balanceAfter || 0)}
+                        </td>
+                        <td className="border p-2 relative">
+                          <div className="inline-block">
+                            <button
+                              onClick={() =>
+                                setActionOpenId(
+                                  actionOpenId === r.id ? null : r.id,
+                                )
+                              }
+                              className="px-2 py-1 rounded hover:bg-gray-100 md:px-1 md:py-0.5 md:text-[12px]"
+                              aria-label="Acciones"
+                            >
+                              ⋯
+                            </button>
+
+                            {actionOpenId === r.id && (
+                              <div
+                                ref={(el) => {
+                                  actionMenuRef.current =
+                                    el as HTMLDivElement | null;
+                                }}
+                                className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm min-w-[140px]"
+                              >
+                                <button
+                                  className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                                  onClick={() => {
+                                    openEditRecordModal(r);
+                                    setActionOpenId(null);
+                                  }}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  className="block w-full text-left px-3 py-2 text-red-600 hover:bg-gray-100"
+                                  onClick={() => {
+                                    setActionOpenId(null);
+                                    deleteRecordSafe(r.id);
+                                  }}
+                                >
+                                  Eliminar
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {filteredDetailRows.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={7}
+                          className="p-4 text-center text-gray-500"
+                        >
+                          No hay registros para los filtros seleccionados.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-2 flex items-center justify-between">
+                <div className="text-xs text-gray-600">
+                  Mostrando{" "}
+                  {filteredDetailRows.length === 0
+                    ? 0
+                    : (detailPage - 1) * PAGE_SIZE + 1}
+                  -{Math.min(detailPage * PAGE_SIZE, filteredDetailRows.length)}{" "}
+                  de {filteredDetailRows.length}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDetailPage((p: number) => Math.max(1, p - 1))
+                    }
+                    disabled={detailPage <= 1}
+                    className="px-2 py-1 text-xs rounded bg-white border disabled:opacity-50"
+                  >
+                    Prev
+                  </button>
+                  <span className="text-xs">
+                    Página {detailPage} / {totalDetailPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDetailPage((p: number) =>
+                        Math.min(totalDetailPages, p + 1),
+                      )
+                    }
+                    disabled={detailPage >= totalDetailPages}
+                    className="px-2 py-1 text-xs rounded bg-white border disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* tabla detalle */}
-      <div className="overflow-x-auto">
-        <h3 className="font-semibold mb-2">Detalle de registros</h3>
-
-        <table className="min-w-full w-full border text-sm table-auto">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="border p-2">Cliente</th>
-              <th className="border p-2">Tipo</th>
-              <th className="border p-2">Fecha</th>
-              <th className="border p-2">Monto</th>
-              <th className="border p-2">Saldo final</th>
-              <th className="border p-2">Notas</th>
-              <th className="border p-2">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredDetailRows.map((r) => (
-              <tr key={r.id} className="text-center">
-                <td className="border p-2 text-left">{r.clientName}</td>
-                <td className="border p-2">
-                  {r.type === "CUENTA_NUEVA" ? (
-                    <span className="text-[11px] px-2 py-[2px] rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                      CUENTA NUEVA
-                    </span>
-                  ) : (
-                    <span className="text-[11px] px-2 py-[2px] rounded-full bg-violet-100 text-violet-800 border border-violet-200">
-                      ABONO
-                    </span>
-                  )}
-                </td>
-                <td className="border p-2">{r.date}</td>
-                <td className="border p-2">{money(r.amount)}</td>
-                <td className="border p-2 font-semibold">
-                  {money((r as any).balanceAfter || 0)}
-                </td>
-                <td className="border p-2 text-left">{r.notes || "—"}</td>
-                <td className="border p-2 relative">
-                  <div className="inline-block">
-                    <button
-                      onClick={() =>
-                        setActionOpenId(actionOpenId === r.id ? null : r.id)
-                      }
-                      className="px-2 py-1 rounded hover:bg-gray-100 md:px-1 md:py-0.5 md:text-[12px]"
-                      aria-label="Acciones"
-                    >
-                      ⋯
-                    </button>
-
-                    {actionOpenId === r.id && (
-                      <div
-                        ref={(el) => {
-                          actionMenuRef.current = el as HTMLDivElement | null;
-                        }}
-                        className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm min-w-[140px]"
-                      >
-                        <button
-                          className="block w-full text-left px-3 py-2 hover:bg-gray-100"
-                          onClick={() => {
-                            openEditRecordModal(r);
-                            setActionOpenId(null);
-                          }}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          className="block w-full text-left px-3 py-2 text-red-600 hover:bg-gray-100"
-                          onClick={() => {
-                            setActionOpenId(null);
-                            deleteRecordSafe(r.id);
-                          }}
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-
-            {filteredDetailRows.length === 0 && (
-              <tr>
-                <td colSpan={7} className="p-4 text-center text-gray-500">
-                  No hay registros para los filtros seleccionados.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
       {/* modal cliente */}
       {clientModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/40"
             onClick={() => setClientModalOpen(false)}
@@ -1302,7 +1439,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
           <div
             ref={clientModalRef}
-            className="relative bg-white rounded-2xl p-4 w-full max-w-xl shadow-xl"
+            className="relative bg-white rounded-2xl p-4 w-full max-w-xl shadow-xl max-h-[90vh] overflow-auto pb-[env(safe-area-inset-bottom)]"
           >
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold">
@@ -1359,14 +1496,14 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => setClientModalOpen(false)}
-                  className="px-4 py-2 border rounded"
+                  className="px-2 py-1 md:px-4 md:py-2 border rounded text-xs sm:text-sm"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={saveClient}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  className="px-2 py-1 md:px-4 md:py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
                 >
                   Guardar cliente
                 </button>
@@ -1378,7 +1515,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
       {/* modal registro */}
       {recordModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/40"
             onClick={() => setRecordModalOpen(false)}
@@ -1386,7 +1523,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
           <div
             ref={recordModalRef}
-            className="relative bg-white rounded-2xl p-4 w-full max-w-2xl shadow-xl"
+            className="relative bg-white rounded-2xl p-4 w-full max-w-2xl shadow-xl max-h-[90vh] overflow-auto pb-[env(safe-area-inset-bottom)]"
           >
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold">
@@ -1432,7 +1569,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                   value={recordType}
                   onChange={(e) => setRecordType(e.target.value as RecordType)}
                 >
-                  <option value="CUENTA_NUEVA">Cuenta nueva</option>
+                  <option value="CUENTA_NUEVA">Venta nueva</option>
                   <option value="ABONO">Abono</option>
                 </select>
               </div>
@@ -1531,14 +1668,14 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => setRecordModalOpen(false)}
-                  className="px-4 py-2 border rounded"
+                  className="px-2 py-1 md:px-4 md:py-2 border rounded text-xs sm:text-sm"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={saveRecord}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  className="px-2 py-1 md:px-4 md:py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
                 >
                   Guardar registro
                 </button>

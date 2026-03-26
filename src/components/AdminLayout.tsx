@@ -253,7 +253,9 @@ export default function AdminLayout({
     canPath(subject, "productsPricesCandies", "view") ||
     canPath(subject, "transactionCandies", "view") ||
     canPath(subject, "cierreVentasCandies", "view") ||
-    canPath(subject, "estadoCuentaCandies", "view");
+    canPath(subject, "estadoCuentaCandies", "view") ||
+    canPath(subject, "productsPricesCandies", "view") ||
+    canPath(subject, "mainordersCandies", "view");
 
   const storedUserName =
     typeof window !== "undefined" ? localStorage.getItem("user_name") : null;
@@ -1470,7 +1472,17 @@ export default function AdminLayout({
                               to={`${base}/productsVendorsCandies`}
                               className={linkCls}
                             >
-                              Inventario
+                              Orden Vendedor
+                            </NavLink>
+                          )}
+                        </div>
+                        <div className="ml-4 mt-1 space-y-1">
+                          {canPath(subject, "mainordersCandies") && (
+                            <NavLink
+                              to={`${base}/mainordersCandies`}
+                              className={linkCls}
+                            >
+                              Orden Maestra
                             </NavLink>
                           )}
                         </div>

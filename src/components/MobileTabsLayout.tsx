@@ -526,7 +526,8 @@ export default function MobileTabsLayout({
       "cierreVentasCandies",
       "customersCandies",
       "estadoCuentaCandies",
-      "stockPedidosCandies"
+      "stockPedidosCandies",
+      "mainordersCandies"
     ]);
 
     const filtered = built.filter((t) => {
