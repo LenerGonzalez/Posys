@@ -737,27 +737,27 @@ export default function MobileTabsLayout({
     <div className="min-h-screen bg-[#f1f3f7] flex flex-col">
       {/* Top Bar */}
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
-        <div className="px-3 py-3 flex items-center gap-2">
+        <div className="px-2 sm:px-3 py-2.5 sm:py-3 flex items-center gap-1.5 sm:gap-2 min-w-0">
           {/* Rubro selector para admin o usuario con ambos rubros */}
           {isAdmin || hasBoth ? (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
               <img
                 src="/logo_black.svg"
                 alt="Logo Multiservicios Ortiz"
-                className="h-11 w-auto self-center"
+                className="h-8 w-auto sm:h-11 max-[360px]:h-7 self-center shrink-0"
               />
               <button
                 type="button"
                 onClick={() => setRubro("POLLO")}
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-sm transition",
+                  "inline-flex items-center gap-1.5 sm:gap-2 rounded-full border px-2 py-1.5 sm:px-3 sm:py-2 text-[10px] sm:text-xs font-semibold shadow-sm transition max-[360px]:px-1.5 max-[360px]:py-1",
                   rubro === "POLLO"
                     ? "bg-amber-50 text-amber-700 border-amber-200"
                     : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50",
                 )}
               >
-                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white">
-                  <FaDrumstickBite className="h-3 w-3" />
+                <span className="inline-flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded-full bg-amber-500 text-white shrink-0">
+                  <FaDrumstickBite className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
                 </span>
                 Pollos Bea
               </button>
@@ -765,36 +765,65 @@ export default function MobileTabsLayout({
                 type="button"
                 onClick={() => setRubro("DULCES")}
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-sm transition",
+                  "inline-flex items-center gap-1.5 sm:gap-2 rounded-full border px-2 py-1.5 sm:px-3 sm:py-2 text-[10px] sm:text-xs font-semibold shadow-sm transition max-[360px]:px-1.5 max-[360px]:py-1",
                   rubro === "DULCES"
                     ? "bg-pink-50 text-pink-700 border-pink-200"
                     : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50",
                 )}
               >
-                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-pink-500 text-white">
-                  <FaCandyCane className="h-3 w-3" />
+                <span className="inline-flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded-full bg-pink-500 text-white shrink-0">
+                  <FaCandyCane className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
                 </span>
                 Mr. Candy
               </button>
             </div>
           ) : (
-            <div className="text-sm font-semibold text-gray-800">
-              {isVendPollo
-                ? "Pollos Bea"
-                : isVendDulces
-                  ? "CandyShop"
-                  : "Posys"}
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
+              <img
+                src="/logo_black.svg"
+                alt="Logo Multiservicios Ortiz"
+                className="h-8 w-auto sm:h-11 max-[360px]:h-7 shrink-0"
+              />
+              {isVendPollo ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 sm:gap-2 rounded-full border px-2 py-1.5 sm:px-3 sm:py-2 text-[10px] sm:text-xs font-semibold shadow-sm",
+                    "border-amber-200 bg-amber-50 text-amber-700 max-[360px]:px-1.5 max-[360px]:py-1",
+                  )}
+                >
+                  <span className="inline-flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded-full bg-amber-500 text-white shrink-0">
+                    <FaDrumstickBite className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
+                  </span>
+                  Pollos Bea
+                </span>
+              ) : isVendDulces ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 sm:gap-2 rounded-full border px-2 py-1.5 sm:px-3 sm:py-2 text-[10px] sm:text-xs font-semibold shadow-sm",
+                    "border-pink-200 bg-pink-50 text-pink-700 max-[360px]:px-1.5 max-[360px]:py-1",
+                  )}
+                >
+                  <span className="inline-flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded-full bg-pink-500 text-white shrink-0">
+                    <FaCandyCane className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
+                  </span>
+                  CandyShop
+                </span>
+              ) : (
+                <div className="text-xs sm:text-sm font-semibold text-gray-800 truncate max-[360px]:text-[11px]">
+                  Posys
+                </div>
+              )}
             </div>
           )}
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Si querés mantener InstallApp visible, lo agregas acá */}
 
             {/* ✅ Botón 3 puntos (Drawer) */}
             <button
               type="button"
               onClick={() => setDrawerOpen((v) => !v)}
-              className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl border shadow-sm transition ${
+              className={`inline-flex h-9 w-9 sm:h-10 sm:w-10 max-[360px]:h-8 max-[360px]:w-8 items-center justify-center rounded-2xl border shadow-sm transition ${
                 drawerOpen
                   ? "bg-slate-900 text-white border-slate-900"
                   : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
@@ -803,9 +832,9 @@ export default function MobileTabsLayout({
               title={drawerOpen ? "Cerrar menú" : "Menú"}
             >
               {drawerOpen ? (
-                <FaTimes className="h-4 w-4" />
+                <FaTimes className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               ) : (
-                <FaBars className="h-4 w-4" />
+                <FaBars className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               )}
             </button>
           </div>

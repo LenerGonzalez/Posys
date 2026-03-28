@@ -4698,18 +4698,16 @@ export default function VendorCandyOrders({
                         {isAdmin && (
                           <>
                             <th className="text-right p-2 border-b">U.Bruta</th>
-                            <th className="text-right p-2 border-b">U x paq</th>
                             <th className="text-right p-2 border-b">Gastos</th>
+                            <th className="text-right p-2 border-b">U x paq</th>
+                            <th className="text-right p-2 border-b">
+                              UN x Paq
+                            </th>
                             <th className="text-right p-2 border-b">
                               UV x Paq
                             </th>
-                          </>
-                        )}
-                        {/* U. Vendedor column removed */}
-                        {isAdmin && (
-                          <>
                             <th className="text-right p-2 border-b">
-                              UN x Paq
+                              U Vendor
                             </th>
                             <th className="text-right p-2 border-b">U. Neta</th>
                           </>
@@ -4985,25 +4983,15 @@ export default function VendorCandyOrders({
                                 </td>
 
                                 <td className="p-2 border-b text-right">
+                                  {money(gastos)}
+                                </td>
+
+                                <td className="p-2 border-b text-right">
                                   <span className={zeroClass(uXpaq)}>
                                     {money(uXpaq)}
                                   </span>
                                 </td>
 
-                                <td className="p-2 border-b text-right">
-                                  {money(gastos)}
-                                </td>
-                                <td className="p-2 border-b text-right">
-                                  <span className={zeroClass(uvXpaq)}>
-                                    {money(round2(Number(uvXpaq || 0)))}
-                                  </span>
-                                </td>
-                              </>
-                            )}
-
-                            {/* U. Vendedor cell removed */}
-                            {isAdmin && (
-                              <>
                                 <td className="p-2 border-b text-right">
                                   <span
                                     className={zeroClass(uNetaDisplay && packs)}
@@ -5011,6 +4999,20 @@ export default function VendorCandyOrders({
                                     {packs > 0
                                       ? money(uNetaDisplay / packs)
                                       : "-"}
+                                  </span>
+                                </td>
+                                <td className="p-2 border-b text-right">
+                                  <span className={zeroClass(uvXpaq)}>
+                                    {money(round2(Number(uvXpaq || 0)))}
+                                  </span>
+                                </td>
+                                <td className="p-2 border-b text-right">
+                                  <span
+                                    className={zeroClass(uVendorDisplay)}
+                                  >
+                                    {money(
+                                      round2(Number(uVendorDisplay || 0)),
+                                    )}
                                   </span>
                                 </td>
                                 <td className="p-2 border-b text-right">
@@ -5139,7 +5141,7 @@ export default function VendorCandyOrders({
                         <tr>
                           <td
                             className="p-3 text-sm text-gray-600"
-                            colSpan={isAdmin ? 13 : 9}
+                            colSpan={isAdmin ? 14 : 9}
                           >
                             No hay productos asociados.
                           </td>
@@ -5208,6 +5210,15 @@ export default function VendorCandyOrders({
                               const uVendorDisplay = Number(
                                 splitDisplay.uVendor || 0,
                               );
+                              const uXpaq =
+                                packs > 0 ? grossProfitBase / packs : 0;
+                              const uvXpaq =
+                                packs > 0
+                                  ? round2(
+                                      Number(splitDisplay.uVendor || 0) /
+                                        packs,
+                                    )
+                                  : 0;
                               const gastosBase = getItemLogisticBase(it);
                               const uNetaDisplay =
                                 Number(grossProfitBase || 0) -
@@ -5463,33 +5474,75 @@ export default function VendorCandyOrders({
                                             {money(gastos)}
                                           </div>
                                         </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            U x paq
+                                          </div>
+                                          <div
+                                            className={`font-semibold ${zeroClass(
+                                              uXpaq,
+                                            )}`}
+                                          >
+                                            {money(uXpaq)}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            UN x Paq
+                                          </div>
+                                          <div
+                                            className={`font-semibold ${zeroClass(
+                                              uNetaDisplay && packs,
+                                            )}`}
+                                          >
+                                            {packs > 0
+                                              ? money(uNetaDisplay / packs)
+                                              : "-"}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            UV x Paq
+                                          </div>
+                                          <div
+                                            className={`font-semibold ${zeroClass(
+                                              uvXpaq,
+                                            )}`}
+                                          >
+                                            {money(
+                                              round2(Number(uvXpaq || 0)),
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            U Vendor
+                                          </div>
+                                          <div
+                                            className={`font-semibold ${zeroClass(
+                                              uVendorDisplay,
+                                            )}`}
+                                          >
+                                            {money(
+                                              round2(
+                                                Number(uVendorDisplay || 0),
+                                              ),
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            U. Neta
+                                          </div>
+                                          <div
+                                            className={`font-semibold ${zeroClass(
+                                              uNetaDisplay,
+                                            )}`}
+                                          >
+                                            {money(uNetaDisplay)}
+                                          </div>
+                                        </div>
                                       </>
-                                    )}
-                                    <div>
-                                      <div className="text-gray-600">
-                                        U. Vendedor
-                                      </div>
-                                      <div
-                                        className={`font-semibold ${zeroClass(
-                                          uVendorDisplay,
-                                        )}`}
-                                      >
-                                        {money(uVendorDisplay)}
-                                      </div>
-                                    </div>
-                                    {isAdmin && (
-                                      <div>
-                                        <div className="text-gray-600">
-                                          U. Neta
-                                        </div>
-                                        <div
-                                          className={`font-semibold ${zeroClass(
-                                            uNetaDisplay,
-                                          )}`}
-                                        >
-                                          {money(uNetaDisplay)}
-                                        </div>
-                                      </div>
                                     )}
                                   </div>
 

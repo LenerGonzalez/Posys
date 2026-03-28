@@ -580,7 +580,12 @@ export default function App() {
             path="stockPedidosCandies"
             element={
               <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
-                <CandyStockPedidosPage />
+                <CandyStockPedidosPage
+                  role={role}
+                  roles={roles}
+                  currentUserEmail={currentUserEmail}
+                  sellerCandyId={sellerCandyId}
+                />
               </PrivateRoute>
             }
           />

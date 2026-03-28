@@ -20,10 +20,9 @@ import { hasRole } from "../../utils/roles";
 import {
   FiClock,
   FiShoppingCart,
-  FiEdit,
-  FiTrash2,
-  FiFileText,
+  FiMoreVertical,
 } from "react-icons/fi";
+import ActionMenu from "../common/ActionMenu";
 
 const PLACES = [
   "Altagracia",
@@ -128,6 +127,138 @@ const normalizeDebtStatus = (value?: string): "PENDIENTE" | "PAGADA" => {
   if (PAID_DEBT_FLAGS.has(upper)) return "PAGADA";
   return "PENDIENTE";
 };
+
+/** Saldo pendiente de una venta (CARGO − abonos con ref.saleId). */
+function getPendingForSale(rows: MovementRow[], saleId: string): number {
+  const cargo = rows.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  if (!cargo) return 0;
+  const cargoAmt = Number(cargo.amount);
+  const paid = rows
+    .filter(
+      (m) =>
+        m.type === "ABONO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) < 0,
+    )
+    .reduce((acc, m) => acc + Math.abs(Number(m.amount) || 0), 0);
+  return roundCurrency(Math.max(0, cargoAmt - paid));
+}
+
+/** Fecha del cargo (venta) yyyy-MM-dd para validar abonos. */
+function getCargoSaleDate(rows: MovementRow[], saleId: string): string {
+  const c = rows.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  return (c?.date || "").slice(0, 10);
+}
+
+/** Total abonado a una venta (suma de montos absolutos de ABONO con ref). */
+function getTotalAbonadoForSale(rows: MovementRow[], saleId: string): number {
+  return roundCurrency(
+    rows
+      .filter(
+        (m) =>
+          m.type === "ABONO" &&
+          m.ref?.saleId === saleId &&
+          Number(m.amount) < 0,
+      )
+      .reduce((acc, m) => acc + Math.abs(Number(m.amount) || 0), 0),
+  );
+}
+
+function buildSaleAbonoLedger(
+  rows: MovementRow[],
+  saleId: string,
+): Array<
+  MovementRow & {
+    saldoInicial: number;
+    saldoFinal: number;
+    montoAbs: number;
+  }
+> {
+  const cargo = rows.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  if (!cargo) return [];
+  let running = Number(cargo.amount);
+  const abonos = rows
+    .filter(
+      (m) =>
+        m.type === "ABONO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) < 0,
+    )
+    .slice()
+    .sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const as = a.createdAt?.seconds || 0;
+      const bs = b.createdAt?.seconds || 0;
+      return as - bs;
+    });
+
+  const chronological = abonos.map((ab) => {
+    const inicial = roundCurrency(running);
+    const monto = Math.abs(Number(ab.amount) || 0);
+    running = roundCurrency(running - monto);
+    return {
+      ...ab,
+      saldoInicial: inicial,
+      saldoFinal: running,
+      montoAbs: monto,
+    };
+  });
+  /** Vista: del más reciente al más antiguo (saldos siguen siendo los de cada movimiento). */
+  return chronological.slice().reverse();
+}
+
+/** Abonos creados con el botón "Pagar" (reversibles). */
+const FULL_PAYMENT_COMMENT_PREFIX = "Pago total factura";
+
+function isFullPaymentAbonoComment(comment?: string): boolean {
+  return String(comment || "").startsWith(FULL_PAYMENT_COMMENT_PREFIX);
+}
+
+/** Pendiente ≤ 0 ⇒ factura pagada; si no, pendiente. */
+function computeDebtStatusFromPendingForSale(
+  list: MovementRow[],
+  saleId: string,
+): "PENDIENTE" | "PAGADA" {
+  return getPendingForSale(list, saleId) <= 0.005 ? "PAGADA" : "PENDIENTE";
+}
+
+async function syncCargoDebtStatusForSaleId(
+  list: MovementRow[],
+  saleId: string,
+): Promise<MovementRow[]> {
+  const cargo = list.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  if (!cargo) return list;
+  const next = computeDebtStatusFromPendingForSale(list, saleId);
+  const normalized = normalizeDebtStatus(cargo.debtStatus);
+  if (normalized !== next) {
+    await updateDoc(doc(db, "ar_movements_pollo", cargo.id), {
+      debtStatus: next,
+    });
+  }
+  return list.map((row) =>
+    row.id === cargo.id ? { ...row, debtStatus: next } : row,
+  );
+}
 
 function normalizePhone(input: string): string {
   const prefix = "+505 ";
@@ -469,16 +600,24 @@ export default function CustomersPollo({
   );
   const [abonoComment, setAbonoComment] = useState<string>("");
   const [savingAbono, setSavingAbono] = useState(false);
+  /** Abono asociado a una venta (ref.saleId en Firestore). */
+  const [abonoTargetSaleId, setAbonoTargetSaleId] = useState<string | null>(
+    null,
+  );
+  const [saleMenuAnchor, setSaleMenuAnchor] = useState<{
+    saleId: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [saleLedgerSaleId, setSaleLedgerSaleId] = useState<string | null>(null);
 
   // editar/eliminar mov
   const [editMovId, setEditMovId] = useState<string | null>(null);
   const [eMovDate, setEMovDate] = useState<string>("");
-  const [eMovAmount, setEMovAmount] = useState<number>(0);
   const [eMovComment, setEMovComment] = useState<string>("");
-  const [updatingDebtStatusId, setUpdatingDebtStatusId] = useState<
-    string | null
-  >(null);
-
+  const [customerRowMenu, setCustomerRowMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(
     null,
@@ -1002,6 +1141,15 @@ export default function CustomersPollo({
     });
   };
 
+  const closeStatement = () => {
+    setShowStatement(false);
+    setSaleMenuAnchor(null);
+    setSaleLedgerSaleId(null);
+    setAbonoTargetSaleId(null);
+    setShowAbono(false);
+    setItemsModalOpen(false);
+  };
+
   const openStatement = async (customer: CustomerRow) => {
     setStCustomer(customer);
     setStRows([]);
@@ -1021,6 +1169,9 @@ export default function CustomersPollo({
     setAbonoAmount(0);
     setAbonoDate(formatLocalDate(new Date()));
     setAbonoComment("");
+    setAbonoTargetSaleId(null);
+    setSaleMenuAnchor(null);
+    setSaleLedgerSaleId(null);
     setEditMovId(null);
 
     setStLoading(true);
@@ -1093,6 +1244,27 @@ export default function CustomersPollo({
     return abonos.length ? abonos[abonos.length - 1] : null;
   };
 
+  /** Ventas a crédito (CARGO con venta) mostradas en el estado de cuenta. */
+  const saleVentasRows = useMemo(() => {
+    return stRows
+      .filter(
+        (m) =>
+          m.type === "CARGO" &&
+          Boolean(m.ref?.saleId) &&
+          Number(m.amount) > 0,
+      )
+      .slice()
+      .sort((a, b) => {
+        if (a.date !== b.date) return b.date.localeCompare(a.date);
+        return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+      });
+  }, [stRows]);
+
+  const saleLedgerComputed = useMemo(() => {
+    if (!saleLedgerSaleId) return [];
+    return buildSaleAbonoLedger(stRows, saleLedgerSaleId);
+  }, [stRows, saleLedgerSaleId]);
+
   const saveAbono = async () => {
     if (!stCustomer) return;
     setMsg("");
@@ -1108,9 +1280,26 @@ export default function CustomersPollo({
       return;
     }
 
+    if (abonoTargetSaleId) {
+      const pend = getPendingForSale(stRows, abonoTargetSaleId);
+      if (safeAmt > pend + 0.005) {
+        setMsg(
+          `El abono no puede superar el saldo pendiente (${money(pend)}) de esta venta.`,
+        );
+        return;
+      }
+      const saleD = getCargoSaleDate(stRows, abonoTargetSaleId);
+      if (saleD && abonoDate < saleD) {
+        setMsg(
+          `La fecha del abono no puede ser anterior a la fecha de la venta (${saleD}).`,
+        );
+        return;
+      }
+    }
+
     try {
       setSavingAbono(true);
-      const payload = {
+      const payload: Record<string, unknown> = {
         customerId: stCustomer.id,
         type: "ABONO",
         amount: -safeAmt,
@@ -1118,6 +1307,9 @@ export default function CustomersPollo({
         comment: abonoComment || "",
         createdAt: Timestamp.now(),
       };
+      if (abonoTargetSaleId) {
+        payload.ref = { saleId: abonoTargetSaleId };
+      }
       const ref = await addDoc(collection(db, "ar_movements_pollo"), payload);
 
       const newRow: MovementRow = {
@@ -1127,14 +1319,23 @@ export default function CustomersPollo({
         amount: -safeAmt,
         comment: abonoComment || "",
         createdAt: Timestamp.now(),
+        ref: abonoTargetSaleId
+          ? { saleId: abonoTargetSaleId }
+          : undefined,
       };
 
-      const newList = [...stRows, newRow].sort((a, b) => {
+      let newList = [...stRows, newRow].sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         const as = a.createdAt?.seconds || 0;
         const bs = b.createdAt?.seconds || 0;
         return as - bs;
       });
+      if (abonoTargetSaleId) {
+        newList = await syncCargoDebtStatusForSaleId(
+          newList,
+          abonoTargetSaleId,
+        );
+      }
 
       setStRows(newList);
       recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
@@ -1174,6 +1375,7 @@ export default function CustomersPollo({
       setAbonoAmount(0);
       setAbonoComment("");
       setAbonoDate(formatLocalDate(new Date()));
+      setAbonoTargetSaleId(null);
       setShowAbono(false);
       setMsg("✅ Abono registrado");
     } catch (e) {
@@ -1184,17 +1386,203 @@ export default function CustomersPollo({
     }
   };
 
+  const payFullSale = async (saleId: string) => {
+    if (!stCustomer) return;
+    setMsg("");
+    const pending = getPendingForSale(stRows, saleId);
+    if (!(pending > 0.005)) {
+      setMsg("No hay saldo pendiente para esta venta.");
+      return;
+    }
+    const cargo = stRows.find(
+      (m) =>
+        m.type === "CARGO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) > 0,
+    );
+    if (!cargo) {
+      setMsg("No se encontró el cargo de esta venta.");
+      return;
+    }
+    const payAmt = roundCurrency(pending);
+    const payDate = formatLocalDate(new Date());
+    const saleD = (cargo.date || "").slice(0, 10);
+    if (saleD && payDate < saleD) {
+      setMsg(
+        `La fecha de pago no puede ser anterior a la fecha de la venta (${saleD}).`,
+      );
+      return;
+    }
+
+    const okPay = confirm(
+      `¿Confirmar el pago total de esta factura por ${money(payAmt)}?`,
+    );
+    if (!okPay) return;
+
+    try {
+      setSavingAbono(true);
+      const payload = {
+        customerId: stCustomer.id,
+        type: "ABONO",
+        amount: -payAmt,
+        date: payDate,
+        comment: `${FULL_PAYMENT_COMMENT_PREFIX} (${saleId.slice(0, 8)}…)`,
+        createdAt: Timestamp.now(),
+        ref: { saleId },
+      };
+      const refDoc = await addDoc(
+        collection(db, "ar_movements_pollo"),
+        payload,
+      );
+
+      const newRow: MovementRow = {
+        id: refDoc.id,
+        date: payDate,
+        type: "ABONO",
+        amount: -payAmt,
+        comment: payload.comment,
+        createdAt: Timestamp.now(),
+        ref: { saleId },
+      };
+
+      let newList = [...stRows, newRow].sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        const as = a.createdAt?.seconds || 0;
+        const bs = b.createdAt?.seconds || 0;
+        return as - bs;
+      });
+      newList = await syncCargoDebtStatusForSaleId(newList, saleId);
+
+      setStRows(newList);
+      recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
+      const sumMov = newList.reduce(
+        (acc, it) => acc + (Number(it.amount) || 0),
+        0,
+      );
+      const nuevoSaldo = roundCurrency(
+        Number(stCustomer.initialDebt || 0) + sumMov,
+      );
+      const openDebt = hasOpenDebt(newList, nuevoSaldo);
+      const last = openDebt ? getLastAbonoFromList(newList) : null;
+
+      setRows((prev) =>
+        prev.map((c) =>
+          c.id === stCustomer.id
+            ? {
+                ...c,
+                balance: nuevoSaldo,
+                lastAbonoDate: openDebt && last ? last.date : "",
+                lastAbonoAmount: openDebt && last ? last.amount : 0,
+              }
+            : c,
+        ),
+      );
+      setStCustomer((prev) =>
+        prev
+          ? {
+              ...prev,
+              balance: nuevoSaldo,
+              lastAbonoDate: openDebt && last ? last.date : "",
+              lastAbonoAmount: openDebt && last ? last.amount : 0,
+            }
+          : prev,
+      );
+
+      setMsg("✅ Factura pagada");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al registrar el pago");
+    } finally {
+      setSavingAbono(false);
+    }
+  };
+
+  /** Elimina el abono de "Pago total factura" y sincroniza estado de la venta. */
+  const revertFullPaymentSale = async (saleId: string) => {
+    if (!stCustomer) return;
+    const candidates = stRows
+      .filter(
+        (m) =>
+          m.type === "ABONO" &&
+          m.ref?.saleId === saleId &&
+          isFullPaymentAbonoComment(m.comment),
+      )
+      .slice()
+      .sort(
+        (a, b) =>
+          (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0),
+      );
+    const abono = candidates[0];
+    if (!abono) {
+      setMsg("No hay un pago total registrado para revertir.");
+      return;
+    }
+    const revertAmt = Math.abs(Number(abono.amount) || 0);
+    const ok = confirm(
+      `¿Confirmar revertir el pago total?\n\nSe eliminará el abono de ${money(revertAmt)} y la factura volverá a Pendiente si queda saldo por cobrar.`,
+    );
+    if (!ok) return;
+
+    try {
+      setSavingAbono(true);
+      await deleteDoc(doc(db, "ar_movements_pollo", abono.id));
+      let newList = stRows.filter((x) => x.id !== abono.id);
+      newList = await syncCargoDebtStatusForSaleId(newList, saleId);
+
+      setStRows(newList);
+      recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
+
+      const sumMov = newList.reduce(
+        (acc, it) => acc + (Number(it.amount) || 0),
+        0,
+      );
+      const nuevoSaldo = roundCurrency(
+        Number(stCustomer.initialDebt || 0) + sumMov,
+      );
+      const openDebt = hasOpenDebt(newList, nuevoSaldo);
+      const last = openDebt ? getLastAbonoFromList(newList) : null;
+
+      setRows((prev) =>
+        prev.map((c) =>
+          c.id === stCustomer.id
+            ? {
+                ...c,
+                balance: nuevoSaldo,
+                lastAbonoDate: openDebt && last ? last.date : "",
+                lastAbonoAmount: openDebt && last ? last.amount : 0,
+              }
+            : c,
+        ),
+      );
+      setStCustomer((prev) =>
+        prev
+          ? {
+              ...prev,
+              balance: nuevoSaldo,
+              lastAbonoDate: openDebt && last ? last.date : "",
+              lastAbonoAmount: openDebt && last ? last.amount : 0,
+            }
+          : prev,
+      );
+
+      setMsg("✅ Pago total revertido");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al revertir el pago");
+    } finally {
+      setSavingAbono(false);
+    }
+  };
+
   const startEditMovement = (m: MovementRow) => {
     setEditMovId(m.id);
     setEMovDate(m.date || formatLocalDate(new Date()));
-    setEMovAmount(Math.abs(Number(m.amount || 0)));
     setEMovComment(m.comment || "");
   };
 
   const cancelEditMovement = () => {
     setEditMovId(null);
     setEMovDate("");
-    setEMovAmount(0);
     setEMovComment("");
   };
 
@@ -1204,20 +1592,14 @@ export default function CustomersPollo({
     if (idx === -1) return;
     const old = stRows[idx];
 
-    const entered = Number(eMovAmount || 0);
-    if (!(entered > 0)) {
-      setMsg("El monto debe ser mayor a 0.");
+    if (!eMovDate) {
+      setMsg("Selecciona la fecha.");
       return;
     }
-    const signed =
-      old.type === "ABONO"
-        ? -parseFloat(entered.toFixed(2))
-        : +parseFloat(entered.toFixed(2));
 
     try {
       await updateDoc(doc(db, "ar_movements_pollo", editMovId), {
         date: eMovDate,
-        amount: signed,
         comment: eMovComment || "",
       });
 
@@ -1225,7 +1607,6 @@ export default function CustomersPollo({
       newList[idx] = {
         ...old,
         date: eMovDate,
-        amount: signed,
         comment: eMovComment || "",
       };
       newList.sort((a, b) => {
@@ -1309,12 +1690,19 @@ export default function CustomersPollo({
         await deleteDoc(doc(db, "ar_movements_pollo", m.id));
       }
 
-      const newList = stRows.filter((x) => {
+      let newList = stRows.filter((x) => {
         if (m.type === "CARGO" && m.ref?.saleId) {
           return x.ref?.saleId !== m.ref.saleId;
         }
         return x.id !== m.id;
       });
+
+      if (m.type === "ABONO" && m.ref?.saleId) {
+        newList = await syncCargoDebtStatusForSaleId(
+          newList,
+          m.ref.saleId,
+        );
+      }
 
       setStRows(newList);
       recomputeKpis(newList, Number(stCustomer.initialDebt || 0));
@@ -1360,77 +1748,6 @@ export default function CustomersPollo({
       setMsg("❌ Error al eliminar movimiento");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const toggleDebtStatus = async (movement: MovementRow) => {
-    if (movement.type !== "CARGO") return;
-    const nextStatus = (
-      normalizeDebtStatus(movement.debtStatus) === "PAGADA"
-        ? "PENDIENTE"
-        : "PAGADA"
-    ) as "PENDIENTE" | "PAGADA";
-
-    try {
-      setUpdatingDebtStatusId(movement.id);
-      await updateDoc(doc(db, "ar_movements_pollo", movement.id), {
-        debtStatus: nextStatus,
-      });
-
-      const updatedList: MovementRow[] = stRows.map((row) =>
-        row.id === movement.id
-          ? ({ ...row, debtStatus: nextStatus } as MovementRow)
-          : row,
-      );
-
-      setStRows(updatedList);
-      if (stCustomer) {
-        recomputeKpis(updatedList, Number(stCustomer.initialDebt || 0));
-        const sumMov = updatedList.reduce(
-          (acc, it) => acc + (Number(it.amount) || 0),
-          0,
-        );
-        const nuevoSaldo = roundCurrency(
-          Number(stCustomer.initialDebt || 0) + sumMov,
-        );
-        const openDebt = hasOpenDebt(updatedList, nuevoSaldo);
-        const last = openDebt ? getLastAbonoFromList(updatedList) : null;
-
-        setRows((prev) =>
-          prev.map((c) =>
-            c.id === stCustomer.id
-              ? {
-                  ...c,
-                  balance: nuevoSaldo,
-                  lastAbonoDate: openDebt && last ? last.date : "",
-                  lastAbonoAmount: openDebt && last ? last.amount : 0,
-                }
-              : c,
-          ),
-        );
-
-        setStCustomer((prev) =>
-          prev
-            ? {
-                ...prev,
-                balance: nuevoSaldo,
-                lastAbonoDate: openDebt && last ? last.date : "",
-                lastAbonoAmount: openDebt && last ? last.amount : 0,
-              }
-            : prev,
-        );
-      }
-
-      setMsg(
-        nextStatus === "PAGADA"
-          ? "✅ Compra marcada como pagada"
-          : "✅ Compra marcada como pendiente",
-      );
-    } catch (error) {
-      console.error(error);
-      setMsg("❌ No se pudo actualizar el estado de la compra");
-    } finally {
-      setUpdatingDebtStatusId(null);
     }
   };
 
@@ -1725,7 +2042,7 @@ export default function CustomersPollo({
                           )}
                         </td>
                         <td className="p-3 border-b text-left">
-                          {c.createdAt?.toDate
+                          {c.createdAt
                             ? formatLocalDate(c.createdAt)
                             : "—"}
                         </td>
@@ -1842,54 +2159,39 @@ export default function CustomersPollo({
                           )}
                         </td>
                         <td className="p-3 border-b text-right">
-                          <div className="flex gap-2 justify-end">
-                            {isEditing ? (
-                              <>
-                                <button
-                                  className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                                  onClick={saveEdit}
-                                >
-                                  Guardar
-                                </button>
-                                <button
-                                  className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                                  onClick={cancelEdit}
-                                >
-                                  Cancelar
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700 flex items-center justify-center"
-                                  onClick={() => startEdit(c)}
-                                  title="Editar"
-                                  aria-label="Editar cliente"
-                                >
-                                  <FiEdit className="w-4 h-4" />
-                                </button>
-                                <button
-                                  className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 flex items-center justify-center"
-                                  onClick={() => handleDelete(c)}
-                                  disabled={!isAdmin}
-                                  title={!isAdmin ? "Solo admin" : "Borrar"}
-                                  aria-label={
-                                    isAdmin ? "Borrar cliente" : "Solo admin"
-                                  }
-                                >
-                                  <FiTrash2 className="w-4 h-4" />
-                                </button>
-                                <button
-                                  className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700 flex items-center justify-center"
-                                  onClick={() => openStatement(c)}
-                                  title="Estado de cuenta"
-                                  aria-label="Ver estado de cuenta"
-                                >
-                                  <FiFileText className="w-4 h-4" />
-                                </button>
-                              </>
-                            )}
-                          </div>
+                          {isEditing ? (
+                            <div className="flex gap-2 justify-end">
+                              <button
+                                className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                                onClick={saveEdit}
+                              >
+                                Guardar
+                              </button>
+                              <button
+                                className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                                onClick={cancelEdit}
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 inline-flex"
+                              aria-label="Acciones del cliente"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCustomerRowMenu({
+                                  id: c.id,
+                                  rect: (
+                                    e.currentTarget as HTMLElement
+                                  ).getBoundingClientRect(),
+                                });
+                              }}
+                            >
+                              <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -1913,7 +2215,7 @@ export default function CustomersPollo({
             filteredRows.map((c) => (
               <div
                 key={c.id}
-                className="border rounded-lg bg-white p-3 shadow-sm"
+                className="rounded-xl border-2 border-slate-200 bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 p-3 shadow-md"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -1934,15 +2236,13 @@ export default function CustomersPollo({
                   </span>
                 </div>
 
-                <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                  <div className="border rounded p-2 bg-gray-50">
-                    <div className="text-[11px] text-gray-600">Saldo</div>
-                    <div className="font-semibold">{money(c.balance || 0)}</div>
-                  </div>
-                  <div className="border rounded p-2 bg-gray-50">
-                    <div className="text-[11px] text-gray-600">Límite</div>
-                    <div className="font-semibold">
-                      {money(c.creditLimit || 0)}
+                <div className="mt-2">
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50/80 p-3 text-sm shadow-sm">
+                    <div className="text-[11px] font-medium text-indigo-700">
+                      Saldo
+                    </div>
+                    <div className="text-lg font-semibold text-indigo-950">
+                      {money(c.balance || 0)}
                     </div>
                   </div>
                 </div>
@@ -1965,33 +2265,21 @@ export default function CustomersPollo({
                   </div>
                 ) : null}
 
-                <div className="mt-3 flex gap-2 flex-wrap">
+                <div className="mt-3 flex justify-end">
                   <button
                     type="button"
-                    className="px-3 py-2 rounded bg-indigo-600 text-white text-sm"
-                    onClick={() => openStatement(c)}
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    aria-label="Acciones del cliente"
+                    onClick={(e) =>
+                      setCustomerRowMenu({
+                        id: c.id,
+                        rect: (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect(),
+                      })
+                    }
                   >
-                    Estado de cuenta
-                  </button>
-
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded bg-yellow-600 text-white text-sm"
-                    onClick={() => startEdit(c)}
-                    disabled={isVendor}
-                    title={isVendor ? "Vendedor no edita" : "Editar"}
-                  >
-                    Editar
-                  </button>
-
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded bg-red-600 text-white text-sm disabled:opacity-50"
-                    onClick={() => handleDelete(c)}
-                    disabled={!isAdmin}
-                    title={!isAdmin ? "Solo admin" : "Borrar"}
-                  >
-                    Borrar
+                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
                   </button>
                 </div>
               </div>
@@ -1999,6 +2287,62 @@ export default function CustomersPollo({
           )}
         </div>
       </div>
+
+      <ActionMenu
+        anchorRect={customerRowMenu?.rect ?? null}
+        isOpen={!!customerRowMenu}
+        onClose={() => setCustomerRowMenu(null)}
+        width={220}
+      >
+        {customerRowMenu &&
+          (() => {
+            const c = rows.find((x) => x.id === customerRowMenu.id);
+            if (!c) {
+              return (
+                <div className="px-3 py-2 text-sm text-gray-500">
+                  Sin datos
+                </div>
+              );
+            }
+            return (
+              <div className="py-1">
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  onClick={() => {
+                    setCustomerRowMenu(null);
+                    void openStatement(c);
+                  }}
+                >
+                  Estado de cuenta
+                </button>
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                  disabled={isVendor}
+                  onClick={() => {
+                    setCustomerRowMenu(null);
+                    startEdit(c);
+                  }}
+                >
+                  Editar cliente
+                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                    onClick={() => {
+                      setCustomerRowMenu(null);
+                      void handleDelete(c);
+                    }}
+                  >
+                    Borrar cliente
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+      </ActionMenu>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
@@ -2166,7 +2510,7 @@ export default function CustomersPollo({
             {/* overlay */}
             <div
               className="absolute inset-0 bg-black/40"
-              onClick={() => setShowStatement(false)}
+              onClick={closeStatement}
             />
 
             {/* modal */}
@@ -2180,21 +2524,8 @@ export default function CustomersPollo({
                   <div className="flex gap-2 shrink-0">
                     <button
                       type="button"
-                      className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-                      onClick={() => {
-                        setAbonoAmount(0);
-                        setAbonoDate(formatLocalDate(new Date()));
-                        setAbonoComment("");
-                        setShowAbono(true);
-                      }}
-                    >
-                      Abonar
-                    </button>
-
-                    <button
-                      type="button"
                       className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                      onClick={() => setShowStatement(false)}
+                      onClick={closeStatement}
                     >
                       Cerrar
                     </button>
@@ -2202,44 +2533,60 @@ export default function CustomersPollo({
                 </div>
 
                 {/* KPIs (VISIBLE SIEMPRE) */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">Deuda inicial</div>
-                    <div className="text-xl font-semibold">
-                      {money(Number(stCustomer?.initialDebt || 0))}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                  <div className="p-3 border-2 rounded-xl border-indigo-200 bg-gradient-to-br from-indigo-50 to-white shadow-sm">
+                    <div className="text-xs font-medium text-indigo-700">
+                      Saldo actual
                     </div>
-                  </div>
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">Saldo actual</div>
-                    <div className="text-xl font-semibold">
+                    <div className="text-xl font-semibold text-indigo-900">
                       {money(stKpis.saldoActual)}
                     </div>
                   </div>
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">Total abonado</div>
-                    <div className="text-xl font-semibold">
+                  <div className="p-3 border-2 rounded-xl border-emerald-200 bg-gradient-to-br from-emerald-50 to-white shadow-sm">
+                    <div className="text-xs font-medium text-emerald-700">
+                      Total abonado
+                    </div>
+                    <div className="text-xl font-semibold text-emerald-900">
                       {money(stKpis.totalAbonado)}
                     </div>
                   </div>
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">Saldo restante</div>
-                    <div className="text-xl font-semibold">
+                  <div className="p-3 border-2 rounded-xl border-amber-200 bg-gradient-to-br from-amber-50 to-white shadow-sm">
+                    <div className="text-xs font-medium text-amber-800">
+                      Saldo restante
+                    </div>
+                    <div className="text-xl font-semibold text-amber-950">
                       {money(stKpis.saldoRestante)}
                     </div>
                   </div>
                 </div>
 
-                {/* Tabla (desktop) + Tarjetas (móvil) */}
+                <div className="mb-3 text-sm text-gray-600">
+                  <button
+                    type="button"
+                    className="text-blue-600 underline hover:text-blue-800"
+                    onClick={() => {
+                      setAbonoTargetSaleId(null);
+                      setAbonoAmount(0);
+                      setAbonoDate(formatLocalDate(new Date()));
+                      setAbonoComment("");
+                      setShowAbono(true);
+                    }}
+                  >
+                    Registrar abono general (no ligado a una venta)
+                  </button>
+                </div>
+
+                {/* Tabla (desktop): solo ventas a crédito */}
                 <div className="hidden md:block bg-white rounded border overflow-x-auto">
                   <table className="min-w-full text-sm">
                     <thead className="bg-gray-100">
                       <tr>
                         <th className="p-2 border">Fecha</th>
-                        <th className="p-2 border">Tipo</th>
-                        <th className="p-2 border">Estado compra</th>
-                        <th className="p-2 border">Comentario</th>
-                        <th className="p-2 border">Monto</th>
-                        <th className="p-2 border">Acciones</th>
+                        <th className="p-2 border">Total venta</th>
+                        <th className="p-2 border">Pendiente</th>
+                        <th className="p-2 border">Estado</th>
+                        <th className="p-2 border">Detalle</th>
+                        <th className="p-2 border w-12"> </th>
                       </tr>
                     </thead>
 
@@ -2250,158 +2597,63 @@ export default function CustomersPollo({
                             Cargando…
                           </td>
                         </tr>
-                      ) : stRows.length === 0 ? (
+                      ) : saleVentasRows.length === 0 ? (
                         <tr>
                           <td colSpan={6} className="p-4 text-center">
-                            Sin movimientos
+                            Sin ventas a crédito registradas
                           </td>
                         </tr>
                       ) : (
-                        stRows.map((m) => {
-                          const isEditing = editMovId === m.id;
+                        saleVentasRows.map((m) => {
+                          const saleId = m.ref!.saleId!;
+                          const pending = getPendingForSale(stRows, saleId);
                           const normalizedDebt = normalizeDebtStatus(
                             m.debtStatus,
                           );
                           return (
                             <tr key={m.id} className="text-center">
-                              <td className="p-2 border">
-                                {isEditing ? (
-                                  <input
-                                    type="date"
-                                    className="w-full border p-1 rounded"
-                                    value={eMovDate}
-                                    onChange={(e) =>
-                                      setEMovDate(e.target.value)
-                                    }
-                                  />
-                                ) : (
-                                  m.date || "—"
-                                )}
-                              </td>
-
-                              <td className="p-2 border">
-                                {m.amount >= 0 ? (
-                                  m.ref?.saleId ? (
-                                    <button
-                                      type="button"
-                                      className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700 underline"
-                                      onClick={() =>
-                                        openItemsModal(m.ref!.saleId!)
-                                      }
-                                    >
-                                      COMPRA (Ver detalle)
-                                    </button>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">
-                                      COMPRA (Ver detalle)
-                                    </span>
-                                  )
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
-                                    ABONO
-                                  </span>
-                                )}
-                              </td>
-
-                              <td className="p-2 border">
-                                {m.type === "CARGO" ? (
-                                  <span
-                                    className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
-                                  >
-                                    {normalizedDebt === "PAGADA"
-                                      ? "Pagada"
-                                      : "Pendiente"}
-                                  </span>
-                                ) : (
-                                  "—"
-                                )}
-                              </td>
-
-                              <td className="p-2 border">
-                                {isEditing ? (
-                                  <input
-                                    className="w-full border p-1 rounded"
-                                    value={eMovComment}
-                                    onChange={(e) =>
-                                      setEMovComment(e.target.value)
-                                    }
-                                  />
-                                ) : (
-                                  <span title={m.comment || ""}>
-                                    {(m.comment || "").length > 40
-                                      ? (m.comment || "").slice(0, 40) + "…"
-                                      : m.comment || "—"}
-                                  </span>
-                                )}
-                              </td>
-
+                              <td className="p-2 border">{m.date || "—"}</td>
                               <td className="p-2 border font-semibold">
-                                {isEditing ? (
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    inputMode="decimal"
-                                    className="w-full border p-1 rounded text-right"
-                                    value={
-                                      Number.isNaN(eMovAmount) ? "" : eMovAmount
-                                    }
-                                    onChange={(e) =>
-                                      setEMovAmount(Number(e.target.value || 0))
-                                    }
-                                  />
-                                ) : (
-                                  money(m.amount)
-                                )}
+                                {money(m.amount)}
                               </td>
-
+                              <td className="p-2 border font-medium text-orange-800">
+                                {money(pending)}
+                              </td>
                               <td className="p-2 border">
-                                {isEditing ? (
-                                  <div className="flex gap-2 justify-center">
-                                    <button
-                                      type="button"
-                                      className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                                      onClick={saveEditMovement}
-                                    >
-                                      Guardar
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                                      onClick={cancelEditMovement}
-                                    >
-                                      Cancelar
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div className="flex gap-2 justify-center">
-                                    <button
-                                      type="button"
-                                      className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                                      onClick={() => startEditMovement(m)}
-                                    >
-                                      Editar
-                                    </button>
-                                    {m.type === "CARGO" && (
-                                      <button
-                                        type="button"
-                                        className={`px-2 py-1 rounded text-white ${normalizedDebt === "PAGADA" ? "bg-gray-600 hover:bg-gray-700" : "bg-emerald-600 hover:bg-emerald-700"} disabled:opacity-50`}
-                                        onClick={() => toggleDebtStatus(m)}
-                                        disabled={updatingDebtStatusId === m.id}
-                                      >
-                                        {normalizedDebt === "PAGADA"
-                                          ? "Marcar pendiente"
-                                          : "Marcar pagada"}
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                                      onClick={() => deleteMovement(m)}
-                                    >
-                                      Borrar
-                                    </button>
-                                  </div>
-                                )}
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                                >
+                                  {normalizedDebt === "PAGADA"
+                                    ? "Pagada"
+                                    : "Pendiente"}
+                                </span>
+                              </td>
+                              <td className="p-2 border">
+                                <button
+                                  type="button"
+                                  className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700 underline"
+                                  onClick={() => openItemsModal(saleId)}
+                                >
+                                  Ver detalle
+                                </button>
+                              </td>
+                              <td className="p-2 border">
+                                <button
+                                  type="button"
+                                  className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                                  aria-label="Acciones de venta"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSaleMenuAnchor({
+                                      saleId,
+                                      rect: (
+                                        e.currentTarget as HTMLElement
+                                      ).getBoundingClientRect(),
+                                    });
+                                  }}
+                                >
+                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                                </button>
                               </td>
                             </tr>
                           );
@@ -2411,140 +2663,438 @@ export default function CustomersPollo({
                   </table>
                 </div>
 
-                {/* Mobile: cards */}
+                {/* Mobile: tarjetas por venta */}
                 <div className="md:hidden space-y-3">
                   {stLoading ? (
                     <div className="p-4 text-center text-sm">Cargando…</div>
-                  ) : stRows.length === 0 ? (
+                  ) : saleVentasRows.length === 0 ? (
                     <div className="p-4 text-center text-sm">
-                      Sin movimientos
+                      Sin ventas a crédito registradas
                     </div>
                   ) : (
-                    stRows.map((m) => {
-                      const isEditing = editMovId === m.id;
+                    saleVentasRows.map((m) => {
+                      const saleId = m.ref!.saleId!;
+                      const pending = getPendingForSale(stRows, saleId);
                       const normalizedDebt = normalizeDebtStatus(m.debtStatus);
                       return (
                         <div
                           key={m.id}
-                          className="bg-white border rounded-lg p-3 shadow-sm"
+                          className="rounded-xl border-2 border-sky-200 bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/50 p-3 shadow-md"
                         >
-                          <div className="flex items-start justify-between">
+                          <div className="flex items-start justify-between gap-2">
                             <div>
-                              <div className="text-sm font-semibold">
+                              <div className="text-sm font-semibold text-slate-900">
                                 {m.date || "—"}
                               </div>
-                              <div className="text-xs text-gray-500 mt-1">
-                                {m.amount >= 0 ? (
-                                  m.ref?.saleId ? (
-                                    <button
-                                      type="button"
-                                      className="text-xs text-yellow-700 underline"
-                                      onClick={() =>
-                                        openItemsModal(m.ref!.saleId!)
-                                      }
-                                    >
-                                      Compra — ver detalle
-                                    </button>
-                                  ) : (
-                                    <span className="text-xs text-yellow-700">
-                                      Compra
-                                    </span>
-                                  )
-                                ) : (
-                                  <span className="text-xs text-green-700">
-                                    Abono
-                                  </span>
-                                )}
+                              <div className="text-xs text-gray-600 mt-1">
+                                Total:{" "}
+                                <span className="font-semibold text-gray-900">
+                                  {money(m.amount)}
+                                </span>
                               </div>
+                              <div className="text-xs text-orange-800 mt-0.5">
+                                Pendiente: {money(pending)}
+                              </div>
+                              <div className="mt-2">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                                >
+                                  {normalizedDebt === "PAGADA"
+                                    ? "Pagada"
+                                    : "Pendiente"}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="text-xs text-yellow-700 underline mt-2"
+                                onClick={() => openItemsModal(saleId)}
+                              >
+                                Ver detalle de compra
+                              </button>
                             </div>
-
-                            <div className="text-right">
-                              <div className="text-sm font-semibold">
-                                {money(m.amount)}
-                              </div>
-                              <div className="text-xs text-gray-500 mt-1">
-                                {m.type === "CARGO" ? (
-                                  <span
-                                    className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
-                                  >
-                                    {normalizedDebt === "PAGADA"
-                                      ? "Pagada"
-                                      : "Pendiente"}
-                                  </span>
-                                ) : (
-                                  <span className="text-xs">—</span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mt-2 text-sm text-gray-700">
-                            {isEditing ? (
-                              <input
-                                className="w-full border p-2 rounded"
-                                value={eMovComment}
-                                onChange={(e) => setEMovComment(e.target.value)}
-                              />
-                            ) : (
-                              <div className="text-sm">
-                                {(m.comment || "").length > 120
-                                  ? (m.comment || "").slice(0, 120) + "…"
-                                  : m.comment || "—"}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="mt-3 flex gap-2 flex-wrap justify-end">
-                            {isEditing ? (
-                              <>
-                                <button
-                                  className="px-3 py-1 rounded bg-blue-600 text-white"
-                                  onClick={saveEditMovement}
-                                >
-                                  Guardar
-                                </button>
-                                <button
-                                  className="px-3 py-1 rounded bg-gray-200"
-                                  onClick={cancelEditMovement}
-                                >
-                                  Cancelar
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  className="px-3 py-1 rounded bg-yellow-600 text-white text-sm"
-                                  onClick={() => startEditMovement(m)}
-                                >
-                                  Editar
-                                </button>
-                                {m.type === "CARGO" && (
-                                  <button
-                                    className={`px-3 py-1 rounded text-sm text-white ${normalizedDebt === "PAGADA" ? "bg-gray-600" : "bg-emerald-600"}`}
-                                    onClick={() => toggleDebtStatus(m)}
-                                    disabled={updatingDebtStatusId === m.id}
-                                  >
-                                    {normalizedDebt === "PAGADA"
-                                      ? "Marcar pendiente"
-                                      : "Marcar pagada"}
-                                  </button>
-                                )}
-                                <button
-                                  className="px-3 py-1 rounded bg-red-600 text-white text-sm"
-                                  onClick={() => deleteMovement(m)}
-                                >
-                                  Borrar
-                                </button>
-                              </>
-                            )}
+                            <button
+                              type="button"
+                              className="p-2 rounded-lg border border-gray-200 shrink-0"
+                              aria-label="Acciones de venta"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSaleMenuAnchor({
+                                  saleId,
+                                  rect: (
+                                    e.currentTarget as HTMLElement
+                                  ).getBoundingClientRect(),
+                                });
+                              }}
+                            >
+                              <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                            </button>
                           </div>
                         </div>
                       );
                     })
                   )}
                 </div>
+
+                {editMovId &&
+                  (() => {
+                    const em = stRows.find((x) => x.id === editMovId);
+                    if (!em) return null;
+                    return (
+                      <div className="mt-4 border rounded-lg p-4 bg-amber-50 border-amber-200">
+                        <div className="font-semibold mb-2">
+                          Editar movimiento (
+                          {em.type === "ABONO" ? "Abono" : "Compra"})
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600">
+                              Fecha
+                            </label>
+                            <input
+                              type="date"
+                              className="w-full border p-2 rounded"
+                              value={eMovDate}
+                              onChange={(e) => setEMovDate(e.target.value)}
+                            />
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-medium text-gray-600">
+                              Comentario
+                            </label>
+                            <input
+                              className="w-full border p-2 rounded"
+                              value={eMovComment}
+                              onChange={(e) => setEMovComment(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">
+                          Solo se pueden editar fecha y comentario; el monto no
+                          se modifica aquí.
+                        </p>
+                        <div className="mt-3 flex gap-2 justify-end">
+                          <button
+                            type="button"
+                            className="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
+                            onClick={cancelEditMovement}
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                            onClick={saveEditMovement}
+                          >
+                            Guardar
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
               </div>
             </div>
+
+            <ActionMenu
+              anchorRect={saleMenuAnchor?.rect ?? null}
+              isOpen={!!saleMenuAnchor}
+              onClose={() => setSaleMenuAnchor(null)}
+              width={260}
+            >
+              {saleMenuAnchor &&
+                (() => {
+                  const sid = saleMenuAnchor.saleId;
+                  const cargoM = stRows.find(
+                    (x) =>
+                      x.type === "CARGO" &&
+                      x.ref?.saleId === sid &&
+                      Number(x.amount) > 0,
+                  );
+                  if (!cargoM) {
+                    return (
+                      <div className="px-3 py-2 text-sm text-gray-500">
+                        Sin datos
+                      </div>
+                    );
+                  }
+                  const pend = getPendingForSale(stRows, sid);
+                  return (
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                        disabled={savingAbono || !(pend > 0.005)}
+                        onClick={() => {
+                          setSaleMenuAnchor(null);
+                          void payFullSale(sid);
+                        }}
+                      >
+                        Pagar
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                        disabled={savingAbono || !(pend > 0.005)}
+                        onClick={() => {
+                          setSaleMenuAnchor(null);
+                          setAbonoTargetSaleId(sid);
+                          setAbonoAmount(0);
+                          setAbonoDate(formatLocalDate(new Date()));
+                          setAbonoComment("");
+                          setShowAbono(true);
+                        }}
+                      >
+                        Abonar
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                        onClick={() => {
+                          setSaleMenuAnchor(null);
+                          setSaleLedgerSaleId(sid);
+                        }}
+                      >
+                        Ver cuenta
+                      </button>
+                      {stRows.some(
+                        (m) =>
+                          m.type === "ABONO" &&
+                          m.ref?.saleId === sid &&
+                          isFullPaymentAbonoComment(m.comment),
+                      ) && (
+                        <button
+                          type="button"
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-amber-800 disabled:opacity-50"
+                          disabled={savingAbono}
+                          onClick={() => {
+                            setSaleMenuAnchor(null);
+                            void revertFullPaymentSale(sid);
+                          }}
+                        >
+                          Revertir pago total
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <>
+                          <button
+                            type="button"
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                            onClick={() => {
+                              setSaleMenuAnchor(null);
+                              startEditMovement(cargoM);
+                            }}
+                          >
+                            Editar movimiento
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                            onClick={() => {
+                              setSaleMenuAnchor(null);
+                              void deleteMovement(cargoM);
+                            }}
+                          >
+                            Eliminar venta
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+            </ActionMenu>
+
+            {saleLedgerSaleId && (
+              <div className="fixed inset-0 z-[62] flex items-center justify-center p-4">
+                <div
+                  className="absolute inset-0 bg-black/40"
+                  onClick={() => setSaleLedgerSaleId(null)}
+                />
+                <div
+                  className="relative z-10 bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl max-h-[85vh] overflow-auto p-4"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div>
+                      <h3 className="text-lg font-bold">
+                        Cuenta de la venta
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        Cliente: {stCustomer?.name || "—"}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 shrink-0"
+                      onClick={() => setSaleLedgerSaleId(null)}
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                    <div className="p-3 border-2 rounded-xl border-violet-200 bg-gradient-to-br from-violet-50 to-white shadow-sm">
+                      <div className="text-xs font-medium text-violet-700">
+                        Saldo actual
+                      </div>
+                      <div className="text-lg font-semibold text-violet-950">
+                        {money(
+                          getPendingForSale(stRows, saleLedgerSaleId),
+                        )}
+                      </div>
+                    </div>
+                    <div className="p-3 border-2 rounded-xl border-teal-200 bg-gradient-to-br from-teal-50 to-white shadow-sm">
+                      <div className="text-xs font-medium text-teal-800">
+                        Abonos
+                      </div>
+                      <div className="text-lg font-semibold text-teal-950">
+                        {money(
+                          getTotalAbonadoForSale(stRows, saleLedgerSaleId),
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="hidden md:block border rounded overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="p-2 border text-left">Fecha</th>
+                          <th className="p-2 border text-right">Monto</th>
+                          <th className="p-2 border text-right">
+                            Saldo inicial
+                          </th>
+                          <th className="p-2 border text-right">
+                            Saldo final
+                          </th>
+                          <th className="p-2 border text-left">Comentario</th>
+                          {isAdmin && (
+                            <th className="p-2 border text-center">Acciones</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {saleLedgerComputed.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={isAdmin ? 6 : 5}
+                              className="p-4 text-center text-gray-500"
+                            >
+                              No hay abonos con referencia a esta venta. Los
+                              abonos generales del cliente siguen reflejados en
+                              los KPI del estado de cuenta.
+                            </td>
+                          </tr>
+                        ) : (
+                          saleLedgerComputed.map((row) => (
+                            <tr key={row.id} className="text-center">
+                              <td className="p-2 border">{row.date || "—"}</td>
+                              <td className="p-2 border text-right font-medium">
+                                {money(-row.montoAbs)}
+                              </td>
+                              <td className="p-2 border text-right">
+                                {money(row.saldoInicial)}
+                              </td>
+                              <td className="p-2 border text-right">
+                                {money(row.saldoFinal)}
+                              </td>
+                              <td className="p-2 border text-left text-xs">
+                                {row.comment || "—"}
+                              </td>
+                              {isAdmin && (
+                                <td className="p-2 border">
+                                  <div className="flex gap-1 justify-center flex-wrap">
+                                    <button
+                                      type="button"
+                                      className="text-xs text-blue-600 underline"
+                                      onClick={() => {
+                                        setSaleLedgerSaleId(null);
+                                        startEditMovement(row);
+                                      }}
+                                    >
+                                      Editar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-red-600 underline"
+                                      onClick={() => {
+                                        void deleteMovement(row);
+                                      }}
+                                    >
+                                      Borrar
+                                    </button>
+                                  </div>
+                                </td>
+                              )}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="md:hidden space-y-3 mt-3">
+                    {saleLedgerComputed.length === 0 ? (
+                      <div className="p-3 text-sm text-gray-500 border rounded">
+                        No hay abonos con referencia a esta venta.
+                      </div>
+                    ) : (
+                      saleLedgerComputed.map((row) => (
+                        <div
+                          key={row.id}
+                          className="rounded-xl border-2 border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 shadow-md"
+                        >
+                          <div className="flex justify-between text-sm">
+                            <span className="font-medium">{row.date}</span>
+                            <span className="font-semibold">
+                              {money(-row.montoAbs)}
+                            </span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                            <div>
+                              <div className="text-[11px]">Saldo inicial</div>
+                              <div className="font-medium text-gray-900">
+                                {money(row.saldoInicial)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[11px]">Saldo final</div>
+                              <div className="font-medium text-gray-900">
+                                {money(row.saldoFinal)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-2 text-sm text-gray-700">
+                            {row.comment || "—"}
+                          </div>
+                          {isAdmin && (
+                            <div className="mt-2 flex gap-3 justify-end text-sm">
+                              <button
+                                type="button"
+                                className="text-blue-600"
+                                onClick={() => {
+                                  setSaleLedgerSaleId(null);
+                                  startEditMovement(row);
+                                }}
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                className="text-red-600"
+                                onClick={() => {
+                                  void deleteMovement(row);
+                                }}
+                              >
+                                Borrar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* items modal (sobre el estado de cuenta) */}
             {itemsModalOpen && (
@@ -2671,8 +3221,18 @@ export default function CustomersPollo({
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[90]">
           <div className="bg-white rounded-lg shadow-2xl border w-[95%] max-w-md p-4">
             <h3 className="text-lg font-bold">
-              Registrar abono — {stCustomer?.name || ""}
+              {abonoTargetSaleId
+                ? `Abonar venta — ${stCustomer?.name || ""}`
+                : `Registrar abono — ${stCustomer?.name || ""}`}
             </h3>
+            {abonoTargetSaleId && (
+              <p className="text-sm text-gray-600 mt-1">
+                Máximo pendiente de esta venta:{" "}
+                <span className="font-semibold">
+                  {money(getPendingForSale(stRows, abonoTargetSaleId))}
+                </span>
+              </p>
+            )}
 
             <div className="grid grid-cols-1 gap-3">
               <div>
@@ -2681,8 +3241,21 @@ export default function CustomersPollo({
                   type="date"
                   className="w-full border p-2 rounded"
                   value={abonoDate}
+                  min={
+                    abonoTargetSaleId
+                      ? getCargoSaleDate(stRows, abonoTargetSaleId) ||
+                        undefined
+                      : undefined
+                  }
                   onChange={(e) => setAbonoDate(e.target.value)}
                 />
+                {abonoTargetSaleId &&
+                  getCargoSaleDate(stRows, abonoTargetSaleId) && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      No anterior a la venta (
+                      {getCargoSaleDate(stRows, abonoTargetSaleId)})
+                    </p>
+                  )}
               </div>
 
               <div>
@@ -2727,7 +3300,10 @@ export default function CustomersPollo({
             <div className="mt-4 flex justify-end gap-2">
               <button
                 className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                onClick={() => setShowAbono(false)}
+                onClick={() => {
+                  setShowAbono(false);
+                  setAbonoTargetSaleId(null);
+                }}
                 disabled={savingAbono}
               >
                 Cancelar

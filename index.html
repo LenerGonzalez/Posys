@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Posys</title>
 
+    <!-- PNG primero: en pestaña el SVG se ve muy pequeño; el navegador escala el PNG -->
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="192x192"
+      href="/pwa-192x192.png"
+    />
+    <link rel="icon" type="image/png" sizes="32x32" href="/pwa-192x192.png" />
+    <link rel="icon" href="/logo_black.svg" type="image/svg+xml" sizes="any" />
+
     <!-- PWA / iOS -->
     <meta name="theme-color" content="#ffffff" />
     <meta name="color-scheme" content="light" />
@@ -14,7 +24,7 @@
       content="default"
     />
     <meta name="apple-mobile-web-app-title" content="Posys" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" href="/logo_black.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
   </head>
   <body>

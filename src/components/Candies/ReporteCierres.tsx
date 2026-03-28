@@ -17,6 +17,8 @@ import * as XLSX from "xlsx";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import ActionMenu from "../common/ActionMenu";
+import { FiMenu } from "react-icons/fi";
 
 type RecordType = "CUENTA_NUEVA" | "ABONO";
 
@@ -146,6 +148,15 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   const detailModalRef = useRef<HTMLDivElement | null>(null);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const [actionOpenId, setActionOpenId] = useState<string | null>(null);
+  const [mainToolsMenuRect, setMainToolsMenuRect] = useState<DOMRect | null>(
+    null,
+  );
+  const [summaryRowMenu, setSummaryRowMenu] = useState<{
+    clientId: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [recordClientLocked, setRecordClientLocked] = useState(false);
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -512,6 +523,12 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     setRecordDate(today());
     setRecordAmount("");
     setRecordNotes("");
+    setRecordClientLocked(false);
+  };
+
+  const showFeedback = (msg: string) => {
+    setFeedbackMsg(msg);
+    window.setTimeout(() => setFeedbackMsg(null), 3500);
   };
 
   const openCreateClientModal = () => {
@@ -530,7 +547,21 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   const openCreateRecordModal = (type: RecordType, forcedClientId?: string) => {
     resetRecordForm();
     setRecordType(type);
-    if (forcedClientId) setRecordClientId(forcedClientId);
+    if (forcedClientId) {
+      setRecordClientId(forcedClientId);
+      setRecordClientLocked(true);
+    } else {
+      setRecordClientLocked(false);
+    }
+    setRecordModalOpen(true);
+  };
+
+  /** Un solo flujo: mismo modal que cuenta/abono; cliente fijo si viene de una fila. */
+  const openMovementModal = (clientId: string) => {
+    resetRecordForm();
+    setRecordType("CUENTA_NUEVA");
+    setRecordClientId(clientId);
+    setRecordClientLocked(true);
     setRecordModalOpen(true);
   };
 
@@ -541,6 +572,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     setRecordDate(row.date || today());
     setRecordAmount(String(Number(row.amount || 0).toFixed(2)));
     setRecordNotes(row.notes || "");
+    setRecordClientLocked(true);
     setRecordModalOpen(true);
   };
 
@@ -579,6 +611,11 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
       setClientModalOpen(false);
       resetClientForm();
+      showFeedback(
+        editingClientId
+          ? "✅ Cliente actualizado correctamente."
+          : "✅ Cliente creado correctamente.",
+      );
       refresh();
     } catch (e) {
       console.error(e);
@@ -667,6 +704,11 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
       setRecordModalOpen(false);
       resetRecordForm();
+      showFeedback(
+        editingRecordId
+          ? "✅ Registro actualizado correctamente."
+          : "✅ Registro guardado correctamente.",
+      );
       refresh();
     } catch (e) {
       console.error(e);
@@ -774,7 +816,8 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
   useEffect(() => {
     const handleMouseDown = (ev: MouseEvent) => {
-      const target = ev.target as Node;
+      const target = ev.target as HTMLElement;
+      if (target?.closest?.("[data-action-menu-root]")) return;
 
       if (
         clientModalOpen &&
@@ -813,8 +856,11 @@ export default function SaldosPendientesExternos(): React.ReactElement {
       if (ev.key === "Escape") {
         setClientModalOpen(false);
         setRecordModalOpen(false);
+        resetRecordForm();
         setDetailModalOpen(false);
         setActionOpenId(null);
+        setMainToolsMenuRect(null);
+        setSummaryRowMenu(null);
       }
     };
 
@@ -830,48 +876,153 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
       <div className="flex items-center justify-between gap-2 mb-4">
-        <h2 className="text-sm sm:text-lg md:text-2xl font-bold">
-          Saldos Pendientes Externos
-        </h2>
+        <h3 className="text-sm sm:text-lg md:text-md font-bold">
+          Saldos Externos
+        </h3>
 
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
           <button
             type="button"
-            onClick={exportToExcel}
-            className="px-3 py-2 border rounded bg-white hover:bg-gray-50 text-sm"
+            aria-label="Menú de acciones"
+            title="Menú de acciones"
+            className="inline-flex items-center justify-center px-3 py-2 border rounded bg-white hover:bg-gray-50"
+            onClick={(e) =>
+              setMainToolsMenuRect(e.currentTarget.getBoundingClientRect())
+            }
           >
-            Excel
+            <FiMenu className="w-5 h-5 text-slate-800" />
           </button>
         </div>
       </div>
 
-      {/* acciones */}
-      <div className="mb-2 grid grid-cols-3 md:grid-cols-3 gap-2">
-        <button
-          type="button"
-          onClick={openCreateClientModal}
-          className="bg-blue-600 text-xs sm:text-sm text-white px-2 py-1 md:px-4 md:py-2 rounded-2xl hover:bg-blue-700"
-        >
-          Crear cliente
-        </button>
+      <ActionMenu
+        anchorRect={mainToolsMenuRect}
+        isOpen={!!mainToolsMenuRect}
+        onClose={() => setMainToolsMenuRect(null)}
+        width={220}
+      >
+        <div className="py-1">
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+            onClick={() => {
+              setMainToolsMenuRect(null);
+              openCreateClientModal();
+            }}
+          >
+            Crear cliente
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+            onClick={() => {
+              setMainToolsMenuRect(null);
+              openCreateRecordModal("CUENTA_NUEVA");
+            }}
+          >
+            Nueva venta
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+            onClick={() => {
+              setMainToolsMenuRect(null);
+              openCreateRecordModal("ABONO");
+            }}
+          >
+            Abono
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+            onClick={() => {
+              setMainToolsMenuRect(null);
+              exportToExcel();
+            }}
+          >
+            Excel
+          </button>
+        </div>
+      </ActionMenu>
 
-        <button
-          type="button"
-          onClick={() => openCreateRecordModal("CUENTA_NUEVA")}
-          className="bg-emerald-600 text-xs sm:text-sm text-white px-2 py-1 md:px-4 md:py-2 rounded-2xl hover:bg-emerald-700"
+      {feedbackMsg && (
+        <div
+          className="mb-4 p-3 rounded-xl border border-green-200 bg-green-50 text-green-900 text-sm"
+          role="status"
         >
-          Nueva venta
-        </button>
+          {feedbackMsg}
+        </div>
+      )}
 
-        <button
-          type="button"
-          onClick={() => openCreateRecordModal("ABONO")}
-          className="bg-violet-600 text-xs sm:text-sm text-white px-2 py-1 md:px-4 md:py-2 rounded-2xl hover:bg-violet-700"
-        >
-          Abonar
-        </button>
-      </div>
+      <ActionMenu
+        anchorRect={summaryRowMenu?.rect ?? null}
+        isOpen={!!summaryRowMenu}
+        onClose={() => setSummaryRowMenu(null)}
+        width={220}
+      >
+        <div className="py-1">
+          {summaryRowMenu &&
+            (() => {
+              const r = filteredSummaries.find(
+                (x) => x.clientId === summaryRowMenu.clientId,
+              );
+              if (!r) return null;
+              return (
+                <>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    onClick={() => {
+                      setDetailClientId(r.clientId);
+                      setDetailModalOpen(true);
+                      setSummaryRowMenu(null);
+                    }}
+                  >
+                    Ver
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    onClick={() => {
+                      setSummaryRowMenu(null);
+                      openMovementModal(r.clientId);
+                    }}
+                  >
+                    Movimiento
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    onClick={() => {
+                      setSummaryRowMenu(null);
+                      openEditClientModal(
+                        clientsById[r.clientId] || {
+                          id: r.clientId,
+                          name: r.clientName,
+                          phone: r.phone,
+                          description: r.description,
+                        },
+                      );
+                    }}
+                  >
+                    Editar cliente
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm text-red-700 hover:bg-red-50"
+                    onClick={() => {
+                      setSummaryRowMenu(null);
+                      void deleteClientSafe(r.clientId);
+                    }}
+                  >
+                    Eliminar
+                  </button>
+                </>
+              );
+            })()}
+        </div>
+      </ActionMenu>
 
       {/* KPI general */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
@@ -881,10 +1032,10 @@ export default function SaldosPendientesExternos(): React.ReactElement {
             {generalKpis.totalClientes}
           </div>
         </div>
-        {/* <div className="border rounded-2xl p-3 bg-amber-50">
-          <div className="text-xs text-gray-600">Registros</div>
+        <div className="hidden md:block border rounded-2xl p-3 bg-amber-50">
+          <div className="text-xs text-gray-600">Movimientos</div>
           <div className="text-2xl font-bold">{generalKpis.totalRegistros}</div>
-        </div> */}
+        </div>
 
         <div className="border rounded-2xl p-3 bg-emerald-50">
           <div className="text-[11px] sm:text-xs text-gray-600">
@@ -1026,66 +1177,41 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                           <div className="text-xs text-gray-500 mt-1">
                             {r.phone || "—"} • {r.description || "—"}
                           </div>
-                          <div className="mt-2 text-xs text-gray-600 grid grid-cols-3 gap-2">
-                            <div>
-                              <div className="text-[10px]">Cuentas</div>
-                              <div className="font-semibold">
-                                {Number(r.totalCuentas || 0)}
-                              </div>
-                            </div>
-                            <div>
-                              <div className="text-[10px]">Abonos</div>
-                              <div className="font-semibold">
-                                {Number(r.totalAbonos || 0)}
-                              </div>
-                            </div>
-                            <div>
-                              <div className="text-[10px]">Registros</div>
-                              <div className="font-semibold">{r.registros}</div>
-                            </div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-200 font-semibold tabular-nums">
+                              <span className="font-medium opacity-90">
+                                Cuentas
+                              </span>
+                              <span>{Number(r.totalCuentas || 0)}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full bg-violet-100 text-violet-900 border border-violet-200 font-semibold tabular-nums">
+                              <span className="font-medium opacity-90">
+                                Abonos
+                              </span>
+                              <span>{Number(r.totalAbonos || 0)}</span>
+                            </span>
                           </div>
                         </div>
 
-                        <div className="flex-shrink-0 text-right">
+                        <div className="flex-shrink-0 text-right flex flex-col items-end gap-2">
                           <div className="text-xs text-gray-600">Saldo</div>
                           <div className="font-semibold">
                             {money(r.saldoActual)}
                           </div>
-                          <div className="mt-2 flex flex-col gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDetailClientId(r.clientId);
-                                setDetailModalOpen(true);
-                              }}
-                              className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 md:px-1 md:py-0.5 md:text-[12px]"
-                            >
-                              Ver
-                            </button>
-                            <div className="flex gap-1">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  openCreateRecordModal(
-                                    "CUENTA_NUEVA",
-                                    r.clientId,
-                                  )
-                                }
-                                className="flex-1 px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 md:px-1 md:py-0.5 md:text-[12px]"
-                              >
-                                Cuenta
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  openCreateRecordModal("ABONO", r.clientId)
-                                }
-                                className="flex-1 px-2 py-1 text-xs rounded bg-violet-100 text-violet-700 hover:bg-violet-200 md:px-1 md:py-0.5 md:text-[12px]"
-                              >
-                                Abono
-                              </button>
-                            </div>
-                          </div>
+                          <button
+                            type="button"
+                            aria-label="Acciones del cliente"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSummaryRowMenu({
+                                clientId: r.clientId,
+                                rect: e.currentTarget.getBoundingClientRect(),
+                              });
+                            }}
+                            className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50"
+                          >
+                            <FiMenu className="w-5 h-5" />
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1104,7 +1230,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                       <th className="border p-2">Saldo actual</th>
                       <th className="border p-2">Última venta</th>
                       <th className="border p-2">Último abono</th>
-                      <th className="border p-2">Registros</th>
+                      <th className="border p-2">Movimientos</th>
                       <th className="border p-2">Acciones</th>
                     </tr>
                   </thead>
@@ -1123,64 +1249,19 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                         <td className="border p-2">{r.lastAbonoDate || "—"}</td>
                         <td className="border p-2">{r.registros}</td>
                         <td className="border p-2">
-                          <div className="flex flex-wrap items-center justify-center gap-2">
+                          <div className="flex items-center justify-center">
                             <button
                               type="button"
-                              onClick={() => {
-                                setDetailClientId(r.clientId);
-                                setDetailModalOpen(true);
+                              aria-label="Acciones del cliente"
+                              onClick={(e) => {
+                                setSummaryRowMenu({
+                                  clientId: r.clientId,
+                                  rect: e.currentTarget.getBoundingClientRect(),
+                                });
                               }}
-                              className="px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 md:px-1 md:py-0.5 md:text-[12px]"
+                              className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50"
                             >
-                              Ver
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openEditClientModal(
-                                  clientsById[r.clientId] || {
-                                    id: r.clientId,
-                                    name: r.clientName,
-                                    phone: r.phone,
-                                    description: r.description,
-                                  },
-                                )
-                              }
-                              className="px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 md:px-1 md:py-0.5 md:text-[12px]"
-                            >
-                              Editar cliente
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openCreateRecordModal(
-                                  "CUENTA_NUEVA",
-                                  r.clientId,
-                                )
-                              }
-                              className="px-2 py-1 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 md:px-1 md:py-0.5 md:text-[12px]"
-                            >
-                              Cuenta
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openCreateRecordModal("ABONO", r.clientId)
-                              }
-                              className="px-2 py-1 rounded bg-violet-100 text-violet-700 hover:bg-violet-200 md:px-1 md:py-0.5 md:text-[12px]"
-                            >
-                              Abono
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => deleteClientSafe(r.clientId)}
-                              className="px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 md:px-1 md:py-0.5 md:text-[12px]"
-                            >
-                              Eliminar
+                              <FiMenu className="w-5 h-5" />
                             </button>
                           </div>
                         </td>
@@ -1190,7 +1271,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                     {filteredSummaries.length === 0 && (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={8}
                           className="p-4 text-center text-gray-500"
                         >
                           No hay clientes para los filtros seleccionados.
@@ -1496,14 +1577,14 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => setClientModalOpen(false)}
-                  className="px-2 py-1 md:px-4 md:py-2 border rounded text-xs sm:text-sm"
+                  className="px-2 py-1 md:px-4 mb-5 md:py-2 border rounded text-xs sm:text-sm"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={saveClient}
-                  className="px-2 py-1 md:px-4 md:py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
+                  className="px-2 py-1 md:px-4 md:py-2 mb-5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
                 >
                   Guardar cliente
                 </button>
@@ -1518,7 +1599,10 @@ export default function SaldosPendientesExternos(): React.ReactElement {
         <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/40"
-            onClick={() => setRecordModalOpen(false)}
+            onClick={() => {
+              setRecordModalOpen(false);
+              resetRecordForm();
+            }}
           />
 
           <div
@@ -1530,13 +1614,16 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 {editingRecordId
                   ? "Editar registro"
                   : recordType === "CUENTA_NUEVA"
-                    ? "Agregar cuenta nueva"
-                    : "Agregar abono"}
+                    ? "Agregar Venta"
+                    : "Agregar Abono"}
               </h3>
 
               <button
                 type="button"
-                onClick={() => setRecordModalOpen(false)}
+                onClick={() => {
+                  setRecordModalOpen(false);
+                  resetRecordForm();
+                }}
                 className="text-gray-500 hover:text-gray-700"
               >
                 ✕
@@ -1549,8 +1636,9 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                   Cliente
                 </label>
                 <select
-                  className="border rounded px-3 py-2 w-full"
+                  className="border rounded px-3 py-2 w-full disabled:bg-gray-100 disabled:cursor-not-allowed"
                   value={recordClientId}
+                  disabled={recordClientLocked || !!editingRecordId}
                   onChange={(e) => setRecordClientId(e.target.value)}
                 >
                   <option value="">Seleccionar...</option>
@@ -1590,7 +1678,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
               <div>
                 <label className="block text-sm text-gray-600 mb-1">
-                  {recordType === "CUENTA_NUEVA" ? "Saldo inicial" : "Abono"}
+                  {recordType === "CUENTA_NUEVA" ? "Monto de la venta" : "Abono"}
                 </label>
                 <input
                   type="text"
@@ -1616,7 +1704,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 />
               </div>
 
-              <div className="md:col-span-2">
+              {/* <div className="md:col-span-2">
                 <label className="block text-sm text-gray-600 mb-1">
                   Notas
                 </label>
@@ -1626,17 +1714,10 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                   onChange={(e) => setRecordNotes(e.target.value)}
                   placeholder="Observación opcional"
                 />
-              </div>
+              </div> */}
 
               <div className="md:col-span-2">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                  <div className="border rounded-xl p-3 bg-gray-50">
-                    <div className="text-xs text-gray-600">Cliente</div>
-                    <div className="font-semibold">
-                      {selectedClientSummary?.clientName || "—"}
-                    </div>
-                  </div>
-
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <div className="border rounded-xl p-3 bg-emerald-50">
                     <div className="text-xs text-gray-600">
                       Cuentas acumuladas
@@ -1667,15 +1748,18 @@ export default function SaldosPendientesExternos(): React.ReactElement {
               <div className="md:col-span-2 flex justify-end gap-2 mt-2">
                 <button
                   type="button"
-                  onClick={() => setRecordModalOpen(false)}
-                  className="px-2 py-1 md:px-4 md:py-2 border rounded text-xs sm:text-sm"
+                  onClick={() => {
+                    setRecordModalOpen(false);
+                    resetRecordForm();
+                  }}
+                  className="px-2 py-1 md:px-4 mb-5 md:py-2 border rounded text-xs sm:text-sm"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={saveRecord}
-                  className="px-2 py-1 md:px-4 md:py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
+                  className="px-2 py-1 md:px-4 md:py-2 mb-5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
                 >
                   Guardar registro
                 </button>
@@ -1727,7 +1811,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
               </div>
 
               <div className="border rounded-xl p-3 bg-amber-50">
-                <div className="text-xs text-gray-600">Registros</div>
+                <div className="text-xs text-gray-600">Movimientos</div>
                 <div className="text-lg font-bold">
                   {detailClientSummary.registros}
                 </div>
@@ -1749,21 +1833,21 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                     <th className="border p-2">Fecha</th>
                     <th className="border p-2">Monto</th>
                     <th className="border p-2">Saldo final</th>
-                    <th className="border p-2">Notas</th>
+                    {/* <th className="border p-2">Notas</th> */}
                   </tr>
                 </thead>
                 <tbody>
                   {clientDetailRows.map((r) => (
                     <tr key={r.id} className="text-center">
                       <td className="border p-2">
-                        {r.type === "CUENTA_NUEVA" ? "Cuenta nueva" : "Abono"}
+                        {r.type === "CUENTA_NUEVA" ? "Venta" : "Abono"}
                       </td>
                       <td className="border p-2">{r.date}</td>
                       <td className="border p-2">{money(r.amount)}</td>
                       <td className="border p-2 font-semibold">
                         {money((r as any).balanceAfter || 0)}
                       </td>
-                      <td className="border p-2 text-left">{r.notes || "—"}</td>
+                      {/* <td className="border p-2 text-left">{r.notes || "—"}</td> */}
                     </tr>
                   ))}
 

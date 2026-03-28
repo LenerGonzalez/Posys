@@ -17,6 +17,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import { syncCatalogProductDependents } from "../../Services/syncCatalogProductDependents";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
@@ -766,6 +767,17 @@ export default function ProductsCandies() {
       payload.packaging = pk || "";
 
       await updateDoc(doc(db, "products_candies", editingId), payload);
+
+      try {
+        await syncCatalogProductDependents(editingId, {
+          name: n,
+          category: c,
+          providerPrice: pp,
+          unitsPerPackage: upp,
+        });
+      } catch (syncErr) {
+        console.error(syncErr);
+      }
 
       setProducts((prev) =>
         prev

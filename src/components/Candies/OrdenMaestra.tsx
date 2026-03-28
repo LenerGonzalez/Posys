@@ -6,6 +6,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  documentId,
   getDoc,
   getDocs,
   orderBy,
@@ -205,48 +206,106 @@ function getRowValue(row: any, keys: string[]) {
 }
 
 // =====================
-// Cálculos (manteniendo tu lógica)
+// Cálculos
 // =====================
-function calcTotalsByMargins(
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/** Misma lógica que PreciosVenta: packagePrice* o unitPrice* × und/paq. */
+function pkgPricesFromCurrentPricesDoc(
+  p: Record<string, any> | undefined | null,
+  unitsPerPackage: number,
+): { rivas: number; isla: number } {
+  const u = Math.max(1, safeInt(unitsPerPackage));
+  let pkgIsla = Number(p?.packagePriceIsla ?? NaN);
+  let pkgRivas = Number(p?.packagePriceRivas ?? NaN);
+  if (!Number.isFinite(pkgIsla)) {
+    const x = Number(p?.unitPriceIsla ?? NaN);
+    pkgIsla = Number.isFinite(x) ? x * u : 0;
+  }
+  if (!Number.isFinite(pkgRivas)) {
+    const x = Number(p?.unitPriceRivas ?? NaN);
+    pkgRivas = Number.isFinite(x) ? x * u : 0;
+  }
+  return { rivas: pkgRivas, isla: pkgIsla };
+}
+
+function deriveMarginPercentFromSubtotalAndTotal(
+  subtotal: number,
+  total: number,
+): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  return Math.min(Math.max((1 - subtotal / total) * 100, 0), MAX_MARGIN_PERCENT);
+}
+
+/** Precio Rivas/Isla por paquete fijado (p. ej. desde current_prices); SJ sigue por margen. */
+function calcTotalsFromFixedPackageSalePrices(
   providerPriceNum: number,
   packagesNum: number,
-  margins: { marginR: number; marginSJ: number; marginIsla: number },
+  marginSanJorgePct: number,
+  unitPriceRivasPerPkg: number,
+  unitPriceIslaPerPkg: number,
 ) {
   const subtotalCalc = providerPriceNum * packagesNum;
-
   const limit = MAX_MARGIN_PERCENT;
-  const mR = Math.min(Math.max(margins.marginR, 0), limit) / 100;
-  const mSJ = Math.min(Math.max(margins.marginSJ, 0), limit) / 100;
-  const mIsla = Math.min(Math.max(margins.marginIsla, 0), limit) / 100;
+  const mSJ = Math.min(Math.max(marginSanJorgePct, 0), limit) / 100;
 
-  // ✅ total = subtotal / (1 - margen)
-  const totalR =
-    packagesNum > 0 && mR < 1 ? subtotalCalc / (1 - mR) : subtotalCalc;
+  const totalR = unitPriceRivasPerPkg * packagesNum;
+  const totalI = unitPriceIslaPerPkg * packagesNum;
   const totalSJ =
     packagesNum > 0 && mSJ < 1 ? subtotalCalc / (1 - mSJ) : subtotalCalc;
-  const totalIO =
-    packagesNum > 0 && mIsla < 1 ? subtotalCalc / (1 - mIsla) : subtotalCalc;
 
   const gainR = totalR - subtotalCalc;
   const gainSJ = totalSJ - subtotalCalc;
-  const gainIO = totalIO - subtotalCalc;
+  const gainIO = totalI - subtotalCalc;
 
   const unitR = packagesNum > 0 ? roundToInt(totalR / packagesNum) : 0;
   const unitSJ = packagesNum > 0 ? roundToInt(totalSJ / packagesNum) : 0;
-  const unitIO = packagesNum > 0 ? roundToInt(totalIO / packagesNum) : 0;
+  const unitIO = packagesNum > 0 ? roundToInt(totalI / packagesNum) : 0;
+
+  const marginR = deriveMarginPercentFromSubtotalAndTotal(
+    subtotalCalc,
+    totalR,
+  );
+  const marginIsla = deriveMarginPercentFromSubtotalAndTotal(
+    subtotalCalc,
+    totalI,
+  );
 
   return {
     subtotal: subtotalCalc,
     totalRivas: totalR,
     totalSanJorge: totalSJ,
-    totalIsla: totalIO,
+    totalIsla: totalI,
     gainRivas: gainR,
     gainSanJorge: gainSJ,
     gainIsla: gainIO,
     unitPriceRivas: unitR,
     unitPriceSanJorge: unitSJ,
     unitPriceIsla: unitIO,
+    marginRivas: marginR,
+    marginIsla: marginIsla,
   };
+}
+
+async function fetchCurrentPricesByProductIds(
+  ids: string[],
+): Promise<Map<string, Record<string, any>>> {
+  const map = new Map<string, Record<string, any>>();
+  const clean = [...new Set(ids.filter(Boolean))];
+  for (const group of chunkArray(clean, 30)) {
+    if (!group.length) continue;
+    const q = query(
+      collection(db, "current_prices"),
+      where(documentId(), "in", group),
+    );
+    const snap = await getDocs(q);
+    snap.forEach((d) => map.set(d.id, d.data() as Record<string, any>));
+  }
+  return map;
 }
 
 // ✅ Utilidad bruta base = gainRivas (lo pediste “A partir de UTILIDAD BRUTA”)
@@ -287,6 +346,8 @@ export default function CandyMainOrders() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingOrder, setSavingOrder] = useState(false);
+  const [addingItemToOrder, setAddingItemToOrder] = useState(false);
+  const [refreshingSalePrices, setRefreshingSalePrices] = useState(false);
   const [isBackfillingMain, setIsBackfillingMain] = useState(false);
   const [backfillingInventory, setBackfillingInventory] = useState(false);
 
@@ -334,18 +395,6 @@ export default function CandyMainOrders() {
   const [editingProviderPriceMap, setEditingProviderPriceMap] = useState<
     Record<string, boolean>
   >({});
-  const [editingUnitPriceRivasMap, setEditingUnitPriceRivasMap] = useState<
-    Record<string, boolean>
-  >({});
-  const [editingUnitPriceIslaMap, setEditingUnitPriceIslaMap] = useState<
-    Record<string, boolean>
-  >({});
-  const [editingMarginRivasMap, setEditingMarginRivasMap] = useState<
-    Record<string, boolean>
-  >({});
-  const [editingMarginIslaMap, setEditingMarginIslaMap] = useState<
-    Record<string, boolean>
-  >({});
 
   const openPackagesEdit = (id: string) =>
     setEditingPackagesMap((prev) => ({ ...prev, [id]: true }));
@@ -364,24 +413,6 @@ export default function CandyMainOrders() {
     setEditingProviderPriceMap((prev) => ({ ...prev, [id]: true }));
   const closeProviderPriceEdit = (id: string) =>
     setEditingProviderPriceMap((prev) => ({ ...prev, [id]: false }));
-  const openUnitPriceRivasEdit = (id: string) =>
-    setEditingUnitPriceRivasMap((prev) => ({ ...prev, [id]: true }));
-  const closeUnitPriceRivasEdit = (id: string) =>
-    setEditingUnitPriceRivasMap((prev) => ({ ...prev, [id]: false }));
-  const openUnitPriceIslaEdit = (id: string) =>
-    setEditingUnitPriceIslaMap((prev) => ({ ...prev, [id]: true }));
-  const closeUnitPriceIslaEdit = (id: string) =>
-    setEditingUnitPriceIslaMap((prev) => ({ ...prev, [id]: false }));
-
-  const openMarginRivasEdit = (id: string) =>
-    setEditingMarginRivasMap((prev) => ({ ...prev, [id]: true }));
-  const closeMarginRivasEdit = (id: string) =>
-    setEditingMarginRivasMap((prev) => ({ ...prev, [id]: false }));
-
-  const openMarginIslaEdit = (id: string) =>
-    setEditingMarginIslaMap((prev) => ({ ...prev, [id]: true }));
-  const closeMarginIslaEdit = (id: string) =>
-    setEditingMarginIslaMap((prev) => ({ ...prev, [id]: false }));
 
   // selección producto
   const [orderCategory, setOrderCategory] = useState<string>("Todas");
@@ -397,7 +428,6 @@ export default function CandyMainOrders() {
   const [mobileTab, setMobileTab] = useState<MobileTab>("DATOS");
 
   const [itemSearch, setItemSearch] = useState("");
-  const [itemsGlobalMargin, setItemsGlobalMargin] = useState<string>("");
 
   const serializeOrderState = (items: CandyOrderItem[]) => {
     const normalizedItems = items
@@ -548,6 +578,7 @@ export default function CandyMainOrders() {
 
   // Reset form
   const resetOrderForm = () => {
+    setRefreshingSalePrices(false);
     setEditingOrderId(null);
     setOrderName("");
     setOrderDate("");
@@ -556,10 +587,6 @@ export default function CandyMainOrders() {
     setEditingUnitsMap({});
     setEditingRemainingMap({});
     setEditingProviderPriceMap({});
-    setEditingUnitPriceRivasMap({});
-    setEditingUnitPriceIslaMap({});
-    setEditingMarginRivasMap({});
-    setEditingMarginIslaMap({});
 
     setOrderCategory("Todas");
     setOrderProductId("");
@@ -576,13 +603,12 @@ export default function CandyMainOrders() {
 
     setMobileTab("DATOS");
     setItemSearch("");
-    setItemsGlobalMargin("");
   };
 
   // =========================
   // Add item (nuevo o edición)
   // =========================
-  const addItemToOrder = () => {
+  const addItemToOrder = async () => {
     setMsg("");
     if (!orderProductId) {
       setMsg("Selecciona un producto del catálogo.");
@@ -612,84 +638,169 @@ export default function CandyMainOrders() {
       return;
     }
 
-    const mR = Number(marginRivas || 0);
-    const mSJ = Number(marginSanJorge || 0); // legacy
-    const mI = Number(marginIsla || 0);
+    const mSJ = Number(marginSanJorge || 0); // legacy (SJ)
 
-    // ✅ respeta tu cálculo
-    const vals = calcTotalsByMargins(providerPriceNum, packagesNum, {
-      marginR: mR,
-      marginSJ: mSJ,
-      marginIsla: mI,
-    });
-
-    const existing = orderItems.find((it) => it.id === catProd.id);
-
-    if (existing) {
-      setOrderItems((prev) =>
-        prev.map((it) => {
-          if (it.id !== catProd.id) return it;
-
-          const newPackages = safeInt(it.packages || 0) + packagesNum;
-          const newVals = calcTotalsByMargins(providerPriceNum, newPackages, {
-            marginR: Number(it.marginRivas ?? mR),
-            marginSJ: Number(it.marginSanJorge ?? mSJ),
-            marginIsla: Number(it.marginIsla ?? mI),
-          });
-
-          // si está en edición, remainingPackages viene del inventario. Sumamos el delta de paquetes agregados.
-          const baseRemaining = safeInt(it.remainingPackages ?? it.packages);
-          const newRemaining = baseRemaining + packagesNum;
-
-          return {
-            ...it,
-            providerPrice: providerPriceNum,
-            unitsPerPackage: unitsNum,
-            packages: newPackages,
-            remainingPackages: newRemaining,
-            ...newVals,
-          };
-        }),
+    setAddingItemToOrder(true);
+    try {
+      const priceSnap = await getDoc(
+        doc(db, "current_prices", catProd.id),
       );
-    } else {
-      const newItem: CandyOrderItem = {
-        id: catProd.id,
-        name: catProd.name,
-        category: catProd.category,
-        providerPrice: providerPriceNum,
-        packages: packagesNum,
-        unitsPerPackage: unitsNum,
+      if (!priceSnap.exists()) {
+        setMsg(
+          "Cargá primero los precios de venta en Precios ventas para este producto.",
+        );
+        return;
+      }
+      const raw = priceSnap.data() as Record<string, any>;
+      const { rivas: pkgR, isla: pkgI } = pkgPricesFromCurrentPricesDoc(
+        raw,
+        unitsNum,
+      );
+      if (!(pkgR > 0 && pkgI > 0)) {
+        setMsg(
+          "Faltan precios Rivas e Isla válidos en Precios ventas para este producto.",
+        );
+        return;
+      }
 
-        marginRivas: mR,
-        marginSanJorge: mSJ, // legacy
-        marginIsla: mI,
+      const vals = calcTotalsFromFixedPackageSalePrices(
+        providerPriceNum,
+        packagesNum,
+        mSJ,
+        pkgR,
+        pkgI,
+      );
 
-        subtotal: vals.subtotal,
-        totalRivas: vals.totalRivas,
-        totalSanJorge: vals.totalSanJorge,
-        totalIsla: vals.totalIsla,
+      const existing = orderItems.find((it) => it.id === catProd.id);
 
-        gainRivas: vals.gainRivas,
-        gainSanJorge: vals.gainSanJorge,
-        gainIsla: vals.gainIsla,
+      if (existing) {
+        setOrderItems((prev) =>
+          prev.map((it) => {
+            if (it.id !== catProd.id) return it;
 
-        unitPriceRivas: vals.unitPriceRivas,
-        unitPriceSanJorge: vals.unitPriceSanJorge,
-        unitPriceIsla: vals.unitPriceIsla,
+            const newPackages = safeInt(it.packages || 0) + packagesNum;
+            const newVals = calcTotalsFromFixedPackageSalePrices(
+              providerPriceNum,
+              newPackages,
+              Number(it.marginSanJorge ?? mSJ),
+              Number(it.unitPriceRivas || 0),
+              Number(it.unitPriceIsla || 0),
+            );
 
-        remainingPackages: packagesNum,
-      };
+            // si está en edición, remainingPackages viene del inventario. Sumamos el delta de paquetes agregados.
+            const baseRemaining = safeInt(it.remainingPackages ?? it.packages);
+            const newRemaining = baseRemaining + packagesNum;
 
-      setOrderItems((prev) => [...prev, newItem]);
+            return {
+              ...it,
+              providerPrice: providerPriceNum,
+              unitsPerPackage: unitsNum,
+              packages: newPackages,
+              remainingPackages: newRemaining,
+              ...newVals,
+            };
+          }),
+        );
+      } else {
+        const newItem: CandyOrderItem = {
+          id: catProd.id,
+          name: catProd.name,
+          category: catProd.category,
+          providerPrice: providerPriceNum,
+          packages: packagesNum,
+          unitsPerPackage: unitsNum,
+
+          marginRivas: vals.marginRivas,
+          marginSanJorge: mSJ, // legacy
+          marginIsla: vals.marginIsla,
+
+          subtotal: vals.subtotal,
+          totalRivas: vals.totalRivas,
+          totalSanJorge: vals.totalSanJorge,
+          totalIsla: vals.totalIsla,
+
+          gainRivas: vals.gainRivas,
+          gainSanJorge: vals.gainSanJorge,
+          gainIsla: vals.gainIsla,
+
+          unitPriceRivas: vals.unitPriceRivas,
+          unitPriceSanJorge: vals.unitPriceSanJorge,
+          unitPriceIsla: vals.unitPriceIsla,
+
+          remainingPackages: packagesNum,
+        };
+
+        setOrderItems((prev) => [...prev, newItem]);
+      }
+
+      setOrderProductId("");
+      setOrderPackages("0");
+      setMobileTab("ITEMS");
+    } catch (err) {
+      console.error(err);
+      setMsg("❌ Error leyendo precios de venta. Reintentá.");
+    } finally {
+      setAddingItemToOrder(false);
     }
-
-    setOrderProductId("");
-    setOrderPackages("0");
-    setMobileTab("ITEMS");
   };
 
   const removeItemFromOrder = (id: string) => {
     setOrderItems((prev) => prev.filter((it) => it.id !== id));
+  };
+
+  /** Vuelve a leer Rivas/Isla desde current_prices y recalcula ítems (modal abierto). */
+  const refreshSalePricesFromCurrentPrices = async (askConfirm: boolean) => {
+    if (!orderItems.length) {
+      setMsg(
+        "No hay productos en la orden. Agregá ítems antes de actualizar precios.",
+      );
+      return;
+    }
+    if (askConfirm) {
+      const ok = confirm(
+        `¿Actualizar precios de venta desde Precios ventas para ${orderItems.length} producto(s)?`,
+      );
+      if (!ok) return;
+    }
+
+    setRefreshingSalePrices(true);
+    try {
+      const priceMap = await fetchCurrentPricesByProductIds(
+        orderItems.map((it) => it.id),
+      );
+      let skipped = 0;
+      setOrderItems((prev) =>
+        prev.map((it) => {
+          const pd = priceMap.get(it.id);
+          const u = Math.max(1, safeInt(it.unitsPerPackage || 1));
+          const { rivas, isla } = pkgPricesFromCurrentPricesDoc(pd, u);
+          if (!(rivas > 0 && isla > 0)) {
+            skipped += 1;
+            return it;
+          }
+          const vals = calcTotalsFromFixedPackageSalePrices(
+            Number(it.providerPrice || 0),
+            safeInt(it.packages || 0),
+            Number(it.marginSanJorge || 0),
+            rivas,
+            isla,
+          );
+          return { ...it, ...vals };
+        }),
+      );
+      if (skipped > 0) {
+        setMsg(
+          `⚠️ ${skipped} producto(s) sin precios válidos en Precios ventas; no se modificaron.`,
+        );
+      } else {
+        setMsg("✅ Precios actualizados desde Precios ventas.");
+      }
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al sincronizar precios de venta.");
+    } finally {
+      setRefreshingSalePrices(false);
+    }
   };
 
   // =========================
@@ -720,57 +831,24 @@ export default function CandyMainOrders() {
             Math.max(0, requested),
           );
         }
-        if (field === "unitPriceRivas" || field === "unitPriceIsla") {
-          const price = Math.max(0, Number(value) || 0);
-          const packagesCount = Math.max(0, safeInt(updated.packages || 0));
-          const subtotal = Number(updated.providerPrice || 0) * packagesCount;
-          const totalFromPrice = packagesCount > 0 ? price * packagesCount : 0;
 
-          if (field === "unitPriceRivas") {
-            updated.unitPriceRivas = price;
-            updated.totalRivas = totalFromPrice;
-            updated.gainRivas = totalFromPrice - subtotal;
-            const derivedMargin =
-              totalFromPrice > 0 ? (1 - subtotal / totalFromPrice) * 100 : 0;
-            updated.marginRivas = Math.min(
-              Math.max(derivedMargin, 0),
-              MAX_MARGIN_PERCENT,
-            );
-          } else {
-            updated.unitPriceIsla = price;
-            updated.totalIsla = totalFromPrice;
-            updated.gainIsla = totalFromPrice - subtotal;
-            const derivedMargin =
-              totalFromPrice > 0 ? (1 - subtotal / totalFromPrice) * 100 : 0;
-            updated.marginIsla = Math.min(
-              Math.max(derivedMargin, 0),
-              MAX_MARGIN_PERCENT,
-            );
-          }
-        }
-
-        if (field === "marginRivas") updated.marginRivas = Number(value || 0);
-        if (field === "marginIsla") updated.marginIsla = Number(value || 0);
-
-        // San Jorge: no UI, pero preservo
+        // San Jorge: no UI por ítem, pero preservo si llega por código
         if (field === "marginSanJorge")
           updated.marginSanJorge = Number(value || 0);
 
-        if (
+        const needsEconomicRecalc =
           field === "packages" ||
           field === "providerPrice" ||
-          field === "marginRivas" ||
-          field === "marginIsla" ||
-          field === "marginSanJorge"
-        ) {
-          const vals = calcTotalsByMargins(
-            updated.providerPrice,
-            updated.packages,
-            {
-              marginR: Number(updated.marginRivas || 0),
-              marginSJ: Number(updated.marginSanJorge || 0),
-              marginIsla: Number(updated.marginIsla || 0),
-            },
+          field === "unitsPerPackage" ||
+          field === "marginSanJorge";
+
+        if (needsEconomicRecalc) {
+          const vals = calcTotalsFromFixedPackageSalePrices(
+            Number(updated.providerPrice || 0),
+            safeInt(updated.packages || 0),
+            Number(updated.marginSanJorge || 0),
+            Number(updated.unitPriceRivas || 0),
+            Number(updated.unitPriceIsla || 0),
           );
           updated = { ...updated, ...vals };
         }
@@ -927,20 +1005,13 @@ export default function CandyMainOrders() {
       return;
     }
 
-    const mR = Number(marginRivas || 0);
-    const mI = Number(marginIsla || 0);
-
-    // Sheet Productos (según tu excel)
+    // Sheet Productos: solo nombre y paquetes; precios y márgenes vienen de current_prices al importar
     const rows = catalog
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name, "es"))
       .map((p) => ({
         Producto: p.name,
         Paquetes: "",
-        "Margen rivas": mR,
-        "Margen Isla": mI,
-        "P. unidad Rivas": "",
-        "P. unidad Isla": "",
       }));
 
     // Sheet Config
@@ -983,6 +1054,8 @@ export default function CandyMainOrders() {
         "Und x Paquete": safeInt(it.unitsPerPackage),
         "Precio proveedor": Number(it.providerPrice || 0),
         Facturado: Number(it.subtotal || 0),
+        "Precio Rivas": Number(it.unitPriceRivas || 0),
+        "Precio Isla": Number(it.unitPriceIsla || 0),
         "Esperado Rivas": Number(it.totalRivas || 0),
         "Esperado Isla": Number(it.totalIsla || 0),
         "MV Rivas": Number(it.marginRivas || 0),
@@ -990,8 +1063,6 @@ export default function CandyMainOrders() {
         "Utilidad Bruta": Number(it.grossProfit || 0),
         "Utilidad Bruta Isla": Number(it.grossProfitIsla || 0),
         "Prorrateo logistico": Number(it.logisticAllocated || 0),
-        "Precio Rivas": Number(it.unitPriceRivas || 0),
-        "Precio Isla": Number(it.unitPriceIsla || 0),
       }));
 
     const resumen = [
@@ -1115,17 +1186,8 @@ export default function CandyMainOrders() {
 
       const errors: string[] = [];
 
-      // Acumular por productId
-      const incomingById = new Map<
-        string,
-        {
-          packages: number;
-          mR: number;
-          mI: number;
-          puR?: number;
-          puI?: number;
-        }
-      >();
+      // Acumular por productId (precios Rivas/Isla vienen de current_prices)
+      const incomingById = new Map<string, { packages: number }>();
 
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
@@ -1137,24 +1199,6 @@ export default function CandyMainOrders() {
           "Name",
         ]);
         const packagesVal = getRowValue(r, ["Paquetes", "Packages"]);
-
-        const mRVal = getRowValue(r, [
-          "Margen rivas",
-          "Margen Rivas",
-          "MV Rivas",
-        ]);
-        const mIVal = getRowValue(r, ["Margen Isla", "Margen isla", "MV Isla"]);
-
-        const puRVal = getRowValue(r, [
-          "P. unidad Rivas",
-          "P unidad Rivas",
-          "Precio Rivas",
-        ]);
-        const puIVal = getRowValue(r, [
-          "P. unidad Isla",
-          "P unidad Isla",
-          "Precio Isla",
-        ]);
 
         const prodKey = norm(productName);
         if (!prodKey) continue;
@@ -1175,37 +1219,21 @@ export default function CandyMainOrders() {
           continue;
         }
 
-        const mR =
-          String(mRVal ?? "").trim() !== ""
-            ? num(mRVal)
-            : Number(marginRivas || 0);
-        const mI =
-          String(mIVal ?? "").trim() !== ""
-            ? num(mIVal)
-            : Number(marginIsla || 0);
-
-        const puR = Math.floor(num(puRVal));
-        const puI = Math.floor(num(puIVal));
-
         const prev = incomingById.get(catProd.id);
         if (prev) {
           incomingById.set(catProd.id, {
             packages: prev.packages + packagesNum,
-            mR,
-            mI,
-            puR: puR > 0 ? puR : prev.puR,
-            puI: puI > 0 ? puI : prev.puI,
           });
         } else {
           incomingById.set(catProd.id, {
             packages: packagesNum,
-            mR,
-            mI,
-            puR: puR > 0 ? puR : undefined,
-            puI: puI > 0 ? puI : undefined,
           });
         }
       }
+
+      const priceMap = await fetchCurrentPricesByProductIds([
+        ...incomingById.keys(),
+      ]);
 
       const newItems: CandyOrderItem[] = [];
 
@@ -1217,61 +1245,27 @@ export default function CandyMainOrders() {
         const unitsNum = Math.max(1, safeInt(catProd.unitsPerPackage || 1));
         const packagesNum = Math.max(1, safeInt(x.packages));
 
-        const subtotalCalc = providerPriceNum * packagesNum;
-
-        const priceR = Number(x.puR || 0);
-        const priceI = Number(x.puI || 0);
-        const hasAnyPrice = priceR > 0 || priceI > 0;
-
-        let finalMR = x.mR;
-        let finalMI = x.mI;
-
-        // San Jorge legacy: calculo con el header actual pero no se usa en UI
         const mSJ = Number(marginSanJorge || 0);
+        const pDoc = priceMap.get(productId);
+        const { rivas: pkgR, isla: pkgI } = pkgPricesFromCurrentPricesDoc(
+          pDoc,
+          unitsNum,
+        );
 
-        let vals: ReturnType<typeof calcTotalsByMargins>;
-
-        if (hasAnyPrice) {
-          const fallback = calcTotalsByMargins(providerPriceNum, packagesNum, {
-            marginR: finalMR,
-            marginSJ: mSJ,
-            marginIsla: finalMI,
-          });
-
-          const totalR =
-            priceR > 0 ? priceR * packagesNum : fallback.totalRivas;
-          const totalI = priceI > 0 ? priceI * packagesNum : fallback.totalIsla;
-
-          const deriveMargin = (total: number) => {
-            if (!Number.isFinite(total) || total <= 0) return 0;
-            const m = (1 - subtotalCalc / total) * 100;
-            return Math.min(Math.max(m, 0), MAX_MARGIN_PERCENT);
-          };
-
-          if (priceR > 0) finalMR = deriveMargin(totalR);
-          if (priceI > 0) finalMI = deriveMargin(totalI);
-
-          vals = {
-            subtotal: subtotalCalc,
-            totalRivas: totalR,
-            totalSanJorge: fallback.totalSanJorge,
-            totalIsla: totalI,
-            gainRivas: totalR - subtotalCalc,
-            gainSanJorge: fallback.gainSanJorge,
-            gainIsla: totalI - subtotalCalc,
-            unitPriceRivas:
-              packagesNum > 0 ? roundToInt(totalR / packagesNum) : 0,
-            unitPriceSanJorge: fallback.unitPriceSanJorge,
-            unitPriceIsla:
-              packagesNum > 0 ? roundToInt(totalI / packagesNum) : 0,
-          };
-        } else {
-          vals = calcTotalsByMargins(providerPriceNum, packagesNum, {
-            marginR: finalMR,
-            marginSJ: mSJ,
-            marginIsla: finalMI,
-          });
+        if (!(pkgR > 0 && pkgI > 0)) {
+          errors.push(
+            `Producto "${catProd.name}": sin precios Rivas/Isla en Precios ventas (current_prices).`,
+          );
+          return;
         }
+
+        const vals = calcTotalsFromFixedPackageSalePrices(
+          providerPriceNum,
+          packagesNum,
+          mSJ,
+          pkgR,
+          pkgI,
+        );
 
         newItems.push({
           id: catProd.id,
@@ -1280,9 +1274,9 @@ export default function CandyMainOrders() {
           providerPrice: providerPriceNum,
           packages: packagesNum,
           unitsPerPackage: unitsNum,
-          marginRivas: finalMR,
+          marginRivas: vals.marginRivas,
           marginSanJorge: mSJ,
-          marginIsla: finalMI,
+          marginIsla: vals.marginIsla,
 
           subtotal: vals.subtotal,
           totalRivas: vals.totalRivas,
@@ -1315,21 +1309,17 @@ export default function CandyMainOrders() {
             const mergedPackages =
               safeInt(existing.packages) + safeInt(it.packages);
 
-            const vals = calcTotalsByMargins(
+            const vals = calcTotalsFromFixedPackageSalePrices(
               existing.providerPrice,
               mergedPackages,
-              {
-                marginR: it.marginRivas,
-                marginSJ: Number(existing.marginSanJorge || 0),
-                marginIsla: it.marginIsla,
-              },
+              Number(existing.marginSanJorge || 0),
+              Number(existing.unitPriceRivas || 0),
+              Number(existing.unitPriceIsla || 0),
             );
 
             map.set(it.id, {
               ...existing,
               packages: mergedPackages,
-              marginRivas: it.marginRivas,
-              marginIsla: it.marginIsla,
               remainingPackages:
                 safeInt(existing.remainingPackages ?? existing.packages) +
                 safeInt(it.packages),
@@ -1978,7 +1968,13 @@ export default function CandyMainOrders() {
           (remainingByProduct[productId] || 0) + remainingPackages;
       });
 
-      // normalizar contra catálogo + recalcular totales (NO rompo tu lógica)
+      const priceMap = await fetchCurrentPricesByProductIds(
+        itemsFromDoc.map((it) => it.id),
+      );
+
+      let priceFallbackUsed = false;
+
+      // normalizar contra catálogo + recalcular desde precios de venta (current_prices)
       const normalized = itemsFromDoc.map((it) => {
         const cat = catalog.find((c) => c.id === it.id);
 
@@ -1990,18 +1986,26 @@ export default function CandyMainOrders() {
           safeInt(it.unitsPerPackage ?? cat?.unitsPerPackage ?? 1),
         );
 
-        const mR = Number(it.marginRivas ?? 0);
         const mSJ = Number(it.marginSanJorge ?? Number(marginSanJorge || 0)); // legacy
-        const mI = Number(it.marginIsla ?? 0);
 
-        const vals = calcTotalsByMargins(
+        const pDoc = priceMap.get(it.id);
+        let { rivas: pkgR, isla: pkgI } = pkgPricesFromCurrentPricesDoc(
+          pDoc,
+          unitsPerPackage,
+        );
+
+        if (!(pkgR > 0 && pkgI > 0)) {
+          pkgR = Number(it.unitPriceRivas || 0);
+          pkgI = Number(it.unitPriceIsla || 0);
+          priceFallbackUsed = true;
+        }
+
+        const vals = calcTotalsFromFixedPackageSalePrices(
           providerPrice,
           safeInt(it.packages || 0),
-          {
-            marginR: mR,
-            marginSJ: mSJ,
-            marginIsla: mI,
-          },
+          mSJ,
+          pkgR,
+          pkgI,
         );
 
         return {
@@ -2023,6 +2027,12 @@ export default function CandyMainOrders() {
           ...vals,
         };
       });
+
+      if (priceFallbackUsed) {
+        setMsg(
+          "⚠️ Algunos ítems usaron precios guardados en la orden (faltaban datos en Precios ventas).",
+        );
+      }
 
       setOrderItems(normalized);
       originalOrderSnapshotRef.current = serializeOrderState(normalized);
@@ -2226,7 +2236,7 @@ export default function CandyMainOrders() {
         </div>
       </div>
 
-      {msg && (
+      {msg && !openOrderModal && (
         <div className="mb-3 p-2 rounded border text-sm bg-white">{msg}</div>
       )}
 
@@ -2271,7 +2281,22 @@ export default function CandyMainOrders() {
                     : "Nueva Orden Maestra"}
                 </h3>
 
-                <div className="ml-auto flex gap-2">
+                <div className="ml-auto flex flex-wrap items-center gap-2 justify-end">
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 text-sm"
+                    disabled={
+                      savingOrder ||
+                      refreshingSalePrices ||
+                      !orderItems.length
+                    }
+                    title="Vuelve a cargar precios desde Precios ventas (útil si los acabás de cargar en otra pestaña)"
+                    onClick={() => void refreshSalePricesFromCurrentPrices(false)}
+                  >
+                    {refreshingSalePrices
+                      ? "Actualizando…"
+                      : "Actualizar precios"}
+                  </button>
                   {editingOrderId && (
                     <button
                       type="button"
@@ -2367,6 +2392,15 @@ export default function CandyMainOrders() {
                   </button>
                 </div>
               </div>
+
+              {msg && (
+                <div
+                  className="mt-3 p-2 rounded border text-sm bg-amber-50 border-amber-200 text-amber-950"
+                  role="status"
+                >
+                  {msg}
+                </div>
+              )}
             </div>
 
             <form onSubmit={handleSaveOrder} className="space-y-4 pt-4">
@@ -2550,10 +2584,11 @@ export default function CandyMainOrders() {
                   <div className="flex flex-col md:flex-row md:items-center md:justify-end gap-2 mt-3">
                     <button
                       type="button"
-                      onClick={addItemToOrder}
-                      className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                      onClick={() => void addItemToOrder()}
+                      disabled={addingItemToOrder}
+                      className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
                     >
-                      Agregar producto
+                      {addingItemToOrder ? "Cargando…" : "Agregar producto"}
                     </button>
                   </div>
                 </div>
@@ -2618,49 +2653,22 @@ export default function CandyMainOrders() {
                         className="w-full md:w-80 border rounded px-3 py-2 text-sm"
                       />
 
+                      {/* Margen global deshabilitado: MV se recalcula desde precios de venta (current_prices)
                       <input
                         type="number"
-                        value={itemsGlobalMargin}
-                        onChange={(e) => setItemsGlobalMargin(e.target.value)}
                         placeholder="Margen %"
                         className="w-24 border rounded px-2 py-2 text-sm"
                         min={0}
                       />
+                      */}
 
                       <button
                         type="button"
-                        className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                        onClick={() => {
-                          const v = Number(itemsGlobalMargin || "");
-                          if (!Number.isFinite(v)) return;
-                          const ok = confirm(
-                            `¿Aplicar margen ${v}% a ${orderItems.length} productos?`,
-                          );
-                          if (!ok) return;
-                          setOrderItems((prev) =>
-                            prev.map((it) => {
-                              const providerPriceNum = Number(
-                                it.providerPrice || 0,
-                              );
-                              const packagesNum = safeInt(it.packages || 0);
-                              const newVals = calcTotalsByMargins(
-                                providerPriceNum,
-                                packagesNum,
-                                {
-                                  marginR: v,
-                                  marginSJ: Number(it.marginSanJorge || 0),
-                                  marginIsla: v,
-                                },
-                              );
-                              return {
-                                ...it,
-                                marginRivas: v,
-                                marginIsla: v,
-                                ...newVals,
-                              };
-                            }),
-                          );
-                        }}
+                        className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                        disabled={refreshingSalePrices || !orderItems.length}
+                        onClick={() =>
+                          void refreshSalePricesFromCurrentPrices(true)
+                        }
                       >
                         Aplicar
                       </button>
@@ -2682,6 +2690,9 @@ export default function CandyMainOrders() {
 
                             <th className="text-right p-2">Facturado</th>
 
+                            <th className="text-right p-2">Precio Rivas</th>
+                            <th className="text-right p-2">Precio Isla</th>
+
                             <th className="text-right p-2">Esperado Rivas</th>
                             <th className="text-right p-2">Esperado Isla</th>
 
@@ -2691,9 +2702,6 @@ export default function CandyMainOrders() {
                             <th className="text-right p-2">U. Bruta Rivas</th>
                             <th className="text-right p-2">U. Bruta Isla</th>
                             <th className="text-right p-2">Prorrateo</th>
-
-                            <th className="text-right p-2">Precio Rivas</th>
-                            <th className="text-right p-2">Precio Isla</th>
 
                             <th className="text-center p-2">Acciones</th>
                           </tr>
@@ -2879,6 +2887,13 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-right">
+                                <span>{Number(it.unitPriceRivas || 0)}</span>
+                              </td>
+                              <td className="p-2 text-right">
+                                <span>{Number(it.unitPriceIsla || 0)}</span>
+                              </td>
+
+                              <td className="p-2 text-right">
                                 {Number(it.totalRivas || 0).toFixed(2)}
                               </td>
                               <td className="p-2 text-right">
@@ -2886,89 +2901,15 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-right">
-                                {editingMarginRivasMap[it.id] ? (
-                                  <input
-                                    type="number"
-                                    step="0.001"
-                                    className="w-16 border rounded p-1 text-right"
-                                    value={Number(it.marginRivas ?? 0)}
-                                    onChange={(e) =>
-                                      handleItemFieldChange(
-                                        it.id,
-                                        "marginRivas",
-                                        e.target.value,
-                                      )
-                                    }
-                                    onBlur={() => closeMarginRivasEdit(it.id)}
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" ||
-                                        e.key === "Escape"
-                                      ) {
-                                        closeMarginRivasEdit(it.id);
-                                      }
-                                    }}
-                                    inputMode="decimal"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <div className="flex items-center justify-end gap-2">
-                                    <span>
-                                      {Number(it.marginRivas ?? 0).toFixed(3)}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() => openMarginRivasEdit(it.id)}
-                                      aria-label="Editar margen Rivas"
-                                    >
-                                      ✏️
-                                    </button>
-                                  </div>
-                                )}
+                                <span>
+                                  {Number(it.marginRivas ?? 0).toFixed(3)}
+                                </span>
                               </td>
 
                               <td className="p-2 text-right">
-                                {editingMarginIslaMap[it.id] ? (
-                                  <input
-                                    type="number"
-                                    step="0.001"
-                                    className="w-16 border rounded p-1 text-right"
-                                    value={Number(it.marginIsla ?? 0)}
-                                    onChange={(e) =>
-                                      handleItemFieldChange(
-                                        it.id,
-                                        "marginIsla",
-                                        e.target.value,
-                                      )
-                                    }
-                                    onBlur={() => closeMarginIslaEdit(it.id)}
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" ||
-                                        e.key === "Escape"
-                                      ) {
-                                        closeMarginIslaEdit(it.id);
-                                      }
-                                    }}
-                                    inputMode="decimal"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <div className="flex items-center justify-end gap-2">
-                                    <span>
-                                      {Number(it.marginIsla ?? 0).toFixed(3)}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() => openMarginIslaEdit(it.id)}
-                                      aria-label="Editar margen Isla"
-                                    >
-                                      ✏️
-                                    </button>
-                                  </div>
-                                )}
+                                <span>
+                                  {Number(it.marginIsla ?? 0).toFixed(3)}
+                                </span>
                               </td>
 
                               <td className="p-2 text-right">
@@ -2979,93 +2920,6 @@ export default function CandyMainOrders() {
                               </td>
                               <td className="p-2 text-right">
                                 {Number(it.logisticAllocated || 0).toFixed(2)}
-                              </td>
-
-                              <td className="p-2 text-right">
-                                {editingUnitPriceRivasMap[it.id] ? (
-                                  <input
-                                    type="number"
-                                    className="w-20 border rounded p-1 text-right"
-                                    value={Number(it.unitPriceRivas || 0)}
-                                    onChange={(e) =>
-                                      handleItemFieldChange(
-                                        it.id,
-                                        "unitPriceRivas",
-                                        e.target.value,
-                                      )
-                                    }
-                                    onBlur={() =>
-                                      closeUnitPriceRivasEdit(it.id)
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" ||
-                                        e.key === "Escape"
-                                      ) {
-                                        closeUnitPriceRivasEdit(it.id);
-                                      }
-                                    }}
-                                    inputMode="decimal"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <div className="flex items-center justify-end gap-2">
-                                    <span>
-                                      {Number(it.unitPriceRivas || 0)}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() =>
-                                        openUnitPriceRivasEdit(it.id)
-                                      }
-                                      aria-label="Editar precio Rivas"
-                                    >
-                                      ✏️
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-                              <td className="p-2 text-right">
-                                {editingUnitPriceIslaMap[it.id] ? (
-                                  <input
-                                    type="number"
-                                    className="w-20 border rounded p-1 text-right"
-                                    value={Number(it.unitPriceIsla || 0)}
-                                    onChange={(e) =>
-                                      handleItemFieldChange(
-                                        it.id,
-                                        "unitPriceIsla",
-                                        e.target.value,
-                                      )
-                                    }
-                                    onBlur={() => closeUnitPriceIslaEdit(it.id)}
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" ||
-                                        e.key === "Escape"
-                                      ) {
-                                        closeUnitPriceIslaEdit(it.id);
-                                      }
-                                    }}
-                                    inputMode="decimal"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <div className="flex items-center justify-end gap-2">
-                                    <span>{Number(it.unitPriceIsla || 0)}</span>
-                                    <button
-                                      type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
-                                      onClick={() =>
-                                        openUnitPriceIslaEdit(it.id)
-                                      }
-                                      aria-label="Editar precio Isla"
-                                    >
-                                      ✏️
-                                    </button>
-                                  </div>
-                                )}
                               </td>
 
                               <td className="p-2 text-center">
@@ -3326,90 +3180,18 @@ export default function CandyMainOrders() {
                               <label className="text-xs text-gray-600">
                                 MV Rivas (%)
                               </label>
-                              {editingMarginRivasMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  className="w-full border p-2 rounded text-right"
-                                  value={it.marginRivas ?? 0}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "marginRivas",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closeMarginRivasEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closeMarginRivasEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="decimal"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {Number(it.marginRivas ?? 0).toFixed(3)}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
-                                    onClick={() => openMarginRivasEdit(it.id)}
-                                    aria-label="Editar margen Rivas"
-                                  >
-                                    ✏️
-                                  </button>
-                                </div>
-                              )}
+                              <div className="text-right font-semibold">
+                                {Number(it.marginRivas ?? 0).toFixed(3)}
+                              </div>
                             </div>
 
                             <div>
                               <label className="text-xs text-gray-600">
                                 MV Isla (%)
                               </label>
-                              {editingMarginIslaMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  className="w-full border p-2 rounded text-right"
-                                  value={it.marginIsla ?? 0}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "marginIsla",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closeMarginIslaEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closeMarginIslaEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="decimal"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {Number(it.marginIsla ?? 0).toFixed(3)}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
-                                    onClick={() => openMarginIslaEdit(it.id)}
-                                    aria-label="Editar margen Isla"
-                                  >
-                                    ✏️
-                                  </button>
-                                </div>
-                              )}
+                              <div className="text-right font-semibold">
+                                {Number(it.marginIsla ?? 0).toFixed(3)}
+                              </div>
                             </div>
                           </div>
 
@@ -3420,6 +3202,24 @@ export default function CandyMainOrders() {
                               </div>
                               <div className="font-semibold">
                                 {Number(it.subtotal || 0).toFixed(2)}
+                              </div>
+                            </div>
+
+                            <div className="p-2 rounded bg-blue-50 border">
+                              <div className="text-xs text-gray-600">
+                                Precio Rivas (paq)
+                              </div>
+                              <div className="font-semibold text-right">
+                                {Number(it.unitPriceRivas || 0)}
+                              </div>
+                            </div>
+
+                            <div className="p-2 rounded bg-blue-50 border">
+                              <div className="text-xs text-gray-600">
+                                Precio Isla (paq)
+                              </div>
+                              <div className="font-semibold text-right">
+                                {Number(it.unitPriceIsla || 0)}
                               </div>
                             </div>
 
@@ -3468,7 +3268,7 @@ export default function CandyMainOrders() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
+                          <div className="grid grid-cols-1 gap-2 mt-3 text-xs">
                             <div className="p-2 rounded bg-gray-50 border">
                               <div className="text-gray-600">
                                 Precio proveedor (paq)
@@ -3507,98 +3307,6 @@ export default function CandyMainOrders() {
                                     className="text-xs text-gray-600 hover:text-gray-900"
                                     onClick={() => openProviderPriceEdit(it.id)}
                                     aria-label="Editar precio proveedor"
-                                  >
-                                    ✏️
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="p-2 rounded bg-blue-50 border">
-                              <div className="text-gray-600">
-                                Precio Rivas (paq)
-                              </div>
-                              {editingUnitPriceRivasMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  className="w-full border rounded p-2 text-right"
-                                  value={Number(it.unitPriceRivas || 0)}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "unitPriceRivas",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closeUnitPriceRivasEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closeUnitPriceRivasEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="decimal"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {it.unitPriceRivas}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
-                                    onClick={() =>
-                                      openUnitPriceRivasEdit(it.id)
-                                    }
-                                    aria-label="Editar precio Rivas"
-                                  >
-                                    ✏️
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="p-2 rounded bg-blue-50 border">
-                              <div className="text-gray-600">
-                                Precio Isla (paq)
-                              </div>
-                              {editingUnitPriceIslaMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  className="w-full border rounded p-2 text-right"
-                                  value={Number(it.unitPriceIsla || 0)}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "unitPriceIsla",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closeUnitPriceIslaEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closeUnitPriceIslaEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="decimal"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {it.unitPriceIsla}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
-                                    onClick={() => openUnitPriceIslaEdit(it.id)}
-                                    aria-label="Editar precio Isla"
                                   >
                                     ✏️
                                   </button>

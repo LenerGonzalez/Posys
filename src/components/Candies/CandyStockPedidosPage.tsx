@@ -200,6 +200,22 @@ export default function CandyStockPedidosPage({
   const [from, setFrom] = useState(startOfMonthISO());
   const [to, setTo] = useState(todayLocalISO());
 
+  /** Si es false, el stock agrega todas las órdenes maestras; si es true, aplica Desde/Hasta. */
+  const [stockFilterByDate, setStockFilterByDate] = useState(false);
+  /** Solo admin: limitar stock a una orden maestra concreta. */
+  const [selectedMainOrderId, setSelectedMainOrderId] = useState("");
+  /** Con vendedor elegido: filtrar por orden de vendedor (inventory_candies_sellers). */
+  const [selectedVendorOrderId, setSelectedVendorOrderId] = useState("");
+  const [mainOrderOptions, setMainOrderOptions] = useState<
+    { id: string; label: string }[]
+  >([]);
+  const [vendorOrdersBySeller, setVendorOrdersBySeller] = useState<
+    Record<string, { orderId: string; label: string }[]>
+  >({});
+  const [vendorOrderProductMap, setVendorOrderProductMap] = useState<
+    Record<string, string[]>
+  >({});
+
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [masterProducts, setMasterProducts] = useState<MasterProductAgg[]>([]);
   const [possibleOrders, setPossibleOrders] = useState<PossibleOrder[]>([]);
@@ -220,39 +236,43 @@ export default function CandyStockPedidosPage({
   const [globalFiltersOpenMobile, setGlobalFiltersOpenMobile] = useState(false);
 
   function ProductCard({ product }: { product: MasterProductAgg }) {
+    const packs = Number(product.stockPackages || 0);
+    const qtyColor = packs === 0 ? "text-red-600" : "text-emerald-600";
     return (
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="font-semibold text-slate-900">
+      <div className="bg-slate-50/80 border border-slate-200 rounded-xl shadow-sm p-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-slate-900 leading-snug">
               {product.productName}
             </div>
-            <div className="text-xs text-slate-500 mt-0.5">
+            <div className="text-[10px] text-slate-500 mt-0.5 leading-tight">
               {product.category || "—"}
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-xs text-slate-500">Precio Isla</div>
-            <div className="font-semibold">{money(product.priceIsla)}</div>
+          <div className="text-right shrink-0">
+            <div className="text-[10px] text-slate-500">Precio Isla</div>
+            <div className="text-xs font-semibold text-slate-900 tabular-nums">
+              {money(product.priceIsla)}
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
-          <div className="rounded-xl bg-slate-50 p-3">
-            <div className="text-xs text-slate-500">Stock</div>
-            <div className="font-bold text-lg">
-              {Number(product.stockPackages || 0)}
+        <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
+          <div className="rounded-lg bg-white border border-slate-100 p-2">
+            <div className="text-[10px] text-slate-500">Stock</div>
+            <div className={`font-bold text-base tabular-nums ${qtyColor}`}>
+              {packs}
             </div>
           </div>
-          <div className="rounded-xl bg-slate-50 p-3">
-            <div className="text-xs text-slate-500">Unidades</div>
-            <div className="font-bold text-lg">
+          <div className="rounded-lg bg-white border border-slate-100 p-2">
+            <div className="text-[10px] text-slate-500">Unidades</div>
+            <div className={`font-bold text-base tabular-nums ${qtyColor}`}>
               {Number(product.stockUnits || 0)}
             </div>
           </div>
         </div>
 
-        <div className="flex gap-2 flex-wrap mt-4">
+        <div className="flex gap-1.5 flex-wrap mt-2.5">
           <span
             className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
               product.available ? "available" : "out",
@@ -386,6 +406,78 @@ export default function CandyStockPedidosPage({
         query(collection(db, "inventory_candies_sellers")),
       );
 
+      const mainOrderOpts: { id: string; label: string; sortKey: number }[] = [];
+      mainSnap.forEach((d) => {
+        const x = d.data() as any;
+        const docDate = String(x.date || "");
+        const name = String(x.name || x.orderName || "").trim();
+        const label =
+          `${docDate || "—"}${name ? ` · ${name}` : ""}`.trim() || d.id;
+        mainOrderOpts.push({
+          id: d.id,
+          label,
+          sortKey: parseDateKey(docDate),
+        });
+      });
+      mainOrderOpts.sort((a, b) => b.sortKey - a.sortKey);
+      setMainOrderOptions(
+        mainOrderOpts.map(({ id, label }) => ({ id, label })),
+      );
+
+      const voMeta = new Map<
+        string,
+        { orderId: string; label: string; sortKey: number }
+      >();
+      const voProductMap: Record<string, string[]> = {};
+
+      sellerInvSnap.forEach((d) => {
+        const x = d.data() as any;
+        const sid = String(x.sellerId || x.seller || "").trim();
+        const oid = String(x.orderId || "").trim();
+        const pid = String(
+          x.productId || x.product || x.id || (x.product && x.product.id) || "",
+        ).trim();
+        if (!sid || !oid || !pid) return;
+
+        const vk = `${sid}__${oid}`;
+        if (!voProductMap[vk]) voProductMap[vk] = [];
+        if (!voProductMap[vk].includes(pid)) voProductMap[vk].push(pid);
+
+        const metaKey = `${sid}||${oid}`;
+        if (!voMeta.has(metaKey)) {
+          const orderName = String(x.orderName || "").trim();
+          const date = String(x.date || "").trim();
+          const label =
+            [orderName || oid, date].filter(Boolean).join(" · ") || oid;
+          voMeta.set(metaKey, {
+            orderId: oid,
+            label,
+            sortKey: parseDateKey(date),
+          });
+        }
+      });
+
+      const voBySeller: Record<string, { orderId: string; label: string }[]> =
+        {};
+      voMeta.forEach((v, metaKey) => {
+        const sid = metaKey.split("||")[0];
+        if (!sid) return;
+        if (!voBySeller[sid]) voBySeller[sid] = [];
+        voBySeller[sid].push({ orderId: v.orderId, label: v.label });
+      });
+      Object.keys(voBySeller).forEach((sid) => {
+        voBySeller[sid].sort((a, b) => {
+          const ta =
+            voMeta.get(`${sid}||${a.orderId}`)?.sortKey ?? 0;
+          const tb =
+            voMeta.get(`${sid}||${b.orderId}`)?.sortKey ?? 0;
+          return tb - ta;
+        });
+      });
+
+      setVendorOrdersBySeller(voBySeller);
+      setVendorOrderProductMap(voProductMap);
+
       const assignedBySeller: Record<string, Set<string>> = {};
       sellerInvSnap.forEach((d) => {
         const x = d.data() as any;
@@ -423,10 +515,13 @@ export default function CandyStockPedidosPage({
 
       const map = new Map<string, MasterProductAgg>();
 
+      const mainOrderPick = isAdmin ? selectedMainOrderId : "";
+
       mainSnap.forEach((d) => {
         const x = d.data() as any;
         const docDate = String(x.date || "");
-        if (!inDateRange(docDate, from, to)) return;
+        if (mainOrderPick && d.id !== mainOrderPick) return;
+        if (stockFilterByDate && !inDateRange(docDate, from, to)) return;
 
         const dateKey = parseDateKey(docDate);
         const createdAtMs =
@@ -532,13 +627,22 @@ export default function CandyStockPedidosPage({
   useEffect(() => {
     refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to]);
+  }, [from, to, stockFilterByDate, selectedMainOrderId, isAdmin]);
 
   // recalcular badge asignado cuando cambia vendedor sin volver a pegar a Firestore
   useEffect(() => {
     (async () => {
       try {
-        if (!selectedSellerId) return;
+        if (!selectedSellerId) {
+          setMasterProducts((prev) =>
+            prev.map((r) => ({
+              ...r,
+              assigned: false,
+              available: r.stockPackages > 0,
+            })),
+          );
+          return;
+        }
         const sellerInvSnap = await getDocs(
           query(collection(db, "inventory_candies_sellers")),
         );
@@ -571,6 +675,17 @@ export default function CandyStockPedidosPage({
     }
   }, [sellerCandyId, isVendDulces, isAdmin]);
 
+  useEffect(() => {
+    setSelectedVendorOrderId("");
+  }, [selectedSellerId]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setSelectedMainOrderId("");
+      setSelectedVendorOrderId("");
+    }
+  }, [isAdmin]);
+
   const categories = useMemo(() => {
     return Array.from(
       new Set(masterProducts.map((x) => x.category).filter(Boolean)),
@@ -578,18 +693,75 @@ export default function CandyStockPedidosPage({
   }, [masterProducts]);
 
   const filteredStock = useMemo(() => {
+    const vendorKey =
+      isAdmin && selectedSellerId && selectedVendorOrderId
+        ? `${selectedSellerId}__${selectedVendorOrderId}`
+        : "";
     return masterProducts.filter((r) => {
+      const okSeller = !selectedSellerId || r.assigned;
+      const okVendorOrder =
+        !vendorKey ||
+        (vendorOrderProductMap[vendorKey]?.includes(r.productId) ?? false);
       const okProduct =
         !stockProductFilter ||
         norm(r.productName).includes(norm(stockProductFilter));
       const okCategory =
         !stockCategoryFilter || norm(r.category) === norm(stockCategoryFilter);
       const okAvailable = !onlyAvailable || Number(r.stockPackages || 0) > 0;
-      return okProduct && okCategory && okAvailable;
+      return (
+        okSeller && okVendorOrder && okProduct && okCategory && okAvailable
+      );
     });
-  }, [masterProducts, stockProductFilter, stockCategoryFilter, onlyAvailable]);
+  }, [
+    masterProducts,
+    isAdmin,
+    selectedSellerId,
+    selectedVendorOrderId,
+    vendorOrderProductMap,
+    stockProductFilter,
+    stockCategoryFilter,
+    onlyAvailable,
+  ]);
 
-  // pagination for stock (web + mobile)
+  /** Por categoría (listado filtrado): Disponible = nº de productos con paquetes > 0; Stock = suma de paquetes solo de esos productos. */
+  const categoryStats = useMemo(() => {
+    const m: Record<string, { disponibles: number; paquetes: number }> = {};
+    for (const p of filteredStock) {
+      const c = String(p.category || "").trim() || "—";
+      if (!m[c]) m[c] = { disponibles: 0, paquetes: 0 };
+      const packs = Number(p.stockPackages || 0);
+      if (packs > 0) {
+        m[c].disponibles += 1;
+        m[c].paquetes += packs;
+      }
+    }
+    return m;
+  }, [filteredStock]);
+
+  /** Total de productos por categoría en el filtro actual (para subtítulo móvil). */
+  const categoryCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const p of filteredStock) {
+      const c = String(p.category || "").trim() || "—";
+      m[c] = (m[c] || 0) + 1;
+    }
+    return m;
+  }, [filteredStock]);
+
+  /** Orden: 1) categoría A–Z, 2) producto A–Z (escritorio + paginación; mismo criterio que móvil). */
+  const stockSortedAlphabetical = useMemo(() => {
+    const cat = (p: MasterProductAgg) =>
+      String(p.category || "").trim() || "—";
+    return [...filteredStock].sort((a, b) => {
+      const c = cat(a).localeCompare(cat(b), "es", { sensitivity: "base" });
+      if (c !== 0) return c;
+      return a.productName.localeCompare(b.productName, "es", {
+        sensitivity: "base",
+      });
+    });
+  }, [filteredStock]);
+
+  // pagination for stock (solo escritorio; la tabla usa este slice)
   const totalStockPages = Math.max(
     1,
     Math.ceil(filteredStock.length / STOCK_PAGE_SIZE),
@@ -600,8 +772,8 @@ export default function CandyStockPedidosPage({
 
   const paginatedStock = useMemo(() => {
     const start = (stockPage - 1) * STOCK_PAGE_SIZE;
-    return filteredStock.slice(start, start + STOCK_PAGE_SIZE);
-  }, [filteredStock, stockPage]);
+    return stockSortedAlphabetical.slice(start, start + STOCK_PAGE_SIZE);
+  }, [stockSortedAlphabetical, stockPage]);
 
   const stockKpis = useMemo(() => {
     return {
@@ -903,17 +1075,17 @@ export default function CandyStockPedidosPage({
   const renderStockTable = () => (
     <div className="hidden md:block bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-700">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-50 text-slate-700 text-[11px] uppercase tracking-wide">
             <tr>
-              <th className="text-left px-4 py-3 font-semibold">Categoría</th>
-              <th className="text-left px-4 py-3 font-semibold">Producto</th>
-              <th className="text-right px-4 py-3 font-semibold">Stock</th>
-              <th className="text-right px-4 py-3 font-semibold">Unidades</th>
-              <th className="text-right px-4 py-3 font-semibold">
+              <th className="text-left px-3 py-2 font-semibold">Categoría</th>
+              <th className="text-left px-3 py-2 font-semibold">Producto</th>
+              <th className="text-right px-3 py-2 font-semibold">Stock</th>
+              <th className="text-right px-3 py-2 font-semibold">Unidades</th>
+              <th className="text-right px-3 py-2 font-semibold">
                 Precio Isla
               </th>
-              <th className="text-left px-4 py-3 font-semibold">Badges</th>
+              <th className="text-left px-3 py-2 font-semibold">Badges</th>
             </tr>
           </thead>
           <tbody>
@@ -921,39 +1093,51 @@ export default function CandyStockPedidosPage({
               <tr>
                 <td
                   colSpan={6}
-                  className="px-4 py-8 text-center text-slate-500"
+                  className="px-4 py-8 text-center text-slate-500 text-sm"
                 >
                   No hay productos para ese filtro.
                 </td>
               </tr>
             ) : (
-              filteredStock.map((r) => (
+              paginatedStock.map((r) => {
+                const packs = Number(r.stockPackages || 0);
+                const stockColor =
+                  packs === 0 ? "text-red-600" : "text-emerald-600";
+                return (
                 <tr key={r.productId} className="border-t">
-                  <td className="px-4 py-3">{r.category || "—"}</td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900">
+                  <td className="px-3 py-2 text-[11px] text-slate-600 max-w-[140px]">
+                    {r.category || "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="text-xs font-medium text-slate-900 leading-snug">
                       {r.productName}
                     </div>
-                    <div className="text-xs text-slate-500">{r.productId}</div>
+                    <div className="text-[10px] text-slate-500">{r.productId}</div>
                   </td>
-                  <td className="px-4 py-3 text-right font-semibold">
-                    {Number(r.stockPackages || 0)}
+                  <td
+                    className={`px-3 py-2 text-right font-semibold text-xs tabular-nums ${stockColor}`}
+                  >
+                    {packs}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td
+                    className={`px-3 py-2 text-right text-xs tabular-nums ${stockColor}`}
+                  >
                     {Number(r.stockUnits || 0)}
                   </td>
-                  <td className="px-4 py-3 text-right">{money(r.priceIsla)}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2 text-right text-xs tabular-nums">
+                    {money(r.priceIsla)}
+                  </td>
+                  <td className="px-3 py-2">
                     <div className="flex gap-2 flex-wrap">
                       <span
-                        className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
+                        className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusBadgeClasses(
                           r.available ? "available" : "out",
                         )}`}
                       >
                         {r.available ? "Disponible" : "Agotado"}
                       </span>
                       <span
-                        className={`px-2 py-1 rounded-full border text-xs font-semibold ${statusBadgeClasses(
+                        className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusBadgeClasses(
                           assignedByNameMap[String(r.productId)]
                             ? "assigned"
                             : "unassigned",
@@ -966,7 +1150,8 @@ export default function CandyStockPedidosPage({
                     </div>
                   </td>
                 </tr>
-              ))
+              );
+              })
             )}
           </tbody>
         </table>
@@ -981,48 +1166,76 @@ export default function CandyStockPedidosPage({
           No hay productos para ese filtro.
         </div>
       ) : (
-        // Group paginated products by category and render collapsible category cards (mobile only)
+        // Agrupa todo el listado filtrado por categoría (sin paginar en móvil).
         (() => {
+          const catKey = (p: MasterProductAgg) =>
+            String(p.category || "").trim() || "—";
+
           const cats = Array.from(
-            new Set(paginatedStock.map((p) => p.category).filter(Boolean)),
-          ).sort((a, b) => String(a).localeCompare(String(b), "es"));
+            new Set(filteredStock.map(catKey)),
+          ).sort((a, b) =>
+            a.localeCompare(b, "es", { sensitivity: "base" }),
+          );
 
           return cats.map((c) => {
-            const products = paginatedStock.filter(
-              (p) => (p.category || "") === c,
-            );
+            const products = filteredStock
+              .filter((p) => catKey(p) === c)
+              .sort((a, b) =>
+                a.productName.localeCompare(b.productName, "es", {
+                  sensitivity: "base",
+                }),
+              );
+            const title = c === "—" ? "Sin categoría" : c;
+            const totalEnCat = categoryCounts[c] ?? products.length;
+
             return (
-              <div key={c} className="space-y-2">
-                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm">
+              <div key={c} className="space-y-1.5">
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                   <button
                     type="button"
                     onClick={() =>
                       setCategoryOpenMap((s) => ({ ...s, [c]: !s[c] }))
                     }
-                    className={`w-full px-4 py-3 rounded-2xl flex items-center justify-between ${
+                    className={`w-full px-3 py-2.5 flex items-start justify-between gap-2 text-left ${
                       categoryOpenMap[c]
-                        ? "bg-yellow-50 border-yellow-200"
-                        : "bg-white"
+                        ? "bg-amber-50/90 border-b border-amber-100"
+                        : ""
                     }`}
                   >
-                    <div className="text-left">
-                      <div className="font-semibold">{c}</div>
-                      <div className="text-xs text-slate-500">
-                        {products.length} productos
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-slate-900 leading-tight">
+                        {title}
                       </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {totalEnCat}{" "}
+                        {totalEnCat === 1 ? "producto" : "productos"}
+                      </div>
+                      {!categoryOpenMap[c] ? (
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                          <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-900">
+                            Disponible{" "}
+                            {categoryStats[c]?.disponibles ?? 0}
+                          </span>
+                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-800">
+                            Stock {categoryStats[c]?.paquetes ?? 0}
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="text-sm font-semibold">
+                    <div className="text-xs font-semibold text-slate-600 shrink-0 pt-0.5">
                       {categoryOpenMap[c] ? "Cerrar" : "Abrir"}
                     </div>
                   </button>
 
-                  <div className={`${categoryOpenMap[c] ? "" : "hidden"} p-3`}>
+                  <div
+                    className={`${categoryOpenMap[c] ? "" : "hidden"} px-2 pb-2 pt-1`}
+                  >
                     {products.length === 0 ? (
-                      <div className="text-sm text-slate-500">
+                      <div className="text-xs text-slate-500 px-1 py-2">
                         No hay productos en esta categoría.
                       </div>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         {products.map((p) => (
                           <ProductCard key={p.productId} product={p} />
                         ))}
@@ -1275,7 +1488,9 @@ export default function CandyStockPedidosPage({
             <div className="text-left">
               <div className="font-semibold">Filtros</div>
               <div className="text-xs text-slate-500">
-                Desde / Hasta / Vendedor
+                {tab === "STOCK"
+                  ? "Fechas, vendedor, stock y órdenes"
+                  : "Desde / Hasta / Vendedor"}
               </div>
             </div>
             <div className="text-sm font-semibold">
@@ -1338,6 +1553,125 @@ export default function CandyStockPedidosPage({
             </div>
           </div>
 
+          {tab === "STOCK" ? (
+            <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+              {/* Escritorio: fechas de órdenes maestras + orden maestra + orden vendedor */}
+              <div className="hidden md:block space-y-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 shrink-0"
+                    checked={stockFilterByDate}
+                    onChange={(e) => setStockFilterByDate(e.target.checked)}
+                  />
+                  <span className="text-sm text-slate-700 leading-snug">
+                    Filtrar stock por fechas de órdenes maestras (usa Desde/Hasta).
+                    Desmarcado: se muestran todos los productos acumulados desde el
+                    origen.
+                  </span>
+                </label>
+
+                {isAdmin ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Orden maestra
+                    </label>
+                    <select
+                      className="w-full border rounded-xl px-3 py-2 text-sm"
+                      value={selectedMainOrderId}
+                      onChange={(e) => setSelectedMainOrderId(e.target.value)}
+                    >
+                      <option value="">Todas (desde el origen)</option>
+                      {mainOrderOptions.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+
+                {isAdmin && selectedSellerId ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Orden de vendedor
+                    </label>
+                    <select
+                      className="w-full border rounded-xl px-3 py-2 text-sm"
+                      value={selectedVendorOrderId}
+                      onChange={(e) => setSelectedVendorOrderId(e.target.value)}
+                    >
+                      <option value="">Todas las órdenes del vendedor</option>
+                      {(vendorOrdersBySeller[selectedSellerId] || []).map(
+                        (o) => (
+                          <option key={o.orderId} value={o.orderId}>
+                            {o.label}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Móvil: fechas de stock + orden maestra + orden vendedor (dentro del mismo contenedor Filtros) */}
+              <div className="md:hidden space-y-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 shrink-0"
+                    checked={stockFilterByDate}
+                    onChange={(e) => setStockFilterByDate(e.target.checked)}
+                  />
+                  <span className="text-xs text-slate-700 leading-snug">
+                    Filtrar stock por fechas (órdenes maestras). Desmarcado: se
+                    incluyen todas desde el origen.
+                  </span>
+                </label>
+                {isAdmin ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Orden maestra
+                    </label>
+                    <select
+                      className="w-full border rounded-xl px-3 py-2 text-sm"
+                      value={selectedMainOrderId}
+                      onChange={(e) => setSelectedMainOrderId(e.target.value)}
+                    >
+                      <option value="">Todas (desde el origen)</option>
+                      {mainOrderOptions.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                {isAdmin && selectedSellerId ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Orden de vendedor
+                    </label>
+                    <select
+                      className="w-full border rounded-xl px-3 py-2 text-sm"
+                      value={selectedVendorOrderId}
+                      onChange={(e) => setSelectedVendorOrderId(e.target.value)}
+                    >
+                      <option value="">Todas las órdenes del vendedor</option>
+                      {(vendorOrdersBySeller[selectedSellerId] || []).map(
+                        (o) => (
+                          <option key={o.orderId} value={o.orderId}>
+                            {o.label}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
           {msg ? (
             <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
               {msg}
@@ -1348,37 +1682,8 @@ export default function CandyStockPedidosPage({
 
       {tab === "STOCK" ? (
         <>
-          {/* Desktop/tablet: two KPI cards. Mobile: single card with two columns */}
-          <div className="hidden md:grid grid-cols-2 gap-3 mb-4">
-            <KpiCard label="Stock" value={stockKpis.stockPackages} />
-            <KpiCard label="Productos" value={stockKpis.productsCount} />
-          </div>
-
-          <div className="md:hidden mb-4">
-            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-slate-500">
-                    Stock
-                  </div>
-                  <div className="mt-1 text-2xl font-bold text-slate-900">
-                    {stockKpis.stockPackages}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-slate-500">
-                    Productos
-                  </div>
-                  <div className="mt-1 text-2xl font-bold text-slate-900">
-                    {stockKpis.productsCount}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* filtros stock mobile */}
+          {/* Filtros de stock justo debajo del bloque global (fechas / vendedor) */}
+          {/* filtros stock mobile: categoría y disponibilidad (producto arriba del listado) */}
           <div className="md:hidden mb-3">
             <button
               type="button"
@@ -1402,18 +1707,6 @@ export default function CandyStockPedidosPage({
 
             {filtersOpenMobile ? (
               <div className="mt-2 bg-white border border-slate-200 rounded-2xl shadow-sm p-3 space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Producto
-                  </label>
-                  <input
-                    className="w-full border rounded-xl px-3 py-2"
-                    value={stockProductFilter}
-                    onChange={(e) => setStockProductFilter(e.target.value)}
-                    placeholder="Buscar producto..."
-                  />
-                </div>
-
                 <div>
                   <label className="block text-xs font-semibold text-slate-700">
                     Categoría
@@ -1477,6 +1770,7 @@ export default function CandyStockPedidosPage({
                   className="w-full border rounded-xl px-3 py-2"
                   value={stockProductFilter}
                   onChange={(e) => setStockProductFilter(e.target.value)}
+                  onFocus={() => setStockProductFilter("")}
                   placeholder="Ej: Bombón, Conito..."
                 />
               </div>
@@ -1538,15 +1832,59 @@ export default function CandyStockPedidosPage({
             </div>
           </div>
 
+          {/* Desktop/tablet: two KPI cards. Mobile: single card with two columns */}
+          <div className="hidden md:grid grid-cols-2 gap-3 mb-4">
+            <KpiCard label="Stock" value={stockKpis.stockPackages} />
+            <KpiCard label="Productos" value={stockKpis.productsCount} />
+          </div>
+
+          <div className="md:hidden mb-4">
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Stock
+                  </div>
+                  <div className="mt-1 text-2xl font-bold text-slate-900">
+                    {stockKpis.stockPackages}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Productos
+                  </div>
+                  <div className="mt-1 text-2xl font-bold text-slate-900">
+                    {stockKpis.productsCount}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Móvil: buscador de producto fuera del acordeón de filtros de stock */}
+          <div className="md:hidden mb-3">
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Producto
+            </label>
+            <input
+              className="w-full border rounded-xl px-3 py-2 bg-white"
+              value={stockProductFilter}
+              onChange={(e) => setStockProductFilter(e.target.value)}
+              onFocus={() => setStockProductFilter("")}
+              placeholder="Buscar producto..."
+            />
+          </div>
+
           {renderStockTable()}
           {renderStockMobile()}
 
-          {/* Paginación stock */}
-          <div className="mt-3 flex items-center justify-between">
+          {/* Paginación stock (solo escritorio; en móvil el listado va por categorías sin paginar) */}
+          <div className="mt-3 hidden md:flex items-center justify-between">
             <div className="text-sm text-slate-500">
               {filteredStock.length === 0
                 ? "Sin resultados"
-                : `Mostrando ${Math.min(filteredStock.length, STOCK_PAGE_SIZE)} de ${filteredStock.length}`}
+                : `Mostrando ${paginatedStock.length} de ${filteredStock.length}`}
             </div>
 
             <div className="flex items-center gap-2">

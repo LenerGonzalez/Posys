@@ -43,10 +43,6 @@ export default function ActionMenu({
       document.addEventListener("keydown", onKey);
     }, 0);
 
-    // debug log: menu mounted
-    // eslint-disable-next-line no-console
-    console.log("ActionMenu mount", { isOpen, anchorRect });
-
     return () => {
       clearTimeout(timer);
       document.removeEventListener("mousedown", onDown);
@@ -57,23 +53,39 @@ export default function ActionMenu({
 
   if (!isOpen || !anchorRect) return null;
 
-  const left = Math.min(
-    Math.max(anchorRect.left, 8),
-    window.innerWidth - width - 8,
-  );
-  const top = anchorRect.bottom + 8;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 400;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 600;
+
+  const left = Math.min(Math.max(anchorRect.left, 8), vw - width - 8);
+
+  /** Altura máxima con scroll para que no se corten opciones abajo del viewport (móvil). */
+  const maxMenuHeight = Math.min(320, Math.max(120, vh - 16));
+  const gap = 8;
+  let top = anchorRect.bottom + gap;
+  const spaceBelow = vh - anchorRect.bottom - gap;
+  const spaceAbove = anchorRect.top - gap;
+  if (top + maxMenuHeight > vh - 8) {
+    const openAbove = anchorRect.top - maxMenuHeight - gap;
+    if (openAbove >= 8 && spaceAbove >= spaceBelow) {
+      top = openAbove;
+    } else {
+      top = Math.max(8, vh - maxMenuHeight - 8);
+    }
+  }
 
   const el = (
     <div
+      data-action-menu-root
       ref={ref}
       style={{
         position: "fixed",
         top: `${top}px`,
         left: `${left}px`,
         width,
+        maxHeight: maxMenuHeight,
         zIndex: 9999,
       }}
-      className="bg-white border rounded shadow-lg overflow-visible"
+      className="bg-white border rounded shadow-lg overflow-y-auto overflow-x-hidden overscroll-contain py-1"
     >
       {children}
     </div>
