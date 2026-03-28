@@ -23,8 +23,111 @@ import useManualRefresh from "../../hooks/useManualRefresh";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
+import { FiInfo, FiMenu } from "react-icons/fi";
+import ActionMenu from "../common/ActionMenu";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+/** Mismo criterio que ventas FIFO: lote más antiguo primero. */
+function sortBatchesFifoOrder(loots: Batch[]): Batch[] {
+  return [...loots].sort((a, b) => {
+    const da = String(a.date || "");
+    const db = String(b.date || "");
+    if (da !== db) return da < db ? -1 : 1;
+    const ca = a.createdAt?.seconds ?? 0;
+    const cb = b.createdAt?.seconds ?? 0;
+    return ca - cb;
+  });
+}
+
+/**
+ * Costo unitario ponderado del stock restante entre varios lotes del mismo producto:
+ * Σ(remaining × purchasePrice) / Σ(remaining).
+ * Sirve para valorar inventario y comparar con el costo FIFO que usa cada venta.
+ */
+function weightedAvgUnitCostRemaining(loots: Batch[]): number | null {
+  let remSum = 0;
+  let costSum = 0;
+  for (const b of loots) {
+    const rem = Number(b.remaining || 0);
+    if (rem <= 0) continue;
+    const cost = Number(b.purchasePrice || 0);
+    remSum += rem;
+    costSum += rem * cost;
+  }
+  if (remSum <= 0) return null;
+  return Number((costSum / remSum).toFixed(4));
+}
+
+type WeightedCostLotLine = {
+  batchId: string;
+  date: string;
+  remaining: number;
+  purchasePrice: number;
+  salePrice: number;
+  orderName?: string;
+};
+
+type WeightedCostRow = {
+  key: string;
+  productId: string;
+  productName: string;
+  unit: string;
+  quantityRemaining: number;
+  weightedAvgUnitCost: number;
+  inventoryValueAtCost: number;
+  /** Lotes con saldo que entran en el ponderado (orden FIFO). */
+  lotCount: number;
+  lots: WeightedCostLotLine[];
+};
+
+/** Agrupa lotes por producto + unidad y calcula costo ponderado del disponible. */
+function weightedCostRowsByProduct(batches: Batch[]): WeightedCostRow[] {
+  const groups = new Map<string, Batch[]>();
+  for (const b of batches) {
+    const rem = Number(b.remaining || 0);
+    if (rem <= 0) continue;
+    const key = `${b.productId}|||${String(b.unit || "").toLowerCase()}`;
+    const arr = groups.get(key) || [];
+    arr.push(b);
+    groups.set(key, arr);
+  }
+  const rows: WeightedCostRow[] = [];
+  for (const [key, loots] of groups) {
+    const wac = weightedAvgUnitCostRemaining(loots);
+    if (wac == null) continue;
+    const sorted = sortBatchesFifoOrder(loots);
+    const lots: WeightedCostLotLine[] = sorted.map((b) => ({
+      batchId: b.id,
+      date: String(b.date || ""),
+      remaining: roundQty(Number(b.remaining || 0)),
+      purchasePrice: Number(b.purchasePrice || 0),
+      salePrice: Number(b.salePrice || 0),
+      orderName: String(b.orderName || "").trim() || undefined,
+    }));
+    const rem = roundQty(
+      loots.reduce((a, b) => a + Number(b.remaining || 0), 0),
+    );
+    const first = sorted[0];
+    rows.push({
+      key,
+      productId: first.productId,
+      productName: first.productName,
+      unit: first.unit,
+      quantityRemaining: rem,
+      weightedAvgUnitCost: wac,
+      inventoryValueAtCost: Number((rem * wac).toFixed(2)),
+      lotCount: lots.length,
+      lots,
+    });
+  }
+  rows.sort((a, b) =>
+    a.productName.localeCompare(b.productName, "es", {
+      sensitivity: "base",
+    }),
+  );
+  return rows;
+}
 
 // ===== Types =====
 interface Product {
@@ -188,6 +291,20 @@ export default function InventoryBatches({
   type AvailabilityFilter = "all" | "with" | "without";
   const [availabilityFilter, setAvailabilityFilter] =
     useState<AvailabilityFilter>("all");
+  /** Fila expandida en tabla de costo ponderado (detalle de lotes). */
+  const [weightedCostDetailKey, setWeightedCostDetailKey] = useState<
+    string | null
+  >(null);
+  /** Modal: explicación sencilla del costo ponderado. */
+  const [ponderadoInfoOpen, setPonderadoInfoOpen] = useState(false);
+  /** Menú ⋮ junto a Refrescar (exportar / crear lote). */
+  const [mainToolsMenuRect, setMainToolsMenuRect] =
+    useState<DOMRect | null>(null);
+  /** Menú ⋮ por fila de pedido/lote. */
+  const [rowActionMenu, setRowActionMenu] = useState<{
+    groupId: string;
+    rect: DOMRect;
+  } | null>(null);
   const [mobileTypeOpen, setMobileTypeOpen] = useState<Record<string, boolean>>(
     {},
   );
@@ -353,6 +470,39 @@ export default function InventoryBatches({
       totalExistenciasMonetarias,
     };
   }, [filteredBatches]);
+
+  /** Costo ponderado por producto (solo lotes con remaining > 0 en el filtro actual). */
+  const weightedCostInventoryRows = useMemo(
+    () => weightedCostRowsByProduct(filteredBatches),
+    [filteredBatches],
+  );
+
+  const totalInventoryAtWeightedCost = useMemo(
+    () =>
+      Number(
+        weightedCostInventoryRows
+          .reduce((a, r) => a + r.inventoryValueAtCost, 0)
+          .toFixed(2),
+      ),
+    [weightedCostInventoryRows],
+  );
+
+  useEffect(() => {
+    if (!weightedCostDetailKey) return;
+    const onDown = (ev: MouseEvent) => {
+      const root = document.querySelector("[data-weighted-cost-root]");
+      if (root && !root.contains(ev.target as Node)) {
+        setWeightedCostDetailKey(null);
+      }
+    };
+    const t = window.setTimeout(() => {
+      document.addEventListener("mousedown", onDown);
+    }, 0);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [weightedCostDetailKey]);
 
   const [ventasRealizadas, setVentasRealizadas] = useState<number>(0);
   const [ventasCount, setVentasCount] = useState<number>(0);
@@ -1393,40 +1543,6 @@ export default function InventoryBatches({
     <div className="max-w-6xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h2 className="text-2xl font-bold">Inventario</h2>
-
-        <div className="flex items-center gap-2">
-          {/* Exportar PDF hidden per request */}
-
-          <button
-            className="px-2 py-1 rounded-xl text-sm md:px-3 md:py-2 md:rounded-2xl md:text-base bg-green-600 text-white hover:bg-green-700"
-            type="button"
-            onClick={handleExportInventoryCsv}
-            disabled={loading}
-          >
-            Exportar Productos
-          </button>
-          <button
-            className="px-2 py-1 rounded-xl text-sm md:px-3 md:py-2 md:rounded-2xl md:text-base bg-amber-600 text-white hover:bg-amber-700"
-            type="button"
-            onClick={handleExportInventoryXlsx}
-            disabled={loading}
-          >
-            Exportar Lotes
-          </button>
-
-          {canCreateBatch && (
-            <button
-              className="px-2 py-1 rounded-xl text-sm md:px-3 md:py-2 md:rounded-2xl md:text-base bg-blue-600 text-white hover:bg-blue-700"
-              type="button"
-              onClick={() => {
-                resetOrderModal();
-                setShowCreateModal(true);
-              }}
-            >
-              Crear Lote
-            </button>
-          )}
-        </div>
       </div>
 
       {/* 🔎 Filtros */}
@@ -1478,10 +1594,153 @@ export default function InventoryBatches({
           Quitar filtro
         </button>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+            title="¿Qué es el costo ponderado?"
+            aria-label="Información sobre costo ponderado"
+            onClick={() => {
+              setRowActionMenu(null);
+              setMainToolsMenuRect(null);
+              setPonderadoInfoOpen(true);
+            }}
+          >
+            <FiInfo className="w-5 h-5" />
+          </button>
           <RefreshButton onClick={() => refresh()} loading={loading} />
+          <button
+            type="button"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            title="Más acciones"
+            aria-label="Menú de acciones"
+            onClick={(e) => {
+              setRowActionMenu(null);
+              setMainToolsMenuRect(e.currentTarget.getBoundingClientRect());
+            }}
+          >
+            <FiMenu className="w-5 h-5" />
+          </button>
         </div>
       </div>
+
+      <ActionMenu
+        anchorRect={mainToolsMenuRect}
+        isOpen={!!mainToolsMenuRect}
+        onClose={() => setMainToolsMenuRect(null)}
+        width={240}
+      >
+        <div className="py-1">
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
+            disabled={loading}
+            onClick={() => {
+              setMainToolsMenuRect(null);
+              handleExportInventoryCsv();
+            }}
+          >
+            Exportar productos (CSV)
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
+            disabled={loading}
+            onClick={() => {
+              setMainToolsMenuRect(null);
+              handleExportInventoryXlsx();
+            }}
+          >
+            Exportar lotes (Excel)
+          </button>
+          {canCreateBatch && (
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                resetOrderModal();
+                setShowCreateModal(true);
+              }}
+            >
+              Crear lote
+            </button>
+          )}
+        </div>
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={rowActionMenu?.rect ?? null}
+        isOpen={!!rowActionMenu}
+        onClose={() => setRowActionMenu(null)}
+        width={220}
+      >
+        <div className="py-1">
+          {rowActionMenu &&
+            (() => {
+              const g = groupedRows.find(
+                (x) => x.groupId === rowActionMenu.groupId,
+              );
+              if (!g) {
+                return (
+                  <div className="px-3 py-2 text-sm text-gray-500">
+                    No se encontró el pedido.
+                  </div>
+                );
+              }
+              return (
+                <>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    onClick={() => {
+                      openDetail(g);
+                      setRowActionMenu(null);
+                    }}
+                  >
+                    Ver detalle
+                  </button>
+                  {isAdmin && g.status === "PENDIENTE" && (
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 text-green-800 font-medium"
+                      onClick={() => {
+                        payGroup(g);
+                        setRowActionMenu(null);
+                      }}
+                    >
+                      Pagar inventario
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                        onClick={() => {
+                          openForEdit(g);
+                          setRowActionMenu(null);
+                        }}
+                      >
+                        Editar pedido
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 text-red-700"
+                        onClick={() => {
+                          deleteGroup(g);
+                          setRowActionMenu(null);
+                        }}
+                      >
+                        Borrar pedido
+                      </button>
+                    </>
+                  )}
+                </>
+              );
+            })()}
+        </div>
+      </ActionMenu>
 
       {/* KPIs: 3 tarjetas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
@@ -1572,16 +1831,33 @@ export default function InventoryBatches({
                 {money(totals.totalFacturado)}
               </span>
             </div>
-            <div className="flex justify-between">
-              <span>Utilidad bruta</span>
-              <span className="font-semibold">
+            <div className="flex justify-between items-start gap-2">
+              <div>
+                <span>Utilidad bruta</span>
+                <div className="text-[11px] opacity-85 font-normal leading-snug mt-0.5 max-w-[14rem]">
+                  Margen teórico al registrar el pedido (no es la ganancia de
+                  ventas).
+                </div>
+              </div>
+              <span className="font-semibold shrink-0">
                 {money(totals.totalEsperado - totals.totalFacturado)}
               </span>
             </div>
             <div className="flex justify-between">
-              <span>Existencias monetarias</span>
+              <span>Existencias a precio venta</span>
               <span className="font-semibold">
                 {money(totals.totalExistenciasMonetarias)}
+              </span>
+            </div>
+            <div className="flex justify-between border-t border-white/25 pt-2">
+              <div>
+                <span>Inventario a costo ponderado</span>
+                <div className="text-[11px] opacity-85 font-normal leading-snug mt-0.5 max-w-[14rem]">
+                  Σ(cant. restante × costo de compra) por producto.
+                </div>
+              </div>
+              <span className="font-semibold shrink-0">
+                {money(totalInventoryAtWeightedCost)}
               </span>
             </div>
           </div>
@@ -1638,6 +1914,150 @@ export default function InventoryBatches({
           </div>
         </div>
       </div>
+
+      {weightedCostInventoryRows.length > 0 && (
+        <div
+          className="mb-4 border border-slate-200 rounded-2xl bg-slate-50 p-4 shadow-sm"
+          data-weighted-cost-root
+        >
+          <h4 className="font-semibold text-slate-800 mb-1">
+            Costo de compra ponderado (stock disponible)
+          </h4>
+          <p className="text-xs text-slate-600 mb-3 leading-relaxed">
+            Si hay varios lotes del mismo producto con distinto costo, aquí ves
+            el costo unitario medio del inventario restante. En la venta, el
+            descuento de inventario sigue el orden{" "}
+            <strong>FIFO</strong> (lote más antiguo primero); el costo de
+            venta y la ganancia en cierre usan ese costo real por lote, no el
+            precio del último pedido.
+          </p>
+          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+            <table className="min-w-[640px] w-full text-sm text-slate-800">
+              <thead className="bg-slate-100 text-left">
+                <tr>
+                  <th className="p-2 border-b">Producto</th>
+                  <th className="p-2 border-b">Unidad</th>
+                  <th className="p-2 border-b text-right">Existencias</th>
+                  <th className="p-2 border-b text-right">Costo Ponderado</th>
+                  <th className="p-2 border-b text-right">Valor a costo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weightedCostInventoryRows.map((r) => (
+                  <React.Fragment key={r.key}>
+                    <tr className="border-b border-slate-100">
+                      <td className="p-2">
+                        <div className="flex items-start gap-2">
+                          <button
+                            type="button"
+                            className={`mt-0.5 shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
+                              weightedCostDetailKey === r.key
+                                ? "border-blue-600 bg-blue-50 text-blue-700"
+                                : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                            }`}
+                            title="Ver lotes incluidos en el ponderado"
+                            aria-expanded={weightedCostDetailKey === r.key}
+                            aria-label={`Detalle de ${r.lotCount} inventario(s) para ${r.productName}`}
+                            onClick={() =>
+                              setWeightedCostDetailKey((k) =>
+                                k === r.key ? null : r.key,
+                              )
+                            }
+                          >
+                            <FiInfo className="w-4 h-4" aria-hidden />
+                          </button>
+                          <span className="min-w-0 leading-snug">
+                            {r.productName}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-2">{(r.unit || "").toUpperCase()}</td>
+                      <td className="p-2 text-right tabular-nums">
+                        {r.quantityRemaining.toFixed(3)}
+                      </td>
+                      <td className="p-2 text-right tabular-nums">
+                        {money(r.weightedAvgUnitCost)}
+                      </td>
+                      <td className="p-2 text-right tabular-nums font-medium">
+                        {money(r.inventoryValueAtCost)}
+                      </td>
+                    </tr>
+                    {weightedCostDetailKey === r.key && (
+                      <tr className="border-b border-slate-200 bg-slate-100/80">
+                        <td colSpan={5} className="p-0">
+                          <div className="p-3 text-left">
+                            <div className="text-xs font-semibold text-slate-700 mb-2">
+                              {r.lotCount === 1
+                                ? "1 inventario (lote) con saldo entra en el promedio."
+                                : `${r.lotCount} inventarios (lotes) con saldo entran en el promedio (orden FIFO para referencia).`}
+                            </div>
+                            <div className="overflow-x-auto rounded border border-slate-200 bg-white">
+                              <table className="min-w-[520px] w-full text-xs text-slate-800">
+                                <thead className="bg-slate-50">
+                                  <tr>
+                                    <th className="p-2 text-left font-semibold">
+                                      Fecha lote
+                                    </th>
+                                    <th className="p-2 text-left font-semibold">
+                                      Pedido
+                                    </th>
+                                    <th className="p-2 text-left font-mono font-semibold">
+                                      Id lote
+                                    </th>
+                                    <th className="p-2 text-right font-semibold">
+                                      Existencias
+                                    </th>
+                                    <th className="p-2 text-right font-semibold">
+                                      Costo compra
+                                    </th>
+                                    <th className="p-2 text-right font-semibold">
+                                      Precio venta
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {r.lots.map((lot) => (
+                                    <tr
+                                      key={lot.batchId}
+                                      className="border-t border-slate-100"
+                                    >
+                                      <td className="p-2 tabular-nums">
+                                        {lot.date || "—"}
+                                      </td>
+                                      <td className="p-2 max-w-[140px] truncate" title={lot.orderName}>
+                                        {lot.orderName || "—"}
+                                      </td>
+                                      <td
+                                        className="p-2 font-mono text-[11px] text-slate-600 max-w-[120px] truncate"
+                                        title={lot.batchId}
+                                      >
+                                        {lot.batchId}
+                                      </td>
+                                      <td className="p-2 text-right tabular-nums">
+                                        {lot.remaining.toFixed(3)}
+                                      </td>
+                                      <td className="p-2 text-right tabular-nums">
+                                        {money(lot.purchasePrice)}
+                                      </td>
+                                      <td className="p-2 text-right tabular-nums">
+                                        {money(lot.salePrice)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ===================== */}
       {/* ✅ MOBILE FIRST: CARDS */}
@@ -1851,40 +2271,21 @@ export default function InventoryBatches({
                                 )}
                               </div>
 
-                              <div className="mt-3 flex gap-2">
+                              <div className="mt-3 flex justify-end">
                                 <button
-                                  className="flex-1 px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm"
-                                  onClick={() => openDetail(g)}
+                                  type="button"
+                                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-medium text-gray-800 hover:bg-gray-50"
+                                  onClick={(e) => {
+                                    setMainToolsMenuRect(null);
+                                    setRowActionMenu({
+                                      groupId: g.groupId,
+                                      rect: e.currentTarget.getBoundingClientRect(),
+                                    });
+                                  }}
                                 >
-                                  Ver detalle
+                                  <FiMenu className="w-5 h-5" />
+                                  Acciones
                                 </button>
-
-                                {isAdmin ? (
-                                  <>
-                                    {g.status === "PENDIENTE" && (
-                                      <button
-                                        className="px-3 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm"
-                                        onClick={() => payGroup(g)}
-                                      >
-                                        Pagar
-                                      </button>
-                                    )}
-
-                                    <button
-                                      className="px-3 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 text-white text-sm"
-                                      onClick={() => openForEdit(g)}
-                                    >
-                                      Editar
-                                    </button>
-
-                                    <button
-                                      className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm"
-                                      onClick={() => deleteGroup(g)}
-                                    >
-                                      Borrar
-                                    </button>
-                                  </>
-                                ) : null}
                               </div>
                             </div>
                           )}
@@ -2028,32 +2429,22 @@ export default function InventoryBatches({
                     </span>
                   </td>
                   <td className="p-3 align-middle text-center">
-                    {isAdmin ? (
-                      <div className="flex gap-2 justify-center">
-                        {g.status === "PENDIENTE" && (
-                          <button
-                            onClick={() => payGroup(g)}
-                            className="px-2 py-1 rounded text-white bg-green-600 hover:bg-green-700"
-                          >
-                            Pagar
-                          </button>
-                        )}
-                        <button
-                          className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                          onClick={() => openForEdit(g)}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                          onClick={() => deleteGroup(g)}
-                        >
-                          Borrar
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-gray-500">Solo vista</span>
-                    )}
+                    <button
+                      type="button"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                      title="Acciones del pedido"
+                      aria-label={`Acciones: ${g.orderName}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMainToolsMenuRect(null);
+                        setRowActionMenu({
+                          groupId: g.groupId,
+                          rect: e.currentTarget.getBoundingClientRect(),
+                        });
+                      }}
+                    >
+                      <FiMenu className="w-5 h-5" />
+                    </button>
                   </td>
                 </tr>
               ))
@@ -2063,6 +2454,71 @@ export default function InventoryBatches({
       </div>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
+
+      {ponderadoInfoOpen &&
+        createPortal(
+          <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/45 border-0 cursor-default"
+              aria-label="Cerrar"
+              onClick={() => setPonderadoInfoOpen(false)}
+            />
+            <div
+              className="relative bg-white rounded-2xl shadow-xl max-w-lg w-full p-5 sm:p-6 max-h-[88vh] overflow-y-auto"
+              role="dialog"
+              aria-labelledby="ponderado-info-title"
+            >
+              <h3
+                id="ponderado-info-title"
+                className="text-lg font-bold text-slate-900 mb-3 pr-8"
+              >
+                ¿Qué es el costo ponderado? (explicación sencilla)
+              </h3>
+              <div className="text-sm text-slate-800 space-y-3 leading-relaxed">
+                <p>
+                  A veces compras pollo varias veces y cada compra te cuesta
+                  distinto. Además, de cada compra te puede quedar más o menos
+                  cantidad en el congelador o en la vitrina.
+                </p>
+                <p>
+                  El <strong>costo ponderado</strong> es un número que el sistema
+                  saca así: mira <strong>cuánto te queda</strong> de cada
+                  compra, multiplica eso por <strong>lo que te costó en su
+                  momento</strong>, suma todo y lo divide entre la cantidad
+                  total que te queda. Así sale un &quot;precio medio&quot; por
+                  libra o por unidad, solo para que sepas más o menos cuánto
+                  dinero tienes metido en mercadería.
+                </p>
+                <p>
+                  <strong>Eso no es lo que cobras al cliente.</strong> Es para
+                  tener una idea del valor del inventario a costo.
+                </p>
+                <p>
+                  Cuando <strong>vendes</strong>, el programa no usa ese promedio
+                  para el costo de la venta: primero descuenta del{" "}
+                  <strong>lote más viejo</strong> que tenga saldo (así se
+                  acostumbra en negocio: lo primero que entró es lo primero que
+                  sale). Por eso el costo real de esa venta es el precio de
+                  compra <strong>de ese lote</strong>, no el promedio.
+                </p>
+                <p className="text-slate-600">
+                  <strong>No tienes que escribir el ponderado a mano.</strong>{" "}
+                  Solo cargas el costo de cada pedido cuando lo das de alta; el
+                  sistema hace el resto.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="mt-5 w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
+                onClick={() => setPonderadoInfoOpen(false)}
+              >
+                Entendido
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
 
       {/* ======================= */}
       {/* MODAL CREAR/EDITAR */}

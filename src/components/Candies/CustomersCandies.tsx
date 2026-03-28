@@ -8,6 +8,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   orderBy,
   query,
   Timestamp,
@@ -17,6 +18,11 @@ import {
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
+import { FiMoreVertical } from "react-icons/fi";
+import ActionMenu from "../common/ActionMenu";
+import MobileKpiTwoColumn from "../common/MobileKpiTwoColumn";
+import Toast from "../common/Toast";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 
 const PLACES = [
   "Altagracia",
@@ -50,6 +56,10 @@ interface CustomerRow {
   // ✅ NUEVO: para mobile (último abono)
   lastAbonoDate?: string; // yyyy-MM-dd
   lastAbonoAmount?: number; // positivo (monto del abono)
+
+  lastSaleDate?: string;
+  lastSaleDateTime?: string;
+  lastSaleAmount?: number;
 }
 
 interface MovementRow {
@@ -69,6 +79,140 @@ interface SellerRow {
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+/** Fecha local YYYY-MM-DD (alineado con Clientes Pollo). */
+const formatLocalDate = (v: any) => {
+  if (!v && v !== 0) return "";
+  if (typeof v === "string") {
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+    const parsed = new Date(v);
+    if (!Number.isNaN(parsed.getTime())) {
+      const d = parsed;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+    return String(v).slice(0, 10);
+  }
+  if (v instanceof Date) {
+    const d = v;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  if (v?.toDate && typeof v.toDate === "function") {
+    const d = v.toDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  return String(v).slice(0, 10);
+};
+
+const formatLocalDateTime = (v: any): string => {
+  if (!v && v !== 0) return "";
+  if (typeof v === "string") {
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) {
+      const s = v.slice(0, 19).replace("T", " ");
+      return s.length >= 10 ? s : "";
+    }
+    const parsed = new Date(v);
+    if (!Number.isNaN(parsed.getTime())) {
+      const d = parsed;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    }
+    return "";
+  }
+  if (v instanceof Date) {
+    const d = v;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  if (v?.toDate && typeof v.toDate === "function") {
+    const d = v.toDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  if (typeof v?.seconds === "number") {
+    const d = new Date(v.seconds * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  return "";
+};
+
+async function loadLastSaleForCustomer(c: CustomerRow): Promise<void> {
+  c.lastSaleDate = "";
+  c.lastSaleDateTime = "";
+  c.lastSaleAmount = undefined;
+  try {
+    let sDoc: any = null;
+    try {
+      const qS = query(
+        collection(db, "sales_candies"),
+        where("customerId", "==", c.id),
+        orderBy("createdAt", "desc"),
+        limit(1),
+      );
+      const sSnap = await getDocs(qS);
+      sDoc = sSnap.docs[0] ?? null;
+    } catch {
+      const sAll = await getDocs(
+        query(
+          collection(db, "sales_candies"),
+          where("customerId", "==", c.id),
+        ),
+      );
+      let bestTs = 0;
+      let best: any = null;
+      sAll.docs.forEach((dd) => {
+        const sd = dd.data() as any;
+        let ms = 0;
+        if (sd?.createdAt?.seconds) ms = Number(sd.createdAt.seconds) * 1000;
+        else if (sd?.date) {
+          const p = Date.parse(String(sd.date));
+          if (!Number.isNaN(p)) ms = p;
+        }
+        if (ms >= bestTs) {
+          bestTs = ms;
+          best = dd;
+        }
+      });
+      sDoc = best;
+    }
+    if (!sDoc) return;
+    const sData = sDoc.data() as any;
+    if (sData?.date) {
+      c.lastSaleDate =
+        typeof sData.date === "string"
+          ? sData.date.slice(0, 10)
+          : formatLocalDate(sData.date);
+    } else if (sData?.timestamp) {
+      c.lastSaleDate = formatLocalDate(sData.timestamp);
+    } else if (sData?.createdAt) {
+      c.lastSaleDate = formatLocalDate(sData.createdAt);
+    }
+    c.lastSaleDateTime =
+      formatLocalDateTime(sData.timestamp) ||
+      formatLocalDateTime(sData.createdAt) ||
+      (typeof sData.date === "string"
+        ? sData.date.replace("T", " ").slice(0, 16)
+        : "") ||
+      c.lastSaleDate ||
+      "";
+    const directTot = Number(
+      sData.total ?? sData.amount ?? sData.grandTotal ?? 0,
+    );
+    if (Number.isFinite(directTot) && directTot !== 0) {
+      c.lastSaleAmount = Math.round(directTot * 100) / 100;
+    } else if (Array.isArray(sData.items)) {
+      c.lastSaleAmount =
+        Math.round(
+          sData.items.reduce(
+            (acc: number, it: any) =>
+              acc +
+              (Number(
+                it?.total ?? it?.amount ?? it?.lineFinal ?? 0,
+              ) || 0),
+            0,
+          ) * 100,
+        ) / 100;
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 function normalizePhone(input: string): string {
   const prefix = "+505 ";
@@ -279,10 +423,10 @@ export default function CustomersCandy({
   // 👉 Modal Crear Cliente
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // ✅ MOBILE: collapse/expand customers list
-  const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(
-    null,
-  );
+  const [customerRowMenu, setCustomerRowMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
 
   // ✅ MOBILE: collapse/expand statement sections + movement cards
   const [stOpenAccount, setStOpenAccount] = useState(false);
@@ -419,6 +563,8 @@ export default function CustomersCandy({
               c.lastAbonoDate = "";
               c.lastAbonoAmount = 0;
             }
+
+            await loadLastSaleForCustomer(c);
           } catch {
             c.balance = Number(c.initialDebt || 0);
             c.lastAbonoDate = "";
@@ -1240,7 +1386,24 @@ export default function CustomersCandy({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+      <div className="md:hidden mb-4">
+        <MobileKpiTwoColumn
+          left={{
+            badge: "Saldo pendiente",
+            value: money(totalPendingBalance),
+            subtitle: "Calculado sobre los clientes filtrados",
+            variant: "emerald",
+          }}
+          right={{
+            badge: "Clientes activos",
+            value: activeCustomersCount,
+            subtitle: `De un total de ${totalCustomersCount}`,
+            variant: "indigo",
+          }}
+        />
+      </div>
+
+      <div className="hidden md:grid md:grid-cols-2 md:gap-3 mb-4">
         <div className="p-4 border rounded-lg bg-white shadow-sm">
           <div className="text-xs uppercase tracking-wide text-gray-600">
             Saldo pendiente
@@ -1297,16 +1460,18 @@ export default function CustomersCandy({
         {filtersOpen && (
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-semibold">Estado</label>
-              <select
-                className="w-full border rounded px-3 py-2"
+              <MobileHtmlSelect
+                label="Estado"
                 value={fStatus}
-                onChange={(e) => setFStatus(e.target.value as Status | "")}
-              >
-                <option value="">Todos</option>
-                <option value="ACTIVO">Activo</option>
-                <option value="BLOQUEADO">Bloqueado</option>
-              </select>
+                onChange={(v) => setFStatus(v as Status | "")}
+                options={[
+                  { value: "", label: "Todos" },
+                  { value: "ACTIVO", label: "Activo" },
+                  { value: "BLOQUEADO", label: "Bloqueado" },
+                ]}
+                selectClassName="w-full border rounded px-3 py-2"
+                sheetTitle="Estado"
+              />
             </div>
             <div>
               <label className="block text-sm font-semibold">
@@ -1340,500 +1505,558 @@ export default function CustomersCandy({
         )}
       </div>
 
-      <div className="bg-white p-2 rounded shadow border w-full">
-        {/* ===================== WEB (NO CAMBIAR UI) ===================== */}
+      <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-200 w-full">
         <div className="hidden md:block">
-          <table className="min-w-full w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 border">Fecha</th>
-                <th className="p-2 border">Nombre</th>
-                <th className="p-2 border">Teléfono</th>
-                <th className="p-2 border">Vendedor</th>
-                <th className="p-2 border">Lugar</th>
-                <th className="p-2 border">Estado</th>
-                <th className="p-2 border">Límite</th>
-                <th className="p-2 border">Saldo</th>
-                <th className="p-2 border">Comentario</th>
-                <th className="p-2 border">Acciones</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td className="p-4 text-center" colSpan={10}>
-                    Cargando…
-                  </td>
+          <div className="rounded-xl overflow-hidden border border-slate-200">
+            <table className="min-w-full w-full text-sm">
+              <thead className="bg-slate-100 sticky top-0 z-10">
+                <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                  <th className="p-3 border-b text-left">Estado</th>
+                  <th className="p-3 border-b text-left">Creado</th>
+                  <th className="p-3 border-b text-left">Ult. Compra</th>
+                  <th className="p-3 border-b text-left">Ult. Abono</th>
+                  <th className="p-3 border-b text-left">Nombre</th>
+                  <th className="p-3 border-b text-left">Vendedor</th>
+                  <th className="p-3 border-b text-right">Saldo</th>
+                  <th className="p-3 border-b text-left">Comentario</th>
+                  <th className="p-3 border-b text-right">Acciones</th>
                 </tr>
-              ) : pagedRows.length === 0 ? (
-                <tr>
-                  <td className="p-4 text-center" colSpan={10}>
-                    Sin clientes
-                  </td>
-                </tr>
-              ) : (
-                pagedRows.map((c) => {
-                  const isEditing = editingId === c.id;
-                  return (
-                    <tr key={c.id} className="text-center">
-                      <td className="p-2 border">
-                        {c.createdAt?.toDate
-                          ? c.createdAt.toDate().toISOString().slice(0, 10)
-                          : "—"}
-                      </td>
+              </thead>
 
-                      <td className="p-2 border text-left">
-                        {isEditing ? (
-                          <input
-                            className="w-full border p-1 rounded"
-                            value={eName}
-                            onChange={(e) => setEName(e.target.value)}
-                          />
-                        ) : (
-                          <div className="font-medium">{c.name}</div>
-                        )}
-                      </td>
-
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <input
-                            className="w-full border p-1 rounded"
-                            value={ePhone}
-                            onChange={(e) =>
-                              setEPhone(normalizePhone(e.target.value))
-                            }
-                          />
-                        ) : (
-                          c.phone
-                        )}
-                      </td>
-
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded text-xs"
-                            value={isVendor ? sellerIdSafe : eVendorId}
-                            onChange={(e) => setEVendorId(e.target.value)}
-                            disabled={isVendor}
-                            title="Vendedor asociado"
-                          >
-                            <option value="">— Sin vendedor —</option>
-                            {sellers.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          c.vendorName || "—"
-                        )}
-                      </td>
-
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded"
-                            value={ePlace}
-                            onChange={(e) => setEPlace(e.target.value as Place)}
-                          >
-                            <option value="">—</option>
-                            {PLACES.map((p) => (
-                              <option key={p} value={p}>
-                                {p}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          c.place || "—"
-                        )}
-                      </td>
-
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded"
-                            value={eStatus}
-                            onChange={(e) =>
-                              setEStatus(e.target.value as Status)
-                            }
-                          >
-                            <option value="ACTIVO">ACTIVO</option>
-                            <option value="BLOQUEADO">BLOQUEADO</option>
-                          </select>
-                        ) : (
-                          <span
-                            className={`px-2 py-0.5 rounded text-xs ${badgeStatus(
-                              c.status,
-                            )}`}
-                          >
-                            {c.status}
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <input
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            className="w-full border p-1 rounded text-right"
-                            value={
-                              Number.isNaN(eCreditLimit) ? "" : eCreditLimit
-                            }
-                            onChange={(e) =>
-                              setECreditLimit(
-                                Math.max(0, Number(e.target.value || 0)),
-                              )
-                            }
-                          />
-                        ) : (
-                          money(c.creditLimit || 0)
-                        )}
-                      </td>
-
-                      <td className="p-2 border font-semibold">
-                        {money(c.balance || 0)}
-                      </td>
-
-                      <td className="p-2 border">
-                        {isEditing ? (
-                          <textarea
-                            className="w-full border p-1 rounded resize-y min-h-12"
-                            value={eNotes}
-                            onChange={(e) => setENotes(e.target.value)}
-                            maxLength={500}
-                          />
-                        ) : (
-                          <span title={c.notes || ""}>
-                            {(c.notes || "").length > 40
-                              ? (c.notes || "").slice(0, 40) + "…"
-                              : c.notes || "—"}
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="p-2 border">
-                        <div className="flex gap-2 justify-center">
-                          {isEditing ? (
-                            <>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                                onClick={saveEdit}
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td className="p-4 text-center" colSpan={9}>
+                      Cargando…
+                    </td>
+                  </tr>
+                ) : pagedRows.length === 0 ? (
+                  <tr>
+                    <td className="p-4 text-center" colSpan={9}>
+                      Sin clientes
+                    </td>
+                  </tr>
+                ) : (
+                  pagedRows.map((c) => {
+                    const isEditing = editingId === c.id;
+                    return (
+                      <React.Fragment key={c.id}>
+                        <tr
+                          className={`text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition ${isEditing ? "bg-amber-50/40" : ""}`}
+                        >
+                          <td className="p-3 border-b text-left">
+                            {isEditing ? (
+                              <MobileHtmlSelect
+                                value={eStatus}
+                                onChange={(v) =>
+                                  setEStatus(v as Status)
+                                }
+                                options={[
+                                  { value: "ACTIVO", label: "ACTIVO" },
+                                  {
+                                    value: "BLOQUEADO",
+                                    label: "BLOQUEADO",
+                                  },
+                                ]}
+                                selectClassName="w-full border p-1 rounded text-xs"
+                                buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
+                                sheetTitle="Estado"
+                              />
+                            ) : (
+                              <span
+                                className={`px-2 py-0.5 rounded text-xs ${badgeStatus(
+                                  c.status,
+                                )}`}
                               >
-                                Guardar
-                              </button>
+                                {c.status}
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 border-b text-left">
+                            {c.createdAt
+                              ? formatLocalDate(c.createdAt)
+                              : "—"}
+                          </td>
+                          <td className="p-3 border-b text-left">
+                            {c.lastSaleDate ? c.lastSaleDate : "—"}
+                          </td>
+                          <td className="p-3 border-b text-left">
+                            {c.lastAbonoDate ? c.lastAbonoDate : "—"}
+                          </td>
+                          <td className="p-3 border-b text-left">
+                            {isEditing ? (
+                              <input
+                                className="w-full border p-1 rounded"
+                                value={eName}
+                                onChange={(e) => setEName(e.target.value)}
+                              />
+                            ) : (
+                              <div className="font-medium text-slate-900">
+                                {c.name}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3 border-b text-left">
+                            {isEditing ? (
+                              <MobileHtmlSelect
+                                value={isVendor ? sellerIdSafe : eVendorId}
+                                onChange={setEVendorId}
+                                disabled={isVendor}
+                                options={[
+                                  {
+                                    value: "",
+                                    label: "— Sin vendedor —",
+                                  },
+                                  ...sellers.map((s) => ({
+                                    value: s.id,
+                                    label: s.name,
+                                  })),
+                                ]}
+                                selectClassName="w-full border p-1 rounded text-xs"
+                                buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
+                                sheetTitle="Vendedor"
+                              />
+                            ) : (
+                              c.vendorName || "—"
+                            )}
+                          </td>
+                          <td className="p-3 border-b text-right font-semibold">
+                            {money(c.balance || 0)}
+                          </td>
+                          <td className="p-3 border-b text-left">
+                            {isEditing ? (
+                              <textarea
+                                className="w-full border p-1 rounded resize-y min-h-12"
+                                value={eNotes}
+                                onChange={(e) => setENotes(e.target.value)}
+                                maxLength={500}
+                              />
+                            ) : (
+                              <span title={c.notes || ""}>
+                                {(c.notes || "").length > 40
+                                  ? (c.notes || "").slice(0, 40) + "…"
+                                  : c.notes || "—"}
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 border-b text-right">
+                            {isEditing ? (
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                                  onClick={saveEdit}
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                                  onClick={cancelEdit}
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
                               <button
-                                className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                                onClick={cancelEdit}
+                                type="button"
+                                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 inline-flex"
+                                aria-label="Acciones del cliente"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCustomerRowMenu({
+                                    id: c.id,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  });
+                                }}
                               >
-                                Cancelar
+                                <FiMoreVertical className="w-5 h-5 text-slate-700" />
                               </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                                onClick={() => startEdit(c)}
-                              >
-                                Editar
-                              </button>
-
-                              <button
-                                className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
-                                onClick={() => handleDelete(c)}
-                                disabled={!isAdmin}
-                                title={!isAdmin ? "Solo admin" : "Borrar"}
-                              >
-                                Borrar
-                              </button>
-
-                              <button
-                                className="px-2 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
-                                onClick={() => openStatement(c)}
-                              >
-                                Estado de cuenta
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                            )}
+                          </td>
+                        </tr>
+                        {isEditing ? (
+                          <tr className="bg-amber-50/50">
+                            <td
+                              className="p-3 border-b text-left"
+                              colSpan={9}
+                            >
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
+                                <div>
+                                  <div className="text-[11px] font-medium text-slate-500 mb-0.5">
+                                    Teléfono
+                                  </div>
+                                  <input
+                                    className="w-full border p-1.5 rounded"
+                                    value={ePhone}
+                                    onChange={(e) =>
+                                      setEPhone(normalizePhone(e.target.value))
+                                    }
+                                  />
+                                </div>
+                                <div>
+                                  <MobileHtmlSelect
+                                    label="Lugar"
+                                    value={ePlace}
+                                    onChange={(v) =>
+                                      setEPlace(v as Place)
+                                    }
+                                    options={[
+                                      { value: "", label: "—" },
+                                      ...PLACES.map((p) => ({
+                                        value: p,
+                                        label: p,
+                                      })),
+                                    ]}
+                                    selectClassName="w-full border p-1.5 rounded text-sm"
+                                    buttonClassName="w-full border p-1.5 rounded text-sm text-left flex items-center justify-between bg-white"
+                                    sheetTitle="Lugar"
+                                  />
+                                </div>
+                                <div>
+                                  <div className="text-[11px] font-medium text-slate-500 mb-0.5">
+                                    Límite crédito
+                                  </div>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    inputMode="decimal"
+                                    className="w-full border p-1.5 rounded text-right"
+                                    value={
+                                      Number.isNaN(eCreditLimit)
+                                        ? ""
+                                        : eCreditLimit
+                                    }
+                                    onChange={(e) =>
+                                      setECreditLimit(
+                                        Math.max(
+                                          0,
+                                          Number(e.target.value || 0),
+                                        ),
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
           {renderPager()}
         </div>
 
-        {/* ===================== MOBILE (COLAPSABLE + RAPIDO) ===================== */}
-        <div className="md:hidden">
+        {/* ===================== MOBILE (cards estilo Clientes Pollo) ===================== */}
+        <div className="md:hidden space-y-2">
           {loading ? (
-            <div className="p-4 text-center text-sm">Cargando…</div>
+            <div className="p-4 text-center text-sm text-gray-600">
+              Cargando…
+            </div>
           ) : pagedRows.length === 0 ? (
-            <div className="p-4 text-center text-sm">Sin clientes</div>
+            <div className="p-4 text-center text-sm text-gray-600">
+              Sin clientes
+            </div>
           ) : (
-            <div className="space-y-2">
-              {pagedRows.map((c) => {
-                const isExpanded = expandedCustomerId === c.id;
-                const isEditing = editingId === c.id;
+            pagedRows.map((c) => (
+              <div
+                key={c.id}
+                className="rounded-xl border-2 border-slate-200 bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 p-3 shadow-md"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-base">{c.name}</div>
+                    <div className="text-xs text-gray-600">{c.phone || "—"}</div>
+                    <div className="text-xs text-gray-600">
+                      Vendedor:{" "}
+                      <span className="font-medium">
+                        {c.vendorName || "—"}
+                      </span>
+                    </div>
+                  </div>
 
-                const statusPill = (
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[11px] ${badgeStatus(
+                    className={`px-2 py-0.5 rounded text-xs shrink-0 ${badgeStatus(
                       c.status,
                     )}`}
                   >
                     {c.status}
                   </span>
-                );
+                </div>
 
-                return (
-                  <div
-                    key={c.id}
-                    className="border rounded-2xl shadow-sm bg-white overflow-hidden"
-                  >
-                    {/* Collapsed Row (tap to expand) */}
-                    <button
-                      type="button"
-                      className="w-full px-3 py-3 flex items-center justify-between gap-2 text-left"
-                      onClick={() => {
-                        setMsg("");
-                        // si está editando, no lo colapses accidental
-                        if (isEditing) return;
-                        setExpandedCustomerId((prev) =>
-                          prev === c.id ? null : c.id,
-                        );
-                      }}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-semibold">{c.name}</div>
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        <div className="text-right">
-                          <div className="text-[11px] text-gray-500 leading-3">
-                            Pendiente
-                          </div>
-                          <div className="font-semibold leading-4">
-                            {money(c.balance || 0)}
-                          </div>
-                        </div>
-                        {statusPill}
-                      </div>
-                    </button>
-
-                    {/* Expanded content */}
-                    {isExpanded && (
-                      <div className="px-3 pb-3">
-                        {/* último abono + saldo */}
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <div className="bg-gray-50 border rounded-xl p-2">
-                            <div className="text-[11px] text-gray-500">
-                              Último abono
-                            </div>
-                            <div className="font-medium">
-                              {c.lastAbonoDate ? c.lastAbonoDate : "—"}
-                            </div>
-                            <div className="text-[12px] text-gray-700">
-                              {c.lastAbonoAmount
-                                ? money(c.lastAbonoAmount)
-                                : ""}
-                            </div>
-                          </div>
-
-                          <div className="bg-gray-50 border rounded-xl p-2">
-                            <div className="text-[11px] text-gray-500">
-                              Saldo pendiente
-                            </div>
-                            <div className="text-lg font-bold">
-                              {money(c.balance || 0)}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Acciones (modo normal) */}
-                        {!isEditing ? (
-                          <div className="mt-3 grid grid-cols-3 gap-2">
-                            <button
-                              className="px-3 py-2 rounded-xl text-white bg-yellow-600 hover:bg-yellow-700"
-                              onClick={() => startEdit(c)}
-                              type="button"
-                            >
-                              Editar
-                            </button>
-
-                            <button
-                              className="px-3 py-2 rounded-xl text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
-                              onClick={() => handleDelete(c)}
-                              disabled={!isAdmin}
-                              title={!isAdmin ? "Solo admin" : "Borrar"}
-                              type="button"
-                            >
-                              Borrar
-                            </button>
-
-                            <button
-                              className="px-3 py-2 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700"
-                              onClick={() => openStatement(c)}
-                              type="button"
-                            >
-                              Estado
-                            </button>
-                          </div>
-                        ) : (
-                          // Edit mode shows all data (as you asked)
-                          <div className="mt-3 space-y-3">
-                            <div className="grid grid-cols-2 gap-2 text-sm">
-                              <div className="col-span-2">
-                                <div className="text-[11px] text-gray-500">
-                                  Nombre
-                                </div>
-                                <input
-                                  className="w-full border p-2 rounded-xl"
-                                  value={eName}
-                                  onChange={(e) => setEName(e.target.value)}
-                                />
-                              </div>
-
-                              <div className="col-span-2">
-                                <div className="text-[11px] text-gray-500">
-                                  Teléfono
-                                </div>
-                                <input
-                                  className="w-full border p-2 rounded-xl"
-                                  value={ePhone}
-                                  onChange={(e) =>
-                                    setEPhone(normalizePhone(e.target.value))
-                                  }
-                                />
-                              </div>
-
-                              <div>
-                                <div className="text-[11px] text-gray-500">
-                                  Estado
-                                </div>
-                                <select
-                                  className="w-full border p-2 rounded-xl"
-                                  value={eStatus}
-                                  onChange={(e) =>
-                                    setEStatus(e.target.value as Status)
-                                  }
-                                >
-                                  <option value="ACTIVO">ACTIVO</option>
-                                  <option value="BLOQUEADO">BLOQUEADO</option>
-                                </select>
-                              </div>
-
-                              <div>
-                                <div className="text-[11px] text-gray-500">
-                                  Lugar
-                                </div>
-                                <select
-                                  className="w-full border p-2 rounded-xl"
-                                  value={ePlace}
-                                  onChange={(e) =>
-                                    setEPlace(e.target.value as Place)
-                                  }
-                                >
-                                  <option value="">—</option>
-                                  {PLACES.map((p) => (
-                                    <option key={p} value={p}>
-                                      {p}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-
-                              <div className="col-span-2">
-                                <div className="text-[11px] text-gray-500">
-                                  Vendedor
-                                </div>
-                                <select
-                                  className="w-full border p-2 rounded-xl"
-                                  value={isVendor ? sellerIdSafe : eVendorId}
-                                  onChange={(e) => setEVendorId(e.target.value)}
-                                  disabled={isVendor}
-                                >
-                                  <option value="">— Sin vendedor —</option>
-                                  {sellers.map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                      {s.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-
-                              <div className="col-span-2">
-                                <div className="text-[11px] text-gray-500">
-                                  Límite
-                                </div>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  inputMode="decimal"
-                                  className="w-full border p-2 rounded-xl text-right"
-                                  value={
-                                    Number.isNaN(eCreditLimit)
-                                      ? ""
-                                      : eCreditLimit
-                                  }
-                                  onChange={(e) =>
-                                    setECreditLimit(
-                                      Math.max(0, Number(e.target.value || 0)),
-                                    )
-                                  }
-                                />
-                              </div>
-
-                              <div className="col-span-2">
-                                <div className="text-[11px] text-gray-500">
-                                  Comentario
-                                </div>
-                                <textarea
-                                  className="w-full border p-2 rounded-xl min-h-24 resize-y"
-                                  value={eNotes}
-                                  onChange={(e) => setENotes(e.target.value)}
-                                  maxLength={500}
-                                />
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2">
-                              <button
-                                className="px-3 py-2 rounded-xl text-white bg-blue-600 hover:bg-blue-700"
-                                onClick={saveEdit}
-                                type="button"
-                              >
-                                Guardar
-                              </button>
-                              <button
-                                className="px-3 py-2 rounded-xl bg-gray-200 hover:bg-gray-300"
-                                onClick={() => {
-                                  cancelEdit();
-                                  setExpandedCustomerId(null);
-                                }}
-                                type="button"
-                              >
-                                Cancelar
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                <div className="mt-2">
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50/80 p-3 text-sm shadow-sm">
+                    <div className="text-[11px] font-medium text-indigo-700">
+                      Saldo
+                    </div>
+                    <div className="text-lg font-semibold text-indigo-950">
+                      {money(c.balance || 0)}
+                    </div>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+
+                <div className="mt-2 text-xs text-gray-600">
+                  Último abono:{" "}
+                  <span className="font-medium">
+                    {c.lastAbonoDate
+                      ? `${c.lastAbonoDate}${
+                          c.lastAbonoAmount
+                            ? ` (${money(c.lastAbonoAmount)})`
+                            : ""
+                        }`
+                      : "—"}
+                  </span>
+                </div>
+
+                <div className="mt-1 text-xs text-gray-600">
+                  Última compra:{" "}
+                  <span className="font-medium">
+                    {c.lastSaleDateTime || c.lastSaleDate || "—"}
+                    {typeof c.lastSaleAmount === "number" &&
+                    c.lastSaleAmount > 0
+                      ? ` (${money(c.lastSaleAmount)})`
+                      : ""}
+                  </span>
+                </div>
+
+                {c.notes ? (
+                  <div className="mt-2 text-xs text-gray-700">
+                    <span className="font-semibold">Nota:</span>{" "}
+                    {(c.notes || "").length > 80
+                      ? (c.notes || "").slice(0, 80) + "…"
+                      : c.notes}
+                  </div>
+                ) : null}
+
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    aria-label="Acciones del cliente"
+                    onClick={(e) =>
+                      setCustomerRowMenu({
+                        id: c.id,
+                        rect: (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect(),
+                      })
+                    }
+                  >
+                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                  </button>
+                </div>
+              </div>
+            ))
           )}
           {renderPager()}
         </div>
       </div>
 
-      {msg && <p className="mt-2 text-sm">{msg}</p>}
+      <ActionMenu
+        anchorRect={customerRowMenu?.rect ?? null}
+        isOpen={!!customerRowMenu}
+        onClose={() => setCustomerRowMenu(null)}
+        width={220}
+      >
+        {customerRowMenu &&
+          (() => {
+            const c = rows.find((x) => x.id === customerRowMenu.id);
+            if (!c) {
+              return (
+                <div className="px-3 py-2 text-sm text-gray-500">
+                  Sin datos
+                </div>
+              );
+            }
+            return (
+              <div className="py-1">
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  onClick={() => {
+                    setCustomerRowMenu(null);
+                    void openStatement(c);
+                  }}
+                >
+                  Estado de cuenta
+                </button>
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                  disabled={isVendor}
+                  onClick={() => {
+                    setCustomerRowMenu(null);
+                    startEdit(c);
+                  }}
+                >
+                  Editar cliente
+                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                    onClick={() => {
+                      setCustomerRowMenu(null);
+                      void handleDelete(c);
+                    }}
+                  >
+                    Borrar cliente
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+      </ActionMenu>
+
+      {editingId && !isVendor && (
+        <div className="md:hidden fixed inset-0 z-[86] flex flex-col justify-end">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50 border-0 cursor-default"
+            aria-label="Cerrar"
+            onClick={cancelEdit}
+          />
+          <div className="relative bg-white rounded-t-2xl shadow-2xl max-h-[92vh] overflow-auto w-full">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b bg-white px-4 py-3">
+              <h3 className="font-bold text-lg">Editar cliente</h3>
+              <button
+                type="button"
+                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm"
+                onClick={cancelEdit}
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="col-span-2">
+                  <div className="text-[11px] text-gray-500">Nombre</div>
+                  <input
+                    className="w-full border p-2 rounded-xl"
+                    value={eName}
+                    onChange={(e) => setEName(e.target.value)}
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <div className="text-[11px] text-gray-500">Teléfono</div>
+                  <input
+                    className="w-full border p-2 rounded-xl"
+                    value={ePhone}
+                    onChange={(e) =>
+                      setEPhone(normalizePhone(e.target.value))
+                    }
+                  />
+                </div>
+
+                <div>
+                  <MobileHtmlSelect
+                    label="Estado"
+                    value={eStatus}
+                    onChange={(v) => setEStatus(v as Status)}
+                    options={[
+                      { value: "ACTIVO", label: "ACTIVO" },
+                      { value: "BLOQUEADO", label: "BLOQUEADO" },
+                    ]}
+                    selectClassName="w-full border p-2 rounded-xl"
+                    buttonClassName="w-full border p-2 rounded-xl text-left flex items-center justify-between gap-2 bg-white"
+                    sheetTitle="Estado"
+                  />
+                </div>
+
+                <div>
+                  <MobileHtmlSelect
+                    label="Lugar"
+                    value={ePlace}
+                    onChange={(v) => setEPlace(v as Place)}
+                    options={[
+                      { value: "", label: "—" },
+                      ...PLACES.map((p) => ({ value: p, label: p })),
+                    ]}
+                    selectClassName="w-full border p-2 rounded-xl"
+                    buttonClassName="w-full border p-2 rounded-xl text-left flex items-center justify-between gap-2 bg-white"
+                    sheetTitle="Lugar"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <MobileHtmlSelect
+                    label="Vendedor"
+                    value={isVendor ? sellerIdSafe : eVendorId}
+                    onChange={setEVendorId}
+                    disabled={isVendor}
+                    options={[
+                      { value: "", label: "— Sin vendedor —" },
+                      ...sellers.map((s) => ({
+                        value: s.id,
+                        label: s.name,
+                      })),
+                    ]}
+                    selectClassName="w-full border p-2 rounded-xl"
+                    buttonClassName="w-full border p-2 rounded-xl text-left flex items-center justify-between gap-2 bg-white"
+                    sheetTitle="Vendedor"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <div className="text-[11px] text-gray-500">Límite</div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="w-full border p-2 rounded-xl text-right"
+                    value={
+                      Number.isNaN(eCreditLimit) ? "" : eCreditLimit
+                    }
+                    onChange={(e) =>
+                      setECreditLimit(
+                        Math.max(0, Number(e.target.value || 0)),
+                      )
+                    }
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <div className="text-[11px] text-gray-500">Comentario</div>
+                  <textarea
+                    className="w-full border p-2 rounded-xl min-h-24 resize-y"
+                    value={eNotes}
+                    onChange={(e) => setENotes(e.target.value)}
+                    maxLength={500}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button
+                  className="px-3 py-2 rounded-xl text-white bg-blue-600 hover:bg-blue-700"
+                  onClick={saveEdit}
+                  type="button"
+                >
+                  Guardar
+                </button>
+                <button
+                  className="px-3 py-2 rounded-xl bg-gray-200 hover:bg-gray-300"
+                  onClick={cancelEdit}
+                  type="button"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {msg ? (
+        <Toast message={msg} onClose={() => setMsg("")} />
+      ) : null}
 
       {/* ===== Modal: Form Crear Cliente ===== */}
       {showCreateModal &&
@@ -1883,50 +2106,49 @@ export default function CustomersCandy({
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold">Lugar</label>
-                  <select
-                    className="w-full border p-2 rounded"
+                  <MobileHtmlSelect
+                    label="Lugar"
                     value={place}
-                    onChange={(e) => setPlace(e.target.value as Place)}
-                  >
-                    <option value="">—</option>
-                    {PLACES.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => setPlace(v as Place)}
+                    options={[
+                      { value: "", label: "—" },
+                      ...PLACES.map((p) => ({ value: p, label: p })),
+                    ]}
+                    selectClassName="w-full border p-2 rounded"
+                    sheetTitle="Lugar"
+                  />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold">Estado</label>
-                  <select
-                    className="w-full border p-2 rounded"
+                  <MobileHtmlSelect
+                    label="Estado"
                     value={status}
-                    onChange={(e) => setStatus(e.target.value as Status)}
-                  >
-                    <option value="ACTIVO">ACTIVO</option>
-                    <option value="BLOQUEADO">BLOQUEADO</option>
-                  </select>
+                    onChange={(v) => setStatus(v as Status)}
+                    options={[
+                      { value: "ACTIVO", label: "ACTIVO" },
+                      { value: "BLOQUEADO", label: "BLOQUEADO" },
+                    ]}
+                    selectClassName="w-full border p-2 rounded"
+                    sheetTitle="Estado"
+                  />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold">
-                    Vendedor asociado
-                  </label>
-                  <select
-                    className="w-full border p-2 rounded"
+                  <MobileHtmlSelect
+                    label="Vendedor asociado"
                     value={isVendor ? sellerIdSafe : vendorId}
-                    onChange={(e) => setVendorId(e.target.value)}
+                    onChange={setVendorId}
                     disabled={isVendor}
-                  >
-                    <option value="">— Sin vendedor —</option>
-                    {sellers.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: "", label: "— Sin vendedor —" },
+                      ...sellers.map((s) => ({
+                        value: s.id,
+                        label: s.name,
+                      })),
+                    ]}
+                    selectClassName="w-full border p-2 rounded"
+                    sheetTitle="Vendedor"
+                  />
                 </div>
 
                 <div>

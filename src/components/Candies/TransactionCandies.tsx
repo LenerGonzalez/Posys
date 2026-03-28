@@ -17,6 +17,7 @@ import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import { format } from "date-fns";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -1049,85 +1050,82 @@ export default function TransactionsReportCandies({
               </div>
 
               <div className="sm:col-span-2 lg:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700">
-                  Cliente (credito)
-                </label>
-                <select
-                  className="border rounded-md px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Cliente (credito)"
                   value={filterCustomerId}
-                  onChange={(e) => {
-                    setFilterCustomerId(e.target.value);
+                  onChange={(v) => {
+                    setFilterCustomerId(v);
                     setPage(1);
                   }}
-                >
-                  <option value="">Todos</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "", label: "Todos" },
+                    ...customers.map((c) => ({
+                      value: c.id,
+                      label: c.name,
+                    })),
+                  ]}
+                  selectClassName="border rounded-md px-3 py-2 w-full"
+                  sheetTitle="Cliente"
+                />
               </div>
 
               <div className="sm:col-span-2 lg:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700">
-                  Vendedor
-                </label>
-                <select
-                  className="border rounded-md px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Vendedor"
                   value={filterSellerId}
-                  onChange={(e) => {
-                    setFilterSellerId(e.target.value);
+                  onChange={(v) => {
+                    setFilterSellerId(v);
                     setPage(1);
                   }}
-                >
-                  <option value="">Todos</option>
-                  {sellers.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "", label: "Todos" },
+                    ...sellers.map((v) => ({
+                      value: v.id,
+                      label: v.name,
+                    })),
+                  ]}
+                  selectClassName="border rounded-md px-3 py-2 w-full"
+                  sheetTitle="Vendedor"
+                />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Tipo
-                </label>
-                <select
-                  className="border rounded-md px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Tipo"
                   value={filterType}
-                  onChange={(e) => {
-                    setFilterType(e.target.value as "" | SaleType);
+                  onChange={(v) => {
+                    setFilterType(v as "" | SaleType);
                     setPage(1);
                   }}
-                >
-                  <option value="">Todos</option>
-                  <option value="CONTADO">Cash</option>
-                  <option value="CREDITO">Crédito</option>
-                </select>
+                  options={[
+                    { value: "", label: "Todos" },
+                    { value: "CONTADO", label: "Cash" },
+                    { value: "CREDITO", label: "Crédito" },
+                  ]}
+                  selectClassName="border rounded-md px-3 py-2 w-full"
+                  sheetTitle="Tipo"
+                />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Producto
-                </label>
-                <select
-                  className="border rounded-md px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Producto"
                   value={filterProduct}
-                  onChange={(e) => {
-                    setFilterProduct(e.target.value);
+                  onChange={(v) => {
+                    setFilterProduct(v);
                     setPage(1);
                   }}
                   disabled={productOptions.length === 0}
-                >
-                  <option value="">Todos</option>
-                  {productOptions.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "", label: "Todos" },
+                    ...productOptions.map((name) => ({
+                      value: name,
+                      label: name,
+                    })),
+                  ]}
+                  selectClassName="border rounded-md px-3 py-2 w-full"
+                  sheetTitle="Producto"
+                />
               </div>
 
               {isAdmin && (

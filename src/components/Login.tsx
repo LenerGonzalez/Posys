@@ -9,7 +9,8 @@ import {
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { hasRole } from "../utils/roles";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import BottomSheet from "./common/BottomSheet";
 
 type AllowedRole =
   | "admin"
@@ -26,6 +27,7 @@ export default function Login() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [showLogoutTransition, setShowLogoutTransition] = useState(false);
+  const [publicAccessOpen, setPublicAccessOpen] = useState(false);
   const isLoggingInRef = useRef(false);
   const isRedirectingRef = useRef(false);
   const minDurationMs = 100;
@@ -311,6 +313,19 @@ export default function Login() {
               </p>
             )}
           </form>
+
+          <div className="mt-5 space-y-3">
+            <button
+              type="button"
+              onClick={() => setPublicAccessOpen(true)}
+              className="w-full rounded-2xl border-2 border-slate-800 bg-slate-50 px-4 py-3.5 text-center text-base font-bold text-slate-900 shadow-sm transition hover:bg-slate-100"
+            >
+              Acceder sin usuario
+            </button>
+            <p className="text-center text-sm text-slate-600">
+              Consulta pública (sin iniciar sesión): usá el botón de arriba.
+            </p>
+          </div>
         </div>
 
         <div className="relative hidden md:flex min-h-[180px] items-center justify-center bg-gradient-to-br from-rose-600 via-amber-500 to-pink-600 md:min-h-0">
@@ -342,6 +357,33 @@ export default function Login() {
           </div>
         </div>
       )}
+
+      <BottomSheet
+        open={publicAccessOpen}
+        onClose={() => setPublicAccessOpen(false)}
+        title="Consulta sin iniciar sesión"
+        closeText="Cerrar"
+      >
+        <div className="px-2 pt-2 space-y-2">
+          <p className="text-sm text-slate-600 px-1 pb-1">
+            Elige una opción permitida sin cuenta:
+          </p>
+          <Link
+            to="/publico/precios-venta"
+            onClick={() => setPublicAccessOpen(false)}
+            className="block w-full rounded-xl border border-sky-200 bg-sky-50 px-4 py-3.5 text-left text-base font-semibold text-sky-950 hover:bg-sky-100"
+          >
+            Precios ventas
+          </Link>
+          <Link
+            to="/publico/saldos-externos"
+            onClick={() => setPublicAccessOpen(false)}
+            className="block w-full rounded-xl border border-violet-200 bg-violet-50 px-4 py-3.5 text-left text-base font-semibold text-violet-950 hover:bg-violet-100"
+          >
+            Saldos externos
+          </Link>
+        </div>
+      </BottomSheet>
     </div>
   );
 }

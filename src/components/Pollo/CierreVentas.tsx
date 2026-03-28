@@ -1,9 +1,11 @@
 // src/components/CierreVentas.tsx
 import React, { useEffect, useRef, useState } from "react";
-import { db } from "../../firebase";
+import { createPortal } from "react-dom";
+import { db, auth } from "../../firebase";
 import {
   collection,
   getDocs,
+  getDoc,
   addDoc,
   Timestamp,
   query,
@@ -12,14 +14,18 @@ import {
   writeBatch,
   doc,
   updateDoc,
+  runTransaction,
 } from "firebase/firestore";
-import { format } from "date-fns";
+import ActionMenu from "../../components/common/ActionMenu";
+import Toast from "../../components/common/Toast";
+import { format, endOfMonth, startOfMonth } from "date-fns";
 import { hasRole } from "../../utils/roles";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import * as XLSX from "xlsx";
 import { restoreSaleAndDelete } from "../../Services/inventory";
 import RefreshButton from "../../components/common/RefreshButton";
+import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import { canAction } from "../../utils/access";
 
@@ -51,7 +57,11 @@ interface SaleDataRaw {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
-  items?: any[]; // ← importante para multi-ítems
+  items?: any[];
+  unitPrice?: number;
+  edited?: boolean;
+  editedAt?: FireTimestamp;
+  editedBy?: string;
 }
 
 interface SaleData {
@@ -77,6 +87,8 @@ interface SaleData {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
+  unitPrice?: number;
+  edited?: boolean;
 }
 
 interface ClosureData {
@@ -107,7 +119,8 @@ interface CombinedDailyRow {
 }
 
 // helpers
-const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+const round2 = (n: number) =>
+  Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100;
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
@@ -171,6 +184,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
           : raw.allocations,
         avgUnitCost: Number(it?.avgUnitCost ?? raw.avgUnitCost ?? 0),
         cogsAmount: Number(it?.cogsAmount ?? 0),
+        unitPrice: Number(it?.unitPrice || 0),
+        edited: !!raw.edited,
       };
     });
   }
@@ -194,9 +209,33 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       allocations: raw.allocations,
       avgUnitCost: raw.avgUnitCost,
       cogsAmount: raw.cogsAmount,
+      unitPrice: Number(raw.unitPrice || 0),
+      edited: !!raw.edited,
     },
   ];
 };
+
+const sanitizeDecimal = (v: string, maxDec: number): string => {
+  let s = v.replace(/,/g, ".");
+  s = s.replace(/[^0-9.]/g, "");
+  const parts = s.split(".");
+  if (parts.length > 2) s = parts[0] + "." + parts.slice(1).join("");
+  if (parts.length === 2 && parts[1].length > maxDec) {
+    s = parts[0] + "." + parts[1].slice(0, maxDec);
+  }
+  return s;
+};
+
+/** Más reciente primero: fecha venta desc, luego fecha/hora ingreso desc. */
+function compareSaleNewestFirst(a: SaleData, b: SaleData): number {
+  const da = String(a.date || "");
+  const db = String(b.date || "");
+  if (da !== db) return db.localeCompare(da);
+  const ca = String(a.createdAt || "");
+  const cb = String(b.createdAt || "");
+  if (ca !== cb) return cb.localeCompare(ca);
+  return String(b.id).localeCompare(String(a.id));
+}
 
 export default function CierreVentas({
   role,
@@ -219,15 +258,25 @@ export default function CierreVentas({
   >({});
 
   const [editing, setEditing] = useState<null | SaleData>(null);
-  const [editQty, setEditQty] = useState<number>(0);
-  const [editAmount, setEditAmount] = useState<number>(0);
+  const [editDate, setEditDate] = useState<string>("");
+  const [editQty, setEditQty] = useState<string>("");
+  const [editPrice, setEditPrice] = useState<string>("");
   const [editClient, setEditClient] = useState<string>("");
-  const [editPaid, setEditPaid] = useState<number>(0);
-  const [editChange, setEditChange] = useState<string>("0");
+  const [editConfirm, setEditConfirm] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editMinDate, setEditMinDate] = useState<string>("");
+  const [rowActionMenu, setRowActionMenu] = useState<{
+    rect: DOMRect;
+    sale: SaleData;
+  } | null>(null);
+  const [headerToolsMenuRect, setHeaderToolsMenuRect] =
+    useState<DOMRect | null>(null);
 
   const today = format(new Date(), "yyyy-MM-dd");
-  const [startDate, setStartDate] = useState<string>(today);
-  const [endDate, setEndDate] = useState<string>(today);
+  const monthStart = format(startOfMonth(new Date()), "yyyy-MM-dd");
+  const monthEnd = format(endOfMonth(new Date()), "yyyy-MM-dd");
+  const [startDate, setStartDate] = useState<string>(monthStart);
+  const [endDate, setEndDate] = useState<string>(monthEnd);
 
   // ✅ NUEVOS: colapsables (todo nace colapsado)
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -240,12 +289,15 @@ export default function CierreVentas({
 
   // paginacion (tabla contado y credito)
   const PAGE_SIZE = 25;
+  /** Transacciones Contado + Crédito (tabla consolidada diaria) */
+  const COMBINED_PAGE_SIZE = 15;
   const [cashPage, setCashPage] = useState(1);
   const [creditPage, setCreditPage] = useState(1);
+  const [combinedPage, setCombinedPage] = useState(1);
   const [pdfMode, setPdfMode] = useState(false);
-  const [cashTableOpen, setCashTableOpen] = useState(true);
-  const [creditTableOpen, setCreditTableOpen] = useState(true);
-  const [combinedTableOpen, setCombinedTableOpen] = useState(true);
+  const [cashTableOpen, setCashTableOpen] = useState(false);
+  const [creditTableOpen, setCreditTableOpen] = useState(false);
+  const [combinedTableOpen, setCombinedTableOpen] = useState(false);
 
   const pdfRef = useRef<HTMLDivElement>(null);
   const { refreshKey, refresh } = useManualRefresh();
@@ -255,6 +307,8 @@ export default function CierreVentas({
   const cierreVentas = canAction(subject, "bills", "cerrarVentas");
 
   const isAdmin = hasRole(subject, "admin");
+  const isContador = hasRole(subject, "contador");
+  const canEditSale = isAdmin || isContador;
 
   const SectionHeader = ({
     title,
@@ -426,6 +480,11 @@ export default function CierreVentas({
     return base;
   }, [filter, salesV2, floatersExtra, productFilter, operationFilter]);
 
+  const visibleSalesSorted = React.useMemo(
+    () => [...visibleSales].sort(compareSaleNewestFirst),
+    [visibleSales],
+  );
+
   // Totales visibles
   const totalCharged = round2(
     visibleSales.reduce((sum, s) => sum + (s.amount || 0), 0),
@@ -435,13 +494,59 @@ export default function CierreVentas({
   );
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
+  const editChanges = React.useMemo(() => {
+    if (!editing) return [];
+    const changes: { label: string; from: string; to: string }[] = [];
+    if (editDate !== editing.date) {
+      changes.push({ label: "Fecha", from: editing.date, to: editDate });
+    }
+    const newQty = parseFloat(editQty) || 0;
+    if (round3(newQty) !== round3(editing.quantity)) {
+      changes.push({
+        label: "Cantidad",
+        from: qty3(editing.quantity),
+        to: qty3(newQty),
+      });
+    }
+    const oldPrice =
+      editing.unitPrice && editing.unitPrice > 0
+        ? editing.unitPrice
+        : editing.quantity > 0
+          ? editing.amount / editing.quantity
+          : 0;
+    const newPrice = parseFloat(editPrice) || 0;
+    if (round2(newPrice) !== round2(oldPrice)) {
+      changes.push({
+        label: "Precio",
+        from: `C$${money(oldPrice)}`,
+        to: `C$${money(newPrice)}`,
+      });
+    }
+    const newAmount = round2(newQty * newPrice);
+    if (round2(newAmount) !== round2(editing.amount)) {
+      changes.push({
+        label: "Monto",
+        from: `C$${money(editing.amount)}`,
+        to: `C$${money(newAmount)}`,
+      });
+    }
+    if (editClient !== editing.clientName) {
+      changes.push({
+        label: "Cliente",
+        from: editing.clientName || "—",
+        to: editClient || "—",
+      });
+    }
+    return changes;
+  }, [editing, editDate, editQty, editPrice, editClient]);
+
   const isUnitMeasure = (m?: string) =>
     String(m || "")
       .trim()
       .toLowerCase() !== "lb";
 
-  const cashSales = visibleSales.filter((s) => s.type === "CONTADO");
-  const creditSales = visibleSales.filter((s) => s.type === "CREDITO");
+  const cashSales = visibleSalesSorted.filter((s) => s.type === "CONTADO");
+  const creditSales = visibleSalesSorted.filter((s) => s.type === "CREDITO");
 
   const cashTotalPages = Math.max(1, Math.ceil(cashSales.length / PAGE_SIZE));
   const creditTotalPages = Math.max(
@@ -462,6 +567,7 @@ export default function CierreVentas({
   useEffect(() => {
     setCashPage(1);
     setCreditPage(1);
+    setCombinedPage(1);
   }, [visibleSales]);
 
   useEffect(() => {
@@ -552,8 +658,26 @@ export default function CierreVentas({
       map[key].totalAmount = round2(map[key].totalAmount + (s.amount || 0));
     });
 
-    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+    return Object.values(map).sort((a, b) => {
+      const byDate = b.date.localeCompare(a.date);
+      if (byDate !== 0) return byDate;
+      return String(a.product || "").localeCompare(String(b.product || ""));
+    });
   }, [visibleSales]);
+
+  const combinedTotalPages = Math.max(
+    1,
+    Math.ceil(combinedDailyRows.length / COMBINED_PAGE_SIZE),
+  );
+
+  const combinedDailyRowsPaged = React.useMemo(() => {
+    const start = (combinedPage - 1) * COMBINED_PAGE_SIZE;
+    return combinedDailyRows.slice(start, start + COMBINED_PAGE_SIZE);
+  }, [combinedDailyRows, combinedPage]);
+
+  useEffect(() => {
+    setCombinedPage((p) => Math.min(p, combinedTotalPages));
+  }, [combinedTotalPages]);
 
   // Consolidado por producto
   const productMap: Record<
@@ -711,39 +835,343 @@ export default function CierreVentas({
   };
 
   const openEdit = (s: SaleData) => {
-    if (!isAdmin) {
+    if (!canEditSale) {
       setMessage("❌ No tienes permisos para editar esta venta.");
       return;
     }
+    setRowActionMenu(null);
     setEditing(s);
-    setEditQty(s.quantity);
-    setEditAmount(s.amount);
+    setEditDate(s.date);
+    setEditQty(String(s.quantity));
+    const price =
+      s.unitPrice && s.unitPrice > 0
+        ? s.unitPrice
+        : s.quantity > 0
+          ? s.amount / s.quantity
+          : 0;
+    setEditPrice(String(price));
     setEditClient(s.clientName);
-    setEditPaid(s.amountReceived);
-    setEditChange(s.change);
+    setEditConfirm(false);
+    setEditSaving(false);
+    setEditMinDate("");
+
+    (async () => {
+      const allocs = s.allocations || [];
+      if (!allocs.length) return;
+      let maxDate = "";
+      for (const a of allocs) {
+        try {
+          const snap = await getDoc(
+            doc(db, "inventory_batches", a.batchId),
+          );
+          if (snap.exists()) {
+            const d = String((snap.data() as any).date ?? "");
+            if (d && d > maxDate) maxDate = d;
+          }
+        } catch (_) {
+          /* lote eliminado */
+        }
+      }
+      setEditMinDate(maxDate);
+    })();
   };
 
   const saveEdit = async () => {
-    if (!isAdmin) {
-      setMessage("❌ No tienes permisos para guardar cambios.");
+    if (!canEditSale || !editing) return;
+
+    const qty = round3(parseFloat(editQty) || 0);
+    const price = round2(parseFloat(editPrice) || 0);
+    if (qty <= 0) {
+      setMessage("❌ La cantidad debe ser mayor a 0.");
       return;
     }
-    if (!editing) return;
+    if (price <= 0) {
+      setMessage("❌ El precio debe ser mayor a 0.");
+      return;
+    }
+    if (editMinDate && editDate < editMinDate) {
+      setMessage(
+        `❌ La fecha no puede ser anterior a ${editMinDate} (fecha del lote).`,
+      );
+      return;
+    }
 
+    const newAmount = round2(qty * price);
+    const docId = editing.id.split("#")[0];
+    const itemIdx = editing.id.includes("#")
+      ? parseInt(editing.id.split("#")[1])
+      : null;
+    const qtyChanged = round3(qty) !== round3(editing.quantity);
+
+    setEditSaving(true);
     try {
-      await updateDoc(doc(db, "salesV2", editing.id.split("#")[0]), {
-        quantity: editQty,
-        amount: editAmount,
-        amountCharged: editAmount,
-        clientName: editClient,
-        amountReceived: editPaid,
-        change: editChange,
-      });
+      const saleRef = doc(db, "salesV2", docId);
+      const editorEmail = auth.currentUser?.email || "admin";
+
+      if (qtyChanged) {
+        const productName = editing.productName;
+        const batchQ = query(
+          collection(db, "inventory_batches"),
+          where("productName", "==", productName),
+        );
+        const batchSnap = await getDocs(batchQ);
+        const batchDocIds = batchSnap.docs
+          .map((d) => ({
+            id: d.id,
+            date: ((d.data() as any).date ?? "") as string,
+            createdSec: (d.data() as any).createdAt?.seconds ?? 0,
+          }))
+          .sort((a, b) => {
+            if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+            return a.createdSec - b.createdSec;
+          });
+        const batchRefs = batchDocIds.map((b) =>
+          doc(db, "inventory_batches", b.id),
+        );
+
+        await runTransaction(db, async (tx) => {
+          const saleSnap = await tx.get(saleRef);
+          if (!saleSnap.exists()) throw new Error("La venta no existe.");
+          const saleData = saleSnap.data() as any;
+
+          const batchTxSnaps = await Promise.all(
+            batchRefs.map((ref) => tx.get(ref)),
+          );
+
+          let oldAllocs: { batchId: string; qty: number }[] = [];
+          if (itemIdx !== null && Array.isArray(saleData.items)) {
+            const item = saleData.items[itemIdx];
+            if (Array.isArray(item?.allocations)) {
+              oldAllocs = item.allocations.map((a: any) => ({
+                batchId: String(a.batchId),
+                qty: Number(a.qty),
+              }));
+            }
+          } else {
+            if (Array.isArray(saleData.allocations)) {
+              oldAllocs = saleData.allocations.map((a: any) => ({
+                batchId: String(a.batchId),
+                qty: Number(a.qty),
+              }));
+            }
+          }
+
+          const oldByBatch = new Map<string, number>();
+          for (const a of oldAllocs) {
+            oldByBatch.set(
+              a.batchId,
+              (oldByBatch.get(a.batchId) || 0) + a.qty,
+            );
+          }
+
+          const batchRemaining = new Map<string, number>();
+          const batchCost = new Map<string, number>();
+          for (let i = 0; i < batchRefs.length; i++) {
+            if (!batchTxSnaps[i].exists()) continue;
+            const data = batchTxSnaps[i].data() as any;
+            let rem = Number(data.remaining ?? 0);
+            const restore = oldByBatch.get(batchRefs[i].id) || 0;
+            rem = Number((rem + restore).toFixed(3));
+            batchRemaining.set(batchRefs[i].id, rem);
+            batchCost.set(batchRefs[i].id, Number(data.purchasePrice ?? 0));
+          }
+
+          let need = qty;
+          const newAllocs: {
+            batchId: string;
+            qty: number;
+            unitCost: number;
+            lineCost: number;
+          }[] = [];
+
+          for (const b of batchDocIds) {
+            if (need <= 0) break;
+            const rem = batchRemaining.get(b.id) || 0;
+            if (rem <= 0) continue;
+            const take = Math.min(rem, need);
+            const cost = batchCost.get(b.id) || 0;
+            batchRemaining.set(b.id, Number((rem - take).toFixed(3)));
+            newAllocs.push({
+              batchId: b.id,
+              qty: take,
+              unitCost: cost,
+              lineCost: Number((take * cost).toFixed(2)),
+            });
+            need = Number((need - take).toFixed(3));
+          }
+
+          if (need > 0) {
+            throw new Error(
+              `Stock insuficiente. Faltan ${need.toFixed(3)} unidades.`,
+            );
+          }
+
+          for (let i = 0; i < batchRefs.length; i++) {
+            if (!batchTxSnaps[i].exists()) continue;
+            const origRem = Number(
+              (batchTxSnaps[i].data() as any).remaining ?? 0,
+            );
+            const newRem = batchRemaining.get(batchRefs[i].id);
+            if (
+              newRem !== undefined &&
+              Math.abs(origRem - newRem) > 0.0005
+            ) {
+              tx.update(batchRefs[i], { remaining: newRem });
+            }
+          }
+
+          const cogsAmount = Number(
+            newAllocs
+              .reduce((acc, x) => acc + x.lineCost, 0)
+              .toFixed(2),
+          );
+          const qtySum = newAllocs.reduce((acc, x) => acc + x.qty, 0);
+          const avgUnitCost =
+            qtySum > 0 ? Number((cogsAmount / qtySum).toFixed(4)) : 0;
+
+          let maxBatchDate = "";
+          for (const a of newAllocs) {
+            const idx2 = batchDocIds.findIndex((b) => b.id === a.batchId);
+            if (idx2 >= 0) {
+              const d = batchDocIds[idx2].date;
+              if (d > maxBatchDate) maxBatchDate = d;
+            }
+          }
+          if (maxBatchDate && editDate < maxBatchDate) {
+            throw new Error(
+              `La fecha no puede ser anterior a ${maxBatchDate} (fecha del lote asignado).`,
+            );
+          }
+
+          if (itemIdx !== null && Array.isArray(saleData.items)) {
+            const items = [...saleData.items];
+            items[itemIdx] = {
+              ...items[itemIdx],
+              qty,
+              unitPrice: price,
+              lineFinal: newAmount,
+              allocations: newAllocs,
+              cogsAmount,
+              avgUnitCost,
+            };
+            const totalAmt = items.reduce(
+              (sum: number, it: any) => sum + Number(it.lineFinal ?? 0),
+              0,
+            );
+            tx.update(saleRef, {
+              items,
+              amount: round2(totalAmt),
+              amountCharged: round2(totalAmt),
+              clientName: editClient,
+              date: editDate,
+              edited: true,
+              editedAt: Timestamp.now(),
+              editedBy: editorEmail,
+            });
+          } else {
+            tx.update(saleRef, {
+              quantity: qty,
+              unitPrice: price,
+              amount: newAmount,
+              amountCharged: newAmount,
+              clientName: editClient,
+              date: editDate,
+              allocations: newAllocs,
+              cogsAmount,
+              avgUnitCost,
+              edited: true,
+              editedAt: Timestamp.now(),
+              editedBy: editorEmail,
+            });
+          }
+        });
+      } else {
+        const editorEmail = auth.currentUser?.email || "admin";
+        if (itemIdx !== null) {
+          const saleSnap = await getDoc(saleRef);
+          if (!saleSnap.exists()) throw new Error("La venta no existe.");
+          const saleData = saleSnap.data() as any;
+          const items = [...(saleData.items || [])];
+          if (items[itemIdx]) {
+            items[itemIdx] = {
+              ...items[itemIdx],
+              unitPrice: price,
+              lineFinal: newAmount,
+            };
+          }
+          const totalAmt = items.reduce(
+            (sum: number, it: any) => sum + Number(it.lineFinal ?? 0),
+            0,
+          );
+          await updateDoc(saleRef, {
+            items,
+            amount: round2(totalAmt),
+            amountCharged: round2(totalAmt),
+            clientName: editClient,
+            date: editDate,
+            edited: true,
+            editedAt: Timestamp.now(),
+            editedBy: editorEmail,
+          });
+        } else {
+          await updateDoc(saleRef, {
+            unitPrice: price,
+            amount: newAmount,
+            amountCharged: newAmount,
+            clientName: editClient,
+            date: editDate,
+            edited: true,
+            editedAt: Timestamp.now(),
+            editedBy: editorEmail,
+          });
+        }
+      }
+
+      const editorEmailLog = auth.currentUser?.email || "admin";
+      const oldPrice =
+        editing.unitPrice && editing.unitPrice > 0
+          ? editing.unitPrice
+          : editing.quantity > 0
+            ? editing.amount / editing.quantity
+            : 0;
+      await addDoc(collection(db, "transaction_edition_logs"), {
+        saleId: docId,
+        saleItemIndex: itemIdx,
+        productName: editing.productName,
+        editedBy: editorEmailLog,
+        editedAt: Timestamp.now(),
+        before: {
+          date: editing.date,
+          quantity: editing.quantity,
+          unitPrice: round2(oldPrice),
+          amount: editing.amount,
+          clientName: editing.clientName || "",
+        },
+        after: {
+          date: editDate,
+          quantity: qty,
+          unitPrice: price,
+          amount: newAmount,
+          clientName: editClient,
+        },
+        changes: editChanges.map((c) => ({
+          field: c.label,
+          from: c.from,
+          to: c.to,
+        })),
+        quantityChanged: qtyChanged,
+      }).catch((err) => console.error("Error guardando log de edición:", err));
+
       setEditing(null);
-      setMessage("✅ Venta actualizada.");
-    } catch (e) {
+      setEditConfirm(false);
+      setMessage("✅ Venta actualizada correctamente.");
+    } catch (e: any) {
       console.error(e);
-      setMessage("❌ No se pudo actualizar la venta.");
+      setMessage(
+        `❌ ${e?.message || "No se pudo actualizar la venta."}`,
+      );
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -795,7 +1223,7 @@ export default function CierreVentas({
 
   const exportToXLSX = () => {
     try {
-      const data = visibleSales.map((s) => ({
+      const data = visibleSalesSorted.map((s) => ({
         Estado: s.status,
         Fecha_ingreso: s.createdAt || "",
         Fecha_venta: s.date,
@@ -893,13 +1321,19 @@ export default function CierreVentas({
     );
   };
 
-  const renderSalesTable = (rows: SaleData[]) => {
+  const renderSalesTable = (
+    rows: SaleData[],
+    allRowsForTotals?: SaleData[],
+  ) => {
+    const totalsSrc = allRowsForTotals ?? rows;
     const totalQty = round3(
-      rows.reduce((sum, s) => sum + (s.quantity || 0), 0),
+      totalsSrc.reduce((sum, s) => sum + (s.quantity || 0), 0),
     );
     const totalAmount = round2(
-      rows.reduce((sum, s) => sum + (s.amount || 0), 0),
+      totalsSrc.reduce((sum, s) => sum + (s.amount || 0), 0),
     );
+    const showAllPagesHint =
+      totalsSrc.length > rows.length && rows.length > 0;
 
     return (
       <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
@@ -911,10 +1345,11 @@ export default function CierreVentas({
               <th className="p-3 border-b text-left">Fecha venta</th>
               <th className="p-3 border-b text-left">Tipo</th>
               <th className="p-3 border-b text-left">Producto</th>
+              <th className="p-3 border-b text-right">Precio</th>
               <th className="p-3 border-b text-right">Libras - Unidad</th>
               <th className="p-3 border-b text-right">Monto</th>
               <th className="p-3 border-b text-left">Vendedor</th>
-              <th className="p-3 border-b text-right">Acciones</th>
+              <th className="p-3 border-b text-center w-10"></th>
             </tr>
           </thead>
           <tbody>
@@ -924,41 +1359,32 @@ export default function CierreVentas({
                 className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
               >
                 <td className="p-3 border-b text-left">
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs ${
-                      s.status === "PROCESADA"
-                        ? "bg-green-100 text-green-700"
-                        : "bg-yellow-100 text-yellow-700"
-                    }`}
-                    title={s.status}
-                    aria-label={s.status}
-                  >
-                    {s.status === "PROCESADA" ? (
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-4 w-4 inline"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                    ) : (
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-4 w-4 inline"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <path d="M6 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1zM14 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1z" />
-                      </svg>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span
+                      className={`px-2 py-0.5 rounded text-xs ${
+                        s.status === "PROCESADA"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-yellow-100 text-yellow-700"
+                      }`}
+                      title={s.status}
+                      aria-label={s.status}
+                    >
+                      {s.status === "PROCESADA" ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z" clipRule="evenodd" />
+                        </svg>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                          <path d="M6 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1zM14 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1z" />
+                        </svg>
+                      )}
+                    </span>
+                    {s.edited && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 font-medium">
+                        Editada
+                      </span>
                     )}
-                  </span>
+                  </div>
                 </td>
                 <td className="p-3 border-b text-left">{s.createdAt || "—"}</td>
                 <td className="p-3 border-b text-left">{s.date}</td>
@@ -966,71 +1392,38 @@ export default function CierreVentas({
                   {s.type === "CREDITO" ? "Crédito" : "Cash"}
                 </td>
                 <td className="p-3 border-b text-left">{s.productName}</td>
+                <td className="p-3 border-b text-right">
+                  C${money(s.unitPrice && s.unitPrice > 0 ? s.unitPrice : s.quantity > 0 ? s.amount / s.quantity : 0)}
+                </td>
                 <td className="p-3 border-b text-right">{qty3(s.quantity)}</td>
                 <td className="p-3 border-b text-right">C${money(s.amount)}</td>
                 <td className="p-3 border-b text-left">
                   {displaySeller(s.userEmail)}
                 </td>
-                <td className="p-3 border-b text-right">
-                  {s.status === "FLOTANTE" ? (
-                    <div className="flex gap-2 justify-end">
-                      {isAdmin ? (
-                        <>
-                          <button
-                            onClick={() => openEdit(s)}
-                            className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            onClick={() => deleteSale(s.id)}
-                            className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                          >
-                            Eliminar
-                          </button>
-                        </>
-                      ) : (
-                        <span className="text-gray-400 text-xs">—</span>
-                      )}
-                    </div>
-                  ) : s.status === "PROCESADA" ? (
-                    <div className="flex gap-2 justify-end">
-                      {isAdmin ? (
-                        <button
-                          onClick={() => handleRevert(s.id)}
-                          className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                          title="Revertir"
-                          aria-label="Revertir"
-                        >
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            className="h-4 w-4 inline"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                            aria-hidden="true"
-                          >
-                            <g transform="translate(20 0) scale(-1 1)">
-                              <path
-                                fillRule="evenodd"
-                                d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
-                                clipRule="evenodd"
-                              />
-                            </g>
-                          </svg>
-                        </button>
-                      ) : (
-                        <span className="text-gray-400 text-xs">—</span>
-                      )}
-                    </div>
+                <td className="p-3 border-b text-center">
+                  {canEditSale ? (
+                    <button
+                      onClick={(e) => {
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setRowActionMenu({ rect, sale: s });
+                      }}
+                      className="p-1 rounded hover:bg-gray-200"
+                      title="Acciones"
+                      aria-label="Acciones"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                      </svg>
+                    </button>
                   ) : (
-                    <span className="text-gray-400 text-xs">No options</span>
+                    <span className="text-gray-400 text-xs">—</span>
                   )}
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-3 text-center text-gray-500">
+                <td colSpan={10} className="p-3 text-center text-gray-500">
                   Sin ventas para mostrar.
                 </td>
               </tr>
@@ -1039,10 +1432,15 @@ export default function CierreVentas({
             {rows.length > 0 && (
               <tr className="text-center bg-slate-100/70">
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="p-3 border-b text-left font-semibold"
                 >
-                  Totales
+                  <span>Totales</span>
+                  {showAllPagesHint ? (
+                    <span className="block text-[10px] font-normal text-slate-500 mt-0.5">
+                      Incluye todas las páginas
+                    </span>
+                  ) : null}
                 </td>
                 <td className="p-3 border-b text-right font-semibold">
                   {qty3(totalQty)}
@@ -1059,7 +1457,15 @@ export default function CierreVentas({
     );
   };
 
-  const renderCombinedDailyTable = (rows: CombinedDailyRow[]) => (
+  const renderCombinedDailyTable = (
+    rows: CombinedDailyRow[],
+    allRowsForTotals?: CombinedDailyRow[],
+  ) => {
+    const totalsSrc = allRowsForTotals ?? rows;
+    const showAllPagesHint =
+      totalsSrc.length > rows.length && rows.length > 0;
+
+    return (
     <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
       <table className="min-w-full w-full text-sm">
         <thead className="bg-slate-100 sticky top-0 z-10">
@@ -1092,16 +1498,21 @@ export default function CierreVentas({
           {rows.length > 0 && (
             <tr className="text-center bg-slate-100/70">
               <td colSpan={2} className="p-3 border-b text-left font-semibold">
-                Totales
+                <span>Totales</span>
+                {showAllPagesHint ? (
+                  <span className="block text-[10px] font-normal text-slate-500 mt-0.5">
+                    Incluye todas las páginas
+                  </span>
+                ) : null}
               </td>
               <td className="p-3 border-b text-right font-semibold">
-                {qty3(rows.reduce((sum, r) => sum + r.totalLbs, 0))}
+                {qty3(totalsSrc.reduce((sum, r) => sum + r.totalLbs, 0))}
               </td>
               <td className="p-3 border-b text-right font-semibold">
-                {qty3(rows.reduce((sum, r) => sum + r.totalUnits, 0))}
+                {qty3(totalsSrc.reduce((sum, r) => sum + r.totalUnits, 0))}
               </td>
               <td className="p-3 border-b text-right font-semibold">
-                C${money(rows.reduce((sum, r) => sum + r.totalAmount, 0))}
+                C${money(totalsSrc.reduce((sum, r) => sum + r.totalAmount, 0))}
               </td>
             </tr>
           )}
@@ -1116,7 +1527,8 @@ export default function CierreVentas({
         </tbody>
       </table>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
@@ -1127,51 +1539,64 @@ export default function CierreVentas({
       `}</style>
 
       <div className="flex items-start justify-between gap-3 mb-4">
-        <h2 className="text-2xl font-bold">
-          Cierre de Ventas - {startDate} → {endDate}
+        <h2 className="text-lg font-bold">
+          Ventas Diarias
         </h2>
 
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} />
-
           <button
             type="button"
-            onClick={handleSaveClosure}
-            disabled={!cierreVentas}
-            title="Cerrar ventas del día"
-            aria-label="Cerrar ventas del día"
-            className="bg-green-600 text-white p-2 rounded hover:bg-green-700"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M12 2v2a8 8 0 108 8h2a10 10 0 11-10-10z" />
-              <path d="M12 6v6l4-3-4-3z" opacity="0.9" />
-            </svg>
-          </button>
-
-          <button
-            type="button"
-            onClick={exportToXLSX}
-            title="Exportar transacciones (XLSX)"
-            aria-label="Exportar transacciones (XLSX)"
+            onClick={(e) => {
+              setRowActionMenu(null);
+              setHeaderToolsMenuRect(
+                e.currentTarget.getBoundingClientRect(),
+              );
+            }}
+            title="Más acciones"
+            aria-label="Más acciones"
             className="bg-gray-100 text-gray-800 p-2 rounded hover:bg-gray-200"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-5 w-5"
-              viewBox="0 0 24 24"
+              viewBox="0 0 20 20"
               fill="currentColor"
               aria-hidden="true"
             >
-              <path d="M19 8h-2V3H7v5H5l7 7 7-7zM5 18h14v2H5z" />
+              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
             </svg>
           </button>
         </div>
+
+        <ActionMenu
+          anchorRect={headerToolsMenuRect}
+          isOpen={!!headerToolsMenuRect}
+          onClose={() => setHeaderToolsMenuRect(null)}
+          width={220}
+        >
+          <button
+            type="button"
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
+            disabled={!cierreVentas}
+            onClick={() => {
+              setHeaderToolsMenuRect(null);
+              void handleSaveClosure();
+            }}
+          >
+            Cerrar ventas del día
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
+            onClick={() => {
+              setHeaderToolsMenuRect(null);
+              exportToXLSX();
+            }}
+          >
+            Exportar transacciones (XLSX)
+          </button>
+        </ActionMenu>
       </div>
 
       {/* ✅ FILTROS (colapsable, nace cerrado) */}
@@ -1216,29 +1641,33 @@ export default function CierreVentas({
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-gray-600">Estado</label>
-                <select
-                  className="border rounded px-2 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Estado"
                   value={filter}
-                  onChange={(e) => setFilter(e.target.value as any)}
-                >
-                  <option value="ALL">Todas</option>
-                  <option value="FLOTANTE">Venta Flotante</option>
-                  <option value="PROCESADA">Venta Procesada</option>
-                </select>
+                  onChange={(v) => setFilter(v as any)}
+                  options={[
+                    { value: "ALL", label: "Todas" },
+                    { value: "FLOTANTE", label: "Venta Flotante" },
+                    { value: "PROCESADA", label: "Venta Procesada" },
+                  ]}
+                  selectClassName="border rounded px-2 py-2 w-full"
+                  sheetTitle="Estado"
+                />
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-gray-600">Tipo Operación</label>
-                <select
-                  className="border rounded px-2 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Tipo Operación"
                   value={operationFilter}
-                  onChange={(e) => setOperationFilter(e.target.value as any)}
-                >
-                  <option value="ALL">Todos</option>
-                  <option value="CREDITO">Crédito</option>
-                  <option value="CONTADO">Cash</option>
-                </select>
+                  onChange={(v) => setOperationFilter(v as any)}
+                  options={[
+                    { value: "ALL", label: "Todos" },
+                    { value: "CREDITO", label: "Crédito" },
+                    { value: "CONTADO", label: "Cash" },
+                  ]}
+                  selectClassName="border rounded px-2 py-2 w-full"
+                  sheetTitle="Tipo operación"
+                />
               </div>
 
               <div className="flex flex-col gap-1">
@@ -1526,8 +1955,21 @@ export default function CierreVentas({
                         </div>
                       </div>
 
-                      {combinedOpenEffective &&
-                        renderCombinedDailyTable(combinedDailyRows)}
+                      {combinedOpenEffective && (
+                        <>
+                          {renderCombinedDailyTable(
+                            pdfMode ? combinedDailyRows : combinedDailyRowsPaged,
+                            combinedDailyRows,
+                          )}
+                          {!pdfMode &&
+                            renderProPager(
+                              combinedPage,
+                              combinedTotalPages,
+                              setCombinedPage,
+                              combinedDailyRows.length,
+                            )}
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -1592,7 +2034,7 @@ export default function CierreVentas({
                   </div>
                   {creditOpenEffective && (
                     <>
-                      {renderSalesTable(creditRowsForTable)}
+                      {renderSalesTable(creditRowsForTable, creditSales)}
                       {!pdfMode &&
                         renderProPager(
                           creditPage,
@@ -1624,7 +2066,7 @@ export default function CierreVentas({
 
             {ventasOpen && (
               <div className="mt-3 space-y-3">
-                {visibleSales.map((s) => (
+                {visibleSalesSorted.map((s) => (
                   <details
                     key={s.id}
                     className="border rounded-xl bg-white shadow-sm"
@@ -1634,7 +2076,14 @@ export default function CierreVentas({
                         <div className="font-semibold truncate">
                           {s.productName}
                         </div>
-                        <div className="text-xs text-gray-500">{s.date}</div>
+                        <div className="text-xs text-gray-500 flex items-center gap-1.5 mt-0.5">
+                          {s.date}
+                          {s.edited && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 font-medium">
+                              Editada
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="text-right shrink-0 ml-3">
@@ -1649,27 +2098,11 @@ export default function CierreVentas({
                           aria-label={s.status}
                         >
                           {s.status === "PROCESADA" ? (
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              className="h-4 w-4 inline"
-                              viewBox="0 0 20 20"
-                              fill="currentColor"
-                              aria-hidden="true"
-                            >
-                              <path
-                                fillRule="evenodd"
-                                d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z"
-                                clipRule="evenodd"
-                              />
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z" clipRule="evenodd" />
                             </svg>
                           ) : (
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              className="h-4 w-4 inline"
-                              viewBox="0 0 20 20"
-                              fill="currentColor"
-                              aria-hidden="true"
-                            >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                               <path d="M6 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1zM14 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1z" />
                             </svg>
                           )}
@@ -1681,6 +2114,13 @@ export default function CierreVentas({
                       <div className="flex justify-between gap-3">
                         <span className="text-gray-600">Cantidad</span>
                         <strong>{qty3(s.quantity)}</strong>
+                      </div>
+
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-600">Precio</span>
+                        <strong>
+                          C${money(s.unitPrice && s.unitPrice > 0 ? s.unitPrice : s.quantity > 0 ? s.amount / s.quantity : 0)}
+                        </strong>
                       </div>
 
                       <div className="flex justify-between gap-3">
@@ -1711,67 +2151,22 @@ export default function CierreVentas({
                         </strong>
                       </div>
 
-                      <div className="pt-2">
-                        {s.status === "FLOTANTE" ? (
-                          <div className="flex gap-2">
-                            {isAdmin ? (
-                              <>
-                                <button
-                                  onClick={() => openEdit(s)}
-                                  className="flex-1 text-xs bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700"
-                                >
-                                  Editar
-                                </button>
-                                <button
-                                  onClick={() => deleteSale(s.id)}
-                                  className="flex-1 text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
-                                >
-                                  Eliminar
-                                </button>
-                              </>
-                            ) : (
-                              <div className="text-gray-400 text-xs w-full text-center">
-                                —
-                              </div>
-                            )}
-                          </div>
-                        ) : s.status === "PROCESADA" ? (
-                          <div className="flex gap-2">
-                            {isAdmin ? (
-                              <button
-                                onClick={() => handleRevert(s.id)}
-                                className="w-full text-xs bg-red-600 text-white py-2 rounded hover:bg-red-700"
-                                title="Revertir"
-                                aria-label="Revertir"
-                              >
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  className="h-5 w-5 inline"
-                                  viewBox="0 0 20 20"
-                                  fill="currentColor"
-                                  aria-hidden="true"
-                                >
-                                  <g transform="translate(20 0) scale(-1 1)">
-                                    <path
-                                      fillRule="evenodd"
-                                      d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
-                                      clipRule="evenodd"
-                                    />
-                                  </g>
-                                </svg>
-                              </button>
-                            ) : (
-                              <div className="text-gray-400 text-xs w-full text-center">
-                                —
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="text-gray-400 text-xs w-full text-center">
-                            No options
-                          </div>
-                        )}
-                      </div>
+                      {canEditSale && (
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            onClick={(e) => {
+                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setRowActionMenu({ rect, sale: s });
+                            }}
+                            className="flex items-center gap-1 text-xs bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-lg"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
+                              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                            </svg>
+                            Acciones
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </details>
                 ))}
@@ -1787,79 +2182,250 @@ export default function CierreVentas({
         </div>
       )}
 
-      {/* acciones ahora en la cabecera: cerrar ventas y exportar XLSX */}
-
-      {message && <p className="mt-2 text-sm">{message}</p>}
-
-      {/* Panel de edición */}
-      {editing && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4 space-y-3">
-            <h4 className="font-semibold text-lg">Editar venta</h4>
-            <div className="text-sm text-gray-500">
-              {editing.productName} • {displaySeller(editing.userEmail)}
-            </div>
-
-            <label className="text-sm">Cantidad</label>
-            <input
-              type="number"
-              step="0.01"
-              className="w-full border rounded px-2 py-1"
-              value={editQty}
-              onChange={(e) => setEditQty(parseFloat(e.target.value || "0"))}
-            />
-
-            <label className="text-sm">Monto cobrado</label>
-            <input
-              type="number"
-              step="0.01"
-              className="w-full border rounded px-2 py-1"
-              value={editAmount}
-              onChange={(e) => setEditAmount(parseFloat(e.target.value || "0"))}
-            />
-
-            <label className="text-sm">Cliente</label>
-            <input
-              type="text"
-              className="w-full border rounded px-2 py-1"
-              value={editClient}
-              onChange={(e) => setEditClient(e.target.value)}
-            />
-
-            <label className="text-sm">Paga con</label>
-            <input
-              type="number"
-              step="0.01"
-              className="w-full border rounded px-2 py-1"
-              value={editPaid}
-              onChange={(e) => setEditPaid(parseFloat(e.target.value || "0"))}
-            />
-
-            <label className="text-sm">Vuelto</label>
-            <input
-              type="text"
-              className="w-full border rounded px-2 py-1"
-              value={editChange}
-              onChange={(e) => setEditChange(e.target.value)}
-            />
-
-            <div className="flex gap-2 justify-end pt-2">
-              <button
-                onClick={() => setEditing(null)}
-                className="px-3 py-1 border rounded"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={saveEdit}
-                className="px-3 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
-              >
-                Guardar cambios
-              </button>
-            </div>
-          </div>
-        </div>
+      {message && (
+        <Toast message={message} onClose={() => setMessage("")} />
       )}
+
+      {/* ActionMenu de fila */}
+      <ActionMenu
+        anchorRect={rowActionMenu?.rect ?? null}
+        isOpen={!!rowActionMenu}
+        onClose={() => setRowActionMenu(null)}
+        width={180}
+      >
+        {rowActionMenu && (
+          <>
+            {rowActionMenu.sale.status === "FLOTANTE" && (
+              <>
+                <button
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
+                  onClick={() => {
+                    openEdit(rowActionMenu.sale);
+                  }}
+                >
+                  Editar venta
+                </button>
+                <button
+                  className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                  onClick={() => {
+                    const id = rowActionMenu.sale.id;
+                    setRowActionMenu(null);
+                    deleteSale(id);
+                  }}
+                >
+                  Eliminar venta
+                </button>
+              </>
+            )}
+            {rowActionMenu.sale.status === "PROCESADA" && (
+              <button
+                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                onClick={() => {
+                  const id = rowActionMenu.sale.id;
+                  setRowActionMenu(null);
+                  handleRevert(id);
+                }}
+              >
+                Revertir a flotante
+              </button>
+            )}
+          </>
+        )}
+      </ActionMenu>
+
+      {/* Modal de edición */}
+      {editing &&
+        createPortal(
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40">
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="sticky top-0 bg-white border-b px-5 py-4 rounded-t-2xl shrink-0">
+                <h4 className="font-semibold text-lg">Editar venta</h4>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  {editing.productName} &bull;{" "}
+                  {displaySeller(editing.userEmail)}
+                </p>
+              </div>
+
+              <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1">
+                {!editConfirm ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Producto
+                      </label>
+                      <div className="bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
+                        {editing.productName}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Vendedor
+                      </label>
+                      <div className="bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
+                        {displaySeller(editing.userEmail)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Fecha venta
+                      </label>
+                      <input
+                        type="date"
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                        value={editDate}
+                        min={editMinDate || undefined}
+                        onChange={(e) => setEditDate(e.target.value)}
+                      />
+                      {editMinDate && (
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          Mín. permitido: {editMinDate}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Cantidad vendida{" "}
+                        {editing.measurement?.toLowerCase() === "lb"
+                          ? "(libras, máx 3 dec.)"
+                          : "(unidades)"}
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                        value={editQty}
+                        onChange={(e) =>
+                          setEditQty(sanitizeDecimal(e.target.value, 3))
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Precio unitario (máx 2 dec.)
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                        value={editPrice}
+                        onChange={(e) =>
+                          setEditPrice(sanitizeDecimal(e.target.value, 2))
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Monto total
+                      </label>
+                      <div className="bg-gray-50 rounded-lg px-3 py-2 text-sm font-semibold text-gray-800">
+                        C$
+                        {money(
+                          round2(
+                            (parseFloat(editQty) || 0) *
+                              (parseFloat(editPrice) || 0),
+                          ),
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Cliente
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                        value={editClient}
+                        onChange={(e) => setEditClient(e.target.value)}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                    <p className="font-semibold text-amber-800 mb-3">
+                      Confirmar cambios
+                    </p>
+                    {editChanges.length === 0 ? (
+                      <p className="text-sm text-gray-600">
+                        No hay cambios.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {editChanges.map((c, i) => (
+                          <div key={i} className="text-sm">
+                            <span className="font-medium text-gray-700">
+                              {c.label}
+                            </span>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="line-through text-red-500">
+                                {c.from}
+                              </span>
+                              <span className="text-gray-400">&rarr;</span>
+                              <span className="text-green-700 font-medium">
+                                {c.to}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {round3(parseFloat(editQty) || 0) !==
+                      round3(editing.quantity) && (
+                      <p className="mt-3 text-xs text-amber-700 border-t border-amber-200 pt-2">
+                        Al cambiar la cantidad, se re-asigna el inventario
+                        (FIFO).
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="sticky bottom-0 bg-white border-t px-5 py-3 flex gap-2 justify-end rounded-b-2xl shrink-0">
+                <button
+                  onClick={() => {
+                    if (editConfirm) setEditConfirm(false);
+                    else setEditing(null);
+                  }}
+                  className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
+                  disabled={editSaving}
+                >
+                  {editConfirm ? "Volver" : "Cancelar"}
+                </button>
+                {(() => {
+                  const qtyOk = (parseFloat(editQty) || 0) > 0;
+                  const priceOk = (parseFloat(editPrice) || 0) > 0;
+                  const fieldsValid = qtyOk && priceOk;
+                  return !editConfirm ? (
+                    <button
+                      onClick={() => setEditConfirm(true)}
+                      className="px-4 py-2 text-sm rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+                      disabled={!fieldsValid || editChanges.length === 0}
+                    >
+                      Revisar cambios
+                    </button>
+                  ) : (
+                    <button
+                      onClick={saveEdit}
+                      className="px-4 py-2 text-sm rounded-lg text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                      disabled={editSaving || !fieldsValid || editChanges.length === 0}
+                    >
+                      {editSaving ? "Guardando..." : "Confirmar y guardar"}
+                    </button>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

@@ -67,6 +67,7 @@ import EntregasCash from "./components/Candies/EntregasCash";
 import PreciosVenta from "./components/Candies/PreciosVenta";
 import EstadoCuentaCandies from "./components/Candies/EstadoCuentaCandies";
 import CandyStockPedidosPage from "./components/Candies/CandyStockPedidosPage";
+import PublicConsultLayout from "./components/common/PublicConsultLayout";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
 import ArqueoProducto from "./components/Pollo/ArqueoProducto";
@@ -314,6 +315,22 @@ export default function App() {
       <PwaUpdatePrompt />
       <Routes>
         <Route path="/" element={<Login />} />
+        <Route
+          path="/publico/precios-venta"
+          element={
+            <PublicConsultLayout>
+              <PreciosVenta publicView />
+            </PublicConsultLayout>
+          }
+        />
+        <Route
+          path="/publico/saldos-externos"
+          element={
+            <PublicConsultLayout>
+              <ReporteCierres publicView />
+            </PublicConsultLayout>
+          }
+        />
 
         <Route
           path="/admin"
@@ -549,7 +566,9 @@ export default function App() {
           <Route
             path="mainordersCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <ProductMainOrder />
               </PrivateRoute>
             }
@@ -558,19 +577,7 @@ export default function App() {
             path="productsPricesCandies"
             element={
               <PrivateRoute
-                roles={roles}
-                allowedRoles={["admin", "vendedor_dulces"]}
-              >
-                <PreciosVenta />
-              </PrivateRoute>
-            }
-          />
-          <Route
-            path="productsPricesCandies"
-            element={
-              <PrivateRoute
-                roles={roles}
-                allowedRoles={["admin", "vendedor_dulces"]}
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
               >
                 <PreciosVenta />
               </PrivateRoute>
@@ -579,7 +586,9 @@ export default function App() {
           <Route
             path="stockPedidosCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <CandyStockPedidosPage
                   role={role}
                   roles={roles}
@@ -730,7 +739,9 @@ export default function App() {
           <Route
             path="reporteCierresCandies"
             element={
-              <PrivateRoute allowedRoles={["admin", "vendedor_dulces"]}>
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador"]}
+              >
                 <ReporteCierres
                   role={role}
                   roles={roles}

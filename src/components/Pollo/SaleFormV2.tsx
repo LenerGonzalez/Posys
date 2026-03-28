@@ -1,5 +1,6 @@
 // src/components/SaleForm.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { db } from "../../firebase";
 import {
   collection,
@@ -110,8 +111,12 @@ export default function SaleForm({
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const [clientName, setClientName] = useState("");
 
-  // mobile product search
+  // mobile product / cliente crédito: búsqueda + panel tipo lista
   const [productQuery, setProductQuery] = useState("");
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [mobileSheet, setMobileSheet] = useState<null | "product" | "customer">(
+    null,
+  );
 
   // Carrito
   const [items, setItems] = useState<CartItem[]>([]);
@@ -311,7 +316,8 @@ export default function SaleForm({
     Record<string, number>
   >({});
 
-  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const round2 = (n: number) =>
+    Math.round((n + Number.EPSILON) * 100) / 100;
   const qty3 = (n: number) => roundQty(n).toFixed(3);
 
   // ===== Tipo de cliente (CONTADO/CRÉDITO) =====
@@ -334,6 +340,8 @@ export default function SaleForm({
       // En contado: no usamos customer/downPayment
       setCustomerId("");
       setDownPayment(0);
+      setCustomerQuery("");
+      setMobileSheet((s) => (s === "customer" ? null : s));
     }
   };
 
@@ -934,10 +942,20 @@ export default function SaleForm({
     );
   }, [selectableProducts, productQuery]);
 
+  const filteredCustomersForPicker = useMemo(() => {
+    const q = String(customerQuery || "")
+      .trim()
+      .toLowerCase();
+    if (!q) return customers;
+    return customers.filter((c) =>
+      `${c.name || ""}`.toLowerCase().includes(q),
+    );
+  }, [customers, customerQuery]);
+
   if (isMobile) {
     return (
-      <div className="w-full max-w-lg mx-auto p-3">
-        <div className="bg-white rounded-2xl shadow p-3 space-y-3">
+      <div className="w-full max-w-lg mx-auto p-3 overflow-x-hidden min-w-0">
+        <div className="bg-white rounded-2xl shadow p-3 space-y-3 min-w-0 max-w-full">
           <div className="flex items-center justify-between">
             <h2 className="font-bold text-lg text-blue-700">
               Registrar venta (Pollo)
@@ -976,24 +994,40 @@ export default function SaleForm({
               />
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 w-full min-w-0">
               <label className="text-sm font-semibold">Cliente (Crédito)</label>
-              <select
-                className="w-full border rounded px-2 py-2"
-                value={customerId}
-                onChange={(e) => setCustomerId(e.target.value)}
-              >
-                <option value="">Selecciona un cliente</option>
-                {customers.map((c) => (
-                  <option
-                    key={c.id}
-                    value={c.status === "ACTIVO" ? c.id : ""}
-                    disabled={c.status === "BLOQUEADO"}
+              <div className="flex gap-1 items-center min-w-0">
+                <input
+                  type="search"
+                  enterKeyHint="search"
+                  className="flex-1 min-w-0 border rounded px-2 py-2 box-border"
+                  placeholder="Buscar cliente por nombre..."
+                  value={customerQuery}
+                  onChange={(e) => setCustomerQuery(e.target.value)}
+                />
+                {customerQuery ? (
+                  <button
+                    type="button"
+                    className="shrink-0 px-2 py-2 text-xs border rounded text-slate-600 bg-white active:bg-slate-50"
+                    onClick={() => setCustomerQuery("")}
                   >
-                    {c.name} — Saldo: {money(c.balance || 0)}
-                  </option>
-                ))}
-              </select>
+                    Limpiar
+                  </button>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="w-full min-w-0 border rounded px-3 py-2.5 text-sm flex items-center justify-between gap-2 text-left bg-white active:bg-slate-50"
+                onClick={() => setMobileSheet("customer")}
+              >
+                <span className="truncate min-w-0 text-gray-700">
+                  {customerId
+                    ? customers.find((c) => c.id === customerId)?.name ??
+                      "Cliente"
+                    : "Elegir cliente (lista)"}
+                </span>
+                <span className="text-slate-400 shrink-0 text-xs">▼</span>
+              </button>
 
               <div className="grid grid-cols-2 gap-2">
                 <div
@@ -1045,40 +1079,144 @@ export default function SaleForm({
             </div>
           )}
 
-          <div className="space-y-2">
+          <div className="space-y-2 w-full min-w-0">
             <label className="text-sm font-semibold">Producto</label>
-            <input
-              className="w-full border rounded px-2 py-2 mb-2"
-              placeholder="Buscar producto por nombre..."
-              value={productQuery}
-              onChange={(e) => setProductQuery(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <select
-                className="flex-1 border rounded px-1 py-2 text-sm"
-                value={selectedProductId}
-                onChange={async (e) => {
-                  const id = e.target.value;
-                  setSelectedProductId(id);
-                  await addProductById(id);
-                }}
-              >
-                <option value="" disabled>
-                  Selecciona un producto
-                </option>
-                {filteredProductsForPicker.map((p) => (
-                  <option
-                    key={p.id}
-                    value={p.id}
-                    disabled={chosenIds.has(p.id)}
-                  >
-                    {p.productName} | C$ {latestPriceById[p.id] ?? p.price} |
-                    Existencia: {qty3(stockById[p.id] || 0)}
-                  </option>
-                ))}
-              </select>
+            <div className="flex gap-1 items-center min-w-0 mb-2">
+              <input
+                type="search"
+                enterKeyHint="search"
+                className="flex-1 min-w-0 border rounded px-2 py-2 box-border"
+                placeholder="Buscar producto por nombre..."
+                value={productQuery}
+                onChange={(e) => setProductQuery(e.target.value)}
+              />
+              {productQuery ? (
+                <button
+                  type="button"
+                  className="shrink-0 px-2 py-2 text-xs border rounded text-slate-600 bg-white active:bg-slate-50"
+                  onClick={() => setProductQuery("")}
+                >
+                  Limpiar
+                </button>
+              ) : null}
             </div>
+            <button
+              type="button"
+              className="w-full min-w-0 border rounded px-3 py-2.5 text-sm flex items-center justify-between gap-2 text-left bg-white active:bg-slate-50"
+              onClick={() => setMobileSheet("product")}
+            >
+              <span className="truncate min-w-0 text-gray-700">
+                Elegir producto (lista)
+              </span>
+              <span className="text-slate-400 shrink-0 text-xs">▼</span>
+            </button>
           </div>
+
+          {mobileSheet &&
+            createPortal(
+              <div
+                className="fixed inset-0 z-[200] flex flex-col justify-end md:justify-center"
+                role="dialog"
+                aria-modal="true"
+                aria-label={
+                  mobileSheet === "product"
+                    ? "Lista de productos"
+                    : "Lista de clientes"
+                }
+              >
+                <button
+                  type="button"
+                  className="absolute inset-0 bg-black/45 border-0 cursor-default"
+                  aria-label="Cerrar"
+                  onClick={() => setMobileSheet(null)}
+                />
+                <div
+                  className="relative z-10 bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full max-h-[min(78vh,520px)] flex flex-col mx-auto md:max-w-md md:my-auto"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 shrink-0">
+                    <span className="font-semibold text-slate-800">
+                      {mobileSheet === "product"
+                        ? "Productos con stock"
+                        : "Clientes"}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-sm text-blue-600 font-medium px-2 py-1"
+                      onClick={() => setMobileSheet(null)}
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+                  <div className="overflow-y-auto overscroll-contain px-2 pb-4 flex-1 min-h-0">
+                    {mobileSheet === "product" ? (
+                      filteredProductsForPicker.length === 0 ? (
+                        <div className="text-center text-gray-500 text-sm py-8 px-4">
+                          No hay productos con ese criterio o sin stock.
+                        </div>
+                      ) : (
+                        filteredProductsForPicker.map((p) => {
+                          const disabled = chosenIds.has(p.id);
+                          const price = latestPriceById[p.id] ?? p.price;
+                          const stock = stockById[p.id] || 0;
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              disabled={disabled}
+                              className="w-full text-left px-3 py-3 border-b border-slate-100 last:border-b-0 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                              onClick={async () => {
+                                if (disabled) return;
+                                await addProductById(p.id);
+                                setMobileSheet(null);
+                              }}
+                            >
+                              <div className="font-medium text-sm text-slate-900 break-words">
+                                {p.productName}
+                              </div>
+                              <div className="text-xs text-slate-600 mt-1">
+                                Precio: C$ {price} · Existencia: {qty3(stock)} Lbs/Un
+                                {disabled ? " · Ya en carrito" : ""}
+                              </div>
+                            </button>
+                          );
+                        })
+                      )
+                    ) : filteredCustomersForPicker.length === 0 ? (
+                      <div className="text-center text-gray-500 text-sm py-8 px-4">
+                        No hay clientes con ese criterio.
+                      </div>
+                    ) : (
+                      filteredCustomersForPicker.map((c) => {
+                        const blocked = c.status === "BLOQUEADO";
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            disabled={blocked}
+                            className="w-full text-left px-3 py-3 border-b border-slate-100 last:border-b-0 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                            onClick={() => {
+                              if (blocked) return;
+                              setCustomerId(c.id);
+                              setMobileSheet(null);
+                            }}
+                          >
+                            <div className="font-medium text-sm text-slate-900 break-words">
+                              {c.name}
+                            </div>
+                            <div className="text-xs text-slate-600 mt-1">
+                              Saldo: {money(c.balance || 0)}
+                              {blocked ? " · Bloqueado" : ""}
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )}
 
           <div className="space-y-2">
             <div className="text-sm font-semibold">Items</div>

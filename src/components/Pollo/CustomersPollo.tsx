@@ -17,12 +17,16 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import {
   FiClock,
   FiShoppingCart,
   FiMoreVertical,
 } from "react-icons/fi";
 import ActionMenu from "../common/ActionMenu";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 
 const PLACES = [
   "Altagracia",
@@ -35,6 +39,14 @@ const PLACES = [
 
 type Place = (typeof PLACES)[number];
 type Status = "ACTIVO" | "BLOQUEADO";
+
+type SaleItemRow = {
+  productName: string;
+  qty: number;
+  unitPrice: number;
+  discount?: number;
+  total: number;
+};
 
 interface CustomerRow {
   id: string;
@@ -54,7 +66,13 @@ interface CustomerRow {
   // para mobile (último abono)
   lastAbonoDate?: string; // yyyy-MM-dd
   lastAbonoAmount?: number; // positivo (monto del abono)
+  /** Fecha y hora del último abono (card móvil). */
+  lastAbonoDateTime?: string;
   lastSaleDate?: string;
+  /** Fecha y hora de la última compra (pantalla móvil). */
+  lastSaleDateTime?: string;
+  /** Monto total de la última compra (pantalla móvil). */
+  lastSaleAmount?: number;
 }
 
 interface MovementRow {
@@ -75,6 +93,13 @@ interface SellerRow {
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+function sanitizeFilename(s: string): string {
+  return String(s || "cliente")
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 80);
+}
 
 const roundCurrency = (value: number) =>
   Math.round((Number(value) || 0) * 100) / 100;
@@ -110,6 +135,274 @@ const formatLocalDate = (v: any) => {
   }
   return String(v).slice(0, 10);
 };
+
+function formatLocalDateTime(v: any): string {
+  if (!v && v !== 0) return "";
+  if (typeof v === "string") {
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) {
+      const s = v.slice(0, 19).replace("T", " ");
+      return s.length >= 10 ? s : "";
+    }
+    const parsed = new Date(v);
+    if (!Number.isNaN(parsed.getTime())) {
+      const d = parsed;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+        d.getDate(),
+      ).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(
+        d.getMinutes(),
+      ).padStart(2, "0")}`;
+    }
+    return "";
+  }
+  if (v instanceof Date) {
+    const d = v;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(
+      d.getMinutes(),
+    ).padStart(2, "0")}`;
+  }
+  if (v?.toDate && typeof v.toDate === "function") {
+    const d = v.toDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(
+      d.getMinutes(),
+    ).padStart(2, "0")}`;
+  }
+  if (typeof v?.seconds === "number") {
+    const d = new Date(v.seconds * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(
+      d.getMinutes(),
+    ).padStart(2, "0")}`;
+  }
+  return "";
+}
+
+function lastAbonoDateTimeLabelFrom(
+  last: { date: string; createdAt?: Timestamp } | null,
+): string {
+  if (!last) return "";
+  return (
+    formatLocalDateTime(last.createdAt) || (last.date || "").slice(0, 10)
+  );
+}
+
+async function loadSaleDetailRows(
+  saleId: string,
+): Promise<{ rows: SaleItemRow[]; saleDateLabel: string } | null> {
+  const byId = await getDoc(doc(db, "salesV2", saleId));
+  let data: any = null;
+
+  if (byId.exists()) {
+    data = byId.data();
+  } else {
+    const snap = await getDocs(
+      query(collection(db, "salesV2"), where("name", "==", saleId)),
+    );
+    data = snap.docs[0]?.data();
+  }
+
+  if (!data) return null;
+
+  let arr: any[] = [];
+
+  if (Array.isArray(data.items) && data.items.length > 0) {
+    arr = data.items;
+  } else if (data.items && typeof data.items === "object") {
+    try {
+      arr = Object.values(data.items);
+    } catch {
+      arr = [];
+    }
+  } else if (data.item) {
+    arr = [data.item];
+  } else if (Array.isArray(data.products) && data.products.length > 0) {
+    arr = data.products;
+  } else if (Array.isArray(data.lines) && data.lines.length > 0) {
+    arr = data.lines;
+  } else if (Array.isArray(data.detalles) && data.detalles.length > 0) {
+    arr = data.detalles;
+  } else if (data.productName || data.product) {
+    arr = [
+      {
+        productName: data.productName || data.product || "",
+        qty: data.qty ?? data.quantity ?? data.lbs ?? 0,
+        unitPrice: data.unitPrice ?? data.price ?? 0,
+        discount: data.discount ?? 0,
+        total: data.total ?? data.amount ?? 0,
+      },
+    ];
+  }
+
+  const parseNum = (v: any) => {
+    if (v === undefined || v === null) return NaN;
+    if (typeof v === "number") return v;
+    let s = String(v).trim();
+    if (!s) return NaN;
+    s = s.replace(/[^0-9.,-]/g, "");
+    if (!s) return NaN;
+    if (s.indexOf(".") > -1 && s.indexOf(",") > -1) {
+      s = s.replace(/,/g, "");
+    } else if (s.indexOf(",") > -1 && s.indexOf(".") === -1) {
+      s = s.replace(/,/g, ".");
+    }
+    const n = Number(s);
+    return Number.isNaN(n) ? NaN : n;
+  };
+
+  const batchIds = new Set<string>();
+  for (const it of arr) {
+    if (Array.isArray(it?.allocations)) {
+      for (const a of it.allocations) {
+        const id = String(a?.batchId || "").trim();
+        if (id) batchIds.add(id);
+      }
+    } else if (it?.allocations && typeof it.allocations === "object") {
+      try {
+        for (const a of Object.values(it.allocations)) {
+          const id = String((a as any)?.batchId || "").trim();
+          if (id) batchIds.add(id);
+        }
+      } catch {}
+    }
+  }
+
+  if (Array.isArray(data?.allocations)) {
+    for (const a of data.allocations) {
+      const id = String(a?.batchId || "").trim();
+      if (id) batchIds.add(id);
+    }
+  }
+
+  const batchPriceMap: Record<string, number> = {};
+  if (batchIds.size > 0) {
+    await Promise.all(
+      Array.from(batchIds).map(async (bid) => {
+        try {
+          const bSnap = await getDoc(doc(db, "inventory_batches", bid));
+          if (bSnap.exists()) {
+            const b = bSnap.data() as any;
+            batchPriceMap[bid] = Number(
+              b.salePrice ?? b.sale_price ?? b.price ?? 0,
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }),
+    );
+  }
+
+  const productIds = new Set<string>();
+  for (const it of arr) {
+    const pid = String(it.productId || "").trim();
+    if (pid) productIds.add(pid);
+  }
+  const productPriceMap: Record<string, number> = {};
+  if (productIds.size > 0) {
+    await Promise.all(
+      Array.from(productIds).map(async (pid) => {
+        try {
+          const pSnap = await getDoc(doc(db, "products", pid));
+          if (pSnap.exists()) {
+            const p = pSnap.data() as any;
+            productPriceMap[pid] = Number(p.salePrice ?? p.price ?? 0);
+          }
+        } catch {
+          /* ignore */
+        }
+      }),
+    );
+  }
+
+  const rows = arr.map((it: any) => {
+    const productName = String(
+      it.productName || it.product || it.name || "(sin nombre)",
+    );
+
+    const qty =
+      Number(it.qty ?? it.quantity ?? it.lbs ?? it.weight ?? 0) || 0;
+
+    const totalCandidate =
+      parseNum(
+        it.total ?? it.lineFinal ?? it.amount ?? it.monto ?? it.line_total,
+      ) || 0;
+
+    let unitPrice = 0;
+    const priceCandidates = [
+      it.unitPrice,
+      it.unitPricePackage,
+      it.salePrice,
+      it.sale_price,
+      it.price,
+      it.unit_price,
+      it.pricePerUnit,
+      it.price_per_unit,
+    ];
+    for (const p of priceCandidates) {
+      const n = parseNum(p);
+      if (!Number.isNaN(n) && n !== 0) {
+        unitPrice = n;
+        break;
+      }
+    }
+
+    if (!unitPrice) {
+      const saleLevelRaw =
+        data?.salePrice ??
+        data?.sale_price ??
+        data?.unitPrice ??
+        data?.unit_price ??
+        data?.price ??
+        data?.pricePerUnit;
+      const saleLevel = parseNum(saleLevelRaw);
+      if (!Number.isNaN(saleLevel) && saleLevel !== 0) unitPrice = saleLevel;
+    }
+
+    if (!unitPrice) {
+      const firstAlloc = Array.isArray(it.allocations)
+        ? it.allocations[0]
+        : it.allocations && typeof it.allocations === "object"
+          ? Object.values(it.allocations)[0]
+          : null;
+      const bid = firstAlloc
+        ? String((firstAlloc as any).batchId || "").trim()
+        : "";
+      if (bid && batchPriceMap[bid]) unitPrice = batchPriceMap[bid] || 0;
+    }
+
+    if (!unitPrice && it.productId) {
+      unitPrice = productPriceMap[String(it.productId)] || 0;
+    }
+
+    if ((!unitPrice || unitPrice === 0) && totalCandidate > 0 && qty > 0) {
+      unitPrice = totalCandidate / qty;
+    }
+
+    const discount = parseNum(it.discount ?? it.desc ?? 0) || 0;
+
+    let total = totalCandidate;
+    if (!total || total === 0) {
+      total = Number(unitPrice * qty || 0);
+    }
+    total = Number(total) || 0;
+
+    return { productName, qty, unitPrice, discount, total };
+  });
+
+  const saleDateLabel =
+    formatLocalDateTime(data.timestamp) ||
+    formatLocalDateTime(data.createdAt) ||
+    (typeof data.date === "string" && /^\d{4}-\d{2}-\d{2}/.test(data.date)
+      ? data.date.replace("T", " ").slice(0, 16)
+      : formatLocalDateTime(data.date)) ||
+    "";
+
+  return { rows, saleDateLabel };
+}
 
 const PAID_DEBT_FLAGS = new Set([
   "PAGADA",
@@ -151,13 +444,35 @@ function getPendingForSale(rows: MovementRow[], saleId: string): number {
 
 /** Fecha del cargo (venta) yyyy-MM-dd para validar abonos. */
 function getCargoSaleDate(rows: MovementRow[], saleId: string): string {
+  const sid = String(saleId || "").trim();
   const c = rows.find(
     (m) =>
       m.type === "CARGO" &&
-      m.ref?.saleId === saleId &&
+      String(m.ref?.saleId || "").trim() === sid &&
       Number(m.amount) > 0,
   );
-  return (c?.date || "").slice(0, 10);
+  return (c?.date || "").trim().slice(0, 10);
+}
+
+/** Fecha mínima del abono: cargo en lista o documento salesV2. */
+async function resolveMinAbonoDateFromSale(
+  rows: MovementRow[],
+  saleId: string,
+): Promise<string> {
+  const fromCargo = getCargoSaleDate(rows, saleId);
+  if (fromCargo) return fromCargo;
+  const sid = String(saleId || "").trim();
+  if (!sid) return "";
+  try {
+    const snap = await getDoc(doc(db, "salesV2", sid));
+    if (!snap.exists()) return "";
+    const x = snap.data() as any;
+    const raw =
+      formatLocalDate(x.date ?? x.timestamp ?? x.createdAt ?? "") || "";
+    return raw.slice(0, 10);
+  } catch {
+    return "";
+  }
 }
 
 /** Total abonado a una venta (suma de montos absolutos de ABONO con ref). */
@@ -322,232 +637,22 @@ export default function CustomersPollo({
   const [itemsModalOpen, setItemsModalOpen] = useState(false);
   const [itemsModalLoading, setItemsModalLoading] = useState(false);
   const [itemsModalSaleId, setItemsModalSaleId] = useState<string | null>(null);
-  const [itemsModalRows, setItemsModalRows] = useState<
-    {
-      productName: string;
-      qty: number;
-      unitPrice: number;
-      discount?: number;
-      total: number;
-    }[]
-  >([]);
+  const [itemsModalSaleDate, setItemsModalSaleDate] = useState("");
+  const [itemsModalRows, setItemsModalRows] = useState<SaleItemRow[]>([]);
 
   const openItemsModal = async (saleId: string) => {
     setItemsModalOpen(true);
     setItemsModalLoading(true);
     setItemsModalSaleId(saleId);
     setItemsModalRows([]);
+    setItemsModalSaleDate("");
 
     try {
-      const byId = await getDoc(doc(db, "salesV2", saleId));
-      let data: any = null;
-
-      if (byId.exists()) {
-        data = byId.data();
-      } else {
-        const snap = await getDocs(
-          query(collection(db, "salesV2"), where("name", "==", saleId)),
-        );
-        data = snap.docs[0]?.data();
+      const res = await loadSaleDetailRows(saleId);
+      if (res) {
+        setItemsModalRows(res.rows);
+        setItemsModalSaleDate(res.saleDateLabel);
       }
-
-      if (!data) {
-        setItemsModalRows([]);
-        return;
-      }
-
-      // Extraer items intentando varias formas que aparecen en distintos documentos
-      let arr: any[] = [];
-
-      if (Array.isArray(data.items) && data.items.length > 0) {
-        arr = data.items;
-      } else if (data.items && typeof data.items === "object") {
-        try {
-          arr = Object.values(data.items);
-        } catch {
-          arr = [];
-        }
-      } else if (data.item) {
-        arr = [data.item];
-      } else if (Array.isArray(data.products) && data.products.length > 0) {
-        arr = data.products;
-      } else if (Array.isArray(data.lines) && data.lines.length > 0) {
-        arr = data.lines;
-      } else if (Array.isArray(data.detalles) && data.detalles.length > 0) {
-        arr = data.detalles;
-      } else if (data.productName || data.product) {
-        arr = [
-          {
-            productName: data.productName || data.product || "",
-            qty: data.qty ?? data.quantity ?? data.lbs ?? 0,
-            unitPrice: data.unitPrice ?? data.price ?? 0,
-            discount: data.discount ?? 0,
-            total: data.total ?? data.amount ?? 0,
-          },
-        ];
-      }
-
-      // Helper: parse numbers tolerantly
-      const parseNum = (v: any) => {
-        if (v === undefined || v === null) return NaN;
-        if (typeof v === "number") return v;
-        let s = String(v).trim();
-        if (!s) return NaN;
-        s = s.replace(/[^0-9.,-]/g, "");
-        if (!s) return NaN;
-        if (s.indexOf(".") > -1 && s.indexOf(",") > -1) {
-          s = s.replace(/,/g, "");
-        } else if (s.indexOf(",") > -1 && s.indexOf(".") === -1) {
-          s = s.replace(/,/g, ".");
-        }
-        const n = Number(s);
-        return Number.isNaN(n) ? NaN : n;
-      };
-
-      // Si hay allocations por lote, traer precios desde inventory_batches
-      const batchIds = new Set<string>();
-      for (const it of arr) {
-        if (Array.isArray(it?.allocations)) {
-          for (const a of it.allocations) {
-            const id = String(a?.batchId || "").trim();
-            if (id) batchIds.add(id);
-          }
-        } else if (it?.allocations && typeof it.allocations === "object") {
-          try {
-            for (const a of Object.values(it.allocations)) {
-              const id = String((a as any)?.batchId || "").trim();
-              if (id) batchIds.add(id);
-            }
-          } catch {}
-        }
-      }
-
-      if (Array.isArray(data?.allocations)) {
-        for (const a of data.allocations) {
-          const id = String(a?.batchId || "").trim();
-          if (id) batchIds.add(id);
-        }
-      }
-
-      const batchPriceMap: Record<string, number> = {};
-      if (batchIds.size > 0) {
-        await Promise.all(
-          Array.from(batchIds).map(async (bid) => {
-            try {
-              const bSnap = await getDoc(doc(db, "inventory_batches", bid));
-              if (bSnap.exists()) {
-                const b = bSnap.data() as any;
-                batchPriceMap[bid] = Number(
-                  b.salePrice ?? b.sale_price ?? b.price ?? 0,
-                );
-              }
-            } catch {
-              /* ignore */
-            }
-          }),
-        );
-      }
-
-      // fallback: precio por producto en collection `products`
-      const productIds = new Set<string>();
-      for (const it of arr) {
-        const pid = String(it.productId || "").trim();
-        if (pid) productIds.add(pid);
-      }
-      const productPriceMap: Record<string, number> = {};
-      if (productIds.size > 0) {
-        await Promise.all(
-          Array.from(productIds).map(async (pid) => {
-            try {
-              const pSnap = await getDoc(doc(db, "products", pid));
-              if (pSnap.exists()) {
-                const p = pSnap.data() as any;
-                productPriceMap[pid] = Number(p.salePrice ?? p.price ?? 0);
-              }
-            } catch {
-              /* ignore */
-            }
-          }),
-        );
-      }
-
-      const rows = arr.map((it: any) => {
-        const productName = String(
-          it.productName || it.product || it.name || "(sin nombre)",
-        );
-
-        const qty =
-          Number(it.qty ?? it.quantity ?? it.lbs ?? it.weight ?? 0) || 0;
-
-        const totalCandidate =
-          parseNum(
-            it.total ?? it.lineFinal ?? it.amount ?? it.monto ?? it.line_total,
-          ) || 0;
-
-        let unitPrice = 0;
-        const priceCandidates = [
-          it.unitPrice,
-          it.unitPricePackage,
-          it.salePrice,
-          it.sale_price,
-          it.price,
-          it.unit_price,
-          it.pricePerUnit,
-          it.price_per_unit,
-        ];
-        for (const p of priceCandidates) {
-          const n = parseNum(p);
-          if (!Number.isNaN(n) && n !== 0) {
-            unitPrice = n;
-            break;
-          }
-        }
-
-        if (!unitPrice) {
-          const saleLevelRaw =
-            data?.salePrice ??
-            data?.sale_price ??
-            data?.unitPrice ??
-            data?.unit_price ??
-            data?.price ??
-            data?.pricePerUnit;
-          const saleLevel = parseNum(saleLevelRaw);
-          if (!Number.isNaN(saleLevel) && saleLevel !== 0)
-            unitPrice = saleLevel;
-        }
-
-        if (!unitPrice) {
-          const firstAlloc = Array.isArray(it.allocations)
-            ? it.allocations[0]
-            : it.allocations && typeof it.allocations === "object"
-              ? Object.values(it.allocations)[0]
-              : null;
-          const bid = firstAlloc
-            ? String((firstAlloc as any).batchId || "").trim()
-            : "";
-          if (bid && batchPriceMap[bid]) unitPrice = batchPriceMap[bid] || 0;
-        }
-
-        if (!unitPrice && it.productId) {
-          unitPrice = productPriceMap[String(it.productId)] || 0;
-        }
-
-        if ((!unitPrice || unitPrice === 0) && totalCandidate > 0 && qty > 0) {
-          unitPrice = totalCandidate / qty;
-        }
-
-        const discount = parseNum(it.discount ?? it.desc ?? 0) || 0;
-
-        let total = totalCandidate;
-        if (!total || total === 0) {
-          total = Number(unitPrice * qty || 0);
-        }
-        total = Number(total) || 0;
-
-        return { productName, qty, unitPrice, discount, total };
-      });
-
-      setItemsModalRows(rows);
     } catch (e) {
       console.error(e);
     } finally {
@@ -589,8 +694,9 @@ export default function CustomersPollo({
     saldoActual: 0,
     totalAbonado: 0,
     totalCargos: 0,
-    saldoRestante: 0,
   });
+  const [exportingAllXlsx, setExportingAllXlsx] = useState(false);
+  const [exportingPdfId, setExportingPdfId] = useState<string | null>(null);
 
   // abonos
   const [showAbono, setShowAbono] = useState(false);
@@ -614,6 +720,8 @@ export default function CustomersPollo({
   const [editMovId, setEditMovId] = useState<string | null>(null);
   const [eMovDate, setEMovDate] = useState<string>("");
   const [eMovComment, setEMovComment] = useState<string>("");
+  /** yyyy-MM-dd mínimo para el input al editar abono ligado a venta */
+  const [editMinSaleDate, setEditMinSaleDate] = useState<string>("");
   const [customerRowMenu, setCustomerRowMenu] = useState<{
     id: string;
     rect: DOMRect;
@@ -689,6 +797,7 @@ export default function CustomersPollo({
 
             lastAbonoDate: "",
             lastAbonoAmount: 0,
+            lastAbonoDateTime: "",
           });
         });
 
@@ -724,7 +833,12 @@ export default function CustomersPollo({
                   : 0;
 
                 if (!lastAbono || ts >= lastAbono.ts) {
-                  lastAbono = { date: d, amount: Math.abs(amt), ts };
+                  lastAbono = {
+                    date: d,
+                    amount: Math.abs(amt),
+                    ts,
+                    createdAt: x.createdAt,
+                  };
                 }
               }
             });
@@ -737,20 +851,31 @@ export default function CustomersPollo({
             if (hasOutstanding && lastAbono) {
               c.lastAbonoDate = lastAbono.date;
               c.lastAbonoAmount = lastAbono.amount;
+              c.lastAbonoDateTime = lastAbonoDateTimeLabelFrom({
+                date: String(lastAbono.date || ""),
+                createdAt: lastAbono.createdAt,
+              });
             } else {
               c.lastAbonoDate = "";
               c.lastAbonoAmount = 0;
+              c.lastAbonoDateTime = "";
             }
             // último venta (salesV2)
             try {
-              const qS = query(
-                collection(db, "salesV2"),
-                where("customerId", "==", c.id),
-                orderBy("date", "desc"),
-                limit(1),
-              );
-              let sSnap = await getDocs(qS);
-              let sDoc = sSnap.docs[0];
+              let sDoc: any = undefined;
+              let sSnap: Awaited<ReturnType<typeof getDocs>> | null = null;
+              try {
+                const qS = query(
+                  collection(db, "salesV2"),
+                  where("customerId", "==", c.id),
+                  orderBy("date", "desc"),
+                  limit(1),
+                );
+                sSnap = await getDocs(qS);
+                sDoc = sSnap.docs[0];
+              } catch {
+                /* índice compuesto ausente u otro error */
+              }
               // if no result, try ordering by timestamp or createdAt, then fallback to scanning
               if (!sDoc) {
                 try {
@@ -833,8 +958,47 @@ export default function CustomersPollo({
                 } else {
                   c.lastSaleDate = "";
                 }
+                c.lastSaleDateTime =
+                  formatLocalDateTime(sData.timestamp) ||
+                  formatLocalDateTime(sData.createdAt) ||
+                  (typeof sData.date === "string"
+                    ? sData.date.replace("T", " ").slice(0, 16)
+                    : "") ||
+                  formatLocalDateTime(sData.date) ||
+                  c.lastSaleDate ||
+                  "";
+                const directTot = Number(
+                  sData.total ??
+                    sData.amount ??
+                    sData.itemsTotal ??
+                    sData.grandTotal ??
+                    sData.totalSale ??
+                    0,
+                );
+                let lastAmt = 0;
+                if (Number.isFinite(directTot) && directTot !== 0) {
+                  lastAmt = roundCurrency(directTot);
+                } else if (Array.isArray(sData.items)) {
+                  lastAmt = roundCurrency(
+                    sData.items.reduce(
+                      (acc: number, it: any) =>
+                        acc +
+                        (Number(
+                          it?.total ??
+                            it?.amount ??
+                            it?.monto ??
+                            it?.lineFinal ??
+                            0,
+                        ) || 0),
+                      0,
+                    ),
+                  );
+                }
+                c.lastSaleAmount = lastAmt;
               } else {
                 c.lastSaleDate = "";
+                c.lastSaleDateTime = "";
+                c.lastSaleAmount = undefined;
               }
               // Debugging: log when we couldn't find a sale or when data looks unexpected
               if (!sDoc) {
@@ -869,12 +1033,17 @@ export default function CustomersPollo({
               }
             } catch (e) {
               c.lastSaleDate = "";
+              c.lastSaleDateTime = "";
+              c.lastSaleAmount = undefined;
             }
           } catch {
             c.balance = Number(c.initialDebt || 0);
             c.lastAbonoDate = "";
             c.lastAbonoAmount = 0;
+            c.lastAbonoDateTime = "";
             c.lastSaleDate = "";
+            c.lastSaleDateTime = "";
+            c.lastSaleAmount = undefined;
           }
         }
 
@@ -954,6 +1123,7 @@ export default function CustomersPollo({
           balance: init,
           lastAbonoDate: "",
           lastAbonoAmount: 0,
+          lastAbonoDateTime: "",
         },
         ...prev,
       ]);
@@ -1137,7 +1307,6 @@ export default function CustomersPollo({
       saldoActual,
       totalAbonado: totalAbonos,
       totalCargos: Number(initialDebtValue || 0) + totalCargosMov,
-      saldoRestante: saldoActual,
     });
   };
 
@@ -1148,6 +1317,11 @@ export default function CustomersPollo({
     setAbonoTargetSaleId(null);
     setShowAbono(false);
     setItemsModalOpen(false);
+    setItemsModalSaleDate("");
+    setEditMovId(null);
+    setEMovDate("");
+    setEMovComment("");
+    setEditMinSaleDate("");
   };
 
   const openStatement = async (customer: CustomerRow) => {
@@ -1157,7 +1331,6 @@ export default function CustomersPollo({
       saldoActual: 0,
       totalAbonado: 0,
       totalCargos: 0,
-      saldoRestante: 0,
     });
     setShowStatement(true);
 
@@ -1239,6 +1412,7 @@ export default function CustomersPollo({
         date: x.date,
         amount: Math.abs(Number(x.amount || 0)),
         ts: x.createdAt?.seconds || 0,
+        createdAt: x.createdAt,
       }))
       .sort((a, b) => (a.ts || 0) - (b.ts || 0));
     return abonos.length ? abonos[abonos.length - 1] : null;
@@ -1299,13 +1473,14 @@ export default function CustomersPollo({
 
     try {
       setSavingAbono(true);
+      const abonoAt = Timestamp.now();
       const payload: Record<string, unknown> = {
         customerId: stCustomer.id,
         type: "ABONO",
         amount: -safeAmt,
         date: abonoDate,
         comment: abonoComment || "",
-        createdAt: Timestamp.now(),
+        createdAt: abonoAt,
       };
       if (abonoTargetSaleId) {
         payload.ref = { saleId: abonoTargetSaleId };
@@ -1318,7 +1493,7 @@ export default function CustomersPollo({
         type: "ABONO",
         amount: -safeAmt,
         comment: abonoComment || "",
-        createdAt: Timestamp.now(),
+        createdAt: abonoAt,
         ref: abonoTargetSaleId
           ? { saleId: abonoTargetSaleId }
           : undefined,
@@ -1357,6 +1532,9 @@ export default function CustomersPollo({
             balance: nextBal,
             lastAbonoDate: openDebt ? abonoDate : "",
             lastAbonoAmount: openDebt ? safeAmt : 0,
+            lastAbonoDateTime: openDebt
+              ? formatLocalDateTime(abonoAt) || abonoDate
+              : "",
           };
         }),
       );
@@ -1368,6 +1546,9 @@ export default function CustomersPollo({
               balance: roundCurrency((prev.balance || 0) - safeAmt),
               lastAbonoDate: openDebt ? abonoDate : "",
               lastAbonoAmount: openDebt ? safeAmt : 0,
+              lastAbonoDateTime: openDebt
+                ? formatLocalDateTime(abonoAt) || abonoDate
+                : "",
             }
           : prev,
       );
@@ -1473,6 +1654,8 @@ export default function CustomersPollo({
                 balance: nuevoSaldo,
                 lastAbonoDate: openDebt && last ? last.date : "",
                 lastAbonoAmount: openDebt && last ? last.amount : 0,
+                lastAbonoDateTime:
+                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
               }
             : c,
         ),
@@ -1484,6 +1667,8 @@ export default function CustomersPollo({
               balance: nuevoSaldo,
               lastAbonoDate: openDebt && last ? last.date : "",
               lastAbonoAmount: openDebt && last ? last.amount : 0,
+              lastAbonoDateTime:
+                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
             }
           : prev,
       );
@@ -1550,6 +1735,8 @@ export default function CustomersPollo({
                 balance: nuevoSaldo,
                 lastAbonoDate: openDebt && last ? last.date : "",
                 lastAbonoAmount: openDebt && last ? last.amount : 0,
+                lastAbonoDateTime:
+                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
               }
             : c,
         ),
@@ -1561,6 +1748,8 @@ export default function CustomersPollo({
               balance: nuevoSaldo,
               lastAbonoDate: openDebt && last ? last.date : "",
               lastAbonoAmount: openDebt && last ? last.amount : 0,
+              lastAbonoDateTime:
+                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
             }
           : prev,
       );
@@ -1578,12 +1767,20 @@ export default function CustomersPollo({
     setEditMovId(m.id);
     setEMovDate(m.date || formatLocalDate(new Date()));
     setEMovComment(m.comment || "");
+    setEditMinSaleDate("");
+    if (m.type === "ABONO" && m.ref?.saleId) {
+      void (async () => {
+        const d = await resolveMinAbonoDateFromSale(stRows, m.ref!.saleId!);
+        setEditMinSaleDate(d ? d.slice(0, 10) : "");
+      })();
+    }
   };
 
   const cancelEditMovement = () => {
     setEditMovId(null);
     setEMovDate("");
     setEMovComment("");
+    setEditMinSaleDate("");
   };
 
   const saveEditMovement = async () => {
@@ -1595,6 +1792,20 @@ export default function CustomersPollo({
     if (!eMovDate) {
       setMsg("Selecciona la fecha.");
       return;
+    }
+
+    if (old.type === "ABONO" && old.ref?.saleId) {
+      const saleD = await resolveMinAbonoDateFromSale(
+        stRows,
+        old.ref.saleId,
+      );
+      const ed = eMovDate.slice(0, 10);
+      if (saleD && ed < saleD) {
+        setMsg(
+          `La fecha del abono no puede ser anterior a la fecha de la venta (${saleD}).`,
+        );
+        return;
+      }
     }
 
     try {
@@ -1638,6 +1849,8 @@ export default function CustomersPollo({
                 balance: nuevoSaldo,
                 lastAbonoDate: openDebt && last ? last.date : "",
                 lastAbonoAmount: openDebt && last ? last.amount : 0,
+                lastAbonoDateTime:
+                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
               }
             : c,
         ),
@@ -1649,6 +1862,8 @@ export default function CustomersPollo({
               balance: nuevoSaldo,
               lastAbonoDate: openDebt && last ? last.date : "",
               lastAbonoAmount: openDebt && last ? last.amount : 0,
+              lastAbonoDateTime:
+                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
             }
           : prev,
       );
@@ -1658,6 +1873,257 @@ export default function CustomersPollo({
     } catch (e) {
       console.error(e);
       setMsg("❌ Error al actualizar movimiento");
+    }
+  };
+
+  const downloadAllMovementsXlsx = async () => {
+    setExportingAllXlsx(true);
+    setMsg("");
+    try {
+      const snap = await getDocs(collection(db, "ar_movements_pollo"));
+      const customerById = new Map(rows.map((c) => [c.id, c]));
+      const out: Array<{
+        cliente: string;
+        telefono: string;
+        customerId: string;
+        fecha: string;
+        tipo: string;
+        monto: number;
+        refVenta: string;
+        comentario: string;
+        estadoCompra: string;
+      }> = [];
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        const cid = String(x.customerId || "");
+        const cust = customerById.get(cid);
+        const amount = Number(x.amount || 0);
+        const date =
+          x.date ??
+          (x.createdAt?.toDate?.() ? formatLocalDate(x.createdAt) : "");
+        out.push({
+          cliente: cust?.name || "(cliente no listado)",
+          telefono: cust?.phone || "",
+          customerId: cid,
+          fecha: String(date).slice(0, 10),
+          tipo:
+            (x.type as string) || (amount < 0 ? "ABONO" : "CARGO"),
+          monto: amount,
+          refVenta: String(x.ref?.saleId || ""),
+          comentario: String(x.comment || ""),
+          estadoCompra: String(
+            normalizeDebtStatus(
+              x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
+            ),
+          ),
+        });
+      });
+      out.sort((a, b) => {
+        const cmp = a.cliente.localeCompare(b.cliente);
+        if (cmp !== 0) return cmp;
+        if (a.fecha !== b.fecha) return a.fecha.localeCompare(b.fecha);
+        return a.customerId.localeCompare(b.customerId);
+      });
+      const aoa: (string | number)[][] = [
+        [
+          "Cliente",
+          "Teléfono",
+          "ID cliente",
+          "Fecha",
+          "Tipo",
+          "Monto",
+          "Ref. venta",
+          "Comentario",
+          "Estado compra",
+        ],
+        ...out.map((r) => [
+          r.cliente,
+          r.telefono,
+          r.customerId,
+          r.fecha,
+          r.tipo,
+          r.monto,
+          r.refVenta,
+          r.comentario,
+          r.estadoCompra,
+        ]),
+      ];
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
+      XLSX.writeFile(
+        wb,
+        `movimientos_cxc_pollo_${formatLocalDate(new Date())}.xlsx`,
+      );
+      setMsg("✅ Excel descargado");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ No se pudo exportar a Excel");
+    } finally {
+      setExportingAllXlsx(false);
+    }
+  };
+
+  const downloadCustomerMovementsPdf = async (customer: CustomerRow) => {
+    setExportingPdfId(customer.id);
+    setMsg("");
+    try {
+      const qMov = query(
+        collection(db, "ar_movements_pollo"),
+        where("customerId", "==", customer.id),
+      );
+      const snap = await getDocs(qMov);
+      const list: MovementRow[] = [];
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        const date =
+          x.date ??
+          (x.createdAt?.toDate?.() ? formatLocalDate(x.createdAt) : "");
+        const amount = Number(x.amount || 0);
+        list.push({
+          id: d.id,
+          date,
+          type:
+            (x.type as "CARGO" | "ABONO") ?? (amount < 0 ? "ABONO" : "CARGO"),
+          amount,
+          ref: x.ref || {},
+          comment: x.comment || "",
+          createdAt: x.createdAt,
+          debtStatus: normalizeDebtStatus(
+            x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
+          ),
+        });
+      });
+      list.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        const as = a.createdAt?.seconds || 0;
+        const bs = b.createdAt?.seconds || 0;
+        return as - bs;
+      });
+
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+      pdf.setFontSize(14);
+      pdf.text(`Movimientos — ${customer.name}`, 14, 18);
+      pdf.setFontSize(10);
+      pdf.text(`Teléfono: ${customer.phone || "—"}`, 14, 28);
+      pdf.text(
+        `Saldo actual: ${money(Number(customer.balance || 0))}`,
+        14,
+        34,
+      );
+      pdf.text(`Generado: ${formatLocalDate(new Date())}`, 14, 40);
+
+      const body = list.map((m) => [
+        m.date || "—",
+        m.type === "CARGO" ? "Compra" : "Abono",
+        money(m.amount),
+        String(m.comment || "").slice(0, 48),
+        m.type === "CARGO" ? normalizeDebtStatus(m.debtStatus) : "—",
+      ]);
+
+      autoTable(pdf, {
+        startY: 46,
+        head: [["Fecha", "Tipo", "Monto", "Comentario", "Estado"]],
+        body,
+        styles: { fontSize: 8, cellPadding: 2 },
+        headStyles: {
+          fillColor: [52, 73, 94],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+        },
+        margin: { left: 14, right: 14 },
+      });
+
+      const saleIdsOrdered: string[] = [];
+      const seenSale = new Set<string>();
+      for (const m of list) {
+        if (m.type === "CARGO" && m.ref?.saleId && Number(m.amount) > 0) {
+          const sid = String(m.ref.saleId);
+          if (!seenSale.has(sid)) {
+            seenSale.add(sid);
+            saleIdsOrdered.push(sid);
+          }
+        }
+      }
+
+      for (const saleId of saleIdsOrdered) {
+        pdf.addPage();
+        const detail = await loadSaleDetailRows(saleId);
+        pdf.setFontSize(11);
+        const titleLine =
+          detail?.saleDateLabel && detail.saleDateLabel.length > 0
+            ? `Detalle venta — ${detail.saleDateLabel}`
+            : `Detalle venta`;
+        pdf.text(titleLine, 14, 18);
+
+        let yAfterDetail = 28;
+        if (detail && detail.rows.length > 0) {
+          const totalVent = detail.rows.reduce(
+            (s, r) => s + Number(r.total || 0),
+            0,
+          );
+          autoTable(pdf, {
+            startY: 24,
+            head: [["Producto", "Cant.", "Precio", "Monto línea"]],
+            body: detail.rows.map((r) => [
+              String(r.productName).slice(0, 48),
+              String(r.qty),
+              money(r.unitPrice),
+              money(r.total),
+            ]),
+            styles: { fontSize: 8, cellPadding: 2 },
+            headStyles: {
+              fillColor: [52, 73, 94],
+              textColor: [255, 255, 255],
+              fontStyle: "bold",
+            },
+            margin: { left: 14, right: 14 },
+          });
+          const fy = (pdf as any).lastAutoTable.finalY as number;
+          pdf.setFontSize(10);
+          pdf.text(`Total venta: ${money(totalVent)}`, 14, fy + 6);
+          yAfterDetail = fy + 14;
+        } else {
+          pdf.setFontSize(9);
+          pdf.text("Sin líneas de producto en esta venta.", 14, 24);
+          yAfterDetail = 32;
+        }
+
+        const movsSale = list.filter((m) => m.ref?.saleId === saleId);
+        pdf.setFontSize(10);
+        pdf.text("Movimientos de esta venta", 14, yAfterDetail);
+        autoTable(pdf, {
+          startY: yAfterDetail + 4,
+          head: [["Fecha", "Tipo", "Monto", "Comentario"]],
+          body: movsSale.map((m) => [
+            m.date || "—",
+            m.type === "CARGO" ? "Compra" : "Abono",
+            money(m.amount),
+            String(m.comment || "").slice(0, 48),
+          ]),
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: {
+            fillColor: [52, 73, 94],
+            textColor: [255, 255, 255],
+            fontStyle: "bold",
+          },
+          margin: { left: 14, right: 14 },
+        });
+      }
+
+      pdf.save(
+        `movimientos_${sanitizeFilename(customer.name)}_${formatLocalDate(new Date())}.pdf`,
+      );
+      setMsg("✅ PDF descargado");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ No se pudo generar el PDF");
+    } finally {
+      setExportingPdfId(null);
     }
   };
 
@@ -1726,6 +2192,8 @@ export default function CustomersPollo({
                 balance: nuevoSaldo,
                 lastAbonoDate: openDebt && last ? last.date : "",
                 lastAbonoAmount: openDebt && last ? last.amount : 0,
+                lastAbonoDateTime:
+                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
               }
             : c,
         ),
@@ -1737,6 +2205,8 @@ export default function CustomersPollo({
               balance: nuevoSaldo,
               lastAbonoDate: openDebt && last ? last.date : "",
               lastAbonoAmount: openDebt && last ? last.amount : 0,
+              lastAbonoDateTime:
+                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
             }
           : prev,
       );
@@ -1821,6 +2291,80 @@ export default function CustomersPollo({
     setFStatus("");
     setFMin("");
     setFMax("");
+  };
+
+  /** Edición de abono dentro del modal "Ver cuenta" (no es hook). */
+  const ledgerInlineEdit =
+    !!editMovId &&
+    !!saleLedgerSaleId &&
+    (() => {
+      const em = stRows.find((x) => x.id === editMovId);
+      return (
+        !!em &&
+        em.type === "ABONO" &&
+        em.ref?.saleId === saleLedgerSaleId
+      );
+    })();
+
+  const renderEditMovementPanel = () => {
+    if (!editMovId) return null;
+    const em = stRows.find((x) => x.id === editMovId);
+    if (!em) return null;
+    return (
+      <div className="mt-4 border rounded-lg p-4 bg-amber-50 border-amber-200">
+        <div className="font-semibold mb-2">
+          Editar movimiento ({em.type === "ABONO" ? "Abono" : "Compra"})
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs font-medium text-gray-600">
+              Fecha
+            </label>
+            <input
+              type="date"
+              className="w-full border p-2 rounded"
+              value={eMovDate}
+              min={
+                em.type === "ABONO" && em.ref?.saleId && editMinSaleDate
+                  ? editMinSaleDate
+                  : undefined
+              }
+              onChange={(e) => setEMovDate(e.target.value)}
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-gray-600">
+              Comentario
+            </label>
+            <input
+              className="w-full border p-2 rounded"
+              value={eMovComment}
+              onChange={(e) => setEMovComment(e.target.value)}
+            />
+          </div>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">
+          Solo se pueden editar fecha y comentario; el monto no se modifica
+          aquí.
+        </p>
+        <div className="mt-3 flex gap-2 justify-end">
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
+            onClick={cancelEditMovement}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+            onClick={saveEditMovement}
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -1908,17 +2452,26 @@ export default function CustomersPollo({
           <div className="flex gap-2">
             <button
               type="button"
-              className="px-3 py-2 rounded border bg-gray-50 hover:bg-gray-100"
+              className="px-3 py-2 text-sm rounded border bg-gray-50 hover:bg-gray-100"
               onClick={() => setFiltersOpen((prev) => !prev)}
             >
-              {filtersOpen ? "Ocultar filtros" : "Más filtros"}
+              {filtersOpen ? "Ocultar" : "Filtros"}
             </button>
             <button
               type="button"
-              className="px-3 py-2 rounded border bg-white hover:bg-gray-50"
+              className="px-3 py-2 text-sm rounded border bg-white hover:bg-gray-50"
               onClick={handleResetFilters}
             >
               Limpiar
+            </button>
+            <button
+              type="button"
+              className="px-3 py-2 text-sm rounded border bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 text-sm"
+              disabled={exportingAllXlsx}
+              onClick={() => void downloadAllMovementsXlsx()}
+              title="Exportar todos los movimientos de todos los clientes"
+            >
+              {exportingAllXlsx ? "Exportando…" : "Excel (todos)"}
             </button>
           </div>
         </div>
@@ -1926,16 +2479,18 @@ export default function CustomersPollo({
         {filtersOpen && (
           <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-semibold">Estado</label>
-              <select
-                className="w-full border rounded px-3 py-2"
+              <MobileHtmlSelect
+                label="Estado"
                 value={fStatus}
-                onChange={(e) => setFStatus(e.target.value as Status | "")}
-              >
-                <option value="">Todos</option>
-                <option value="ACTIVO">Activo</option>
-                <option value="BLOQUEADO">Bloqueado</option>
-              </select>
+                onChange={(v) => setFStatus(v as Status | "")}
+                options={[
+                  { value: "", label: "Todos" },
+                  { value: "ACTIVO", label: "Activo" },
+                  { value: "BLOQUEADO", label: "Bloqueado" },
+                ]}
+                selectClassName="w-full border rounded px-3 py-2"
+                sheetTitle="Estado"
+              />
             </div>
             <div>
               <label className="block text-sm font-semibold">
@@ -2023,16 +2578,20 @@ export default function CustomersPollo({
                       >
                         <td className="p-3 border-b text-left">
                           {isEditing ? (
-                            <select
-                              className="w-full border p-1 rounded"
+                            <MobileHtmlSelect
                               value={eStatus}
-                              onChange={(e) =>
-                                setEStatus(e.target.value as Status)
-                              }
-                            >
-                              <option value="ACTIVO">ACTIVO</option>
-                              <option value="BLOQUEADO">BLOQUEADO</option>
-                            </select>
+                              onChange={(v) => setEStatus(v as Status)}
+                              options={[
+                                { value: "ACTIVO", label: "ACTIVO" },
+                                {
+                                  value: "BLOQUEADO",
+                                  label: "BLOQUEADO",
+                                },
+                              ]}
+                              selectClassName="w-full border p-1 rounded text-xs"
+                              buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
+                              sheetTitle="Estado"
+                            />
                           ) : (
                             <span
                               className={`px-2 py-0.5 rounded text-xs ${badgeStatus(c.status)}`}
@@ -2080,20 +2639,24 @@ export default function CustomersPollo({
                         </td> */}
                         <td className="p-3 border-b text-left">
                           {isEditing ? (
-                            <select
-                              className="w-full border p-1 rounded text-xs"
+                            <MobileHtmlSelect
                               value={isVendor ? sellerIdSafe : eVendorId}
-                              onChange={(e) => setEVendorId(e.target.value)}
+                              onChange={setEVendorId}
                               disabled={isVendor}
-                              title="Vendedor asociado"
-                            >
-                              <option value="">— Sin vendedor —</option>
-                              {sellers.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.name}
-                                </option>
-                              ))}
-                            </select>
+                              options={[
+                                {
+                                  value: "",
+                                  label: "— Sin vendedor —",
+                                },
+                                ...sellers.map((s) => ({
+                                  value: s.id,
+                                  label: s.name,
+                                })),
+                              ]}
+                              selectClassName="w-full border p-1 rounded text-xs"
+                              buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
+                              sheetTitle="Vendedor"
+                            />
                           ) : (
                             c.vendorName || "—"
                           )}
@@ -2251,8 +2814,19 @@ export default function CustomersPollo({
                   Último abono:{" "}
                   <span className="font-medium">
                     {c.lastAbonoDate
-                      ? `${c.lastAbonoDate} (${money(c.lastAbonoAmount || 0)})`
+                      ? `${c.lastAbonoDateTime || c.lastAbonoDate} (${money(c.lastAbonoAmount || 0)})`
                       : "—"}
+                  </span>
+                </div>
+
+                <div className="mt-1 text-xs text-gray-600">
+                  Última compra:{" "}
+                  <span className="font-medium">
+                    {c.lastSaleDateTime || c.lastSaleDate || "—"}
+                    {typeof c.lastSaleAmount === "number" &&
+                    c.lastSaleAmount > 0
+                      ? ` (${money(c.lastSaleAmount)})`
+                      : ""}
                   </span>
                 </div>
 
@@ -2314,7 +2888,18 @@ export default function CustomersPollo({
                     void openStatement(c);
                   }}
                 >
-                  Estado de cuenta
+                  Ver consignaciones
+                </button>
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                  disabled={exportingPdfId === c.id}
+                  onClick={() => {
+                    setCustomerRowMenu(null);
+                    void downloadCustomerMovementsPdf(c);
+                  }}
+                >
+                  {exportingPdfId === c.id ? "Generando PDF…" : "PDF movimientos"}
                 </button>
                 <button
                   type="button"
@@ -2392,48 +2977,47 @@ export default function CustomersPollo({
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold">Lugar</label>
-                  <select
-                    className="w-full border p-2 rounded"
+                  <MobileHtmlSelect
+                    label="Lugar"
                     value={place}
-                    onChange={(e) => setPlace(e.target.value as Place)}
-                  >
-                    <option value="">—</option>
-                    {PLACES.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => setPlace(v as Place)}
+                    options={[
+                      { value: "", label: "—" },
+                      ...PLACES.map((p) => ({ value: p, label: p })),
+                    ]}
+                    selectClassName="w-full border p-2 rounded"
+                    sheetTitle="Lugar"
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold">Estado</label>
-                  <select
-                    className="w-full border p-2 rounded"
+                  <MobileHtmlSelect
+                    label="Estado"
                     value={status}
-                    onChange={(e) => setStatus(e.target.value as Status)}
-                  >
-                    <option value="ACTIVO">ACTIVO</option>
-                    <option value="BLOQUEADO">BLOQUEADO</option>
-                  </select>
+                    onChange={(v) => setStatus(v as Status)}
+                    options={[
+                      { value: "ACTIVO", label: "ACTIVO" },
+                      { value: "BLOQUEADO", label: "BLOQUEADO" },
+                    ]}
+                    selectClassName="w-full border p-2 rounded"
+                    sheetTitle="Estado"
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold">
-                    Vendedor asociado
-                  </label>
-                  <select
-                    className="w-full border p-2 rounded"
+                  <MobileHtmlSelect
+                    label="Vendedor asociado"
                     value={isVendor ? sellerIdSafe : vendorId}
-                    onChange={(e) => setVendorId(e.target.value)}
+                    onChange={setVendorId}
                     disabled={isVendor}
-                  >
-                    <option value="">— Sin vendedor —</option>
-                    {sellers.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: "", label: "— Sin vendedor —" },
+                      ...sellers.map((s) => ({
+                        value: s.id,
+                        label: s.name,
+                      })),
+                    ]}
+                    selectClassName="w-full border p-2 rounded"
+                    sheetTitle="Vendedor"
+                  />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold">
@@ -2454,7 +3038,7 @@ export default function CustomersPollo({
                     Este valor cuenta como saldo desde el inicio.
                   </div>
                 </div>
-                <div>
+                {/* <div>
                   <label className="block text-sm font-semibold">
                     Límite de crédito (opcional)
                   </label>
@@ -2469,7 +3053,7 @@ export default function CustomersPollo({
                     }
                     placeholder="Ej: 2000"
                   />
-                </div>
+                </div> */}
                 <div className="md:col-span-2">
                   <label className="block text-sm font-semibold">
                     Comentario
@@ -2517,11 +3101,35 @@ export default function CustomersPollo({
             <div className="absolute inset-0 flex items-center justify-center p-4">
               <div className="bg-white rounded-lg shadow-xl border w-full max-w-5xl max-h-[92vh] overflow-auto p-4">
                 <div className="flex items-center justify-between mb-3 gap-3">
-                  <h3 className="text-lg font-bold">
-                    Estado de cuenta — {stCustomer?.name || ""}
-                  </h3>
+                  <div className="min-w-0 flex-1 pr-2">
+                    <div className="md:hidden">
+                      <h3 className="text-lg font-bold leading-tight">
+                        Estado de cuenta
+                      </h3>
+                      <p className="text-sm text-gray-600 mt-0.5 break-words">
+                        {stCustomer?.name || ""}
+                      </p>
+                    </div>
+                    <h3 className="text-lg font-bold hidden md:block truncate">
+                      Estado de cuenta: {stCustomer?.name || ""}
+                    </h3>
+                  </div>
 
-                  <div className="flex gap-2 shrink-0">
+                  <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+                    {stCustomer && (
+                      <button
+                        type="button"
+                        className="px-3 py-1 rounded bg-rose-50 border border-rose-200 text-rose-900 text-sm hover:bg-rose-100 disabled:opacity-50"
+                        disabled={exportingPdfId === stCustomer.id}
+                        onClick={() =>
+                          void downloadCustomerMovementsPdf(stCustomer)
+                        }
+                      >
+                        {exportingPdfId === stCustomer.id
+                          ? "PDF…"
+                          : "PDF"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
@@ -2532,16 +3140,21 @@ export default function CustomersPollo({
                   </div>
                 </div>
 
-                {/* KPIs (VISIBLE SIEMPRE) */}
+                {/* KPIs: saldo = deuda inicial + movimientos; cargos y abonos son desglose */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-                  <div className="p-3 border-2 rounded-xl border-indigo-200 bg-gradient-to-br from-indigo-50 to-white shadow-sm">
-                    <div className="text-xs font-medium text-indigo-700">
-                      Saldo actual
+               
+                  <div className="p-3 border-2 rounded-xl border-sky-200 bg-gradient-to-br from-sky-50 to-white shadow-sm">
+                    <div className="text-xs font-medium text-sky-800">
+                      Total ventas a crédito
                     </div>
-                    <div className="text-xl font-semibold text-indigo-900">
-                      {money(stKpis.saldoActual)}
+                    <div className="text-xl font-semibold text-sky-950">
+                      {money(stKpis.totalCargos)}
                     </div>
+                    <p className="text-[10px] text-sky-700/90 mt-1 leading-snug">
+                      Deuda inicial más compras registradas a cuenta.
+                    </p>
                   </div>
+
                   <div className="p-3 border-2 rounded-xl border-emerald-200 bg-gradient-to-br from-emerald-50 to-white shadow-sm">
                     <div className="text-xs font-medium text-emerald-700">
                       Total abonado
@@ -2549,14 +3162,20 @@ export default function CustomersPollo({
                     <div className="text-xl font-semibold text-emerald-900">
                       {money(stKpis.totalAbonado)}
                     </div>
+                    <p className="text-[10px] text-emerald-700/90 mt-1 leading-snug">
+                      Suma de todos los abonos registrados.
+                    </p>
                   </div>
-                  <div className="p-3 border-2 rounded-xl border-amber-200 bg-gradient-to-br from-amber-50 to-white shadow-sm">
-                    <div className="text-xs font-medium text-amber-800">
-                      Saldo restante
+                  <div className="p-3 border-2 rounded-xl border-indigo-200 bg-gradient-to-br from-indigo-50 to-white shadow-sm">
+                    <div className="text-xs font-medium text-indigo-700">
+                      Saldo actual
                     </div>
-                    <div className="text-xl font-semibold text-amber-950">
-                      {money(stKpis.saldoRestante)}
+                    <div className="text-xl font-semibold text-indigo-900">
+                      {money(stKpis.saldoActual)}
                     </div>
+                    <p className="text-[10px] text-indigo-600/90 mt-1 leading-snug">
+                      Total ventas menos los abonos realizados.
+                    </p>
                   </div>
                 </div>
 
@@ -2735,62 +3354,7 @@ export default function CustomersPollo({
                   )}
                 </div>
 
-                {editMovId &&
-                  (() => {
-                    const em = stRows.find((x) => x.id === editMovId);
-                    if (!em) return null;
-                    return (
-                      <div className="mt-4 border rounded-lg p-4 bg-amber-50 border-amber-200">
-                        <div className="font-semibold mb-2">
-                          Editar movimiento (
-                          {em.type === "ABONO" ? "Abono" : "Compra"})
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600">
-                              Fecha
-                            </label>
-                            <input
-                              type="date"
-                              className="w-full border p-2 rounded"
-                              value={eMovDate}
-                              onChange={(e) => setEMovDate(e.target.value)}
-                            />
-                          </div>
-                          <div className="md:col-span-2">
-                            <label className="block text-xs font-medium text-gray-600">
-                              Comentario
-                            </label>
-                            <input
-                              className="w-full border p-2 rounded"
-                              value={eMovComment}
-                              onChange={(e) => setEMovComment(e.target.value)}
-                            />
-                          </div>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-2">
-                          Solo se pueden editar fecha y comentario; el monto no
-                          se modifica aquí.
-                        </p>
-                        <div className="mt-3 flex gap-2 justify-end">
-                          <button
-                            type="button"
-                            className="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
-                            onClick={cancelEditMovement}
-                          >
-                            Cancelar
-                          </button>
-                          <button
-                            type="button"
-                            className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
-                            onClick={saveEditMovement}
-                          >
-                            Guardar
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })()}
+                {editMovId && !ledgerInlineEdit && renderEditMovementPanel()}
               </div>
             </div>
 
@@ -2853,7 +3417,7 @@ export default function CustomersPollo({
                           setSaleLedgerSaleId(sid);
                         }}
                       >
-                        Ver cuenta
+                        Movimientos
                       </button>
                       {stRows.some(
                         (m) =>
@@ -2906,7 +3470,10 @@ export default function CustomersPollo({
               <div className="fixed inset-0 z-[62] flex items-center justify-center p-4">
                 <div
                   className="absolute inset-0 bg-black/40"
-                  onClick={() => setSaleLedgerSaleId(null)}
+                  onClick={() => {
+                    setSaleLedgerSaleId(null);
+                    cancelEditMovement();
+                  }}
                 />
                 <div
                   className="relative z-10 bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl max-h-[85vh] overflow-auto p-4"
@@ -2924,34 +3491,47 @@ export default function CustomersPollo({
                     <button
                       type="button"
                       className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 shrink-0"
-                      onClick={() => setSaleLedgerSaleId(null)}
+                      onClick={() => {
+                        setSaleLedgerSaleId(null);
+                        cancelEditMovement();
+                      }}
                     >
                       Cerrar
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                    <div className="p-3 border-2 rounded-xl border-violet-200 bg-gradient-to-br from-violet-50 to-white shadow-sm">
-                      <div className="text-xs font-medium text-violet-700">
-                        Saldo actual
+                  <div className="rounded-2xl border-2 border-slate-200/90 bg-gradient-to-br from-white via-slate-50/40 to-white p-4 shadow-md mb-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="flex flex-col items-stretch justify-center rounded-xl bg-gradient-to-b from-emerald-50 to-emerald-100/70 border border-emerald-300/60 px-3 py-3 shadow-inner">
+                        <span className="inline-flex self-center rounded-full bg-emerald-600/90 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+                          Saldo
+                        </span>
+                        <span className="text-center text-lg font-bold text-emerald-950 mt-2 tabular-nums">
+                          {money(
+                            getPendingForSale(stRows, saleLedgerSaleId),
+                          )}
+                        </span>
+                        <span className="text-[10px] text-center text-emerald-800/80 mt-1">
+                          Pendiente de esta venta
+                        </span>
                       </div>
-                      <div className="text-lg font-semibold text-violet-950">
-                        {money(
-                          getPendingForSale(stRows, saleLedgerSaleId),
-                        )}
-                      </div>
-                    </div>
-                    <div className="p-3 border-2 rounded-xl border-teal-200 bg-gradient-to-br from-teal-50 to-white shadow-sm">
-                      <div className="text-xs font-medium text-teal-800">
-                        Abonos
-                      </div>
-                      <div className="text-lg font-semibold text-teal-950">
-                        {money(
-                          getTotalAbonadoForSale(stRows, saleLedgerSaleId),
-                        )}
+                      <div className="flex flex-col items-stretch justify-center rounded-xl bg-gradient-to-b from-rose-50 to-rose-100/70 border border-rose-300/60 px-3 py-3 shadow-inner">
+                        <span className="inline-flex self-center rounded-full bg-rose-600/90 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+                          Abonos
+                        </span>
+                        <span className="text-center text-lg font-bold text-rose-950 mt-2 tabular-nums">
+                          {money(
+                            getTotalAbonadoForSale(stRows, saleLedgerSaleId),
+                          )}
+                        </span>
+                        <span className="text-[10px] text-center text-rose-800/80 mt-1">
+                          Total abonado a la venta
+                        </span>
                       </div>
                     </div>
                   </div>
+
+                  {ledgerInlineEdit && renderEditMovementPanel()}
 
                   <div className="hidden md:block border rounded overflow-x-auto">
                     <table className="min-w-full text-sm">
@@ -3006,7 +3586,6 @@ export default function CustomersPollo({
                                       type="button"
                                       className="text-xs text-blue-600 underline"
                                       onClick={() => {
-                                        setSaleLedgerSaleId(null);
                                         startEditMovement(row);
                                       }}
                                     >
@@ -3071,7 +3650,6 @@ export default function CustomersPollo({
                                 type="button"
                                 className="text-blue-600"
                                 onClick={() => {
-                                  setSaleLedgerSaleId(null);
                                   startEditMovement(row);
                                 }}
                               >
@@ -3103,14 +3681,21 @@ export default function CustomersPollo({
                 style={{ zIndex: 60 }}
               >
                 <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-lg font-bold">
-                      Productos vendidos{" "}
-                      {/* {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""} */}
-                    </h3>
+                  <div className="flex items-start justify-between mb-2 gap-2">
+                    <div className="min-w-0">
+                      <h3 className="text-lg font-bold">Productos vendidos</h3>
+                      {itemsModalSaleDate ? (
+                        <p className="text-sm text-gray-600 mt-0.5">
+                          {itemsModalSaleDate}
+                        </p>
+                      ) : null}
+                    </div>
                     <button
-                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                      onClick={() => setItemsModalOpen(false)}
+                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 shrink-0"
+                      onClick={() => {
+                        setItemsModalOpen(false);
+                        setItemsModalSaleDate("");
+                      }}
                     >
                       Cerrar
                     </button>
@@ -3222,7 +3807,7 @@ export default function CustomersPollo({
           <div className="bg-white rounded-lg shadow-2xl border w-[95%] max-w-md p-4">
             <h3 className="text-lg font-bold">
               {abonoTargetSaleId
-                ? `Abonar venta — ${stCustomer?.name || ""}`
+                ? `Abonar — ${stCustomer?.name || ""}`
                 : `Registrar abono — ${stCustomer?.name || ""}`}
             </h3>
             {abonoTargetSaleId && (

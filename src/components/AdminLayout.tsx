@@ -254,8 +254,9 @@ export default function AdminLayout({
     canPath(subject, "transactionCandies", "view") ||
     canPath(subject, "cierreVentasCandies", "view") ||
     canPath(subject, "estadoCuentaCandies", "view") ||
-    canPath(subject, "productsPricesCandies", "view") ||
-    canPath(subject, "mainordersCandies", "view");
+    canPath(subject, "mainordersCandies", "view") ||
+    canPath(subject, "stockPedidosCandies", "view") ||
+    canPath(subject, "reporteCierresCandies", "view");
 
   const storedUserName =
     typeof window !== "undefined" ? localStorage.getItem("user_name") : null;
@@ -515,6 +516,27 @@ export default function AdminLayout({
         module: "dulces",
         section: "Operaciones",
         pathLabel: "Dulces > Operaciones > Precios Venta",
+      });
+      add(can("mainordersCandies"), {
+        label: "Orden Maestra",
+        to: `${base}/mainordersCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Orden Maestra",
+      });
+      add(can("stockPedidosCandies"), {
+        label: "Stock - Pedidos",
+        to: `${base}/stockPedidosCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Stock - Pedidos",
+      });
+      add(can("reporteCierresCandies"), {
+        label: "Saldos Externos",
+        to: `${base}/reporteCierresCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Saldos Externos",
       });
     }
 

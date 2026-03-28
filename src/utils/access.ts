@@ -33,7 +33,8 @@ export type PathKey =
   | "estadoCuentaCandies"
   | "auditProductsPollo"
   | "stockPedidosCandies"
-  | "mainordersCandies";
+  | "mainordersCandies"
+  | "reporteCierresCandies";
 
 type Permission = Partial<Record<Action, boolean>>;
 
@@ -74,6 +75,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     stockPedidosCandies: { view: true, edit: true },
     mainordersCandies: { view: true, edit: true },
     productsPricesCandies: { view: true, edit: false },
+    reporteCierresCandies: { view: true, edit: true },
   },
 
   vendedor_pollo: {
@@ -89,6 +91,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     productsVendorsCandies: { view: true, edit: false },
     // En tu matriz: VER = NO para estos 3
     productsPricesCandies: { view: true, edit: false },
+    reporteCierresCandies: { view: true, edit: true },
     transactionCandies: { view: true, edit: false },
     cierreVentasCandies: { view: true, edit: false },
     customersCandies: { view: true, edit: true },

@@ -23,7 +23,28 @@ import { hasRole } from "../../utils/roles";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import ImportModal from "../common/ImportModal";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import * as XLSX from "xlsx";
+
+const EMPAQUE_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Todos" },
+  { value: "Tarro", label: "Tarro" },
+  { value: "Bolsa", label: "Bolsa" },
+  { value: "Ristra", label: "Ristra" },
+  { value: "Caja", label: "Caja" },
+  { value: "Vaso", label: "Vaso" },
+  { value: "Pana", label: "Pana" },
+];
+
+const EMPAQUE_EDIT_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "—" },
+  { value: "Tarro", label: "Tarro" },
+  { value: "Bolsa", label: "Bolsa" },
+  { value: "Ristra", label: "Ristra" },
+  { value: "Caja", label: "Caja" },
+  { value: "Vaso", label: "Vaso" },
+  { value: "Pana", label: "Pana" },
+];
 
 type PriceRow = {
   productId: string;
@@ -400,8 +421,13 @@ function BarcodeScanModal({
   );
 }
 
-export default function PrecioVentas() {
+export default function PrecioVentas({
+  publicView,
+}: {
+  publicView?: boolean;
+} = {}) {
   const { refreshKey, refresh } = useManualRefresh();
+  const isPublicView = !!publicView;
 
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
@@ -682,7 +708,7 @@ export default function PrecioVentas() {
 
   const createManualPrice = async () => {
     const modeAtStart = priceModalMode;
-    if (!isAdmin) {
+    if (!isAdmin || isPublicView) {
       setMsg("Acción no permitida: solo administradores.");
       return;
     }
@@ -932,7 +958,7 @@ export default function PrecioVentas() {
 
   const handlePickFile = async (f: File | null) => {
     setImportErrors([]);
-    if (!isAdmin) {
+    if (!isAdmin || isPublicView) {
       setImportErrors(["Acción no permitida: solo administradores."]);
       return;
     }
@@ -1072,7 +1098,7 @@ export default function PrecioVentas() {
   };
 
   const saveAllCurrentPrices = async () => {
-    if (!isAdmin) {
+    if (!isAdmin || isPublicView) {
       setMsg("Acción no permitida: solo administradores.");
       return;
     }
@@ -1455,6 +1481,12 @@ export default function PrecioVentas() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isVendor, setIsVendor] = useState(false);
   useEffect(() => {
+    if (isPublicView) {
+      setIsAdmin(false);
+      setIsVendor(false);
+      setSellerCandyId("");
+      return;
+    }
     const unsub = onAuthStateChanged(auth, async (u) => {
       if (!u) return setIsAdmin(false);
       try {
@@ -1478,19 +1510,21 @@ export default function PrecioVentas() {
       }
     });
     return () => unsub();
-  }, []);
+  }, [isPublicView]);
+
+  const isAdminEditable = isAdmin && !isPublicView;
 
   const canCreateManualPrice = useMemo(() => {
     const pkgIsla = parseMaybeEmptyNumber(newPriceIsla);
     const pkgRivas = parseMaybeEmptyNumber(newPriceRivas);
     return (
-      isAdmin &&
+      isAdminEditable &&
       Boolean(newPriceCategory) &&
       Boolean(newPriceProductId) &&
       (Number.isFinite(pkgIsla) || Number.isFinite(pkgRivas))
     );
   }, [
-    isAdmin,
+    isAdminEditable,
     newPriceCategory,
     newPriceProductId,
     newPriceIsla,
@@ -1676,7 +1710,7 @@ export default function PrecioVentas() {
     const pkgPriceIsla = Number(editPriceIsla || 0);
     const pkgPriceRivas = Number(editPriceRivas || 0);
 
-    if (isAdmin) {
+    if (isAdmin && !isPublicView) {
       try {
         const priceRef = doc(collection(db, "current_prices"), id);
         const exSnap = await getDoc(priceRef);
@@ -1738,7 +1772,7 @@ export default function PrecioVentas() {
   };
 
   const deleteCurrentPrice = async (productId: string) => {
-    if (!isAdmin) {
+    if (!isAdmin || isPublicView) {
       setMsg("Acción no permitida: solo administradores.");
       return;
     }
@@ -1762,13 +1796,20 @@ export default function PrecioVentas() {
   const webColCount = isAdmin ? 10 : 9;
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div
+      className={isPublicView ? "max-w-7xl mx-auto w-full pb-4" : "max-w-7xl mx-auto"}
+    >
+      {isPublicView && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Consulta pública: solo lectura de precios.
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col gap-3 mb-3 md:flex-row md:items-center md:justify-between">
         <h2 className="text-xl font-bold">Precio Ventas</h2>
         <div className="flex flex-col gap-2 w-full md:w-auto md:flex-row md:flex-wrap md:justify-end md:gap-2">
           <div className="flex flex-row gap-2 w-full md:contents">
-            {isAdmin && (
+            {isAdminEditable && (
               <button
                 type="button"
                 className="md:hidden flex-1 min-w-0 px-3 py-2 rounded-md text-sm font-semibold border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 whitespace-nowrap"
@@ -1814,20 +1855,14 @@ export default function PrecioVentas() {
           <div className="mt-2 bg-white border rounded-xl shadow-sm p-3 text-sm">
             <div className="grid grid-cols-1 gap-3">
               <div>
-                <label className="block font-semibold">Tipo empaque</label>
-                <select
-                  className="w-full border rounded px-2 py-2"
+                <MobileHtmlSelect
+                  label="Tipo empaque"
                   value={packagingFilter}
-                  onChange={(e) => setPackagingFilter(e.target.value)}
-                >
-                  <option value="">Todos</option>
-                  <option value="Tarro">Tarro</option>
-                  <option value="Bolsa">Bolsa</option>
-                  <option value="Ristra">Ristra</option>
-                  <option value="Caja">Caja</option>
-                  <option value="Vaso">Vaso</option>
-                  <option value="Pana">Pana</option>
-                </select>
+                  onChange={setPackagingFilter}
+                  options={EMPAQUE_TYPE_OPTIONS}
+                  selectClassName="w-full border rounded px-2 py-2"
+                  sheetTitle="Tipo empaque"
+                />
               </div>
 
               <div>
@@ -1930,22 +1965,14 @@ export default function PrecioVentas() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700">
-              Tipo empaque
-            </label>
-            <select
-              className="w-full border rounded-md px-3 py-2"
+            <MobileHtmlSelect
+              label="Tipo empaque"
               value={packagingFilter}
-              onChange={(e) => setPackagingFilter(e.target.value)}
-            >
-              <option value="">Todos</option>
-              <option value="Tarro">Tarro</option>
-              <option value="Bolsa">Bolsa</option>
-              <option value="Ristra">Ristra</option>
-              <option value="Caja">Caja</option>
-              <option value="Vaso">Vaso</option>
-              <option value="Pana">Pana</option>
-            </select>
+              onChange={setPackagingFilter}
+              options={EMPAQUE_TYPE_OPTIONS}
+              selectClassName="w-full border rounded-md px-3 py-2"
+              sheetTitle="Tipo empaque"
+            />
           </div>
 
           <div>
@@ -1984,7 +2011,7 @@ export default function PrecioVentas() {
             </button>
           </div>
         </div>
-        {isAdmin && (
+        {isAdminEditable && (
           <div className="shrink-0">
             <button
               type="button"
@@ -2157,7 +2184,7 @@ export default function PrecioVentas() {
                                         </div>
                                       </div>
 
-                                      {isAdmin && (
+                                      {isAdminEditable && (
                                         <div className="mt-2">
                                           <div className="text-[12px] text-gray-600">
                                             Costo Paq
@@ -2179,7 +2206,7 @@ export default function PrecioVentas() {
                                     </div>
 
                                     <div>
-                                      {isAdmin && (
+                                      {isAdminEditable && (
                                         <div>
                                           <div className="text-[12px] text-gray-600">
                                             Utilidad Bruta
@@ -2239,23 +2266,13 @@ export default function PrecioVentas() {
                                           Tipo Empaque
                                         </div>
                                         {isEditingCatalog ? (
-                                          <select
-                                            className="w-full border rounded px-2 py-2"
+                                          <MobileHtmlSelect
                                             value={editPackaging}
-                                            onChange={(e) =>
-                                              setEditPackaging(e.target.value)
-                                            }
-                                          >
-                                            <option value="">—</option>
-                                            <option value="Tarro">Tarro</option>
-                                            <option value="Bolsa">Bolsa</option>
-                                            <option value="Ristra">
-                                              Ristra
-                                            </option>
-                                            <option value="Caja">Caja</option>
-                                            <option value="Vaso">Vaso</option>
-                                            <option value="Pana">Pana</option>
-                                          </select>
+                                            onChange={setEditPackaging}
+                                            options={EMPAQUE_EDIT_OPTIONS}
+                                            selectClassName="w-full border rounded px-2 py-2"
+                                            sheetTitle="Tipo empaque"
+                                          />
                                         ) : (
                                           <div className="text-sm">
                                             {packagingMap[r.productId] || "—"}
@@ -2298,7 +2315,7 @@ export default function PrecioVentas() {
                                         </button>
                                       </>
                                     ) : (
-                                      isAdmin && (
+                                      isAdminEditable && (
                                         <>
                                           <button
                                             type="button"
@@ -2384,23 +2401,24 @@ export default function PrecioVentas() {
 
             <div className="space-y-3 text-sm">
               <div>
-                <label className="block font-semibold">Categoría</label>
-                <select
-                  className="w-full border rounded px-2 py-2 disabled:bg-slate-100 disabled:text-slate-600"
+                <MobileHtmlSelect
+                  label="Categoría"
                   value={newPriceCategory}
                   disabled={priceModalMode === "edit"}
-                  onChange={(e) => {
-                    setNewPriceCategory(e.target.value);
+                  onChange={(v) => {
+                    setNewPriceCategory(v);
                     setNewPriceProductId("");
                   }}
-                >
-                  <option value="">— Seleccioná —</option>
-                  {modalCategories.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "", label: "— Seleccioná —" },
+                    ...modalCategories.map((c) => ({
+                      value: c,
+                      label: c,
+                    })),
+                  ]}
+                  selectClassName="w-full border rounded px-2 py-2 disabled:bg-slate-100 disabled:text-slate-600"
+                  sheetTitle="Categoría"
+                />
               </div>
 
               <div>
@@ -2417,20 +2435,21 @@ export default function PrecioVentas() {
               </div>
 
               <div>
-                <label className="block font-semibold">Producto</label>
-                <select
-                  className="w-full border rounded px-2 py-2 disabled:bg-slate-100 disabled:text-slate-600"
+                <MobileHtmlSelect
+                  label="Producto"
                   value={newPriceProductId}
                   disabled={priceModalMode === "edit"}
-                  onChange={(e) => setNewPriceProductId(e.target.value)}
-                >
-                  <option value="">— Seleccioná —</option>
-                  {modalProductOptions.map((r) => (
-                    <option key={r.productId} value={r.productId}>
-                      {r.productName} — {r.productId}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setNewPriceProductId}
+                  options={[
+                    { value: "", label: "— Seleccioná —" },
+                    ...modalProductOptions.map((r) => ({
+                      value: r.productId,
+                      label: `${r.productName} — ${r.productId}`,
+                    })),
+                  ]}
+                  selectClassName="w-full border rounded px-2 py-2 disabled:bg-slate-100 disabled:text-slate-600"
+                  sheetTitle="Producto"
+                />
               </div>
 
               {newPriceProductId ? (
@@ -2490,21 +2509,15 @@ export default function PrecioVentas() {
               </div>
 
               <div>
-                <label className="block font-semibold">Tipo empaque</label>
-                <select
-                  className="w-full border rounded px-2 py-2"
+                <MobileHtmlSelect
+                  label="Tipo empaque"
                   value={newPricePackaging}
-                  onChange={(e) => setNewPricePackaging(e.target.value)}
+                  onChange={setNewPricePackaging}
                   disabled={!newPriceProductId}
-                >
-                  <option value="">—</option>
-                  <option value="Tarro">Tarro</option>
-                  <option value="Bolsa">Bolsa</option>
-                  <option value="Ristra">Ristra</option>
-                  <option value="Caja">Caja</option>
-                  <option value="Vaso">Vaso</option>
-                  <option value="Pana">Pana</option>
-                </select>
+                  options={EMPAQUE_EDIT_OPTIONS}
+                  selectClassName="w-full border rounded px-2 py-2"
+                  sheetTitle="Tipo empaque"
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -2914,7 +2927,7 @@ export default function PrecioVentas() {
                   <td className="p-3 border-b text-right tabular-nums">
                     {money(r.priceIsla / (r.unitsPerPackage || 1))}
                   </td>
-                  {isAdmin && (
+                  {isAdminEditable && (
                     <td className="p-3 border-b text-right tabular-nums">
                       {(() => {
                         const rowProvider = Number.isFinite(
@@ -2958,7 +2971,7 @@ export default function PrecioVentas() {
                     })()}
                   </td>
                   <td className="p-3 border-b text-right">
-                    {isAdmin && (
+                    {isAdminEditable && (
                       <button
                         type="button"
                         className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-2 py-1.5 text-slate-700 hover:bg-slate-50"

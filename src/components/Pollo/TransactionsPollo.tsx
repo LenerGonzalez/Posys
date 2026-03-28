@@ -16,6 +16,7 @@ import { hasRole } from "../../utils/roles";
 import { format, isValid, parse } from "date-fns";
 import { restoreSaleAndDelete } from "../../Services/inventory";
 import RefreshButton from "../../components/common/RefreshButton";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
 type SaleType = "CONTADO" | "CREDITO";
@@ -1548,75 +1549,78 @@ export default function TransactionsPollo({
               </div>
 
               <div className="sm:col-span-2 lg:col-span-2">
-                <label className="block font-semibold">Cliente (crédito)</label>
-                <select
-                  className="border rounded px-2 py-1 w-full"
+                <MobileHtmlSelect
+                  label="Cliente (crédito)"
                   value={filterCustomerId}
-                  onChange={(e) => {
-                    setFilterCustomerId(e.target.value);
+                  onChange={(v) => {
+                    setFilterCustomerId(v);
                     setPage(1);
                   }}
-                >
-                  <option value="">Todos</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "", label: "Todos" },
+                    ...customers.map((c) => ({
+                      value: c.id,
+                      label: c.name,
+                    })),
+                  ]}
+                  selectClassName="border rounded px-2 py-1 w-full"
+                  sheetTitle="Cliente"
+                />
               </div>
 
               <div>
-                <label className="block font-semibold">Tipo</label>
-                <select
-                  className="border rounded px-2 py-1 w-full"
+                <MobileHtmlSelect
+                  label="Tipo"
                   value={filterType}
-                  onChange={(e) => {
-                    setFilterType(e.target.value as "" | SaleType);
+                  onChange={(v) => {
+                    setFilterType(v as "" | SaleType);
                     setPage(1);
                   }}
-                >
-                  <option value="">Todos</option>
-                  <option value="CONTADO">Cash</option>
-                  <option value="CREDITO">Crédito</option>
-                </select>
+                  options={[
+                    { value: "", label: "Todos" },
+                    { value: "CONTADO", label: "Cash" },
+                    { value: "CREDITO", label: "Crédito" },
+                  ]}
+                  selectClassName="border rounded px-2 py-1 w-full"
+                  sheetTitle="Tipo"
+                />
               </div>
 
               <div>
-                <label className="block font-semibold">Producto</label>
-                <select
-                  className="border rounded px-2 py-1 w-full"
+                <MobileHtmlSelect
+                  label="Producto"
                   value={productFilter}
-                  onChange={(e) => {
-                    setProductFilter(e.target.value);
+                  onChange={(v) => {
+                    setProductFilter(v);
                     setPage(1);
                   }}
-                >
-                  <option value="ALL">Todos</option>
-                  {products.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "ALL", label: "Todos" },
+                    ...products.map((p) => ({ value: p, label: p })),
+                  ]}
+                  selectClassName="border rounded px-2 py-1 w-full"
+                  sheetTitle="Producto"
+                />
               </div>
 
               <div>
-                <label className="block font-semibold">Estado</label>
-                <select
-                  className="border rounded px-2 py-1 w-full"
+                <MobileHtmlSelect
+                  label="Estado"
                   value={statusFilter}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setStatusFilter(
-                      e.target.value as "" | "PROCESADA" | "FLOTANTE",
+                      v as "" | "PROCESADA" | "FLOTANTE",
                     );
                     setPage(1);
                   }}
-                >
-                  <option value="">Todos</option>
-                  <option value="FLOTANTE">FLOTANTE</option>
-                  <option value="PROCESADA">PROCESADA</option>
-                </select>
+                  options={[
+                    { value: "", label: "Todos" },
+                    { value: "FLOTANTE", label: "FLOTANTE" },
+                    { value: "PROCESADA", label: "PROCESADA" },
+                  ]}
+                  selectClassName="border rounded px-2 py-1 w-full"
+                  sheetTitle="Estado"
+                />
               </div>
 
               <button

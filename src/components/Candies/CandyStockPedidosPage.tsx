@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 
 type RoleProp =
   | ""
@@ -161,7 +162,7 @@ function SectionCard({
       <div className="px-4 py-3 border-b border-slate-100">
         <div className="font-semibold text-slate-900">{title}</div>
         {subtitle ? (
-          <div className="text-xs text-slate-500 mt-0.5">{subtitle}</div>
+          <div className="text-sm text-slate-500 mt-0.5">{subtitle}</div>
         ) : null}
       </div>
       <div className="p-4">{children}</div>
@@ -172,7 +173,7 @@ function SectionCard({
 function KpiCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">
-      <div className="text-xs uppercase tracking-wide text-slate-500">
+      <div className="text-sm uppercase tracking-wide text-slate-500">
         {label}
       </div>
       <div className="mt-1 text-2xl font-bold text-slate-900">{value}</div>
@@ -242,31 +243,31 @@ export default function CandyStockPedidosPage({
       <div className="bg-slate-50/80 border border-slate-200 rounded-xl shadow-sm p-2.5">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-sm font-medium text-slate-900 leading-snug">
+            <div className="text-base font-medium text-slate-900 leading-snug">
               {product.productName}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5 leading-tight">
+            <div className="text-xs text-slate-500 mt-0.5 leading-tight">
               {product.category || "—"}
             </div>
           </div>
           <div className="text-right shrink-0">
-            <div className="text-[10px] text-slate-500">Precio Isla</div>
-            <div className="text-xs font-semibold text-slate-900 tabular-nums">
+            <div className="text-xs text-slate-500">Precio Isla</div>
+            <div className="text-sm font-semibold text-slate-900 tabular-nums">
               {money(product.priceIsla)}
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
+        <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
           <div className="rounded-lg bg-white border border-slate-100 p-2">
-            <div className="text-[10px] text-slate-500">Stock</div>
-            <div className={`font-bold text-base tabular-nums ${qtyColor}`}>
+            <div className="text-xs text-slate-500">Stock</div>
+            <div className={`font-bold text-lg tabular-nums ${qtyColor}`}>
               {packs}
             </div>
           </div>
           <div className="rounded-lg bg-white border border-slate-100 p-2">
-            <div className="text-[10px] text-slate-500">Unidades</div>
-            <div className={`font-bold text-base tabular-nums ${qtyColor}`}>
+            <div className="text-xs text-slate-500">Unidades</div>
+            <div className={`font-bold text-lg tabular-nums ${qtyColor}`}>
               {Number(product.stockUnits || 0)}
             </div>
           </div>
@@ -1075,8 +1076,8 @@ export default function CandyStockPedidosPage({
   const renderStockTable = () => (
     <div className="hidden md:block bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="bg-slate-50 text-slate-700 text-[11px] uppercase tracking-wide">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-700 text-xs uppercase tracking-wide">
             <tr>
               <th className="text-left px-3 py-2 font-semibold">Categoría</th>
               <th className="text-left px-3 py-2 font-semibold">Producto</th>
@@ -1105,39 +1106,39 @@ export default function CandyStockPedidosPage({
                   packs === 0 ? "text-red-600" : "text-emerald-600";
                 return (
                 <tr key={r.productId} className="border-t">
-                  <td className="px-3 py-2 text-[11px] text-slate-600 max-w-[140px]">
+                  <td className="px-3 py-2 text-sm text-slate-600 max-w-[140px]">
                     {r.category || "—"}
                   </td>
                   <td className="px-3 py-2">
-                    <div className="text-xs font-medium text-slate-900 leading-snug">
+                    <div className="text-sm font-medium text-slate-900 leading-snug">
                       {r.productName}
                     </div>
-                    <div className="text-[10px] text-slate-500">{r.productId}</div>
+                    <div className="text-xs text-slate-500">{r.productId}</div>
                   </td>
                   <td
-                    className={`px-3 py-2 text-right font-semibold text-xs tabular-nums ${stockColor}`}
+                    className={`px-3 py-2 text-right font-semibold text-sm tabular-nums ${stockColor}`}
                   >
                     {packs}
                   </td>
                   <td
-                    className={`px-3 py-2 text-right text-xs tabular-nums ${stockColor}`}
+                    className={`px-3 py-2 text-right text-sm tabular-nums ${stockColor}`}
                   >
                     {Number(r.stockUnits || 0)}
                   </td>
-                  <td className="px-3 py-2 text-right text-xs tabular-nums">
+                  <td className="px-3 py-2 text-right text-sm tabular-nums">
                     {money(r.priceIsla)}
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex gap-2 flex-wrap">
                       <span
-                        className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusBadgeClasses(
+                        className={`px-2 py-0.5 rounded-full border text-xs font-semibold ${statusBadgeClasses(
                           r.available ? "available" : "out",
                         )}`}
                       >
                         {r.available ? "Disponible" : "Agotado"}
                       </span>
                       <span
-                        className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusBadgeClasses(
+                        className={`px-2 py-0.5 rounded-full border text-xs font-semibold ${statusBadgeClasses(
                           assignedByNameMap[String(r.productId)]
                             ? "assigned"
                             : "unassigned",
@@ -1528,22 +1529,19 @@ export default function CandyStockPedidosPage({
             </div>
 
             <div className="md:col-span-2">
-              <label className="block text-xs font-semibold text-slate-700">
-                Vendedor
-              </label>
-              <select
-                className="w-full border rounded-xl px-3 py-2"
+              <MobileHtmlSelect
+                label="Vendedor"
                 value={selectedSellerId}
-                onChange={(e) => setSelectedSellerId(e.target.value)}
-                disabled={Boolean(sellerCandyId && (isVendDulces || !isAdmin))}
-              >
-                <option value="">Todos</option>
-                {vendors.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedSellerId}
+                disabled={Boolean(
+                  sellerCandyId && (isVendDulces || !isAdmin),
+                )}
+                options={[
+                  { value: "", label: "Todos" },
+                  ...vendors.map((v) => ({ value: v.id, label: v.name })),
+                ]}
+                sheetTitle="Vendedor"
+              />
             </div>
 
             <div className="flex items-end">
@@ -1555,120 +1553,53 @@ export default function CandyStockPedidosPage({
 
           {tab === "STOCK" ? (
             <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
-              {/* Escritorio: fechas de órdenes maestras + orden maestra + orden vendedor */}
-              <div className="hidden md:block space-y-3">
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-1 h-4 w-4 shrink-0"
-                    checked={stockFilterByDate}
-                    onChange={(e) => setStockFilterByDate(e.target.checked)}
-                  />
-                  <span className="text-sm text-slate-700 leading-snug">
-                    Filtrar stock por fechas de órdenes maestras (usa Desde/Hasta).
-                    Desmarcado: se muestran todos los productos acumulados desde el
-                    origen.
-                  </span>
-                </label>
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 md:mt-1 h-4 w-4 shrink-0"
+                  checked={stockFilterByDate}
+                  onChange={(e) => setStockFilterByDate(e.target.checked)}
+                />
+                <span className="text-xs sm:text-sm text-slate-700 leading-snug">
+                  Filtrar stock por fechas de órdenes maestras (usa Desde/Hasta).
+                  Desmarcado: se muestran todos los productos acumulados desde el
+                  origen.
+                </span>
+              </label>
 
-                {isAdmin ? (
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Orden maestra
-                    </label>
-                    <select
-                      className="w-full border rounded-xl px-3 py-2 text-sm"
-                      value={selectedMainOrderId}
-                      onChange={(e) => setSelectedMainOrderId(e.target.value)}
-                    >
-                      <option value="">Todas (desde el origen)</option>
-                      {mainOrderOptions.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
+              {isAdmin ? (
+                <MobileHtmlSelect
+                  label="Orden maestra"
+                  value={selectedMainOrderId}
+                  onChange={setSelectedMainOrderId}
+                  options={[
+                    { value: "", label: "Todas (desde el origen)" },
+                    ...mainOrderOptions.map((o) => ({
+                      value: o.id,
+                      label: o.label,
+                    })),
+                  ]}
+                  sheetTitle="Orden maestra"
+                />
+              ) : null}
 
-                {isAdmin && selectedSellerId ? (
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Orden de vendedor
-                    </label>
-                    <select
-                      className="w-full border rounded-xl px-3 py-2 text-sm"
-                      value={selectedVendorOrderId}
-                      onChange={(e) => setSelectedVendorOrderId(e.target.value)}
-                    >
-                      <option value="">Todas las órdenes del vendedor</option>
-                      {(vendorOrdersBySeller[selectedSellerId] || []).map(
-                        (o) => (
-                          <option key={o.orderId} value={o.orderId}>
-                            {o.label}
-                          </option>
-                        ),
-                      )}
-                    </select>
-                  </div>
-                ) : null}
-              </div>
-
-              {/* Móvil: fechas de stock + orden maestra + orden vendedor (dentro del mismo contenedor Filtros) */}
-              <div className="md:hidden space-y-3">
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 h-4 w-4 shrink-0"
-                    checked={stockFilterByDate}
-                    onChange={(e) => setStockFilterByDate(e.target.checked)}
-                  />
-                  <span className="text-xs text-slate-700 leading-snug">
-                    Filtrar stock por fechas (órdenes maestras). Desmarcado: se
-                    incluyen todas desde el origen.
-                  </span>
-                </label>
-                {isAdmin ? (
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Orden maestra
-                    </label>
-                    <select
-                      className="w-full border rounded-xl px-3 py-2 text-sm"
-                      value={selectedMainOrderId}
-                      onChange={(e) => setSelectedMainOrderId(e.target.value)}
-                    >
-                      <option value="">Todas (desde el origen)</option>
-                      {mainOrderOptions.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
-                {isAdmin && selectedSellerId ? (
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Orden de vendedor
-                    </label>
-                    <select
-                      className="w-full border rounded-xl px-3 py-2 text-sm"
-                      value={selectedVendorOrderId}
-                      onChange={(e) => setSelectedVendorOrderId(e.target.value)}
-                    >
-                      <option value="">Todas las órdenes del vendedor</option>
-                      {(vendorOrdersBySeller[selectedSellerId] || []).map(
-                        (o) => (
-                          <option key={o.orderId} value={o.orderId}>
-                            {o.label}
-                          </option>
-                        ),
-                      )}
-                    </select>
-                  </div>
-                ) : null}
-              </div>
+              {isAdmin && selectedSellerId ? (
+                <MobileHtmlSelect
+                  label="Orden de vendedor"
+                  value={selectedVendorOrderId}
+                  onChange={setSelectedVendorOrderId}
+                  options={[
+                    { value: "", label: "Todas las órdenes del vendedor" },
+                    ...(vendorOrdersBySeller[selectedSellerId] || []).map(
+                      (o) => ({
+                        value: o.orderId,
+                        label: o.label,
+                      }),
+                    ),
+                  ]}
+                  sheetTitle="Orden de vendedor"
+                />
+              ) : null}
             </div>
           ) : null}
 
@@ -1708,21 +1639,16 @@ export default function CandyStockPedidosPage({
             {filtersOpenMobile ? (
               <div className="mt-2 bg-white border border-slate-200 rounded-2xl shadow-sm p-3 space-y-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Categoría
-                  </label>
-                  <select
-                    className="w-full border rounded-xl px-3 py-2"
+                  <MobileHtmlSelect
+                    label="Categoría"
                     value={stockCategoryFilter}
-                    onChange={(e) => setStockCategoryFilter(e.target.value)}
-                  >
-                    <option value="">Todas</option>
-                    {categories.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setStockCategoryFilter}
+                    options={[
+                      { value: "", label: "Todas" },
+                      ...categories.map((c) => ({ value: c, label: c })),
+                    ]}
+                    sheetTitle="Categoría"
+                  />
                 </div>
 
                 <label className="flex items-center justify-between rounded-xl border px-3 py-3">
@@ -1776,21 +1702,16 @@ export default function CandyStockPedidosPage({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Filtrar por categoría
-                </label>
-                <select
-                  className="w-full border rounded-xl px-3 py-2"
+                <MobileHtmlSelect
+                  label="Filtrar por categoría"
                   value={stockCategoryFilter}
-                  onChange={(e) => setStockCategoryFilter(e.target.value)}
-                >
-                  <option value="">Todas</option>
-                  {categories.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setStockCategoryFilter}
+                  options={[
+                    { value: "", label: "Todas" },
+                    ...categories.map((c) => ({ value: c, label: c })),
+                  ]}
+                  sheetTitle="Categoría"
+                />
               </div>
 
               <div>
@@ -1972,24 +1893,22 @@ export default function CandyStockPedidosPage({
                   <SectionCard title="Datos del vendedor">
                     <div className="space-y-3">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700">
-                          Vendedor
-                        </label>
-                        <select
-                          className="w-full border rounded-xl px-3 py-2"
+                        <MobileHtmlSelect
+                          label="Vendedor"
                           value={orderSellerId}
-                          onChange={(e) => setOrderSellerId(e.target.value)}
+                          onChange={setOrderSellerId}
                           disabled={Boolean(
                             sellerCandyId && (isVendDulces || !isAdmin),
                           )}
-                        >
-                          <option value="">Seleccionar</option>
-                          {vendors.map((v) => (
-                            <option key={v.id} value={v.id}>
-                              {v.name}
-                            </option>
-                          ))}
-                        </select>
+                          options={[
+                            { value: "", label: "Seleccionar" },
+                            ...vendors.map((v) => ({
+                              value: v.id,
+                              label: v.name,
+                            })),
+                          ]}
+                          sheetTitle="Vendedor"
+                        />
                       </div>
 
                       <div>
@@ -2136,24 +2055,19 @@ export default function CandyStockPedidosPage({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700">
-                        Seleccionar
-                      </label>
-                      <select
-                        className="w-full border rounded-xl px-3 py-2"
+                      <MobileHtmlSelect
+                        label="Seleccionar"
                         value={selectedCatalogProductId}
-                        onChange={(e) =>
-                          setSelectedCatalogProductId(e.target.value)
-                        }
-                      >
-                        <option value="">Seleccionar producto</option>
-                        {productSearchResults.map((p) => (
-                          <option key={p.productId} value={p.productId}>
-                            {p.productName} • {p.category || "—"} • Stock:{" "}
-                            {p.stockPackages}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setSelectedCatalogProductId}
+                        options={[
+                          { value: "", label: "Seleccionar producto" },
+                          ...productSearchResults.map((p) => ({
+                            value: p.productId,
+                            label: `${p.productName} • ${p.category || "—"} • Stock: ${p.stockPackages}`,
+                          })),
+                        ]}
+                        sheetTitle="Producto"
+                      />
                     </div>
 
                     <div>
@@ -2456,20 +2370,19 @@ export default function CandyStockPedidosPage({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Estado
-                  </label>
-                  <select
-                    className="w-full border rounded-xl px-3 py-2"
+                  <MobileHtmlSelect
+                    label="Estado"
                     value={ordersStatusFilter}
-                    onChange={(e) =>
-                      setOrdersStatusFilter(e.target.value as "" | PedidoStatus)
+                    onChange={(v) =>
+                      setOrdersStatusFilter(v as "" | PedidoStatus)
                     }
-                  >
-                    <option value="">Todos</option>
-                    <option value="PENDIENTE">Pendiente</option>
-                    <option value="FINALIZADO">Finalizado</option>
-                  </select>
+                    options={[
+                      { value: "", label: "Todos" },
+                      { value: "PENDIENTE", label: "Pendiente" },
+                      { value: "FINALIZADO", label: "Finalizado" },
+                    ]}
+                    sheetTitle="Estado del pedido"
+                  />
                 </div>
 
                 <div className="md:col-span-2 flex items-end">

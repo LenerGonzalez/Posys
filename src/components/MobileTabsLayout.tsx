@@ -69,7 +69,9 @@ export default function MobileTabsLayout({
     canPath(subject, "transactionCandies", "view") ||
     canPath(subject, "cierreVentasCandies", "view") ||
     canPath(subject, "estadoCuentaCandies", "view") ||
-    canPath(subject, "stockPedidosCandies", "view");
+    canPath(subject, "stockPedidosCandies", "view") ||
+    canPath(subject, "mainordersCandies", "view") ||
+    canPath(subject, "reporteCierresCandies", "view");
 
   // Mostrar selector cuando el usuario tenga acceso a ambos rubros
   const hasBoth = hasPollo && hasDulces;
@@ -387,6 +389,27 @@ export default function MobileTabsLayout({
               to: `${base}/stockPedidosCandies`,
             });
           }
+          if (canPath(subject, "mainordersCandies", "view")) {
+            dulcesTabs.push({
+              key: "maes",
+              label: "Orden maestra",
+              to: `${base}/mainordersCandies`,
+            });
+          }
+          if (canPath(subject, "productsPricesCandies", "view")) {
+            dulcesTabs.push({
+              key: "precios",
+              label: "Precios ventas",
+              to: `${base}/productsPricesCandies`,
+            });
+          }
+          if (canPath(subject, "reporteCierresCandies", "view")) {
+            dulcesTabs.push({
+              key: "saldosExt",
+              label: "Saldos Externos",
+              to: `${base}/reporteCierresCandies`,
+            });
+          }
 
           built = dulcesTabs.length
             ? dulcesTabs
@@ -527,7 +550,8 @@ export default function MobileTabsLayout({
       "customersCandies",
       "estadoCuentaCandies",
       "stockPedidosCandies",
-      "mainordersCandies"
+      "mainordersCandies",
+      "reporteCierresCandies",
     ]);
 
     const filtered = built.filter((t) => {

@@ -11,6 +11,7 @@ import {
   serverTimestamp,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
@@ -18,23 +19,80 @@ import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import ActionMenu from "../common/ActionMenu";
+import BottomSheet from "../common/BottomSheet";
 import { FiMenu } from "react-icons/fi";
 
 type RecordType = "CUENTA_NUEVA" | "ABONO";
+
+/** Rubro / sucursal lógica del cliente externo */
+export type RubroType = "dulces" | "pollo" | "ropa" | "libreria";
+
+/** Todos los clientes externos viven en esta colección; el rubro va en el campo `rubroType`. */
+const CLIENTS_COLLECTION = "external_pending_clients";
+
+const RUBRO_LABEL: Record<RubroType, string> = {
+  dulces: "Dulces",
+  pollo: "Pollo",
+  ropa: "Ropa",
+  libreria: "Librería",
+};
+
+const RUBRO_BADGE_CLASS: Record<RubroType, string> = {
+  dulces: "bg-amber-100 text-amber-900 border-amber-200",
+  pollo: "bg-orange-100 text-orange-900 border-orange-200",
+  ropa: "bg-fuchsia-100 text-fuchsia-900 border-fuchsia-200",
+  libreria: "bg-cyan-100 text-cyan-900 border-cyan-200",
+};
+
+const RUBRO_ORDER: RubroType[] = ["dulces", "pollo", "ropa", "libreria"];
+
+function isRubroType(x: unknown): x is RubroType {
+  return (
+    typeof x === "string" &&
+    (RUBRO_ORDER as readonly string[]).includes(x as RubroType)
+  );
+}
+
+function generateClientIdentifier(rubro: RubroType, docId: string): string {
+  const p =
+    rubro === "dulces"
+      ? "DUL"
+      : rubro === "pollo"
+        ? "POL"
+        : rubro === "ropa"
+          ? "ROP"
+          : "LIB";
+  const tail = docId
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(-6)
+    .toUpperCase();
+  return `${p}-${tail || "------"}`;
+}
 
 interface ExternalClient {
   id: string;
   name: string;
   phone: string;
   description: string;
+  rubroType: RubroType;
+  /** Código legible (p. ej. DUL-A1B2C3), generado al crear */
+  clientIdentifier?: string;
   createdAt?: any;
   updatedAt?: any;
+}
+
+function displayIdentifierForClient(c: ExternalClient): string {
+  if (c.clientIdentifier && String(c.clientIdentifier).trim())
+    return String(c.clientIdentifier).trim();
+  return generateClientIdentifier(c.rubroType, c.id);
 }
 
 interface ExternalRecord {
   id: string;
   clientId: string;
   clientName: string;
+  /** Alineado con la colección del cliente; por defecto dulces (datos viejos) */
+  rubroType?: RubroType;
   type: RecordType;
   date: string; // fecha de venta o fecha de abono
   amount: number; // cuenta nueva suma, abono resta
@@ -46,7 +104,11 @@ interface ExternalRecord {
 }
 
 interface ClientSummary {
+  /** Id de documento en `external_pending_clients` (único por cliente) */
+  clientKey: string;
   clientId: string;
+  rubroType: RubroType;
+  clientIdentifier?: string;
   clientName: string;
   phone: string;
   description: string;
@@ -78,14 +140,31 @@ const toNum = (v: unknown) => Number(v || 0) || 0;
 const decimalInputOk = (value: string) =>
   /^(\d+(\.\d{0,2})?|\.\d{0,2}|)$/.test(value);
 
-export default function SaldosPendientesExternos(): React.ReactElement {
+export default function SaldosPendientesExternos({
+  publicView,
+  role: _role,
+  roles: _roles,
+  currentUserEmail: _currentUserEmail,
+  sellerCandyId: _sellerCandyId,
+}: {
+  publicView?: boolean;
+  /** Props opcionales por compatibilidad con rutas /admin (no usadas en vista pública). */
+  role?: unknown;
+  roles?: unknown;
+  currentUserEmail?: string;
+  sellerCandyId?: string;
+} = {}): React.ReactElement {
+  const isPublicView = !!publicView;
+  /** Vista pública: sin Excel ni gestión de clientes; sí ventas y abonos. */
+  const readonly = isPublicView;
   const [loading, setLoading] = useState(true);
 
   const [clients, setClients] = useState<ExternalClient[]>([]);
   const [records, setRecords] = useState<ExternalRecord[]>([]);
 
-  // filtros resumen
-  const [clientFilter, setClientFilter] = useState("ALL");
+  // filtros resumen (cliente = id en external_pending_clients)
+  const [rubroFilter, setRubroFilter] = useState<"ALL" | RubroType>("ALL");
+  const [clientFilter, setClientFilter] = useState<string>("ALL");
   const [lastSaleFrom, setLastSaleFrom] = useState("");
   const [lastSaleTo, setLastSaleTo] = useState("");
   const [lastAbonoFrom, setLastAbonoFrom] = useState("");
@@ -133,7 +212,8 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   // modal movimiento
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
-  const [recordClientId, setRecordClientId] = useState("");
+  /** Id del cliente en external_pending_clients */
+  const [recordClientKey, setRecordClientKey] = useState("");
   const [recordType, setRecordType] = useState<RecordType>("CUENTA_NUEVA");
   const [recordDate, setRecordDate] = useState(today());
   const [recordAmount, setRecordAmount] = useState("");
@@ -141,7 +221,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
   // modal detalle cliente
   const [detailModalOpen, setDetailModalOpen] = useState(false);
-  const [detailClientId, setDetailClientId] = useState<string | null>(null);
+  const [detailClientKey, setDetailClientKey] = useState<string | null>(null);
 
   const clientModalRef = useRef<HTMLDivElement | null>(null);
   const recordModalRef = useRef<HTMLDivElement | null>(null);
@@ -152,11 +232,30 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     null,
   );
   const [summaryRowMenu, setSummaryRowMenu] = useState<{
-    clientId: string;
+    clientKey: string;
     rect: DOMRect;
   } | null>(null);
   const [recordClientLocked, setRecordClientLocked] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  /** Migración one-shot: escribir `rubroType` en clientes legacy */
+  const [migrationBusy, setMigrationBusy] = useState(false);
+
+  /** Rubro del cliente (campo `rubroType` en el documento) */
+  const [clientRubroType, setClientRubroType] = useState<RubroType>("dulces");
+  const [editingClientRubro, setEditingClientRubro] = useState<RubroType | null>(
+    null,
+  );
+
+  /** Bottom sheets móvil para listas */
+  const [mobileListSheet, setMobileListSheet] = useState<
+    | null
+    | "rubroFilter"
+    | "summaryClient"
+    | "detailType"
+    | "recordClient"
+    | "recordTipo"
+    | "clientRubro"
+  >(null);
 
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -172,39 +271,45 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     (async () => {
       setLoading(true);
       try {
-        const [clientsSnap, recordsSnap] = await Promise.all([
-          getDocs(
-            query(
-              collection(db, "external_pending_clients"),
-              orderBy("name", "asc"),
-            ),
+        const clientsSnap = await getDocs(
+          query(
+            collection(db, CLIENTS_COLLECTION),
+            orderBy("name", "asc"),
           ),
-          getDocs(
-            query(
-              collection(db, "external_pending_records"),
-              orderBy("date", "asc"),
-            ),
-          ),
-        ]);
+        );
 
         const clientsList: ExternalClient[] = clientsSnap.docs.map((d) => {
           const x = d.data() as any;
+          const rtRaw = x.rubroType;
+          const rubroType: RubroType = isRubroType(rtRaw) ? rtRaw : "dulces";
           return {
             id: d.id,
+            rubroType,
             name: String(x.name || ""),
             phone: String(x.phone || ""),
             description: String(x.description || ""),
+            clientIdentifier: String(x.clientIdentifier || "").trim(),
             createdAt: x.createdAt ?? null,
             updatedAt: x.updatedAt ?? null,
           };
         });
 
+        const recordsSnap = await getDocs(
+          query(
+            collection(db, "external_pending_records"),
+            orderBy("date", "asc"),
+          ),
+        );
+
         const recordsList: ExternalRecord[] = recordsSnap.docs.map((d) => {
           const x = d.data() as any;
+          const rtRaw = x.rubroType as RubroType | undefined;
+          const rubroType: RubroType = isRubroType(rtRaw) ? rtRaw : "dulces";
           return {
             id: d.id,
             clientId: String(x.clientId || ""),
             clientName: String(x.clientName || ""),
+            rubroType,
             type: (x.type || "CUENTA_NUEVA") as RecordType,
             date: String(x.date || ""),
             amount: toNum(x.amount),
@@ -232,14 +337,15 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     const grouped: Record<string, ExternalRecord[]> = {};
 
     for (const r of records) {
-      if (!grouped[r.clientId]) grouped[r.clientId] = [];
-      grouped[r.clientId].push(r);
+      const gk = r.clientId;
+      if (!grouped[gk]) grouped[gk] = [];
+      grouped[gk].push(r);
     }
 
     const result: (ExternalRecord & { balanceAfter: number })[] = [];
 
-    Object.keys(grouped).forEach((clientId) => {
-      const sorted = [...grouped[clientId]].sort((a, b) => {
+    Object.keys(grouped).forEach((groupKey) => {
+      const sorted = [...grouped[groupKey]].sort((a, b) => {
         const dateCmp = String(a.date || "").localeCompare(
           String(b.date || ""),
         );
@@ -282,8 +388,12 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     const map: Record<string, ClientSummary> = {};
 
     clients.forEach((c) => {
-      map[c.id] = {
+      const k = c.id;
+      map[k] = {
+        clientKey: k,
         clientId: c.id,
+        rubroType: c.rubroType,
+        clientIdentifier: displayIdentifierForClient(c),
         clientName: c.name,
         phone: c.phone,
         description: c.description,
@@ -297,9 +407,14 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     });
 
     recordsWithBalance.forEach((r) => {
-      if (!map[r.clientId]) {
-        map[r.clientId] = {
+      const rt = (r.rubroType ?? "dulces") as RubroType;
+      const k = r.clientId;
+      if (!map[k]) {
+        map[k] = {
+          clientKey: k,
           clientId: r.clientId,
+          rubroType: rt,
+          clientIdentifier: generateClientIdentifier(rt, r.clientId),
           clientName: r.clientName || "Sin nombre",
           phone: "",
           description: "",
@@ -312,7 +427,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
         };
       }
 
-      const item = map[r.clientId];
+      const item = map[k];
       item.registros += 1;
       item.saldoActual = r.balanceAfter;
 
@@ -338,7 +453,9 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
   const filteredSummaries = useMemo(() => {
     const list = clientSummaries.filter((c) => {
-      if (clientFilter !== "ALL" && c.clientId !== clientFilter) return false;
+      if (rubroFilter !== "ALL" && c.rubroType !== rubroFilter) return false;
+
+      if (clientFilter !== "ALL" && c.clientKey !== clientFilter) return false;
 
       if (lastSaleFrom && (!c.lastSaleDate || c.lastSaleDate < lastSaleFrom)) {
         return false;
@@ -396,6 +513,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     return list;
   }, [
     clientSummaries,
+    rubroFilter,
     clientFilter,
     lastSaleFrom,
     lastSaleTo,
@@ -405,10 +523,10 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   ]);
 
   const filteredDetailRows = useMemo(() => {
-    const allowedClientIds = new Set(filteredSummaries.map((x) => x.clientId));
+    const allowedKeys = new Set(filteredSummaries.map((x) => x.clientKey));
 
     return recordsWithBalance.filter((r) => {
-      if (!allowedClientIds.has(r.clientId)) return false;
+      if (!allowedKeys.has(r.clientId)) return false;
 
       if (detailTypeFilter !== "ALL" && r.type !== detailTypeFilter) {
         return false;
@@ -443,6 +561,14 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     setDetailPage(1);
   }, [detailFrom, detailTo, detailTypeFilter, filteredSummaries]);
 
+  useEffect(() => {
+    if (clientFilter === "ALL") return;
+    const cl = clients.find((c) => c.id === clientFilter);
+    if (!cl || (rubroFilter !== "ALL" && cl.rubroType !== rubroFilter)) {
+      setClientFilter("ALL");
+    }
+  }, [rubroFilter, clientFilter, clients]);
+
   const generalKpis = useMemo(() => {
     const totalClientes = filteredSummaries.length;
     const totalCuentas = filteredSummaries.reduce(
@@ -472,13 +598,17 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   }, [filteredSummaries]);
 
   const selectedClientSummary = useMemo(() => {
-    if (!recordClientId) return null;
+    if (!recordClientKey) return null;
+    const cid = recordClientKey.trim();
     return (
-      clientSummaries.find((x) => x.clientId === recordClientId) ?? {
-        clientId: recordClientId,
-        clientName: clientsById[recordClientId]?.name || "",
-        phone: clientsById[recordClientId]?.phone || "",
-        description: clientsById[recordClientId]?.description || "",
+      clientSummaries.find((x) => x.clientKey === cid) ?? {
+        clientKey: cid,
+        clientId: cid,
+        rubroType: (clientsById[cid]?.rubroType ?? "dulces") as RubroType,
+        clientIdentifier: undefined,
+        clientName: clientsById[cid]?.name || "",
+        phone: clientsById[cid]?.phone || "",
+        description: clientsById[cid]?.description || "",
         totalCuentas: 0,
         totalAbonos: 0,
         saldoActual: 0,
@@ -487,7 +617,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
         lastAbonoDate: "",
       }
     );
-  }, [recordClientId, clientSummaries, clientsById]);
+  }, [recordClientKey, clientSummaries, clientsById]);
 
   const previewSaldoFinal = useMemo(() => {
     const amount = toNum(recordAmount);
@@ -500,17 +630,20 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   }, [recordAmount, recordType, selectedClientSummary]);
 
   const clientDetailRows = useMemo(() => {
-    if (!detailClientId) return [];
-    return recordsWithBalance.filter((r) => r.clientId === detailClientId);
-  }, [detailClientId, recordsWithBalance]);
+    if (!detailClientKey) return [];
+    const cid = detailClientKey;
+    return recordsWithBalance.filter((r) => r.clientId === cid);
+  }, [detailClientKey, recordsWithBalance]);
 
   const detailClientSummary = useMemo(() => {
-    if (!detailClientId) return null;
-    return clientSummaries.find((x) => x.clientId === detailClientId) || null;
-  }, [detailClientId, clientSummaries]);
+    if (!detailClientKey) return null;
+    return clientSummaries.find((x) => x.clientKey === detailClientKey) || null;
+  }, [detailClientKey, clientSummaries]);
 
   const resetClientForm = () => {
     setEditingClientId(null);
+    setEditingClientRubro(null);
+    setClientRubroType("dulces");
     setClientName("");
     setClientPhone("");
     setClientDescription("");
@@ -518,7 +651,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
   const resetRecordForm = () => {
     setEditingRecordId(null);
-    setRecordClientId(clientFilter !== "ALL" ? clientFilter : "");
+    setRecordClientKey(clientFilter !== "ALL" ? clientFilter : "");
     setRecordType("CUENTA_NUEVA");
     setRecordDate(today());
     setRecordAmount("");
@@ -531,24 +664,90 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     window.setTimeout(() => setFeedbackMsg(null), 3500);
   };
 
+  /**
+   * Asigna `rubroType: "dulces"` a documentos en `external_pending_clients`
+   * que no tengan un rubro válido (históricos sin campo o valor incorrecto).
+   */
+  const migrateLegacyClientRubroFields = async () => {
+    if (
+      !window.confirm(
+        'Se revisará la colección "external_pending_clients". ' +
+          "A los clientes sin rubro válido se les asignará el rubro Dulces (histórico). ¿Continuar?",
+      )
+    )
+      return;
+
+    setMigrationBusy(true);
+    try {
+      const snap = await getDocs(collection(db, CLIENTS_COLLECTION));
+      const ids: string[] = [];
+      snap.forEach((d) => {
+        const x = d.data() as { rubroType?: unknown };
+        if (!isRubroType(x.rubroType)) ids.push(d.id);
+      });
+
+      if (ids.length === 0) {
+        showFeedback("No hay clientes que requieran actualizar rubroType.");
+        return;
+      }
+
+      const user = auth.currentUser;
+      const payload = {
+        rubroType: "dulces" as const,
+        updatedAt: serverTimestamp(),
+        updatedBy: user
+          ? { uid: user.uid, email: user.email ?? null }
+          : null,
+      };
+
+      const MAX_BATCH = 500;
+      let batch = writeBatch(db);
+      let opCount = 0;
+      for (const id of ids) {
+        if (opCount >= MAX_BATCH) {
+          await batch.commit();
+          batch = writeBatch(db);
+          opCount = 0;
+        }
+        batch.update(doc(db, CLIENTS_COLLECTION, id), payload);
+        opCount++;
+      }
+      if (opCount > 0) await batch.commit();
+
+      showFeedback(`✅ Actualizados ${ids.length} cliente(s) con rubroType.`);
+      refresh();
+    } catch (e) {
+      console.error(e);
+      window.alert("No se pudo completar la actualización en Firestore.");
+    } finally {
+      setMigrationBusy(false);
+    }
+  };
+
   const openCreateClientModal = () => {
     resetClientForm();
+    setClientRubroType("dulces");
     setClientModalOpen(true);
   };
 
   const openEditClientModal = (client: ExternalClient) => {
     setEditingClientId(client.id);
+    setEditingClientRubro(client.rubroType);
+    setClientRubroType(client.rubroType);
     setClientName(client.name || "");
     setClientPhone(client.phone || "");
     setClientDescription(client.description || "");
     setClientModalOpen(true);
   };
 
-  const openCreateRecordModal = (type: RecordType, forcedClientId?: string) => {
+  const openCreateRecordModal = (
+    type: RecordType,
+    forcedClientKey?: string,
+  ) => {
     resetRecordForm();
     setRecordType(type);
-    if (forcedClientId) {
-      setRecordClientId(forcedClientId);
+    if (forcedClientKey) {
+      setRecordClientKey(forcedClientKey);
       setRecordClientLocked(true);
     } else {
       setRecordClientLocked(false);
@@ -557,17 +756,17 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   };
 
   /** Un solo flujo: mismo modal que cuenta/abono; cliente fijo si viene de una fila. */
-  const openMovementModal = (clientId: string) => {
+  const openMovementModal = (clientKey: string) => {
     resetRecordForm();
     setRecordType("CUENTA_NUEVA");
-    setRecordClientId(clientId);
+    setRecordClientKey(clientKey);
     setRecordClientLocked(true);
     setRecordModalOpen(true);
   };
 
   const openEditRecordModal = (row: ExternalRecord) => {
     setEditingRecordId(row.id);
-    setRecordClientId(row.clientId);
+    setRecordClientKey(row.clientId);
     setRecordType(row.type);
     setRecordDate(row.date || today());
     setRecordAmount(String(Number(row.amount || 0).toFixed(2)));
@@ -586,8 +785,13 @@ export default function SaldosPendientesExternos(): React.ReactElement {
       return;
     }
 
+    if (!editingClientId && !clientRubroType) {
+      window.alert("Selecciona el rubro del cliente.");
+      return;
+    }
+
     const user = auth.currentUser;
-    const payload = {
+    const payloadBase = {
       name,
       phone,
       description,
@@ -596,17 +800,69 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     };
 
     try {
-      if (editingClientId) {
-        await updateDoc(
-          doc(db, "external_pending_clients", editingClientId),
-          payload,
-        );
+      if (editingClientId && editingClientRubro) {
+        const ref = doc(db, CLIENTS_COLLECTION, editingClientId);
+
+        if (clientRubroType === editingClientRubro) {
+          await updateDoc(ref, {
+            ...payloadBase,
+            rubroType: clientRubroType,
+          });
+        } else {
+          const newIdentifier = generateClientIdentifier(
+            clientRubroType,
+            editingClientId,
+          );
+          await updateDoc(ref, {
+            ...payloadBase,
+            rubroType: clientRubroType,
+            clientIdentifier: newIdentifier,
+          });
+
+          const recSnap = await getDocs(
+            query(
+              collection(db, "external_pending_records"),
+              where("clientId", "==", editingClientId),
+            ),
+          );
+          const recordIdsToUpdate: string[] = [];
+          recSnap.forEach((d) => {
+            const r = d.data() as { rubroType?: RubroType };
+            const rt = (r.rubroType ?? "dulces") as RubroType;
+            if (rt !== editingClientRubro) return;
+            recordIdsToUpdate.push(d.id);
+          });
+
+          const MAX_BATCH = 500;
+          let batch = writeBatch(db);
+          let opCount = 0;
+          const upd = {
+            rubroType: clientRubroType,
+            updatedAt: serverTimestamp(),
+            updatedBy: user
+              ? { uid: user.uid, email: user.email ?? null }
+              : null,
+          };
+          for (const rid of recordIdsToUpdate) {
+            if (opCount >= MAX_BATCH) {
+              await batch.commit();
+              batch = writeBatch(db);
+              opCount = 0;
+            }
+            batch.update(doc(db, "external_pending_records", rid), upd);
+            opCount++;
+          }
+          if (opCount > 0) await batch.commit();
+        }
       } else {
-        await addDoc(collection(db, "external_pending_clients"), {
-          ...payload,
+        const ref = await addDoc(collection(db, CLIENTS_COLLECTION), {
+          ...payloadBase,
+          rubroType: clientRubroType,
           createdAt: serverTimestamp(),
           createdBy: user ? { uid: user.uid, email: user.email ?? null } : null,
         });
+        const ident = generateClientIdentifier(clientRubroType, ref.id);
+        await updateDoc(ref, { clientIdentifier: ident });
       }
 
       setClientModalOpen(false);
@@ -624,7 +880,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
   };
 
   const saveRecord = async () => {
-    const clientId = recordClientId.trim();
+    const clientId = recordClientKey.trim();
     const client = clientsById[clientId];
     const date = recordDate;
     const amount = toNum(recordAmount);
@@ -654,14 +910,17 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     }
 
     if (recordType === "ABONO") {
-      const summary = clientSummaries.find((x) => x.clientId === clientId);
+      const summary = clientSummaries.find((x) => x.clientKey === clientId);
       const currentBalance = toNum(summary?.saldoActual || 0);
 
       // si está editando, devolver antes el valor original para no invalidar injustamente
       let availableBalance = currentBalance;
       if (editingRecordId) {
         const original = records.find((x) => x.id === editingRecordId);
-        if (original?.type === "ABONO" && original.clientId === clientId) {
+        if (
+          original?.type === "ABONO" &&
+          original.id === editingRecordId
+        ) {
           availableBalance += toNum(original.amount);
         }
       }
@@ -680,6 +939,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     const payload = {
       clientId,
       clientName: client.name || "",
+      rubroType: client.rubroType,
       type: recordType,
       date,
       amount,
@@ -716,7 +976,9 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     }
   };
 
-  const deleteClientSafe = async (clientId: string) => {
+  const deleteClientSafe = async (clientKey: string) => {
+    const clientId = clientKey;
+
     const hasRecords = records.some((r) => r.clientId === clientId);
     if (hasRecords) {
       window.alert(
@@ -728,7 +990,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     if (!window.confirm("¿Eliminar este cliente?")) return;
 
     try {
-      await deleteDoc(doc(db, "external_pending_clients", clientId));
+      await deleteDoc(doc(db, CLIENTS_COLLECTION, clientId));
       refresh();
     } catch (e) {
       console.error(e);
@@ -753,6 +1015,8 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
     const resumenRows: (string | number)[][] = [
       [
+        "Rubro",
+        "ID cliente",
         "Cliente",
         "Teléfono",
         "Descripción",
@@ -767,6 +1031,9 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
     filteredSummaries.forEach((r) => {
       resumenRows.push([
+        RUBRO_LABEL[r.rubroType],
+        r.clientIdentifier ||
+          generateClientIdentifier(r.rubroType, r.clientId),
         r.clientName,
         r.phone || "",
         r.description || "",
@@ -780,11 +1047,25 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     });
 
     const detalleRows: (string | number)[][] = [
-      ["Cliente", "Tipo", "Fecha", "Monto", "Saldo Final", "Notas"],
+      [
+        "Rubro",
+        "ID cliente",
+        "Cliente",
+        "Tipo",
+        "Fecha",
+        "Monto",
+        "Saldo Final",
+        "Notas",
+      ],
     ];
 
     filteredDetailRows.forEach((r) => {
+      const rt = (r.rubroType ?? "dulces") as RubroType;
+      const cl = clientsById[r.clientId];
       detalleRows.push([
+        RUBRO_LABEL[rt],
+        cl?.clientIdentifier ||
+          generateClientIdentifier(rt, r.clientId),
         r.clientName || "",
         r.type === "CUENTA_NUEVA" ? "Cuenta Nueva" : "Abono",
         r.date || "",
@@ -818,6 +1099,8 @@ export default function SaldosPendientesExternos(): React.ReactElement {
     const handleMouseDown = (ev: MouseEvent) => {
       const target = ev.target as HTMLElement;
       if (target?.closest?.("[data-action-menu-root]")) return;
+      /** BottomSheet va en portal (body); si no ignoramos, cerraría modales al tocar el overlay */
+      if (mobileListSheet) return;
 
       if (
         clientModalOpen &&
@@ -854,6 +1137,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
     const handleKeyDown = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
+        setMobileListSheet(null);
         setClientModalOpen(false);
         setRecordModalOpen(false);
         resetRecordForm();
@@ -871,10 +1155,23 @@ export default function SaldosPendientesExternos(): React.ReactElement {
       document.removeEventListener("mousedown", handleMouseDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [clientModalOpen, recordModalOpen, detailModalOpen, actionOpenId]);
+  }, [
+    clientModalOpen,
+    recordModalOpen,
+    detailModalOpen,
+    actionOpenId,
+    mobileListSheet,
+  ]);
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
+      {isPublicView && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Consulta pública: puede registrar <strong>nueva venta</strong> y{" "}
+          <strong>abonos</strong>. No se exporta a Excel ni se administran
+          clientes desde aquí.
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2 mb-4">
         <h3 className="text-sm sm:text-lg md:text-md font-bold">
           Saldos Externos
@@ -896,55 +1193,101 @@ export default function SaldosPendientesExternos(): React.ReactElement {
         </div>
       </div>
 
-      <ActionMenu
-        anchorRect={mainToolsMenuRect}
-        isOpen={!!mainToolsMenuRect}
-        onClose={() => setMainToolsMenuRect(null)}
-        width={220}
-      >
-        <div className="py-1">
-          <button
-            type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-            onClick={() => {
-              setMainToolsMenuRect(null);
-              openCreateClientModal();
-            }}
-          >
-            Crear cliente
-          </button>
-          <button
-            type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-            onClick={() => {
-              setMainToolsMenuRect(null);
-              openCreateRecordModal("CUENTA_NUEVA");
-            }}
-          >
-            Nueva venta
-          </button>
-          <button
-            type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-            onClick={() => {
-              setMainToolsMenuRect(null);
-              openCreateRecordModal("ABONO");
-            }}
-          >
-            Abono
-          </button>
-          <button
-            type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-            onClick={() => {
-              setMainToolsMenuRect(null);
-              exportToExcel();
-            }}
-          >
-            Excel
-          </button>
-        </div>
-      </ActionMenu>
+      {isPublicView ? (
+        <ActionMenu
+          anchorRect={mainToolsMenuRect}
+          isOpen={!!mainToolsMenuRect}
+          onClose={() => setMainToolsMenuRect(null)}
+          width={260}
+        >
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                openCreateRecordModal("CUENTA_NUEVA");
+              }}
+            >
+              Nueva venta
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                openCreateRecordModal("ABONO");
+              }}
+            >
+              Abono
+            </button>
+          </div>
+        </ActionMenu>
+      ) : (
+        <ActionMenu
+          anchorRect={mainToolsMenuRect}
+          isOpen={!!mainToolsMenuRect}
+          onClose={() => setMainToolsMenuRect(null)}
+          width={260}
+        >
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                openCreateClientModal();
+              }}
+            >
+              Crear cliente
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                openCreateRecordModal("CUENTA_NUEVA");
+              }}
+            >
+              Nueva venta
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                openCreateRecordModal("ABONO");
+              }}
+            >
+              Abono
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                exportToExcel();
+              }}
+            >
+              Excel
+            </button>
+            <div className="border-t border-gray-100 my-1" />
+            <button
+              type="button"
+              disabled={migrationBusy || loading}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => {
+                setMainToolsMenuRect(null);
+                void migrateLegacyClientRubroFields();
+              }}
+            >
+              {migrationBusy
+                ? "Actualizando Firestore…"
+                : "Completar rubroType (clientes viejos)"}
+            </button>
+          </div>
+        </ActionMenu>
+      )}
 
       {feedbackMsg && (
         <div
@@ -965,16 +1308,26 @@ export default function SaldosPendientesExternos(): React.ReactElement {
           {summaryRowMenu &&
             (() => {
               const r = filteredSummaries.find(
-                (x) => x.clientId === summaryRowMenu.clientId,
+                (x) => x.clientKey === summaryRowMenu.clientKey,
               );
               if (!r) return null;
+              const ext =
+                clientsById[r.clientKey] ||
+                ({
+                  id: r.clientId,
+                  rubroType: r.rubroType,
+                  name: r.clientName,
+                  phone: r.phone,
+                  description: r.description,
+                  clientIdentifier: r.clientIdentifier,
+                } as ExternalClient);
               return (
                 <>
                   <button
                     type="button"
                     className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
                     onClick={() => {
-                      setDetailClientId(r.clientId);
+                      setDetailClientKey(r.clientKey);
                       setDetailModalOpen(true);
                       setSummaryRowMenu(null);
                     }}
@@ -986,38 +1339,35 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                     className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
                     onClick={() => {
                       setSummaryRowMenu(null);
-                      openMovementModal(r.clientId);
+                      openMovementModal(r.clientKey);
                     }}
                   >
                     Movimiento
                   </button>
-                  <button
-                    type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-                    onClick={() => {
-                      setSummaryRowMenu(null);
-                      openEditClientModal(
-                        clientsById[r.clientId] || {
-                          id: r.clientId,
-                          name: r.clientName,
-                          phone: r.phone,
-                          description: r.description,
-                        },
-                      );
-                    }}
-                  >
-                    Editar cliente
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full text-left px-3 py-2 text-sm text-red-700 hover:bg-red-50"
-                    onClick={() => {
-                      setSummaryRowMenu(null);
-                      void deleteClientSafe(r.clientId);
-                    }}
-                  >
-                    Eliminar
-                  </button>
+                  {!readonly && (
+                    <>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                        onClick={() => {
+                          setSummaryRowMenu(null);
+                          openEditClientModal(ext);
+                        }}
+                      >
+                        Editar cliente
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm text-red-700 hover:bg-red-50"
+                        onClick={() => {
+                          setSummaryRowMenu(null);
+                          void deleteClientSafe(r.clientKey);
+                        }}
+                      >
+                        Eliminar
+                      </button>
+                    </>
+                  )}
                 </>
               );
             })()}
@@ -1104,27 +1454,83 @@ export default function SaldosPendientesExternos(): React.ReactElement {
           {!summaryCollapsed && (
             <div className="p-4 bg-white">
               {/* Mobile: cards */}
-              {/* Controls: cliente select + order buttons. Aligned on one row for md+ */}
-              <div className="mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <div className="w-full md:w-1/3">
-                  <label className="block text-sm font-semibold text-blue-600 mb-1">
-                    Cliente
-                  </label>
-                  <select
-                    className="border rounded px-3 py-2 w-full bg-white"
-                    value={clientFilter}
-                    onChange={(e) => setClientFilter(e.target.value)}
-                  >
-                    <option value="ALL">Todos</option>
-                    {clients.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
+              {/* Filtros rubro + cliente (web: selects / móvil: BottomSheet) */}
+              <div className="mb-4 flex flex-col gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:items-end">
+                  <div>
+                    <label className="block text-sm font-semibold text-blue-600 mb-1">
+                      Rubro
+                    </label>
+                    <select
+                      className="hidden md:block border rounded px-3 py-2 w-full bg-white"
+                      value={rubroFilter}
+                      onChange={(e) =>
+                        setRubroFilter(e.target.value as "ALL" | RubroType)
+                      }
+                    >
+                      <option value="ALL">Todos los rubros</option>
+                      {RUBRO_ORDER.map((rt) => (
+                        <option key={rt} value={rt}>
+                          {RUBRO_LABEL[rt]}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2"
+                      onClick={() => setMobileListSheet("rubroFilter")}
+                    >
+                      <span className="truncate">
+                        {rubroFilter === "ALL"
+                          ? "Todos los rubros"
+                          : RUBRO_LABEL[rubroFilter]}
+                      </span>
+                      <span className="text-slate-400 shrink-0">▼</span>
+                    </button>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-blue-600 mb-1">
+                      Cliente
+                    </label>
+                    <select
+                      className="hidden md:block border rounded px-3 py-2 w-full bg-white"
+                      value={clientFilter}
+                      onChange={(e) => setClientFilter(e.target.value)}
+                    >
+                      <option value="ALL">Todos</option>
+                      {clients
+                        .filter(
+                          (c) =>
+                            rubroFilter === "ALL" ||
+                            c.rubroType === rubroFilter,
+                        )
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({RUBRO_LABEL[c.rubroType]})
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2"
+                      onClick={() => setMobileListSheet("summaryClient")}
+                    >
+                      <span className="truncate text-sm">
+                        {clientFilter === "ALL"
+                          ? "Todos los clientes"
+                          : (() => {
+                              const cl = clientsById[clientFilter];
+                              return cl
+                                ? `${cl.name} (${RUBRO_LABEL[cl.rubroType]})`
+                                : "—";
+                            })()}
+                      </span>
+                      <span className="text-slate-400 shrink-0">▼</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 md:justify-end">
                   <button
                     type="button"
                     onClick={() =>
@@ -1166,12 +1572,26 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 ) : (
                   filteredSummaries.map((r) => (
                     <div
-                      key={r.clientId}
+                      key={r.clientKey}
                       className="border rounded-lg p-3 bg-white shadow-sm"
                     >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 pr-3">
-                          <div className="font-medium text-sm">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 pr-3 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${RUBRO_BADGE_CLASS[r.rubroType]}`}
+                            >
+                              {RUBRO_LABEL[r.rubroType]}
+                            </span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 border border-slate-200 font-mono">
+                              {r.clientIdentifier ||
+                                generateClientIdentifier(
+                                  r.rubroType,
+                                  r.clientId,
+                                )}
+                            </span>
+                          </div>
+                          <div className="font-medium text-sm mt-1">
                             {r.clientName}
                           </div>
                           <div className="text-xs text-gray-500 mt-1">
@@ -1204,7 +1624,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                             onClick={(e) => {
                               e.stopPropagation();
                               setSummaryRowMenu({
-                                clientId: r.clientId,
+                                clientKey: r.clientKey,
                                 rect: e.currentTarget.getBoundingClientRect(),
                               });
                             }}
@@ -1224,6 +1644,8 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                 <table className="min-w-full w-full border text-sm table-auto">
                   <thead className="bg-gray-100">
                     <tr>
+                      <th className="border p-2">Rubro</th>
+                      <th className="border p-2">ID</th>
                       <th className="border p-2">Cliente</th>
                       <th className="border p-2">Cuentas nuevas</th>
                       <th className="border p-2">Abonos</th>
@@ -1236,7 +1658,18 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                   </thead>
                   <tbody>
                     {filteredSummaries.map((r) => (
-                      <tr key={r.clientId} className="text-center">
+                      <tr key={r.clientKey} className="text-center">
+                        <td className="border p-2">
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${RUBRO_BADGE_CLASS[r.rubroType]}`}
+                          >
+                            {RUBRO_LABEL[r.rubroType]}
+                          </span>
+                        </td>
+                        <td className="border p-2 font-mono text-xs">
+                          {r.clientIdentifier ||
+                            generateClientIdentifier(r.rubroType, r.clientId)}
+                        </td>
                         <td className="border p-2 text-left font-medium">
                           {r.clientName}
                         </td>
@@ -1255,7 +1688,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                               aria-label="Acciones del cliente"
                               onClick={(e) => {
                                 setSummaryRowMenu({
-                                  clientId: r.clientId,
+                                  clientKey: r.clientKey,
                                   rect: e.currentTarget.getBoundingClientRect(),
                                 });
                               }}
@@ -1271,7 +1704,7 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                     {filteredSummaries.length === 0 && (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={10}
                           className="p-4 text-center text-gray-500"
                         >
                           No hay clientes para los filtros seleccionados.
@@ -1334,10 +1767,10 @@ export default function SaldosPendientesExternos(): React.ReactElement {
 
                 <div>
                   <label className="block text-xs md:text-sm text-gray-600 mb-1">
-                    Tipo
+                    Tipo movimiento
                   </label>
                   <select
-                    className="border rounded px-2 py-1 md:px-3 md:py-2 w-full bg-white text-xs md:text-sm"
+                    className="hidden md:block border rounded px-2 py-1 md:px-3 md:py-2 w-full bg-white text-xs md:text-sm"
                     value={detailTypeFilter}
                     onChange={(e) =>
                       setDetailTypeFilter(e.target.value as "ALL" | RecordType)
@@ -1347,6 +1780,20 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                     <option value="CUENTA_NUEVA">Cuenta nueva</option>
                     <option value="ABONO">Abono</option>
                   </select>
+                  <button
+                    type="button"
+                    className="md:hidden w-full border rounded px-2 py-2 text-left bg-white text-sm flex justify-between items-center gap-2"
+                    onClick={() => setMobileListSheet("detailType")}
+                  >
+                    <span>
+                      {detailTypeFilter === "ALL"
+                        ? "Todos los tipos"
+                        : detailTypeFilter === "CUENTA_NUEVA"
+                          ? "Cuenta nueva"
+                          : "Abono"}
+                    </span>
+                    <span className="text-slate-400">▼</span>
+                  </button>
                 </div>
               </div>
 
@@ -1407,48 +1854,52 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                           {money((r as any).balanceAfter || 0)}
                         </td>
                         <td className="border p-2 relative">
-                          <div className="inline-block">
-                            <button
-                              onClick={() =>
-                                setActionOpenId(
-                                  actionOpenId === r.id ? null : r.id,
-                                )
-                              }
-                              className="px-2 py-1 rounded hover:bg-gray-100 md:px-1 md:py-0.5 md:text-[12px]"
-                              aria-label="Acciones"
-                            >
-                              ⋯
-                            </button>
-
-                            {actionOpenId === r.id && (
-                              <div
-                                ref={(el) => {
-                                  actionMenuRef.current =
-                                    el as HTMLDivElement | null;
-                                }}
-                                className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm min-w-[140px]"
+                          {!readonly ? (
+                            <div className="inline-block">
+                              <button
+                                onClick={() =>
+                                  setActionOpenId(
+                                    actionOpenId === r.id ? null : r.id,
+                                  )
+                                }
+                                className="px-2 py-1 rounded hover:bg-gray-100 md:px-1 md:py-0.5 md:text-[12px]"
+                                aria-label="Acciones"
                               >
-                                <button
-                                  className="block w-full text-left px-3 py-2 hover:bg-gray-100"
-                                  onClick={() => {
-                                    openEditRecordModal(r);
-                                    setActionOpenId(null);
+                                ⋯
+                              </button>
+
+                              {actionOpenId === r.id && (
+                                <div
+                                  ref={(el) => {
+                                    actionMenuRef.current =
+                                      el as HTMLDivElement | null;
                                   }}
+                                  className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm min-w-[140px]"
                                 >
-                                  Editar
-                                </button>
-                                <button
-                                  className="block w-full text-left px-3 py-2 text-red-600 hover:bg-gray-100"
-                                  onClick={() => {
-                                    setActionOpenId(null);
-                                    deleteRecordSafe(r.id);
-                                  }}
-                                >
-                                  Eliminar
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                                  <button
+                                    className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                                    onClick={() => {
+                                      openEditRecordModal(r);
+                                      setActionOpenId(null);
+                                    }}
+                                  >
+                                    Editar
+                                  </button>
+                                  <button
+                                    className="block w-full text-left px-3 py-2 text-red-600 hover:bg-gray-100"
+                                    onClick={() => {
+                                      setActionOpenId(null);
+                                      deleteRecordSafe(r.id);
+                                    }}
+                                  >
+                                    Eliminar
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1537,6 +1988,39 @@ export default function SaldosPendientesExternos(): React.ReactElement {
             </div>
 
             <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">
+                  Rubro del cliente
+                </label>
+                <select
+                  className="hidden md:block border rounded px-3 py-2 w-full bg-white"
+                  value={clientRubroType}
+                  onChange={(e) =>
+                    setClientRubroType(e.target.value as RubroType)
+                  }
+                >
+                  {RUBRO_ORDER.map((rt) => (
+                    <option key={rt} value={rt}>
+                      {RUBRO_LABEL[rt]}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2"
+                  onClick={() => setMobileListSheet("clientRubro")}
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-semibold ${RUBRO_BADGE_CLASS[clientRubroType]}`}
+                    >
+                      {RUBRO_LABEL[clientRubroType]}
+                    </span>
+                  </span>
+                  <span className="text-slate-400 shrink-0">▼</span>
+                </button>
+              </div>
+
               <div>
                 <label className="block text-sm text-gray-600 mb-1">
                   Nombre
@@ -1636,30 +2120,58 @@ export default function SaldosPendientesExternos(): React.ReactElement {
                   Cliente
                 </label>
                 <select
-                  className="border rounded px-3 py-2 w-full disabled:bg-gray-100 disabled:cursor-not-allowed"
-                  value={recordClientId}
+                  className="hidden md:block border rounded px-3 py-2 w-full disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  value={recordClientKey}
                   disabled={recordClientLocked || !!editingRecordId}
-                  onChange={(e) => setRecordClientId(e.target.value)}
+                  onChange={(e) => setRecordClientKey(e.target.value)}
                 >
                   <option value="">Seleccionar...</option>
                   {clients.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {c.name} ({RUBRO_LABEL[c.rubroType]})
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  disabled={recordClientLocked || !!editingRecordId}
+                  onClick={() => setMobileListSheet("recordClient")}
+                >
+                  <span className="truncate text-sm">
+                    {(() => {
+                      const cl = clientsById[recordClientKey];
+                      if (!recordClientKey || !cl)
+                        return "Seleccionar cliente…";
+                      return `${cl.name} (${RUBRO_LABEL[cl.rubroType]})`;
+                    })()}
+                  </span>
+                  <span className="text-slate-400 shrink-0">▼</span>
+                </button>
               </div>
 
               <div>
                 <label className="block text-sm text-gray-600 mb-1">Tipo</label>
                 <select
-                  className="border rounded px-3 py-2 w-full"
+                  className="hidden md:block border rounded px-3 py-2 w-full"
                   value={recordType}
                   onChange={(e) => setRecordType(e.target.value as RecordType)}
+                  disabled={!!editingRecordId}
                 >
                   <option value="CUENTA_NUEVA">Venta nueva</option>
                   <option value="ABONO">Abono</option>
                 </select>
+                <button
+                  type="button"
+                  className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2 disabled:bg-gray-100"
+                  disabled={!!editingRecordId}
+                  onClick={() => setMobileListSheet("recordTipo")}
+                >
+                  <span>
+                    {recordType === "CUENTA_NUEVA" ? "Venta nueva" : "Abono"}
+                  </span>
+                  <span className="text-slate-400">▼</span>
+                </button>
               </div>
 
               <div>
@@ -1864,6 +2376,209 @@ export default function SaldosPendientesExternos(): React.ReactElement {
           </div>
         </div>
       )}
+
+      <BottomSheet
+        open={mobileListSheet !== null}
+        onClose={() => setMobileListSheet(null)}
+        title={
+          mobileListSheet === "rubroFilter"
+            ? "Filtrar por rubro"
+            : mobileListSheet === "summaryClient"
+              ? "Filtrar por cliente"
+              : mobileListSheet === "detailType"
+                ? "Tipo de movimiento"
+                : mobileListSheet === "recordClient"
+                  ? "Cliente del registro"
+                  : mobileListSheet === "recordTipo"
+                    ? "Tipo de registro"
+                    : mobileListSheet === "clientRubro"
+                      ? "Rubro del cliente"
+                      : ""
+        }
+        zIndexClassName="z-[200]"
+      >
+        {mobileListSheet === "rubroFilter" && (
+          <div className="flex flex-col">
+            <button
+              type="button"
+              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                rubroFilter === "ALL" ? "bg-blue-50 font-semibold" : ""
+              }`}
+              onClick={() => {
+                setRubroFilter("ALL");
+                setMobileListSheet(null);
+              }}
+            >
+              Todos los rubros
+            </button>
+            {RUBRO_ORDER.map((rt) => (
+              <button
+                key={rt}
+                type="button"
+                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                  rubroFilter === rt ? "bg-blue-50 font-semibold" : ""
+                }`}
+                onClick={() => {
+                  setRubroFilter(rt);
+                  setMobileListSheet(null);
+                }}
+              >
+                {RUBRO_LABEL[rt]}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {mobileListSheet === "summaryClient" && (
+          <div className="flex flex-col max-h-[min(60vh,420px)]">
+            <button
+              type="button"
+              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                clientFilter === "ALL" ? "bg-blue-50 font-semibold" : ""
+              }`}
+              onClick={() => {
+                setClientFilter("ALL");
+                setMobileListSheet(null);
+              }}
+            >
+              Todos los clientes
+            </button>
+            {clients
+              .filter(
+                (c) =>
+                  rubroFilter === "ALL" || c.rubroType === rubroFilter,
+              )
+              .map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                    clientFilter === c.id ? "bg-blue-50 font-semibold" : ""
+                  }`}
+                  onClick={() => {
+                    setClientFilter(c.id);
+                    setMobileListSheet(null);
+                  }}
+                >
+                  {c.name}{" "}
+                  <span className="text-slate-500">
+                    ({RUBRO_LABEL[c.rubroType]})
+                  </span>
+                </button>
+              ))}
+          </div>
+        )}
+
+        {mobileListSheet === "detailType" && (
+          <div className="flex flex-col">
+            {(
+              [
+                ["ALL", "Todos los tipos"],
+                ["CUENTA_NUEVA", "Cuenta nueva"],
+                ["ABONO", "Abono"],
+              ] as const
+            ).map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                  detailTypeFilter === val ? "bg-blue-50 font-semibold" : ""
+                }`}
+                onClick={() => {
+                  setDetailTypeFilter(val);
+                  setMobileListSheet(null);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {mobileListSheet === "recordClient" && (
+          <div className="flex flex-col">
+            <button
+              type="button"
+              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                !recordClientKey ? "bg-blue-50 font-semibold" : ""
+              }`}
+              onClick={() => {
+                setRecordClientKey("");
+                setMobileListSheet(null);
+              }}
+            >
+              Seleccionar…
+            </button>
+            {clients.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                  recordClientKey === c.id ? "bg-blue-50 font-semibold" : ""
+                }`}
+                onClick={() => {
+                  setRecordClientKey(c.id);
+                  setMobileListSheet(null);
+                }}
+              >
+                {c.name}{" "}
+                <span className="text-slate-500">
+                  ({RUBRO_LABEL[c.rubroType]})
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {mobileListSheet === "recordTipo" && (
+          <div className="flex flex-col">
+            <button
+              type="button"
+              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                recordType === "CUENTA_NUEVA" ? "bg-blue-50 font-semibold" : ""
+              }`}
+              onClick={() => {
+                setRecordType("CUENTA_NUEVA");
+                setMobileListSheet(null);
+              }}
+            >
+              Venta nueva
+            </button>
+            <button
+              type="button"
+              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                recordType === "ABONO" ? "bg-blue-50 font-semibold" : ""
+              }`}
+              onClick={() => {
+                setRecordType("ABONO");
+                setMobileListSheet(null);
+              }}
+            >
+              Abono
+            </button>
+          </div>
+        )}
+
+        {mobileListSheet === "clientRubro" && (
+          <div className="flex flex-col">
+            {RUBRO_ORDER.map((rt) => (
+              <button
+                key={rt}
+                type="button"
+                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
+                  clientRubroType === rt ? "bg-blue-50 font-semibold" : ""
+                }`}
+                onClick={() => {
+                  setClientRubroType(rt);
+                  setMobileListSheet(null);
+                }}
+              >
+                {RUBRO_LABEL[rt]}
+              </button>
+            ))}
+          </div>
+        )}
+      </BottomSheet>
     </div>
   );
 }

@@ -2,12 +2,14 @@
 // IMPORTANTE: ahora la venta descuenta del pedido del vendedor (inventory_candies_sellers)
 
 import React, { useEffect, useMemo, useState, useRef } from "react";
+import BottomSheet from "../common/BottomSheet";
 import { BrowserMultiFormatReader, IScannerControls } from "@zxing/browser";
 import {
   addDoc,
   collection,
   doc,
   getDocs,
+  onSnapshot,
   orderBy,
   query,
   Timestamp,
@@ -145,6 +147,73 @@ function sellerBranchLabelToBranch(label: string | undefined): Branch {
     default:
       return "RIVAS";
   }
+}
+
+/** Precio por paquete según sucursal desde catálogo products_candies (respaldo). */
+function pricePerPackageForBranch(p: Product, b: Branch): number {
+  const n =
+    b === "RIVAS"
+      ? p.priceRivas
+      : b === "SAN_JORGE"
+        ? p.priceSanJorge
+        : p.priceIsla;
+  return Number(n) || 0;
+}
+
+/** Misma lógica que PreciosVenta / OrdenMaestra: packagePrice* o unitPrice* × und/paq. */
+function pkgPricesFromCurrentPricesDoc(
+  doc: Record<string, any> | undefined | null,
+  unitsPerPackage: number,
+): { rivas: number; isla: number } {
+  const u = Math.max(1, Number(unitsPerPackage) || 1);
+  let pkgIsla = Number(doc?.packagePriceIsla ?? NaN);
+  let pkgRivas = Number(doc?.packagePriceRivas ?? NaN);
+  if (!Number.isFinite(pkgIsla)) {
+    const x = Number(doc?.unitPriceIsla ?? NaN);
+    pkgIsla = Number.isFinite(x) ? x * u : 0;
+  }
+  if (!Number.isFinite(pkgRivas)) {
+    const x = Number(doc?.unitPriceRivas ?? NaN);
+    pkgRivas = Number.isFinite(x) ? x * u : 0;
+  }
+  return { rivas: pkgRivas, isla: pkgIsla };
+}
+
+function unitsForPriceFromDoc(
+  priceDoc: Record<string, any> | undefined,
+  prod: Product,
+): number {
+  const n = Number(
+    priceDoc?.unitsPerPackage ??
+      priceDoc?.unitsPerPack ??
+      prod.unitsPerPackage ??
+      1,
+  );
+  return Math.max(1, Number.isFinite(n) && n > 0 ? n : 1);
+}
+
+/**
+ * Precio de venta por paquete: fuente principal current_prices (Precios venta),
+ * luego catálogo products_candies. San Jorge no va en current_prices → solo catálogo.
+ */
+function salePricePerPackage(
+  prod: Product,
+  branch: Branch,
+  priceDoc: Record<string, any> | undefined,
+): number {
+  const u = unitsForPriceFromDoc(priceDoc, prod);
+  const { rivas, isla } = pkgPricesFromCurrentPricesDoc(priceDoc, u);
+  if (branch === "RIVAS") {
+    const n = Number(rivas) || 0;
+    if (n > 0) return n;
+    return pricePerPackageForBranch(prod, "RIVAS");
+  }
+  if (branch === "ISLA") {
+    const n = Number(isla) || 0;
+    if (n > 0) return n;
+    return pricePerPackageForBranch(prod, "ISLA");
+  }
+  return pricePerPackageForBranch(prod, "SAN_JORGE");
 }
 
 /** Genera el PDF tipo voucher para la venta de dulces (sin autotable) */
@@ -463,6 +532,8 @@ export default function SalesCandiesPOS({
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  /** Precios de venta (Precios venta) — misma colección que PreciosVenta.tsx */
+  const [priceDocsById, setPriceDocsById] = useState<Record<string, any>>({});
 
   // stockByProduct → stock en UNIDADES por productId DEL PEDIDO DEL VENDEDOR
   const [stockByProduct, setStockByProduct] = useState<Record<string, number>>(
@@ -931,6 +1002,21 @@ export default function SalesCandiesPOS({
     })();
   }, []);
 
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, "current_prices"),
+      (snap) => {
+        const pm: Record<string, any> = {};
+        snap.forEach((d) => {
+          pm[d.id] = d.data();
+        });
+        setPriceDocsById(pm);
+      },
+      (err) => console.error("[SalesCandies] current_prices", err),
+    );
+    return () => unsub();
+  }, []);
+
   // leer usuario logueado / vendedor asociado para autoseleccionar vendedor
   useEffect(() => {
     const subject = roles && roles.length ? roles : role;
@@ -1035,22 +1121,23 @@ export default function SalesCandiesPOS({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendorId, vendors]);
 
-  // Cuando cambia la sucursal (derivada del vendedor), actualizar precios por paquete
+  // Cuando cambia la sucursal o los precios de venta (current_prices), actualizar precio por paquete
   useEffect(() => {
     setItems((prev) =>
       prev.map((it) => {
         const prod = products.find((p) => p.id === it.productId);
         if (!prod) return it;
-        const price =
-          branch === "RIVAS"
-            ? prod.priceRivas
-            : branch === "SAN_JORGE"
-              ? prod.priceSanJorge
-              : prod.priceIsla;
-        return { ...it, pricePerPackage: Number(price) || 0 };
+        return {
+          ...it,
+          pricePerPackage: salePricePerPackage(
+            prod,
+            branch,
+            priceDocsById[it.productId],
+          ),
+        };
       }),
     );
-  }, [branch, products]);
+  }, [branch, products, priceDocsById]);
 
   const pickBestVendorOrderData = async (
     productId: string,
@@ -1127,7 +1214,7 @@ export default function SalesCandiesPOS({
       vendors.find((v) => v.id === vendorId)?.branch ?? branch;
 
     const orderData = await pickBestVendorOrderData(pid, vendorId);
-    const price = (() => {
+    const priceFromOrder = (() => {
       if (!orderData) return 0;
       const pVendor = Number(orderData.unitPriceVendor ?? 0);
       if (pVendor > 0) return pVendor;
@@ -1137,6 +1224,17 @@ export default function SalesCandiesPOS({
         return Number(orderData.unitPriceSanJorge ?? 0);
       return Number(orderData.unitPriceIsla ?? 0);
     })();
+    const priceFromPreciosVenta = salePricePerPackage(
+      prod,
+      effectiveBranch,
+      priceDocsById[pid],
+    );
+    const price =
+      Number(priceFromPreciosVenta) > 0
+        ? Number(priceFromPreciosVenta)
+        : Number(priceFromOrder) > 0
+          ? Number(priceFromOrder)
+          : Number(priceFromPreciosVenta);
 
     const providerPriceFromOrder = Number(orderData?.providerPrice ?? 0);
 
@@ -1753,6 +1851,227 @@ export default function SalesCandiesPOS({
     });
   }, [productQuery, productsForVendorPicker]);
 
+  /** Panel móvil tipo SalesV2: búsqueda + lista en sheet */
+  const [mobileSheet, setMobileSheet] = useState<
+    null | "clientType" | "vendor" | "product" | "creditCustomer" | "abonoClient"
+  >(null);
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [vendorQuery, setVendorQuery] = useState("");
+  const [abonoCustomerQuery, setAbonoCustomerQuery] = useState("");
+
+  const filteredVendorsMobile = useMemo(() => {
+    const q = String(vendorQuery || "").trim().toLowerCase();
+    if (!q) return activeVendors;
+    return activeVendors.filter((v) =>
+      `${v.name || ""} ${v.branchLabel || ""}`.toLowerCase().includes(q),
+    );
+  }, [activeVendors, vendorQuery]);
+
+  const filteredCustomersCreditMobile = useMemo(() => {
+    const q = String(customerQuery || "").trim().toLowerCase();
+    if (!q) return customersForCredit;
+    return customersForCredit.filter((c) =>
+      `${c.name || ""}`.toLowerCase().includes(q),
+    );
+  }, [customersForCredit, customerQuery]);
+
+  const filteredAbonoCustomersMobile = useMemo(() => {
+    const q = String(abonoCustomerQuery || "").trim().toLowerCase();
+    if (!q) return customersWithBalance;
+    return customersWithBalance.filter((c) =>
+      `${c.name || ""}`.toLowerCase().includes(q),
+    );
+  }, [customersWithBalance, abonoCustomerQuery]);
+
+  /** Sucursal del vendedor actual (precio por paquete en listas / líneas). */
+  const vendorBranchForPrice =
+    vendors.find((v) => v.id === vendorId)?.branch ?? branch;
+
+  const mobileSheetTitle =
+    mobileSheet === "clientType"
+      ? "Tipo de cliente"
+      : mobileSheet === "vendor"
+        ? "Vendedor"
+        : mobileSheet === "product"
+          ? "Productos"
+          : mobileSheet === "creditCustomer"
+            ? "Cliente (crédito)"
+            : mobileSheet === "abonoClient"
+              ? "Cliente para abono"
+              : "";
+
+  const mobilePickerSheet = (
+    <BottomSheet
+      open={!!mobileSheet}
+      onClose={() => setMobileSheet(null)}
+      title={mobileSheetTitle}
+      ariaLabel={mobileSheetTitle || "Lista"}
+      centerOnDesktop
+    >
+            {mobileSheet === "clientType" && (
+              <>
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
+                  onClick={() => {
+                    setClientType("CONTADO");
+                    setCustomerId("");
+                    setCustomerQuery("");
+                    setMobileSheet(null);
+                  }}
+                >
+                  <div className="font-medium text-sm">Contado</div>
+                </button>
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
+                  onClick={() => {
+                    setClientType("CREDITO");
+                    setMobileSheet(null);
+                  }}
+                >
+                  <div className="font-medium text-sm">Crédito</div>
+                </button>
+              </>
+            )}
+            {mobileSheet === "vendor" &&
+              filteredVendorsMobile.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
+                  onClick={() => {
+                    setVendorId(v.id);
+                    setItems([]);
+                    setMobileSheet(null);
+                  }}
+                >
+                  <div className="font-medium text-sm break-words">{v.name}</div>
+                  <div className="text-xs text-slate-600 mt-1">
+                    {v.branchLabel} · Comisión {v.commissionPercent.toFixed(2)}%
+                  </div>
+                </button>
+              ))}
+            {mobileSheet === "vendor" && filteredVendorsMobile.length === 0 && (
+              <div className="text-center text-gray-500 text-sm py-8 px-4">
+                No hay vendedores con ese criterio.
+              </div>
+            )}
+            {mobileSheet === "product" &&
+              (filteredProductsForPicker.filter((p) => {
+                const units = stockByProduct[p.id] || 0;
+                const upp = Math.max(1, Number(p.unitsPerPackage || 1));
+                return Math.floor(units / upp) > 0;
+              }).length === 0 ? (
+                <div className="text-center text-gray-500 text-sm py-8 px-4">
+                  No hay productos con ese criterio o sin stock.
+                </div>
+              ) : (
+                filteredProductsForPicker
+                  .filter((p) => {
+                    const units = stockByProduct[p.id] || 0;
+                    const upp = Math.max(1, Number(p.unitsPerPackage || 1));
+                    return Math.floor(units / upp) > 0;
+                  })
+                  .map((p) => {
+                    const already = items.some((it) => it.productId === p.id);
+                    const units = stockByProduct[p.id] || 0;
+                    const upp = Math.max(1, Number(p.unitsPerPackage || 1));
+                    const stockPackages = Math.floor(units / upp);
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        disabled={already}
+                        className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={async () => {
+                          if (already) return;
+                          setProductId(p.id);
+                          await addProductToList(p.id);
+                          setMobileSheet(null);
+                        }}
+                      >
+                        <div className="font-medium text-sm text-slate-900 break-words">
+                          {p.name} {p.sku ? `— ${p.sku}` : ""}
+                        </div>
+                        <div className="text-xs text-slate-600 mt-1">
+                          Existencias: {stockPackages} paquetes
+                        </div>
+                        <div className="text-xs text-slate-600 mt-1">
+                          Precio:{" "}
+                          {money(
+                            salePricePerPackage(
+                              p,
+                              vendorBranchForPrice,
+                              priceDocsById[p.id],
+                            ),
+                          )}{" "}
+                          por paquete ({branchLabel(vendorBranchForPrice)})
+                          {already ? " · Ya en lista" : ""}
+                        </div>
+                      </button>
+                    );
+                  })
+              ))}
+            {mobileSheet === "creditCustomer" &&
+              (filteredCustomersCreditMobile.length === 0 ? (
+                <div className="text-center text-gray-500 text-sm py-8 px-4">
+                  No hay clientes con ese criterio.
+                </div>
+              ) : (
+                filteredCustomersCreditMobile.map((c) => {
+                  const blocked = c.status === "BLOQUEADO";
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={blocked}
+                      className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                      onClick={() => {
+                        if (blocked) return;
+                        setCustomerId(c.id);
+                        setMobileSheet(null);
+                      }}
+                    >
+                      <div className="font-medium text-sm break-words">
+                        {c.name}
+                      </div>
+                      <div className="text-xs text-slate-600 mt-1">
+                        Saldo: {money(c.balance || 0)}
+                        {blocked ? " · Bloqueado" : ""}
+                      </div>
+                    </button>
+                  );
+                })
+              ))}
+            {mobileSheet === "abonoClient" &&
+              (filteredAbonoCustomersMobile.length === 0 ? (
+                <div className="text-center text-gray-500 text-sm py-8 px-4">
+                  No hay clientes con saldo y ese criterio.
+                </div>
+              ) : (
+                filteredAbonoCustomersMobile.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
+                    onClick={() => {
+                      setAbonoCustomerId(c.id);
+                      setMobileSheet(null);
+                    }}
+                  >
+                    <div className="font-medium text-sm break-words">
+                      {c.name}
+                    </div>
+                    <div className="text-xs text-slate-600 mt-1">
+                      Saldo: {money(c.balance || 0)}
+                    </div>
+                  </button>
+                ))
+              ))}
+    </BottomSheet>
+  );
+
   // UI
   return (
     <div className="max-w-6xl mx-auto">
@@ -1970,6 +2289,9 @@ export default function SalesCandiesPOS({
                 }
                 value={productQuery}
                 onChange={(e) => setProductQuery(e.target.value)}
+                onClick={() => {
+                  if (productQuery) setProductQuery("");
+                }}
                 disabled={!vendorId}
               />
               <button
@@ -2395,16 +2717,16 @@ export default function SalesCandiesPOS({
                   <label className="block text-sm font-semibold">
                     Tipo de cliente
                   </label>
-                  <select
-                    className="w-full border p-2 rounded"
-                    value={clientType}
-                    onChange={(e) =>
-                      setClientType(e.target.value as ClientType)
-                    }
+                  <button
+                    type="button"
+                    className="mt-1 w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                    onClick={() => setMobileSheet("clientType")}
                   >
-                    <option value="CONTADO">Contado</option>
-                    <option value="CREDITO">Crédito</option>
-                  </select>
+                    <span className="truncate">
+                      {clientType === "CONTADO" ? "Contado" : "Crédito"}
+                    </span>
+                    <span className="text-slate-400 shrink-0">▼</span>
+                  </button>
                 </div>
 
                 {clientType === "CONTADO" ? (
@@ -2426,22 +2748,41 @@ export default function SalesCandiesPOS({
                     </label>
 
                     <div className="flex flex-col gap-2">
-                      <select
-                        className="w-full border p-2 rounded"
-                        value={customerId}
-                        onChange={(e) => setCustomerId(e.target.value)}
-                      >
-                        <option value="">Selecciona un cliente</option>
-                        {customersForCredit.map((c) => (
-                          <option
-                            key={c.id}
-                            value={c.status === "ACTIVO" ? c.id : ""}
-                            disabled={c.status === "BLOQUEADO"}
+                      <div className="flex gap-1 items-center min-w-0">
+                        <input
+                          className="flex-1 border p-2 rounded min-w-0"
+                          placeholder="Buscar cliente..."
+                          value={customerQuery}
+                          onChange={(e) =>
+                            setCustomerQuery(e.target.value)
+                          }
+                          onClick={() => {
+                            if (customerQuery) setCustomerQuery("");
+                          }}
+                        />
+                        {customerQuery ? (
+                          <button
+                            type="button"
+                            className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                            onClick={() => setCustomerQuery("")}
                           >
-                            {c.name} | Saldo: {money(c.balance || 0)}
-                          </option>
-                        ))}
-                      </select>
+                            Limpiar
+                          </button>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                        onClick={() => setMobileSheet("creditCustomer")}
+                      >
+                        <span className="truncate text-sm">
+                          {customerId
+                            ? selectedCustomer?.name ||
+                              "Cliente seleccionado"
+                            : "Elegir cliente"}
+                        </span>
+                        <span className="text-slate-400 shrink-0">▼</span>
+                      </button>
 
                       <button
                         type="button"
@@ -2496,28 +2837,66 @@ export default function SalesCandiesPOS({
                   <label className="block text-sm font-semibold">
                     Vendedor
                   </label>
-                  <select
-                    className="w-full border p-2 rounded"
-                    value={vendorId}
-                    onChange={(e) => {
-                      setVendorId(e.target.value);
-                      setItems([]);
-                    }}
-                    disabled={lockVendor}
-                  >
-                    <option value="">Selecciona un vendedor</option>
-                    {activeVendors.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} — {/*{v.branchLabel} —*/}{" "}
-                        {v.commissionPercent.toFixed(2)}%
-                      </option>
-                    ))}
-                  </select>
-
-                  {lockVendor && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Vendedor Logueado en esta app.
-                    </p>
+                  {lockVendor ? (
+                    <>
+                      <div className="mt-1 w-full border p-2 rounded bg-gray-50 text-sm">
+                        {(() => {
+                          const v = activeVendors.find(
+                            (x) => x.id === vendorId,
+                          );
+                          return v
+                            ? `${v.name} — ${v.commissionPercent.toFixed(2)}%`
+                            : "—";
+                        })()}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Vendedor Logueado en esta app.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mt-1 flex gap-1 items-center min-w-0">
+                        <input
+                          className="flex-1 border p-2 rounded min-w-0"
+                          placeholder="Buscar vendedor..."
+                          value={vendorQuery}
+                          onChange={(e) =>
+                            setVendorQuery(e.target.value)
+                          }
+                          onClick={() => {
+                            if (vendorQuery) setVendorQuery("");
+                          }}
+                        />
+                        {vendorQuery ? (
+                          <button
+                            type="button"
+                            className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                            onClick={() => setVendorQuery("")}
+                          >
+                            Limpiar
+                          </button>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="mt-2 w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                        onClick={() => setMobileSheet("vendor")}
+                      >
+                        <span className="truncate text-sm">
+                          {vendorId
+                            ? (() => {
+                                const v = activeVendors.find(
+                                  (x) => x.id === vendorId,
+                                );
+                                return v
+                                  ? `${v.name} — ${v.commissionPercent.toFixed(2)}%`
+                                  : "Vendedor";
+                              })()
+                            : "Elegir vendedor"}
+                        </span>
+                        <span className="text-slate-400 shrink-0">▼</span>
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -2541,9 +2920,9 @@ export default function SalesCandiesPOS({
                   <label className="block text-sm font-semibold">
                     Productos
                   </label>
-                  <div className="mt-1 mb-2 flex gap-2">
+                  <div className="mt-1 mb-2 flex gap-2 items-center min-w-0">
                     <input
-                      className="flex-1 border rounded px-2 py-2"
+                      className="flex-1 border rounded px-2 py-2 min-w-0"
                       placeholder={
                         vendorId
                           ? "Buscar producto por nombre o SKU"
@@ -2551,11 +2930,23 @@ export default function SalesCandiesPOS({
                       }
                       value={productQuery}
                       onChange={(e) => setProductQuery(e.target.value)}
+                      onClick={() => {
+                        if (productQuery) setProductQuery("");
+                      }}
                       disabled={!vendorId}
                     />
+                    {productQuery ? (
+                      <button
+                        type="button"
+                        className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                        onClick={() => setProductQuery("")}
+                      >
+                        Limpiar
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      className="px-3 py-2 rounded bg-gray-800 text-white"
+                      className="px-3 py-2 rounded bg-gray-800 text-white shrink-0"
                       onClick={() => setScanOpen(true)}
                       disabled={!vendorId}
                     >
@@ -2573,41 +2964,19 @@ export default function SalesCandiesPOS({
                       </svg>
                     </button>
                   </div>
-                  <select
-                    className="w-full border p-2 rounded"
-                    value={productId}
-                    onChange={async (e) => {
-                      const pid = e.target.value;
-                      setProductId(pid);
-                      await addProductToList(pid);
-                    }}
+                  <button
+                    type="button"
+                    className="w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
                     disabled={!vendorId}
+                    onClick={() => setMobileSheet("product")}
                   >
-                    <option value="">
+                    <span className="truncate text-sm text-slate-600">
                       {vendorId
-                        ? "Selecciona un producto"
+                        ? "Elegir producto (lista)"
                         : "Selecciona un vendedor primero"}
-                    </option>
-
-                    {filteredProductsForPicker.map((p) => {
-                      const already = items.some((it) => it.productId === p.id);
-                      const units = stockByProduct[p.id] || 0;
-                      const upp = Math.max(1, Number(p.unitsPerPackage || 1));
-                      const stockPackages = Math.floor(units / upp);
-                      if (stockPackages <= 0) return null;
-
-                      return (
-                        <option
-                          key={p.id}
-                          value={already ? "" : p.id}
-                          disabled={already}
-                        >
-                          {p.name} {p.sku ? `— ${p.sku}` : ""} (disp:{" "}
-                          {stockPackages} paq.){already ? " ✅" : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
+                    </span>
+                    <span className="text-slate-400 shrink-0">▼</span>
+                  </button>
                 </div>
 
                 {items.length === 0 ? (
@@ -2779,18 +3148,42 @@ export default function SalesCandiesPOS({
                           <label className="block text-xs text-gray-600">
                             Cliente
                           </label>
-                          <select
-                            className="w-full border p-2 rounded"
-                            value={abonoCustomerId}
-                            onChange={(e) => setAbonoCustomerId(e.target.value)}
+                          <div className="mt-1 flex gap-1 items-center min-w-0">
+                            <input
+                              className="flex-1 border p-2 rounded min-w-0 text-sm"
+                              placeholder="Buscar cliente..."
+                              value={abonoCustomerQuery}
+                              onChange={(e) =>
+                                setAbonoCustomerQuery(e.target.value)
+                              }
+                              onClick={() => {
+                                if (abonoCustomerQuery)
+                                  setAbonoCustomerQuery("");
+                              }}
+                            />
+                            {abonoCustomerQuery ? (
+                              <button
+                                type="button"
+                                className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                                onClick={() => setAbonoCustomerQuery("")}
+                              >
+                                Limpiar
+                              </button>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            className="mt-2 w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                            onClick={() => setMobileSheet("abonoClient")}
                           >
-                            <option value="">Selecciona un cliente</option>
-                            {customersWithBalance.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name} | Saldo: {money(c.balance || 0)}
-                              </option>
-                            ))}
-                          </select>
+                            <span className="truncate text-sm">
+                              {abonoCustomerId
+                                ? selectedAbonoCustomer?.name ||
+                                  "Cliente"
+                                : "Elegir cliente"}
+                            </span>
+                            <span className="text-slate-400 shrink-0">▼</span>
+                          </button>
                         </div>
                         <div>
                           <label className="block text-xs text-gray-600">
@@ -3169,6 +3562,8 @@ export default function SalesCandiesPOS({
 
       {/* Overlay de guardado (reutiliza LoadingOverlay global) */}
       {saving && <LoadingOverlay message={"Guardando venta..."} />}
+
+      {mobilePickerSheet}
     </div>
   );
 }
