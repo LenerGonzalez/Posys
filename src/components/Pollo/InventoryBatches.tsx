@@ -25,6 +25,8 @@ import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { FiInfo, FiMenu } from "react-icons/fi";
 import ActionMenu from "../common/ActionMenu";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -59,9 +61,37 @@ function weightedAvgUnitCostRemaining(loots: Batch[]): number | null {
   return Number((costSum / remSum).toFixed(4));
 }
 
+/**
+ * Precio de venta ponderado del stock restante:
+ * Σ(remaining × salePrice) / Σ(remaining).
+ * Incluye opcionalmente un lote "nuevo" (qty + salePrice) que aún no está en BD.
+ */
+function weightedAvgSalePriceRemaining(
+  loots: Batch[],
+  newQty = 0,
+  newSalePrice = 0,
+): number | null {
+  let remSum = 0;
+  let saleSum = 0;
+  for (const b of loots) {
+    const rem = Number(b.remaining || 0);
+    if (rem <= 0) continue;
+    const sp = Number(b.salePrice || 0);
+    remSum += rem;
+    saleSum += rem * sp;
+  }
+  if (newQty > 0 && newSalePrice > 0) {
+    remSum += newQty;
+    saleSum += newQty * newSalePrice;
+  }
+  if (remSum <= 0) return null;
+  return Number((saleSum / remSum).toFixed(2));
+}
+
 type WeightedCostLotLine = {
   batchId: string;
   date: string;
+  quantity: number;
   remaining: number;
   purchasePrice: number;
   salePrice: number;
@@ -75,8 +105,10 @@ type WeightedCostRow = {
   unit: string;
   quantityRemaining: number;
   weightedAvgUnitCost: number;
+  weightedAvgSalePrice: number;
+  margin: number;
   inventoryValueAtCost: number;
-  /** Lotes con saldo que entran en el ponderado (orden FIFO). */
+  inventoryValueAtSale: number;
   lotCount: number;
   lots: WeightedCostLotLine[];
 };
@@ -100,6 +132,7 @@ function weightedCostRowsByProduct(batches: Batch[]): WeightedCostRow[] {
     const lots: WeightedCostLotLine[] = sorted.map((b) => ({
       batchId: b.id,
       date: String(b.date || ""),
+      quantity: roundQty(Number(b.quantity || 0)),
       remaining: roundQty(Number(b.remaining || 0)),
       purchasePrice: Number(b.purchasePrice || 0),
       salePrice: Number(b.salePrice || 0),
@@ -108,6 +141,7 @@ function weightedCostRowsByProduct(batches: Batch[]): WeightedCostRow[] {
     const rem = roundQty(
       loots.reduce((a, b) => a + Number(b.remaining || 0), 0),
     );
+    const wasp = weightedAvgSalePriceRemaining(loots) ?? 0;
     const first = sorted[0];
     rows.push({
       key,
@@ -116,7 +150,10 @@ function weightedCostRowsByProduct(batches: Batch[]): WeightedCostRow[] {
       unit: first.unit,
       quantityRemaining: rem,
       weightedAvgUnitCost: wac,
+      weightedAvgSalePrice: wasp,
+      margin: Number((wasp - wac).toFixed(2)),
       inventoryValueAtCost: Number((rem * wac).toFixed(2)),
+      inventoryValueAtSale: Number((rem * wasp).toFixed(2)),
       lotCount: lots.length,
       lots,
     });
@@ -297,6 +334,9 @@ export default function InventoryBatches({
   >(null);
   /** Modal: explicación sencilla del costo ponderado. */
   const [ponderadoInfoOpen, setPonderadoInfoOpen] = useState(false);
+  const [salePonderadoDetailKey, setSalePonderadoDetailKey] = useState<
+    string | null
+  >(null);
   /** Menú ⋮ junto a Refrescar (exportar / crear lote). */
   const [mainToolsMenuRect, setMainToolsMenuRect] =
     useState<DOMRect | null>(null);
@@ -313,6 +353,10 @@ export default function InventoryBatches({
       ...prev,
       [type]: !(prev[type] ?? false),
     }));
+
+  // ===== Precio vigente: panel al crear/editar lote =====
+  const [showPriceInfoModal, setShowPriceInfoModal] = useState(false);
+  const [priceInfoProductId, setPriceInfoProductId] = useState<string>("");
 
   const formatQtyLabel = (lbs: number, uds: number) => {
     const parts: string[] = [];
@@ -828,6 +872,38 @@ export default function InventoryBatches({
     return list.sort((a, b) => a.name.localeCompare(b.name, "es"));
   }, [products, unitFilter]);
 
+  const productFilterSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Todos" },
+      ...products.map((p) => ({
+        value: p.id,
+        label: `${p.name} — ${p.category}`,
+      })),
+    ],
+    [products],
+  );
+
+  const unitFilterOptions = useMemo(
+    () => [
+      { value: "lb", label: "Libras" },
+      { value: "unidad", label: "Unidad" },
+      { value: "cajilla", label: "Cajilla" },
+      { value: "kg", label: "Kilogramo" },
+    ],
+    [],
+  );
+
+  const productByUnitSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Selecciona un producto", disabled: true },
+      ...productsByUnit.map((p) => ({
+        value: p.id,
+        label: `${p.name} — ${p.category} — ${p.measurement}`,
+      })),
+    ],
+    [productsByUnit],
+  );
+
   // autocompletar precio proveedor si el producto tiene `providerPrice`
   useEffect(() => {
     const existing = orderItems.find((it) => it.productId === productId);
@@ -853,6 +929,65 @@ export default function InventoryBatches({
       setPurchasePrice(NaN);
     }
   }, [productId, products, refreshKey, orderItems]);
+
+  /**
+   * Para cada producto del pedido actual, calcula stock existente en otros lotes
+   * y precio de venta ponderado (existente + lo que se va a agregar).
+   */
+  const existingStockByProduct = useMemo(() => {
+    const editingBatchIds = new Set(editingGroupItems.map((b) => b.id));
+    const map: Record<
+      string,
+      {
+        totalRemaining: number;
+        weightedSalePrice: number | null;
+        weightedCost: number | null;
+        lots: Array<{
+          batchId: string;
+          date: string;
+          remaining: number;
+          purchasePrice: number;
+          salePrice: number;
+          orderName?: string;
+        }>;
+      }
+    > = {};
+    const productIds = new Set(orderItems.map((it) => it.productId));
+    for (const pid of productIds) {
+      const matching = batches.filter(
+        (b) =>
+          b.productId === pid &&
+          Number(b.remaining || 0) > 0 &&
+          !editingBatchIds.has(b.id),
+      );
+      const sorted = sortBatchesFifoOrder(matching);
+      const lots = sorted.map((b) => ({
+        batchId: b.id,
+        date: String(b.date || ""),
+        remaining: roundQty(Number(b.remaining || 0)),
+        purchasePrice: Number(b.purchasePrice || 0),
+        salePrice: Number(b.salePrice || 0),
+        orderName: String(b.orderName || "").trim() || undefined,
+      }));
+      const totalRemaining = roundQty(
+        matching.reduce((a, b) => a + Number(b.remaining || 0), 0),
+      );
+      const oi = orderItems.find((x) => x.productId === pid);
+      const newQty = oi ? roundQty(oi.quantity) : 0;
+      const newSP = oi ? Number(oi.salePrice || 0) : 0;
+      map[pid] = {
+        totalRemaining,
+        weightedSalePrice: weightedAvgSalePriceRemaining(
+          matching,
+          newQty,
+          newSP,
+        ),
+        weightedCost: weightedAvgUnitCostRemaining(matching),
+        lots,
+      };
+    }
+    return map;
+  }, [orderItems, batches, editingGroupItems]);
 
   // ===== Crear pedido: agregar item =====
   const addItemToOrder = () => {
@@ -1068,6 +1203,14 @@ export default function InventoryBatches({
           });
         }
 
+        for (const it of orderItems) {
+          try {
+            await updateDoc(doc(db, "products", it.productId), {
+              activeSalePrice: Number(it.salePrice || 0),
+            });
+          } catch {}
+        }
+
         setMsg("✅ Pedido creado");
         setShowCreateModal(false);
         resetOrderModal();
@@ -1126,6 +1269,14 @@ export default function InventoryBatches({
         if (!productIdsNew.has(b.productId)) {
           await deleteDoc(doc(db, "inventory_batches", b.id));
         }
+      }
+
+      for (const it of orderItems) {
+        try {
+          await updateDoc(doc(db, "products", it.productId), {
+            activeSalePrice: Number(it.salePrice || 0),
+          });
+        } catch {}
       }
 
       setMsg("✅ Pedido actualizado");
@@ -1567,20 +1718,16 @@ export default function InventoryBatches({
           />
         </div>
 
-        <div className="flex flex-col min-w-[240px]">
-          <label className="font-semibold">Producto</label>
-          <select
-            className="border rounded px-2 py-1"
+        <div className="flex flex-col min-w-[240px] w-full md:w-auto">
+          <MobileHtmlSelect
+            label="Producto"
             value={productFilterId}
-            onChange={(e) => setProductFilterId(e.target.value)}
-          >
-            <option value="">Todos</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} — {p.category}
-              </option>
-            ))}
-          </select>
+            onChange={setProductFilterId}
+            options={productFilterSelectOptions}
+            sheetTitle="Filtrar por producto"
+            selectClassName="border rounded px-2 py-1 w-full"
+            buttonClassName="border rounded px-2 py-1 w-full text-left flex items-center justify-between gap-2 bg-white"
+          />
         </div>
 
         <button
@@ -2059,6 +2206,260 @@ export default function InventoryBatches({
         </div>
       )}
 
+      {/* ===== PANEL: Precio de venta ponderado + margen (con lotes) ===== */}
+      {weightedCostInventoryRows.length > 0 && (
+        <div className="mb-4 border border-indigo-200 rounded-2xl bg-indigo-50/50 p-4 shadow-sm">
+          <h4 className="font-semibold text-indigo-900 mb-1">
+            Precio de venta ponderado vs costo (stock disponible)
+          </h4>
+          <p className="text-xs text-indigo-700/70 mb-3 leading-relaxed">
+            Compara el precio de venta ponderado con el costo ponderado de cada
+            producto. Toca <strong>ℹ</strong> para ver cada lote individual y
+            comparar precios entre lote viejo y lote nuevo. El{" "}
+            <strong>margen</strong> indica ganancia por unidad; rojo = pérdida,
+            amarillo = margen bajo (&lt;3), verde = saludable.
+          </p>
+          <div className="overflow-x-auto rounded-lg border border-indigo-200 bg-white">
+            <table className="min-w-[780px] w-full text-sm text-slate-800">
+              <thead className="bg-indigo-100/60 text-left">
+                <tr>
+                  <th className="p-2 border-b">Producto</th>
+                  <th className="p-2 border-b">Unidad</th>
+                  <th className="p-2 border-b text-right">Cantidad</th>
+                  <th className="p-2 border-b text-right">P. Costo Pond.</th>
+                  <th className="p-2 border-b text-right">P. Venta Pond.</th>
+                  <th className="p-2 border-b text-right">Margen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weightedCostInventoryRows.map((r) => {
+                  const marginColor =
+                    r.margin < 0
+                      ? "text-red-700 bg-red-50"
+                      : r.margin < 3
+                        ? "text-amber-700 bg-amber-50"
+                        : "text-green-700 bg-green-50";
+                  const isExpanded = salePonderadoDetailKey === r.key;
+                  return (
+                    <React.Fragment key={r.key}>
+                      <tr className="border-b border-slate-100">
+                        <td className="p-2">
+                          <div className="flex items-start gap-2">
+                            <button
+                              type="button"
+                              className={`mt-0.5 shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
+                                isExpanded
+                                  ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+                                  : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+                              }`}
+                              title="Ver lotes individuales"
+                              aria-expanded={isExpanded}
+                              onClick={() =>
+                                setSalePonderadoDetailKey((k) =>
+                                  k === r.key ? null : r.key,
+                                )
+                              }
+                            >
+                              <FiInfo className="w-4 h-4" aria-hidden />
+                            </button>
+                            <span className="min-w-0 leading-snug font-medium">
+                              {r.productName}
+                              {r.lotCount > 1 && (
+                                <span className="ml-1.5 text-[11px] font-normal text-indigo-600">
+                                  {r.lotCount} lotes
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-2">
+                          {(r.unit || "").toUpperCase()}
+                        </td>
+                        <td className="p-2 text-right tabular-nums">
+                          {r.quantityRemaining.toFixed(3)}
+                        </td>
+                        <td className="p-2 text-right tabular-nums font-medium">
+                          {money(r.weightedAvgUnitCost)}
+                        </td>
+                        <td className="p-2 text-right tabular-nums font-medium">
+                          {money(r.weightedAvgSalePrice)}
+                        </td>
+                        <td
+                          className={`p-2 text-right tabular-nums font-bold rounded ${marginColor}`}
+                        >
+                          {money(r.margin)}
+                        </td>
+                      </tr>
+
+                      {isExpanded && (
+                        <tr className="border-b border-indigo-200 bg-indigo-50/40">
+                          <td colSpan={6} className="p-0">
+                            <div className="p-3">
+                              <div className="text-xs font-semibold text-indigo-800 mb-2">
+                                Detalle por lote — {r.productName} (
+                                {r.lotCount}{" "}
+                                {r.lotCount === 1 ? "lote" : "lotes"} con stock,
+                                orden FIFO)
+                              </div>
+                              <div className="overflow-x-auto rounded border border-indigo-200 bg-white">
+                                <table className="min-w-[600px] w-full text-xs text-slate-800">
+                                  <thead className="bg-indigo-50">
+                                    <tr>
+                                      <th className="p-2 text-left font-semibold">
+                                        Fecha
+                                      </th>
+                                      <th className="p-2 text-right font-semibold">
+                                        Cantidad
+                                      </th>
+                                      <th className="p-2 text-right font-semibold">
+                                        Existencias
+                                      </th>
+                                      <th className="p-2 text-right font-semibold">
+                                        P. Costo
+                                      </th>
+                                      <th className="p-2 text-right font-semibold">
+                                        P. Venta
+                                      </th>
+                                      <th className="p-2 text-right font-semibold">
+                                        Margen
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {r.lots.map((lot, idx) => {
+                                      const lotMargin =
+                                        lot.salePrice - lot.purchasePrice;
+                                      const lotMarginColor =
+                                        lotMargin < 0
+                                          ? "text-red-700"
+                                          : lotMargin < 3
+                                            ? "text-amber-700"
+                                            : "text-green-700";
+                                      return (
+                                        <tr
+                                          key={lot.batchId}
+                                          className={`border-t border-slate-100 ${idx === 0 ? "bg-amber-50/40" : ""}`}
+                                        >
+                                          <td className="p-2 tabular-nums">
+                                            {lot.date || "—"}
+                                            {idx === 0 && r.lotCount > 1 && (
+                                              <span className="ml-1 text-[10px] text-amber-700 font-semibold">
+                                                MÁS VIEJO
+                                              </span>
+                                            )}
+                                            {idx === r.lotCount - 1 &&
+                                              r.lotCount > 1 && (
+                                                <span className="ml-1 text-[10px] text-blue-700 font-semibold">
+                                                  MÁS NUEVO
+                                                </span>
+                                              )}
+                                          </td>
+                                          <td className="p-2 text-right tabular-nums">
+                                            {lot.quantity.toFixed(3)}
+                                          </td>
+                                          <td className="p-2 text-right tabular-nums">
+                                            {lot.remaining.toFixed(3)}
+                                          </td>
+                                          <td className="p-2 text-right tabular-nums">
+                                            {money(lot.purchasePrice)}
+                                          </td>
+                                          <td className="p-2 text-right tabular-nums">
+                                            {money(lot.salePrice)}
+                                          </td>
+                                          <td
+                                            className={`p-2 text-right tabular-nums font-semibold ${lotMarginColor}`}
+                                          >
+                                            {money(lotMargin)}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                  <tfoot className="bg-indigo-50/60">
+                                    <tr className="font-semibold border-t border-indigo-200">
+                                      <td colSpan={2} className="p-2">
+                                        Ponderado
+                                      </td>
+                                      <td className="p-2 text-right tabular-nums">
+                                        {r.quantityRemaining.toFixed(3)}
+                                      </td>
+                                      <td className="p-2 text-right tabular-nums">
+                                        {money(r.weightedAvgUnitCost)}
+                                      </td>
+                                      <td className="p-2 text-right tabular-nums">
+                                        {money(r.weightedAvgSalePrice)}
+                                      </td>
+                                      <td
+                                        className={`p-2 text-right tabular-nums font-bold ${
+                                          r.margin < 0
+                                            ? "text-red-700"
+                                            : r.margin < 3
+                                              ? "text-amber-700"
+                                              : "text-green-700"
+                                        }`}
+                                      >
+                                        {money(r.margin)}
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+              <tfoot className="bg-indigo-50/80">
+                <tr className="font-semibold text-sm">
+                  <td colSpan={2} className="p-2 border-t">
+                    Totales
+                  </td>
+                  <td className="p-2 border-t text-right tabular-nums">
+                    {roundQty(
+                      weightedCostInventoryRows.reduce(
+                        (a, r) => a + r.quantityRemaining,
+                        0,
+                      ),
+                    ).toFixed(3)}
+                  </td>
+                  <td className="p-2 border-t text-right tabular-nums">
+                    {money(
+                      weightedCostInventoryRows.reduce(
+                        (a, r) => a + r.inventoryValueAtCost,
+                        0,
+                      ),
+                    )}
+                  </td>
+                  <td className="p-2 border-t text-right tabular-nums">
+                    {money(
+                      weightedCostInventoryRows.reduce(
+                        (a, r) => a + r.inventoryValueAtSale,
+                        0,
+                      ),
+                    )}
+                  </td>
+                  <td className="p-2 border-t text-right tabular-nums font-bold">
+                    {money(
+                      weightedCostInventoryRows.reduce(
+                        (a, r) => a + r.inventoryValueAtSale,
+                        0,
+                      ) -
+                        weightedCostInventoryRows.reduce(
+                          (a, r) => a + r.inventoryValueAtCost,
+                          0,
+                        ),
+                    )}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* ===================== */}
       {/* ✅ MOBILE FIRST: CARDS */}
       {/* ===================== */}
@@ -2453,7 +2854,7 @@ export default function InventoryBatches({
         </table>
       </div>
 
-      {msg && <p className="mt-2 text-sm">{msg}</p>}
+      {msg && <Toast message={msg} onClose={() => setMsg("")} />}
 
       {ponderadoInfoOpen &&
         createPortal(
@@ -2591,43 +2992,33 @@ export default function InventoryBatches({
               <div className="border rounded p-3 bg-gray-50 mb-4">
                 <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
                   <div>
-                    <label className="block text-sm font-semibold">
-                      Unidad
-                    </label>
-                    <select
-                      className="w-full border p-2 rounded"
+                    <MobileHtmlSelect
+                      label="Unidad"
                       value={unitFilter}
-                      onChange={(e) => {
-                        setUnitFilter(e.target.value);
+                      onChange={(v) => {
+                        setUnitFilter(v);
                         setProductId("");
                         setQuantity(0);
                         setPurchasePrice(NaN);
                         setSalePrice(0);
                       }}
-                    >
-                      <option value="lb">Libras</option>
-                      <option value="unidad">Unidad</option>
-                      <option value="cajilla">Cajilla</option>
-                      <option value="kg">Kilogramo</option>
-                    </select>
+                      options={unitFilterOptions}
+                      sheetTitle="Unidad"
+                      selectClassName="w-full border p-2 rounded"
+                      buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                    />
                   </div>
 
                   <div className="md:col-span-2">
-                    <label className="block text-sm font-semibold">
-                      Producto (solo activos)
-                    </label>
-                    <select
-                      className="w-full border p-2 rounded"
+                    <MobileHtmlSelect
+                      label="Producto (solo activos)"
                       value={productId}
-                      onChange={(e) => setProductId(e.target.value)}
-                    >
-                      <option value="">Selecciona un producto</option>
-                      {productsByUnit.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} — {p.category} — {p.measurement}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setProductId}
+                      options={productByUnitSelectOptions}
+                      sheetTitle="Producto"
+                      selectClassName="w-full border p-2 rounded"
+                      buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                    />
                   </div>
 
                   <div>
@@ -2894,6 +3285,160 @@ export default function InventoryBatches({
                 </table>
               </div>
 
+              {/* ===== PANEL PRECIO VIGENTE ===== */}
+              {orderItems.length > 0 && (
+                <div className="mt-4 space-y-3">
+                  {orderItems.map((oi) => {
+                    const info = existingStockByProduct[oi.productId];
+                    if (!info || info.totalRemaining <= 0) return null;
+                    const wsp = info.weightedSalePrice;
+                    const wc = info.weightedCost;
+                    const currentSP = Number(oi.salePrice || 0);
+                    const margin =
+                      wc != null && currentSP > 0 ? currentSP - wc : null;
+                    const totalQty = roundQty(
+                      info.totalRemaining + Number(oi.quantity || 0),
+                    );
+                    const projectedRevenue =
+                      currentSP > 0 ? currentSP * totalQty : 0;
+                    const projectedRevenueWeighted =
+                      wsp != null ? wsp * totalQty : 0;
+
+                    let color = "border-green-300 bg-green-50";
+                    let label = "Margen saludable";
+                    if (margin != null) {
+                      if (margin < 0) {
+                        color = "border-red-400 bg-red-50";
+                        label = "Precio bajo costo ponderado";
+                      } else if (margin < 3) {
+                        color = "border-amber-300 bg-amber-50";
+                        label = "Margen mínimo";
+                      }
+                    }
+
+                    return (
+                      <div
+                        key={oi.productId}
+                        className={`border rounded-lg p-3 ${color}`}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <div className="font-semibold text-sm">
+                            {oi.productName}{" "}
+                            <span className="text-xs font-normal text-gray-600">
+                              — stock existente + nuevo lote
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                margin != null && margin < 0
+                                  ? "bg-red-200 text-red-800"
+                                  : margin != null && margin < 3
+                                    ? "bg-amber-200 text-amber-800"
+                                    : "bg-green-200 text-green-800"
+                              }`}
+                            >
+                              {label}
+                            </span>
+                            <button
+                              type="button"
+                              className="p-1 rounded hover:bg-white/60"
+                              aria-label="Ver detalle de lotes"
+                              title="Ver detalle de lotes"
+                              onClick={() => {
+                                setPriceInfoProductId(oi.productId);
+                                setShowPriceInfoModal(true);
+                              }}
+                            >
+                              <FiInfo className="w-4 h-4 text-gray-700" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                          <div>
+                            <div className="text-gray-600">Stock existente</div>
+                            <div className="font-semibold text-base">
+                              {info.totalRemaining.toFixed(3)} {oi.unit}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-600">Nuevo lote</div>
+                            <div className="font-semibold text-base">
+                              {roundQty(oi.quantity).toFixed(3)} {oi.unit}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-600">
+                              Precio venta ponderado
+                            </div>
+                            <div className="font-semibold text-base">
+                              {wsp != null ? money(wsp) : "—"}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-600">
+                              Tu precio de venta
+                            </div>
+                            <div className="font-semibold text-base">
+                              {currentSP > 0 ? money(currentSP) : "—"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {margin != null && (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mt-2">
+                            <div>
+                              <div className="text-gray-600">
+                                Costo ponderado
+                              </div>
+                              <div className="font-semibold">
+                                {wc != null ? money(wc) : "—"}/{oi.unit}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-gray-600">
+                                Margen por {oi.unit}
+                              </div>
+                              <div
+                                className={`font-semibold ${margin < 0 ? "text-red-700" : margin < 3 ? "text-amber-700" : "text-green-700"}`}
+                              >
+                                {money(margin)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-gray-600">
+                                Ingreso total estimado
+                              </div>
+                              <div className="font-semibold">
+                                {money(projectedRevenue)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-gray-600">
+                                Ingreso si usaras ponderado
+                              </div>
+                              <div className="font-semibold text-gray-500">
+                                {money(projectedRevenueWeighted)}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {margin != null && margin < 0 && (
+                          <div className="mt-2 p-2 rounded bg-red-100 text-red-800 text-xs font-semibold">
+                            ⚠️ Estás C${Math.abs(margin).toFixed(2)}/{oi.unit}{" "}
+                            por debajo del costo. Pérdida estimada:{" "}
+                            {money(Math.abs(margin) * totalQty)} en {totalQty.toFixed(3)}{" "}
+                            {oi.unit}.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
                 <div className="p-3 border rounded bg-gray-50">
                   <div className="mt-0 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
@@ -2962,6 +3507,131 @@ export default function InventoryBatches({
               </div>
 
               {/* Footer buttons moved to header for quicker access */}
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {/* ======================= */}
+      {/* MODAL ℹ️ DETALLE DE LOTES POR PRODUCTO */}
+      {/* ======================= */}
+      {showPriceInfoModal &&
+        priceInfoProductId &&
+        createPortal(
+          <div className="fixed inset-0 z-[80] flex items-center justify-center">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setShowPriceInfoModal(false)}
+            />
+            <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-lg max-h-[80vh] overflow-auto p-4">
+              {(() => {
+                const info = existingStockByProduct[priceInfoProductId];
+                const oi = orderItems.find(
+                  (x) => x.productId === priceInfoProductId,
+                );
+                const pName = oi?.productName || priceInfoProductId;
+                const unit = oi?.unit || "";
+                if (!info || info.lots.length === 0) {
+                  return (
+                    <div className="text-sm text-gray-500 text-center py-4">
+                      No hay lotes existentes con stock para {pName}.
+                    </div>
+                  );
+                }
+                return (
+                  <>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-base font-bold">
+                        Lotes con stock: {pName}
+                      </h3>
+                      <button
+                        type="button"
+                        className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm"
+                        onClick={() => setShowPriceInfoModal(false)}
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                    <div className="text-xs text-gray-600 mb-3">
+                      Estos son los lotes con existencias pendientes de vender.
+                      El precio de venta ponderado combina todos estos lotes +
+                      el nuevo que estás creando.
+                    </div>
+                    <table className="w-full text-xs border">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="p-2 border text-left">Fecha</th>
+                          <th className="p-2 border text-left">Pedido</th>
+                          <th className="p-2 border text-right">Restante</th>
+                          <th className="p-2 border text-right">P. Costo</th>
+                          <th className="p-2 border text-right">P. Venta</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {info.lots.map((lot) => (
+                          <tr key={lot.batchId}>
+                            <td className="p-2 border">{lot.date || "—"}</td>
+                            <td className="p-2 border">
+                              {lot.orderName || "—"}
+                            </td>
+                            <td className="p-2 border text-right">
+                              {lot.remaining.toFixed(3)} {unit}
+                            </td>
+                            <td className="p-2 border text-right">
+                              {money(lot.purchasePrice)}
+                            </td>
+                            <td className="p-2 border text-right">
+                              {money(lot.salePrice)}
+                            </td>
+                          </tr>
+                        ))}
+                        {oi && (
+                          <tr className="bg-blue-50 font-semibold">
+                            <td className="p-2 border">
+                              {orderDate || "nuevo"}
+                            </td>
+                            <td className="p-2 border">
+                              {orderName || "Este pedido"}
+                            </td>
+                            <td className="p-2 border text-right">
+                              {roundQty(oi.quantity).toFixed(3)} {unit}
+                            </td>
+                            <td className="p-2 border text-right">
+                              {money(oi.purchasePrice)}
+                            </td>
+                            <td className="p-2 border text-right">
+                              {money(oi.salePrice)}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                      <tfoot className="bg-gray-50">
+                        <tr className="font-semibold text-sm">
+                          <td colSpan={2} className="p-2 border">
+                            Total
+                          </td>
+                          <td className="p-2 border text-right">
+                            {roundQty(
+                              info.totalRemaining + Number(oi?.quantity || 0),
+                            ).toFixed(3)}{" "}
+                            {unit}
+                          </td>
+                          <td className="p-2 border text-right text-gray-600">
+                            {info.weightedCost != null
+                              ? money(info.weightedCost)
+                              : "—"}
+                          </td>
+                          <td className="p-2 border text-right">
+                            {info.weightedSalePrice != null
+                              ? money(info.weightedSalePrice)
+                              : "—"}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </>
+                );
+              })()}
             </div>
           </div>,
           document.body,

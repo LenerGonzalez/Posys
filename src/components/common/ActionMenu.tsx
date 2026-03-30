@@ -28,7 +28,17 @@ export default function ActionMenu({
 
     const onScroll = (ev: Event) => {
       const target = ev.target as Node;
-      if (ref.current && !ref.current.contains(target)) onClose();
+      if (ref.current && ref.current.contains(target)) return;
+      // Solo cerrar con scroll del documento/ventana; no con scroll dentro de modales o paneles
+      // (si no, el overflow-y del modal dispara el cierre y el menú “no aparece”).
+      const t = ev.target as HTMLElement | null;
+      if (
+        t === document ||
+        t === document.documentElement ||
+        t === document.body
+      ) {
+        onClose();
+      }
     };
 
     const onKey = (ev: KeyboardEvent) => {

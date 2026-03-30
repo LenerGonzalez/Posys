@@ -11,6 +11,9 @@ import {
 import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import RefreshButton from "../common/RefreshButton";
+import Toast from "../common/Toast";
+import ActionMenu from "../common/ActionMenu";
+import { FiMoreVertical } from "react-icons/fi";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
 
@@ -331,6 +334,10 @@ export default function FinancialDashboardCandies() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+  const [saleTxMenu, setSaleTxMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
 
   // Sellers (para comisión)
   const [sellers, setSellers] = useState<SellerCandy[]>([]);
@@ -1147,10 +1154,11 @@ export default function FinancialDashboardCandies() {
       setSalesUpToToDate((prev) => prev.filter((s) => s.id !== saleId));
       setSaleModalOpen(false);
       setSaleModalSale(null);
+      setMsg("✅ Venta eliminada.");
     } catch (e) {
       console.error(e);
-      alert(
-        "No se pudo eliminar la venta. Revisa la consola para más detalles.",
+      setMsg(
+        "❌ No se pudo eliminar la venta. Revisa la consola para más detalles.",
       );
     }
   };
@@ -1202,15 +1210,6 @@ export default function FinancialDashboardCandies() {
               </div>
 
               <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">
-                  Costo de Mercadería (FIFO)
-                </div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.costoMercaderia)}
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">Utilidad Bruta</div>
                 <div className="text-xl font-semibold text-green-600">
                   {money(kpis.utilidadBrutaOrdenes || 0)}
@@ -1232,47 +1231,11 @@ export default function FinancialDashboardCandies() {
               </div>
 
               <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Abonos Recibidos</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.abonosRecibidos)}
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Saldos Pendientes</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.saldosPendientes)}
-                </div>
-                <div className="text-[11px] text-gray-500 mt-1">
-                  A la fecha.
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Clientes con Saldo</div>
-                <div className="text-xl font-semibold">
-                  {kpis.clientesConSaldo}
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Paquetes Cash</div>
-                <div className="text-xl font-semibold">{kpis.paquetesCash}</div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
                 <div className="text-xs text-gray-600">
                   Paquetes Crédito (vendidos)
                 </div>
                 <div className="text-xl font-semibold">
                   {kpis.paquetesCredito}
-                </div>
-              </div>
-
-              <div className="p-3 border rounded bg-gray-50">
-                <div className="text-xs text-gray-600">Comisión Cash</div>
-                <div className="text-xl font-semibold">
-                  {money(kpis.comisionCash)}
                 </div>
               </div>
 
@@ -1796,10 +1759,20 @@ export default function FinancialDashboardCandies() {
                         </td>
                         <td className="p-2 border whitespace-nowrap">
                           <button
-                            className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                            onClick={() => handleDeleteSale(r.id)}
+                            type="button"
+                            className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                            aria-label="Acciones"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSaleTxMenu({
+                                id: r.id,
+                                rect: (
+                                  e.currentTarget as HTMLElement
+                                ).getBoundingClientRect(),
+                              });
+                            }}
                           >
-                            Eliminar
+                            <FiMoreVertical className="w-5 h-5 text-gray-700" />
                           </button>
                         </td>
                       </tr>
@@ -1918,10 +1891,20 @@ export default function FinancialDashboardCandies() {
                   </td>
                   <td className="p-2 border whitespace-nowrap">
                     <button
-                      className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
-                      onClick={() => handleDeleteSale(r.id)}
+                      type="button"
+                      className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                      aria-label="Acciones"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSaleTxMenu({
+                          id: r.id,
+                          rect: (
+                            e.currentTarget as HTMLElement
+                          ).getBoundingClientRect(),
+                        });
+                      }}
                     >
-                      Eliminar
+                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
                     </button>
                   </td>
                 </tr>
@@ -1986,7 +1969,41 @@ export default function FinancialDashboardCandies() {
         </table>
       </div>
 
-      {msg && <p className="mt-2 text-sm">{msg}</p>}
+      <ActionMenu
+        anchorRect={saleTxMenu?.rect ?? null}
+        isOpen={!!saleTxMenu}
+        onClose={() => setSaleTxMenu(null)}
+        width={200}
+      >
+        {saleTxMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                const id = saleTxMenu.id;
+                setSaleTxMenu(null);
+                openSaleModal(id);
+              }}
+            >
+              Ver detalle
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+              onClick={() => {
+                const id = saleTxMenu.id;
+                setSaleTxMenu(null);
+                void handleDeleteSale(id);
+              }}
+            >
+              Eliminar venta
+            </button>
+          </div>
+        )}
+      </ActionMenu>
+
+      {msg && <Toast message={msg} onClose={() => setMsg("")} />}
 
       {/* Modal detalle cliente */}
       {modalOpen && (

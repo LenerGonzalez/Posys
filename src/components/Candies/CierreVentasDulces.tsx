@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { hasRole } from "../../utils/roles";
 import { db } from "../../firebase";
 import {
@@ -20,6 +20,11 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import * as XLSX from "xlsx";
 import { restoreCandySaleAndDelete } from "../../Services/inventory_candies";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
+import ActionMenu from "../common/ActionMenu";
+import RefreshButton from "../common/RefreshButton";
+import { FiMoreVertical } from "react-icons/fi";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -478,7 +483,7 @@ const normalizeMany = (
   return [
     {
       id,
-      registeredAt: extractRegisteredAt(it) || extractRegisteredAt(data),
+      registeredAt: extractRegisteredAt(raw),
       productName: raw.productName ?? "(sin nombre)",
       quantity: qtyPacksFallback,
       amount: amountFallback,
@@ -573,6 +578,10 @@ export default function CierreVentasDulces({
   const [bulkDeleteForCredit, setBulkDeleteForCredit] = useState(false);
   const [bulkDeleteCount, setBulkDeleteCount] = useState(0);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [cierreSaleMenu, setCierreSaleMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
   const [bulkDeleteProgress, setBulkDeleteProgress] = useState(0);
   // processing (guardar cierre) preview + progress
   const [processPreviewOpen, setProcessPreviewOpen] = useState(false);
@@ -588,6 +597,14 @@ export default function CierreVentasDulces({
   const [workingMessage, setWorkingMessage] = useState("");
 
   const pdfRef = useRef<HTMLDivElement>(null);
+
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    setRefreshKey((k) => k + 1);
+    setTimeout(() => setIsRefreshing(false), 1200);
+  }, []);
 
   const subject = roles && roles.length ? roles : role;
   const isAdmin = !subject || hasRole(subject, "admin");
@@ -711,7 +728,7 @@ export default function CierreVentasDulces({
     );
 
     return () => unsub();
-  }, [startDate, endDate]);
+  }, [startDate, endDate, refreshKey]);
 
   // Cierre guardado (informativo) - hoy (fecha proceso)
   useEffect(() => {
@@ -1022,7 +1039,7 @@ export default function CierreVentasDulces({
         });
 
         setAbonosRows(
-          rows.sort((a, b) => (a.date || "").localeCompare(b.date || "")),
+          rows.sort((a, b) => (b.date || "").localeCompare(a.date || "")),
         );
       } catch (e) {
         console.error("Error cargando abonos:", e);
@@ -1386,14 +1403,28 @@ export default function CierreVentasDulces({
     }
   };
 
-  const cashSales = React.useMemo(
-    () => visibleSales.filter((s) => s.type !== "CREDITO"),
-    [visibleSales],
-  );
-  const creditSales = React.useMemo(
-    () => visibleSales.filter((s) => s.type === "CREDITO"),
-    [visibleSales],
-  );
+  const cashSales = React.useMemo(() => {
+    return [...visibleSales]
+      .filter((s) => s.type !== "CREDITO")
+      .sort((a, b) => {
+        const d = (b.date || "").localeCompare(a.date || "");
+        if (d !== 0) return d;
+        return String(b.registeredAt || "").localeCompare(
+          String(a.registeredAt || ""),
+        );
+      });
+  }, [visibleSales]);
+  const creditSales = React.useMemo(() => {
+    return [...visibleSales]
+      .filter((s) => s.type === "CREDITO")
+      .sort((a, b) => {
+        const d = (b.date || "").localeCompare(a.date || "");
+        if (d !== 0) return d;
+        return String(b.registeredAt || "").localeCompare(
+          String(a.registeredAt || ""),
+        );
+      });
+  }, [visibleSales]);
 
   // ✅ KPIs flotantes/procesadas
   const kpiFloCount = React.useMemo(
@@ -2244,8 +2275,11 @@ export default function CierreVentasDulces({
         precioNum = round2(s.amount / qty);
       }
 
-      // UN x Paq (numérico)
-      const u = upaqueteMap[s.vendorId || ""]?.[key];
+      // UN x Paq: preferir valor de la venta, fallback al mapa
+      const fromSaleUn = Number(s.uNetaPorPaquete ?? NaN);
+      const u = Number.isFinite(fromSaleUn) && fromSaleUn !== 0
+        ? fromSaleUn
+        : upaqueteMap[s.vendorId || ""]?.[key];
       // UV x Paq (numérico)
       const uv = getUvXpaqForSale(s);
       // Comision: prefer vendorCommissionAmount, fallback to uv*qty
@@ -2323,6 +2357,36 @@ export default function CierreVentasDulces({
     URL.revokeObjectURL(url);
   };
 
+  const aggregateSaleTotals = (list: SaleData[]) => {
+    let n = 0;
+    let packs = 0;
+    let amount = 0;
+    let unTotal = 0;
+    let uvTotal = 0;
+    let comm = 0;
+    let uNeta = 0;
+    for (const s of list) {
+      n++;
+      const q = Math.max(0, Number(s.quantity || 0));
+      packs += q;
+      amount += Number(s.amount || 0);
+      const key = normKey(s.productName || "");
+      const fromSale = Number(s.uNetaPorPaquete ?? NaN);
+      const un = Number.isFinite(fromSale) && fromSale !== 0
+        ? fromSale
+        : upaqueteMap[s.vendorId || ""]?.[key];
+      if (un && Number(un) !== 0 && q) unTotal += Number(un) * q;
+      const uv = getUvXpaqForSale(s);
+      if (uv > 0 && q) uvTotal += uv * q;
+      comm += getVendorGain(s);
+      if (isAdmin && un && q) uNeta += Number(un) * q;
+    }
+    return { n, packs, amount, unTotal, uvTotal, comm, uNeta };
+  };
+
+  const cashSalesTableTotals = aggregateSaleTotals(cashSales);
+  const creditSalesTableTotals = aggregateSaleTotals(creditSales);
+
   return (
     <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
       {/* ✅ CSS interno SOLO para alternar vista en PDF (sin tocar tu data) */}
@@ -2332,7 +2396,10 @@ export default function CierreVentasDulces({
         .pdf-print-mode .collapsible-content { display: block !important; }
       `}</style>
 
-      <h2 className="text-xl font-bold mb-4">Ventas Diarias</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold">Ventas Diarias</h2>
+        <RefreshButton onClick={handleRefresh} loading={isRefreshing} />
+      </div>
 
       {/* Botones de acción arriba de filtros */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -2816,59 +2883,60 @@ export default function CierreVentasDulces({
               />
             </div>
 
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-slate-700">
-                Filtrar
-              </label>
-              <select
-                className="border rounded-md px-3 py-2"
+            <div className="flex flex-col sm:flex-row sm:items-end gap-2 w-full md:w-auto min-w-0">
+              <MobileHtmlSelect
+                label="Filtrar"
                 value={filter}
-                onChange={(e) => setFilter(e.target.value as any)}
-              >
-                <option value="ALL">Todas</option>
-                <option value="FLOTANTE">Venta Flotante</option>
-                <option value="PROCESADA">Venta Procesada</option>
-              </select>
+                onChange={(v) => setFilter(v as any)}
+                options={[
+                  { value: "ALL", label: "Todas" },
+                  { value: "FLOTANTE", label: "Venta Flotante" },
+                  { value: "PROCESADA", label: "Venta Procesada" },
+                ]}
+                selectClassName="border rounded-md px-3 py-2 text-sm w-full md:w-48"
+                buttonClassName="border rounded-md px-3 py-2 text-sm w-full md:w-48 text-left flex items-center justify-between gap-2 bg-white"
+                sheetTitle="Filtrar ventas"
+              />
             </div>
 
             {/* ✅ NUEVO: filtro por vendedor (solo admin) */}
             {isAdmin && (
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-slate-700">
-                  Vendedor
-                </label>
-                <select
-                  className="border rounded-md px-3 py-2"
+              <div className="flex flex-col sm:flex-row sm:items-end gap-2 w-full md:w-auto min-w-0">
+                <MobileHtmlSelect
+                  label="Vendedor"
                   value={vendorFilter}
-                  onChange={(e) => setVendorFilter(e.target.value)}
-                >
-                  <option value="ALL">Todos</option>
-                  {sellers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name || s.id}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setVendorFilter}
+                  options={[
+                    { value: "ALL", label: "Todos" },
+                    ...sellers.map((s) => ({
+                      value: s.id,
+                      label: s.name || s.id,
+                    })),
+                  ]}
+                  selectClassName="border rounded-md px-3 py-2 text-sm w-full md:w-56"
+                  buttonClassName="border rounded-md px-3 py-2 text-sm w-full md:w-56 text-left flex items-center justify-between gap-2 bg-white"
+                  sheetTitle="Vendedor"
+                />
               </div>
             )}
 
-            <div className="flex items-center gap-2 w-full md:w-auto">
-              <label className="text-xs font-semibold text-slate-700 whitespace-nowrap">
-                Productos
-              </label>
-              <select
-                className="border rounded-md px-3 py-2 text-xs w-full md:w-48 lg:w-56"
+            <div className="flex flex-col sm:flex-row sm:items-end gap-2 w-full md:w-auto min-w-0">
+              <MobileHtmlSelect
+                label="Productos"
                 value={productFilter}
-                onChange={(e) => setProductFilter(e.target.value)}
+                onChange={setProductFilter}
                 disabled={productOptions.length === 0}
-              >
-                <option value="ALL">Todos</option>
-                {productOptions.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: "ALL", label: "Todos" },
+                  ...productOptions.map((name) => ({
+                    value: name,
+                    label: name,
+                  })),
+                ]}
+                selectClassName="border rounded-md px-3 py-2 text-xs w-full md:w-48 lg:w-56"
+                buttonClassName="border rounded-md px-3 py-2 text-xs w-full md:w-48 lg:w-56 text-left flex items-center justify-between gap-2 bg-white"
+                sheetTitle="Productos"
+              />
             </div>
           </div>
         </div>
@@ -3238,7 +3306,7 @@ export default function CierreVentasDulces({
               className={`collapsible-content ${cashCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
               <div className="pdf-desktop hidden md:block">
-                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                   <table className="min-w-full text-sm">
                     <thead className="bg-slate-50 text-slate-600">
                       <tr>
@@ -3378,6 +3446,9 @@ export default function CierreVentasDulces({
                             {isAdmin && (
                               <td className="px-3 py-2">
                                 {(() => {
+                                  const fromSale = Number(s.uNetaPorPaquete ?? NaN);
+                                  if (Number.isFinite(fromSale) && fromSale !== 0)
+                                    return `C$${money(round2(fromSale))}`;
                                   const key = normKey(s.productName || "");
                                   const u =
                                     upaqueteMap[s.vendorId || ""]?.[key];
@@ -3410,9 +3481,11 @@ export default function CierreVentasDulces({
                             {isAdmin && (
                               <td className="px-3 py-2">
                                 {(() => {
+                                  const fromSale = Number(s.uNetaPorPaquete ?? NaN);
                                   const key = normKey(s.productName || "");
-                                  const un =
-                                    upaqueteMap[s.vendorId || ""]?.[key];
+                                  const un = Number.isFinite(fromSale) && fromSale !== 0
+                                    ? fromSale
+                                    : upaqueteMap[s.vendorId || ""]?.[key];
                                   const qty = Number(s.quantity || 0);
                                   const total = Number(un || 0) * qty;
                                   return un && total > 0 ? (
@@ -3428,95 +3501,22 @@ export default function CierreVentasDulces({
                               {getSellerDisplayName(s)}
                             </td>
                             <td className="px-3 py-2">
-                              {s.status === "FLOTANTE" ? (
-                                <div className="flex gap-2 justify-center">
-                                  {isAdmin ? (
-                                    <>
-                                      <button
-                                        onClick={() => openEdit(s)}
-                                        className="text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 px-2 py-1 text-white shadow-sm hover:bg-indigo-700"
-                                        title="Editar"
-                                        aria-label="Editar"
-                                      >
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          className="h-3 w-3"
-                                          viewBox="0 0 20 20"
-                                          fill="currentColor"
-                                          role="img"
-                                          aria-hidden="true"
-                                        >
-                                          <title>Editar</title>
-                                          <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
-                                        </svg>
-                                      </button>
-                                      <button
-                                        onClick={() => deleteSale(s.id)}
-                                        className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
-                                        title="Eliminar"
-                                        aria-label="Eliminar"
-                                      >
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          className="h-3 w-3"
-                                          viewBox="0 0 20 20"
-                                          fill="currentColor"
-                                          role="img"
-                                          aria-hidden="true"
-                                        >
-                                          <title>Eliminar</title>
-                                          <path
-                                            fillRule="evenodd"
-                                            d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                                            clipRule="evenodd"
-                                          />
-                                        </svg>
-                                      </button>
-                                    </>
-                                  ) : (
-                                    <span className="text-slate-400 text-xs">
-                                      —
-                                    </span>
-                                  )}
-                                </div>
-                              ) : s.status === "PROCESADA" ? (
-                                <div className="flex gap-2 justify-center">
-                                  {isAdmin ? (
-                                    <button
-                                      onClick={() => handleRevert(s.id)}
-                                      className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
-                                      title="Revertir"
-                                      aria-label="Revertir"
-                                    >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="h-4 w-4"
-                                        viewBox="0 0 20 20"
-                                        fill="currentColor"
-                                        role="img"
-                                        aria-hidden="true"
-                                      >
-                                        <title>Revertir</title>
-                                        <g transform="translate(20 0) scale(-1 1)">
-                                          <path
-                                            fillRule="evenodd"
-                                            d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
-                                            clipRule="evenodd"
-                                          />
-                                        </g>
-                                      </svg>
-                                    </button>
-                                  ) : (
-                                    <span className="text-slate-400 text-xs">
-                                      —
-                                    </span>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-slate-400 text-xs">
-                                  No options
-                                </span>
-                              )}
+                              <button
+                                type="button"
+                                className="p-2 rounded border border-slate-200 hover:bg-slate-50 inline-flex mx-auto"
+                                aria-label="Acciones"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCierreSaleMenu({
+                                    id: s.id,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  });
+                                }}
+                              >
+                                <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                              </button>
                             </td>
                           </tr>
                         );
@@ -3532,6 +3532,51 @@ export default function CierreVentasDulces({
                         </tr>
                       )}
                     </tbody>
+                    {cashSales.length > 0 && (
+                      <tfoot className="bg-slate-100 font-semibold text-slate-800 border-t-2 border-slate-300">
+                        <tr>
+                          <td
+                            colSpan={5}
+                            className="px-3 py-2 text-left text-xs uppercase tracking-wide"
+                          >
+                            Totales ({cashSalesTableTotals.n} ventas)
+                          </td>
+                          <td className="px-3 py-2">
+                            {qty3(cashSalesTableTotals.packs)}
+                          </td>
+                          <td className="px-3 py-2">—</td>
+                          <td className="px-3 py-2">
+                            C${money(cashSalesTableTotals.amount)}
+                          </td>
+                          {isAdmin && (
+                            <td className="px-3 py-2">
+                              {cashSalesTableTotals.unTotal > 0
+                                ? `C$${money(round2(cashSalesTableTotals.unTotal))}`
+                                : "—"}
+                            </td>
+                          )}
+                          <td className="px-3 py-2">
+                            {cashSalesTableTotals.uvTotal > 0
+                              ? `C$${money(round2(cashSalesTableTotals.uvTotal))}`
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {cashSalesTableTotals.comm > 0
+                              ? `C$${money(round2(cashSalesTableTotals.comm))}`
+                              : "—"}
+                          </td>
+                          {isAdmin && (
+                            <td className="px-3 py-2">
+                              {cashSalesTableTotals.uNeta > 0
+                                ? `C$${money(round2(cashSalesTableTotals.uNeta))}`
+                                : "—"}
+                            </td>
+                          )}
+                          <td className="px-3 py-2">—</td>
+                          <td className="px-3 py-2">—</td>
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
                 </div>
               </div>
@@ -3621,96 +3666,23 @@ export default function CierreVentasDulces({
                           </strong>
                         </div>
 
-                        <div className="pt-2">
-                          {s.status === "FLOTANTE" ? (
-                            <div className="flex gap-2">
-                              {isAdmin ? (
-                                <>
-                                  <button
-                                    onClick={() => openEdit(s)}
-                                    className="flex-1 text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 py-2 text-white shadow-sm hover:bg-indigo-700"
-                                    title="Editar"
-                                    aria-label="Editar"
-                                  >
-                                    <svg
-                                      xmlns="http://www.w3.org/2000/svg"
-                                      className="h-4 w-4 mx-auto"
-                                      viewBox="0 0 20 20"
-                                      fill="currentColor"
-                                      role="img"
-                                      aria-hidden="true"
-                                    >
-                                      <title>Editar</title>
-                                      <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    onClick={() => deleteSale(s.id)}
-                                    className="flex-1 text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
-                                    title="Eliminar"
-                                    aria-label="Eliminar"
-                                  >
-                                    <svg
-                                      xmlns="http://www.w3.org/2000/svg"
-                                      className="h-4 w-4 mx-auto"
-                                      viewBox="0 0 20 20"
-                                      fill="currentColor"
-                                      role="img"
-                                      aria-hidden="true"
-                                    >
-                                      <title>Eliminar</title>
-                                      <path
-                                        fillRule="evenodd"
-                                        d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                                        clipRule="evenodd"
-                                      />
-                                    </svg>
-                                  </button>
-                                </>
-                              ) : (
-                                <div className="text-slate-400 text-xs w-full text-center">
-                                  —
-                                </div>
-                              )}
-                            </div>
-                          ) : s.status === "PROCESADA" ? (
-                            <div className="flex gap-2">
-                              {isAdmin ? (
-                                <button
-                                  onClick={() => handleRevert(s.id)}
-                                  className="w-full text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
-                                  title="Revertir"
-                                  aria-label="Revertir"
-                                >
-                                  <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="h-4 w-4 mx-auto"
-                                    viewBox="0 0 20 20"
-                                    fill="currentColor"
-                                    role="img"
-                                    aria-hidden="true"
-                                  >
-                                    <title>Revertir</title>
-                                    <g transform="translate(20 0) scale(-1 1)">
-                                      <path
-                                        fillRule="evenodd"
-                                        d="M10.293 15.707a1 1 0 010-1.414L13.586 11H4a1 1 0 110-2h9.586l-3.293-3.293a1 1 0 011.414-1.414l5 5a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0z"
-                                        clipRule="evenodd"
-                                      />
-                                    </g>
-                                  </svg>
-                                </button>
-                              ) : (
-                                <div className="text-slate-400 text-xs w-full text-center">
-                                  —
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="text-slate-400 text-xs w-full text-center">
-                              No options
-                            </div>
-                          )}
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            type="button"
+                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                            aria-label="Acciones"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCierreSaleMenu({
+                                id: s.id,
+                                rect: (
+                                  e.currentTarget as HTMLElement
+                                ).getBoundingClientRect(),
+                              });
+                            }}
+                          >
+                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                          </button>
                         </div>
                       </div>
                     </details>
@@ -3744,7 +3716,7 @@ export default function CierreVentasDulces({
               className={`collapsible-content ${creditCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
               <div className="pdf-desktop hidden md:block">
-                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                   <table className="min-w-full text-sm">
                     <thead className="bg-slate-50 text-slate-600">
                       <tr>
@@ -3873,6 +3845,9 @@ export default function CierreVentasDulces({
                             {isAdmin && (
                               <td className="px-3 py-2">
                                 {(() => {
+                                  const fromSale = Number(s.uNetaPorPaquete ?? NaN);
+                                  if (Number.isFinite(fromSale) && fromSale !== 0)
+                                    return `C$${money(round2(fromSale))}`;
                                   const key = normKey(s.productName || "");
                                   const u =
                                     upaqueteMap[s.vendorId || ""]?.[key];
@@ -3892,10 +3867,11 @@ export default function CierreVentasDulces({
                             {isAdmin && (
                               <td className="px-3 py-2">
                                 {(() => {
-                                  // UN x Paq * paquetes vendidos
+                                  const fromSale = Number(s.uNetaPorPaquete ?? NaN);
                                   const key = normKey(s.productName || "");
-                                  const un =
-                                    upaqueteMap[s.vendorId || ""]?.[key];
+                                  const un = Number.isFinite(fromSale) && fromSale !== 0
+                                    ? fromSale
+                                    : upaqueteMap[s.vendorId || ""]?.[key];
                                   const qty = Number(s.quantity || 0);
                                   const total = Number(un || 0) * qty;
                                   return un && total > 0
@@ -3912,77 +3888,22 @@ export default function CierreVentasDulces({
                               {getSellerDisplayName(s)}
                             </td>
                             <td className="px-3 py-2">
-                              {s.status === "FLOTANTE" ? (
-                                <div className="flex gap-2 justify-center">
-                                  {isAdmin ? (
-                                    <>
-                                      <button
-                                        onClick={() => openEdit(s)}
-                                        className="text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 px-2 py-1 text-white shadow-sm hover:bg-indigo-700"
-                                        title="Editar"
-                                        aria-label="Editar"
-                                      >
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          className="h-4 w-4"
-                                          viewBox="0 0 20 20"
-                                          fill="currentColor"
-                                          role="img"
-                                          aria-hidden="true"
-                                        >
-                                          <title>Editar</title>
-                                          <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
-                                        </svg>
-                                      </button>
-                                      <button
-                                        onClick={() => deleteSale(s.id)}
-                                        className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
-                                        title="Eliminar"
-                                        aria-label="Eliminar"
-                                      >
-                                        <svg
-                                          xmlns="http://www.w3.org/2000/svg"
-                                          className="h-4 w-4"
-                                          viewBox="0 0 20 20"
-                                          fill="currentColor"
-                                          role="img"
-                                          aria-hidden="true"
-                                        >
-                                          <title>Eliminar</title>
-                                          <path
-                                            fillRule="evenodd"
-                                            d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-                                            clipRule="evenodd"
-                                          />
-                                        </svg>
-                                      </button>
-                                    </>
-                                  ) : (
-                                    <span className="text-slate-400 text-xs">
-                                      —
-                                    </span>
-                                  )}
-                                </div>
-                              ) : s.status === "PROCESADA" ? (
-                                <div className="flex gap-2 justify-center">
-                                  {isAdmin ? (
-                                    <button
-                                      onClick={() => handleRevert(s.id)}
-                                      className="text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-white shadow-sm hover:bg-rose-700"
-                                    >
-                                      Revertir
-                                    </button>
-                                  ) : (
-                                    <span className="text-slate-400 text-xs">
-                                      —
-                                    </span>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-slate-400 text-xs">
-                                  No options
-                                </span>
-                              )}
+                              <button
+                                type="button"
+                                className="p-2 rounded border border-slate-200 hover:bg-slate-50 inline-flex mx-auto"
+                                aria-label="Acciones"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCierreSaleMenu({
+                                    id: s.id,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  });
+                                }}
+                              >
+                                <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                              </button>
                             </td>
                           </tr>
                         );
@@ -3998,6 +3919,53 @@ export default function CierreVentasDulces({
                         </tr>
                       )}
                     </tbody>
+                    {creditSales.length > 0 && (
+                      <tfoot className="bg-slate-100 font-semibold text-slate-800 border-t-2 border-slate-300">
+                        <tr>
+                          <td
+                            colSpan={3}
+                            className="px-3 py-2 text-left text-xs uppercase tracking-wide"
+                          >
+                            Totales ({creditSalesTableTotals.n} ventas)
+                          </td>
+                          <td className="px-3 py-2">
+                            {qty3(creditSalesTableTotals.packs)}
+                          </td>
+                          <td className="px-3 py-2">—</td>
+                          <td className="px-3 py-2">
+                            C${money(creditSalesTableTotals.amount)}
+                          </td>
+                          {isAdmin && (
+                            <td className="px-3 py-2">
+                              {creditSalesTableTotals.unTotal > 0
+                                ? `C$${money(round2(creditSalesTableTotals.unTotal))}`
+                                : "—"}
+                            </td>
+                          )}
+                          <td className="px-3 py-2">
+                            {creditSalesTableTotals.uvTotal > 0
+                              ? `C$${money(round2(creditSalesTableTotals.uvTotal))}`
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {creditSalesTableTotals.comm > 0
+                              ? `C$${money(round2(creditSalesTableTotals.comm))}`
+                              : "—"}
+                          </td>
+                          {isAdmin && (
+                            <td className="px-3 py-2">
+                              {creditSalesTableTotals.uNeta > 0
+                                ? `C$${money(round2(creditSalesTableTotals.uNeta))}`
+                                : "—"}
+                            </td>
+                          )}
+                          <td colSpan={3} className="px-3 py-2">
+                            —
+                          </td>
+                          <td className="px-3 py-2">—</td>
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
                 </div>
               </div>
@@ -4094,78 +4062,23 @@ export default function CierreVentasDulces({
                           </strong>
                         </div>
 
-                        <div className="pt-2">
-                          {s.status === "FLOTANTE" ? (
-                            <div className="flex gap-2">
-                              {isAdmin ? (
-                                <>
-                                  <button
-                                    onClick={() => openEdit(s)}
-                                    className="flex-1 text-xs font-semibold rounded-md border border-indigo-600 bg-indigo-600 py-2 text-white shadow-sm hover:bg-indigo-700"
-                                    title="Editar"
-                                    aria-label="Editar"
-                                  >
-                                    <svg
-                                      xmlns="http://www.w3.org/2000/svg"
-                                      className="h-4 w-4 mx-auto"
-                                      viewBox="0 0 20 20"
-                                      fill="currentColor"
-                                      role="img"
-                                      aria-hidden="true"
-                                    >
-                                      <title>Editar</title>
-                                      <path d="M17.414 2.586a2 2 0 112.828 2.828L7 18.657 3 19l.343-4L17.414 2.586z" />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    onClick={() => deleteSale(s.id)}
-                                    className="flex-1 text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
-                                    title="Eliminar"
-                                    aria-label="Eliminar"
-                                  >
-                                    <svg
-                                      xmlns="http://www.w3.org/2000/svg"
-                                      className="h-4 w-4 mx-auto"
-                                      viewBox="0 0 20 20"
-                                      fill="currentColor"
-                                      role="img"
-                                      aria-hidden="true"
-                                    >
-                                      <title>Eliminar</title>
-                                      <path
-                                        fillRule="evenodd"
-                                        d="M6 2a1 1 0 00-1 1v1H3a1 1 0 100 2h14a1 1 0 100-2h-2V3a1 1 0 00-1-1H6zm2 6a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z"
-                                        clipRule="evenodd"
-                                      />
-                                    </svg>
-                                  </button>
-                                </>
-                              ) : (
-                                <div className="text-slate-400 text-xs w-full text-center">
-                                  —
-                                </div>
-                              )}
-                            </div>
-                          ) : s.status === "PROCESADA" ? (
-                            <div className="flex gap-2">
-                              {isAdmin ? (
-                                <button
-                                  onClick={() => handleRevert(s.id)}
-                                  className="w-full text-xs font-semibold rounded-md border border-rose-600 bg-rose-600 py-2 text-white shadow-sm hover:bg-rose-700"
-                                >
-                                  Revertir
-                                </button>
-                              ) : (
-                                <div className="text-slate-400 text-xs w-full text-center">
-                                  —
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="text-slate-400 text-xs w-full text-center">
-                              No options
-                            </div>
-                          )}
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            type="button"
+                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                            aria-label="Acciones"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCierreSaleMenu({
+                                id: s.id,
+                                rect: (
+                                  e.currentTarget as HTMLElement
+                                ).getBoundingClientRect(),
+                              });
+                            }}
+                          >
+                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                          </button>
                         </div>
                       </div>
                     </details>
@@ -4203,7 +4116,7 @@ export default function CierreVentasDulces({
               ) : (
                 <>
                   <div className="pdf-desktop hidden md:block">
-                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                       <table className="min-w-full text-sm">
                         <thead className="bg-slate-50 text-slate-600">
                           <tr>
@@ -4437,7 +4350,7 @@ export default function CierreVentasDulces({
                         className={`collapsible-content ${isOpen ? "block" : "hidden"} border-t border-slate-100 p-3`}
                       >
                         <div className="pdf-desktop hidden md:block">
-                          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                             <table className="min-w-full text-sm">
                               <thead className="bg-slate-50 text-slate-600">
                                 <tr>
@@ -4590,8 +4503,9 @@ export default function CierreVentasDulces({
 
       {/* Eliminado: botones ahora están arriba */}
 
-      {message && <p className="mt-2 text-sm">{message}</p>}
-      {message && <p className="mt-2 text-sm">{message}</p>}
+      {message && (
+        <Toast message={message} onClose={() => setMessage("")} />
+      )}
 
       {/* Modal de previsualización para PROCESAR cierre (Guardar) */}
       {processPreviewOpen && (
@@ -4886,6 +4800,70 @@ export default function CierreVentasDulces({
           </div>
         </div>
       )}
+
+      <ActionMenu
+        anchorRect={cierreSaleMenu?.rect ?? null}
+        isOpen={!!cierreSaleMenu}
+        onClose={() => setCierreSaleMenu(null)}
+        width={220}
+      >
+        {cierreSaleMenu &&
+          (() => {
+            const sale = visibleSales.find((x) => x.id === cierreSaleMenu.id);
+            if (!sale) {
+              return (
+                <div className="px-3 py-2 text-sm text-slate-500">
+                  Sin datos
+                </div>
+              );
+            }
+            return (
+              <div className="py-1">
+                {!isAdmin && (
+                  <div className="px-3 py-2 text-sm text-slate-500">
+                    Sin acciones disponibles
+                  </div>
+                )}
+                {isAdmin && sale.status === "FLOTANTE" && (
+                  <>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                      onClick={() => {
+                        setCierreSaleMenu(null);
+                        openEdit(sale);
+                      }}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                      onClick={() => {
+                        setCierreSaleMenu(null);
+                        void deleteSale(sale.id);
+                      }}
+                    >
+                      Eliminar
+                    </button>
+                  </>
+                )}
+                {isAdmin && sale.status === "PROCESADA" && (
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-amber-800 font-semibold"
+                    onClick={() => {
+                      setCierreSaleMenu(null);
+                      void handleRevert(sale.id);
+                    }}
+                  >
+                    Revertir
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+      </ActionMenu>
     </div>
   );
 }

@@ -13,6 +13,10 @@ import { format } from "date-fns";
 import { hasRole } from "../../utils/roles";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
+import ActionMenu from "../common/ActionMenu";
+import { FiMoreVertical } from "react-icons/fi";
 
 type RoleCandies =
   | ""
@@ -640,6 +644,18 @@ export default function DataCenterCandies({
   const [existenciasOpen, setExistenciasOpen] = useState(false);
   const [vendedoresOpen, setVendedoresOpen] = useState(false);
   const [saldosOpen, setSaldosOpen] = useState(false);
+  const [groupRowMenu, setGroupRowMenu] = useState<{
+    key: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [vendorOrderRowMenu, setVendorOrderRowMenu] = useState<{
+    orderKey: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [arRowMenu, setArRowMenu] = useState<{
+    row: ARCustomerRow;
+    rect: DOMRect;
+  } | null>(null);
 
   const customersMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -652,6 +668,52 @@ export default function DataCenterCandies({
     sellers.forEach((s) => (map[s.id] = s));
     return map;
   }, [sellers]);
+
+  const statusFilterOptions = useMemo(
+    () => [
+      { value: "TODAS", label: "Todas" },
+      { value: "FLOTANTE", label: "Flotante" },
+      { value: "PROCESADA", label: "Procesada" },
+    ],
+    [],
+  );
+
+  const typeFilterOptions = useMemo(
+    () => [
+      { value: "AMBAS", label: "Ambas" },
+      { value: "CASH", label: "Cash" },
+      { value: "CREDITO", label: "Crédito" },
+    ],
+    [],
+  );
+
+  const vendorFilterOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todos" },
+      ...sellers.map((s) => ({ value: s.id, label: s.name || s.id })),
+    ],
+    [sellers],
+  );
+
+  const branchFilterOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todas" },
+      { value: "RIVAS", label: "Rivas" },
+      { value: "SAN_JORGE", label: "San Jorge" },
+      { value: "ISLA", label: "Isla" },
+    ],
+    [],
+  );
+
+  const groupByOptions = useMemo(
+    () => [
+      { value: "DIA", label: "Día" },
+      { value: "VENDEDOR", label: "Vendedor" },
+      { value: "PRODUCTO", label: "Producto" },
+      { value: "SUCURSAL", label: "Sucursal" },
+    ],
+    [],
+  );
 
   const displayCustomerName = (r: SaleRow) => {
     const byId = r.customerId ? customersMap[r.customerId] : "";
@@ -2272,59 +2334,57 @@ export default function DataCenterCandies({
               </div>
 
               <div>
-                <label className="block text-xs text-gray-600">Estado</label>
-                <select
-                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                <MobileHtmlSelect
+                  label="Estado"
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
-                >
-                  <option value="TODAS">Todas</option>
-                  <option value="FLOTANTE">Flotante</option>
-                  <option value="PROCESADA">Procesada</option>
-                </select>
+                  onChange={(v) =>
+                    setStatusFilter(v as "TODAS" | SaleStatus)
+                  }
+                  options={statusFilterOptions}
+                  sheetTitle="Estado"
+                  selectClassName="border rounded-lg px-3 py-2 w-full text-sm"
+                  buttonClassName="border rounded-lg px-3 py-2 w-full text-sm text-left flex items-center justify-between gap-2 bg-white"
+                />
               </div>
 
               <div>
-                <label className="block text-xs text-gray-600">Tipo</label>
-                <select
-                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                <MobileHtmlSelect
+                  label="Tipo"
                   value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value as any)}
-                >
-                  <option value="AMBAS">Ambas</option>
-                  <option value="CASH">Cash</option>
-                  <option value="CREDITO">Crédito</option>
-                </select>
+                  onChange={(v) =>
+                    setTypeFilter(v as "AMBAS" | "CASH" | "CREDITO")
+                  }
+                  options={typeFilterOptions}
+                  sheetTitle="Tipo"
+                  selectClassName="border rounded-lg px-3 py-2 w-full text-sm"
+                  buttonClassName="border rounded-lg px-3 py-2 w-full text-sm text-left flex items-center justify-between gap-2 bg-white"
+                />
               </div>
 
               <div>
-                <label className="block text-xs text-gray-600">Vendedor</label>
-                <select
-                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                <MobileHtmlSelect
+                  label="Vendedor"
                   value={vendorFilter}
-                  onChange={(e) => setVendorFilter(e.target.value)}
-                >
-                  <option value="ALL">Todos</option>
-                  {sellers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name || s.id}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setVendorFilter}
+                  options={vendorFilterOptions}
+                  sheetTitle="Vendedor"
+                  selectClassName="border rounded-lg px-3 py-2 w-full text-sm"
+                  buttonClassName="border rounded-lg px-3 py-2 w-full text-sm text-left flex items-center justify-between gap-2 bg-white"
+                />
               </div>
 
               <div>
-                <label className="block text-xs text-gray-600">Sucursal</label>
-                <select
-                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                <MobileHtmlSelect
+                  label="Sucursal"
                   value={branchFilter}
-                  onChange={(e) => setBranchFilter(e.target.value as any)}
-                >
-                  <option value="ALL">Todas</option>
-                  <option value="RIVAS">Rivas</option>
-                  <option value="SAN_JORGE">San Jorge</option>
-                  <option value="ISLA">Isla</option>
-                </select>
+                  onChange={(v) =>
+                    setBranchFilter(v as "ALL" | Branch)
+                  }
+                  options={branchFilterOptions}
+                  sheetTitle="Sucursal"
+                  selectClassName="border rounded-lg px-3 py-2 w-full text-sm"
+                  buttonClassName="border rounded-lg px-3 py-2 w-full text-sm text-left flex items-center justify-between gap-2 bg-white"
+                />
               </div>
 
               <div className="sm:col-span-2 lg:col-span-3">
@@ -2372,22 +2432,18 @@ export default function DataCenterCandies({
               </div>
 
               <div className="sm:col-span-2 lg:col-span-2">
-                <label className="block text-xs text-gray-600">
-                  Agrupar por
-                </label>
-                <select
-                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                <MobileHtmlSelect
+                  label="Agrupar por"
                   value={groupBy}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setDetailKey("");
-                    setGroupBy(e.target.value as any);
+                    setGroupBy(v as GroupBy);
                   }}
-                >
-                  <option value="DIA">Día</option>
-                  <option value="VENDEDOR">Vendedor</option>
-                  <option value="PRODUCTO">Producto</option>
-                  <option value="SUCURSAL">Sucursal</option>
-                </select>
+                  options={groupByOptions}
+                  sheetTitle="Agrupar por"
+                  selectClassName="border rounded-lg px-3 py-2 w-full text-sm"
+                  buttonClassName="border rounded-lg px-3 py-2 w-full text-sm text-left flex items-center justify-between gap-2 bg-white"
+                />
               </div>
             </div>
           </div>
@@ -2941,10 +2997,20 @@ export default function DataCenterCandies({
                                   </div>
                                 </div>
                                 <button
-                                  className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm font-semibold"
-                                  onClick={() => setVendorOrderKey(o.orderKey)}
+                                  type="button"
+                                  className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 shrink-0"
+                                  aria-label="Acciones"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setVendorOrderRowMenu({
+                                      orderKey: o.orderKey,
+                                      rect: (
+                                        e.currentTarget as HTMLElement
+                                      ).getBoundingClientRect(),
+                                    });
+                                  }}
                                 >
-                                  Ver
+                                  <FiMoreVertical className="w-5 h-5 text-gray-800" />
                                 </button>
                               </div>
 
@@ -3375,13 +3441,21 @@ export default function DataCenterCandies({
                                 {c.lastPayment || "—"}
                               </span>
                             </div>
-                            <div className="mt-2">
+                            <div className="mt-2 flex justify-end">
                               <button
                                 type="button"
-                                onClick={() => setArOpen(c)}
-                                className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                                className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                                aria-label="Acciones"
+                                onClick={(e) =>
+                                  setArRowMenu({
+                                    row: c,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  })
+                                }
                               >
-                                Ver
+                                <FiMoreVertical className="w-5 h-5 text-gray-800" />
                               </button>
                             </div>
                           </div>
@@ -3464,10 +3538,20 @@ export default function DataCenterCandies({
                               {g.label}
                             </div>
                             <button
-                              className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm font-semibold"
-                              onClick={() => setDetailKey(g.key)}
+                              type="button"
+                              className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50"
+                              aria-label="Opciones"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setGroupRowMenu({
+                                  key: g.key,
+                                  rect: (
+                                    e.currentTarget as HTMLElement
+                                  ).getBoundingClientRect(),
+                                });
+                              }}
                             >
-                              Ver detalle
+                              <FiMoreVertical className="w-5 h-5 text-gray-800" />
                             </button>
                           </div>
 
@@ -3571,10 +3655,20 @@ export default function DataCenterCandies({
                             </td>
                             <td className="border p-2">
                               <button
-                                className="text-xs bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-black"
-                                onClick={() => setDetailKey(g.key)}
+                                type="button"
+                                className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 inline-flex"
+                                aria-label="Opciones"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setGroupRowMenu({
+                                    key: g.key,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  });
+                                }}
                               >
-                                Ver detalle
+                                <FiMoreVertical className="w-5 h-5 text-gray-800" />
                               </button>
                             </td>
                           </tr>
@@ -3899,7 +3993,9 @@ export default function DataCenterCandies({
           )}
         </div>
 
-        {message && <p className="mt-3 text-sm">{message}</p>}
+        {message && (
+          <Toast message={message} onClose={() => setMessage("")} />
+        )}
       </div>
 
       {arOpen && (
@@ -3993,6 +4089,75 @@ export default function DataCenterCandies({
           </div>
         </div>
       )}
+
+      <ActionMenu
+        anchorRect={groupRowMenu?.rect ?? null}
+        isOpen={!!groupRowMenu}
+        onClose={() => setGroupRowMenu(null)}
+        width={200}
+      >
+        {groupRowMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                const k = groupRowMenu.key;
+                setGroupRowMenu(null);
+                setDetailKey(k);
+              }}
+            >
+              Ver detalle
+            </button>
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={vendorOrderRowMenu?.rect ?? null}
+        isOpen={!!vendorOrderRowMenu}
+        onClose={() => setVendorOrderRowMenu(null)}
+        width={220}
+      >
+        {vendorOrderRowMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                const k = vendorOrderRowMenu.orderKey;
+                setVendorOrderRowMenu(null);
+                setVendorOrderKey(k);
+              }}
+            >
+              Ver detalle de la orden
+            </button>
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={arRowMenu?.rect ?? null}
+        isOpen={!!arRowMenu}
+        onClose={() => setArRowMenu(null)}
+        width={200}
+      >
+        {arRowMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                const row = arRowMenu.row;
+                setArRowMenu(null);
+                setArOpen(row);
+              }}
+            >
+              Ver detalle
+            </button>
+          </div>
+        )}
+      </ActionMenu>
     </div>
   );
 }

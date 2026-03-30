@@ -16,6 +16,8 @@ import { endOfMonth, format, parse, startOfMonth } from "date-fns";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import RefreshButton from "../../components/common/RefreshButton";
+import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
+import Toast from "../../components/common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
 const money = (n: unknown) => `C$${Number(n ?? 0).toFixed(2)}`;
@@ -171,6 +173,7 @@ export default function FinancialDashboard(): React.ReactElement {
   const toggleDetailsKpiCard = () => setDetailsKpiCardOpen((v) => !v);
   // product filter for KPIs
   const [productFilter, setProductFilter] = useState<string>("");
+  const [toastMsg, setToastMsg] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -980,6 +983,14 @@ export default function FinancialDashboard(): React.ReactElement {
     ).sort();
   }, [sales]);
 
+  const productFilterSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Todos los productos" },
+      ...productsInRange.map((name) => ({ value: name, label: name })),
+    ],
+    [productsInRange],
+  );
+
   // Consolidado por producto (con fechas)
   const byProduct = useMemo(() => {
     type Row = {
@@ -1274,11 +1285,13 @@ export default function FinancialDashboard(): React.ReactElement {
 
       await addDoc(collection(db, "financial_snapshots"), snapshot);
       if (!silent)
-        window.alert("KPIs guardados en la colección 'financial_snapshots'.");
+        setToastMsg(
+          "✅ KPIs guardados en la colección financial_snapshots.",
+        );
     } catch (e) {
       console.error("Error guardando snapshot de KPIs:", e);
       if (!silent)
-        window.alert("Error guardando snapshot de KPIs. Revisa la consola.");
+        setToastMsg("❌ Error guardando snapshot de KPIs. Revisa la consola.");
     } finally {
       setSavingSnapshot(false);
     }
@@ -1371,18 +1384,15 @@ export default function FinancialDashboard(): React.ReactElement {
             {kpiSectionOpen && (
               <div className="mt-3">
                 <div className="flex gap-2 mb-2 items-center">
-                  <select
-                    className="w-full border rounded px-2 py-2 text-sm"
+                  <MobileHtmlSelect
+                    label={undefined}
                     value={productFilter}
-                    onChange={(e) => setProductFilter(e.target.value)}
-                  >
-                    <option value="">Todos los productos</option>
-                    {productsInRange.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setProductFilter}
+                    options={productFilterSelectOptions}
+                    sheetTitle="Producto (KPI)"
+                    selectClassName="w-full border rounded px-2 py-2 text-sm"
+                    buttonClassName="w-full border rounded px-2 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                  />
                 </div>
 
                 <div className="md:hidden space-y-3">
@@ -2308,6 +2318,9 @@ export default function FinancialDashboard(): React.ReactElement {
             </div>
           </div>
         </div>
+      )}
+      {toastMsg && (
+        <Toast message={toastMsg} onClose={() => setToastMsg("")} />
       )}
     </div>
   );

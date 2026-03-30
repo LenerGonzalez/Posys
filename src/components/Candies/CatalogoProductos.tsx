@@ -19,7 +19,11 @@ import {
 import { db } from "../../firebase";
 import { syncCatalogProductDependents } from "../../Services/syncCatalogProductDependents";
 import RefreshButton from "../common/RefreshButton";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
+import ActionMenu from "../common/ActionMenu";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import { FiMoreVertical } from "react-icons/fi";
 
 type CandyProduct = {
   id: string;
@@ -34,6 +38,15 @@ type CandyProduct = {
 };
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+const PACKAGING_OPTIONS: { value: string; label: string }[] = [
+  { value: "Tarro", label: "Tarro" },
+  { value: "Bolsa", label: "Bolsa" },
+  { value: "Ristra", label: "Ristra" },
+  { value: "Caja", label: "Caja" },
+  { value: "Vaso", label: "Vaso" },
+  { value: "Pana", label: "Pana" },
+];
 
 function norm(s: any) {
   return String(s ?? "")
@@ -311,6 +324,7 @@ export default function ProductsCandies() {
 
   // form manual
   const [category, setCategory] = useState("");
+  const [categoryPickedNew, setCategoryPickedNew] = useState(false);
   const [name, setName] = useState("");
   const [providerPrice, setProviderPrice] = useState<number>(0);
   const [unitsPerPackage, setUnitsPerPackage] = useState<number>(1);
@@ -321,6 +335,7 @@ export default function ProductsCandies() {
   // edición inline
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editCategory, setEditCategory] = useState("");
+  const [editCategoryPickedNew, setEditCategoryPickedNew] = useState(false);
   const [editName, setEditName] = useState("");
   const [editProviderPrice, setEditProviderPrice] = useState<number>(0);
   const [editUnitsPerPackage, setEditUnitsPerPackage] = useState<number>(1);
@@ -377,6 +392,31 @@ export default function ProductsCandies() {
   const [categoryOpenMap, setCategoryOpenMap] = useState<
     Record<string, boolean>
   >({});
+  const [catalogRowMenu, setCatalogRowMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
+
+  const packagingFilterOptions = useMemo(
+    () => [{ value: "", label: "Todos" }, ...PACKAGING_OPTIONS],
+    [],
+  );
+
+  const packagingCreateOptions = useMemo(
+    () => [{ value: "", label: "Seleccionar" }, ...PACKAGING_OPTIONS],
+    [],
+  );
+
+  const packagingEditDashOptions = useMemo(
+    () => [{ value: "", label: "—" }, ...PACKAGING_OPTIONS],
+    [],
+  );
+
+  const packagingEditSelectOptions = useMemo(
+    () => [{ value: "", label: "Seleccionar" }, ...PACKAGING_OPTIONS],
+    [],
+  );
+
   const creatingRef = useRef(false);
   const lastCreateKeyRef = useRef<{ key: string; ts: number } | null>(null);
 
@@ -427,7 +467,6 @@ export default function ProductsCandies() {
 
         if (!initialCatalogSnapshot.current && changed) {
           setMsg("✅ Catálogo actualizado.");
-          setTimeout(() => setMsg(""), 3000);
         }
         initialCatalogSnapshot.current = false;
       },
@@ -578,11 +617,21 @@ export default function ProductsCandies() {
     return Array.from(set).sort((a, b) => a.localeCompare(b, "es"));
   }, [products]);
 
+  const categorySelectFieldOptions = useMemo(
+    () => [
+      { value: "", label: "— Seleccionar —" },
+      ...categoryOptions.map((c) => ({ value: c, label: c })),
+      { value: "__new__", label: "+ Nueva categoría" },
+    ],
+    [categoryOptions],
+  );
+
   // ============================
   //  CRUD MANUAL
   // ============================
   const resetForm = () => {
     setCategory("");
+    setCategoryPickedNew(false);
     setName("");
     setProviderPrice(0);
     setUnitsPerPackage(1);
@@ -693,7 +742,9 @@ export default function ProductsCandies() {
 
   const startEdit = (p: CandyProduct) => {
     setEditingId(p.id);
+    const ec = String(p.category || "").trim();
     setEditCategory(p.category);
+    setEditCategoryPickedNew(ec.length > 0 && !categoryOptions.includes(ec));
     setEditName(p.name);
     setEditProviderPrice(p.providerPrice);
     setEditUnitsPerPackage(p.unitsPerPackage || 1);
@@ -707,6 +758,7 @@ export default function ProductsCandies() {
   const cancelEdit = () => {
     setEditingId(null);
     setEditCategory("");
+    setEditCategoryPickedNew(false);
     setEditName("");
     setEditProviderPrice(0);
     setEditUnitsPerPackage(1);
@@ -1249,20 +1301,15 @@ export default function ProductsCandies() {
           {/* Empaque (mobile quick filter shown when filters open) */}
           {filtersOpen && (
             <div className="bg-white p-3 rounded shadow-sm border">
-              <label className="block font-semibold">Empaque</label>
-              <select
-                className="w-full border rounded px-2 py-1"
+              <MobileHtmlSelect
+                label="Empaque"
                 value={packagingFilter}
-                onChange={(e) => setPackagingFilter(e.target.value)}
-              >
-                <option value="">Todos</option>
-                <option value="Tarro">Tarro</option>
-                <option value="Bolsa">Bolsa</option>
-                <option value="Ristra">Ristra</option>
-                <option value="Caja">Caja</option>
-                <option value="Vaso">Vaso</option>
-                <option value="Pana">Pana</option>
-              </select>
+                onChange={setPackagingFilter}
+                options={packagingFilterOptions}
+                sheetTitle="Empaque"
+                selectClassName="w-full border rounded px-2 py-1"
+                buttonClassName="w-full border rounded px-2 py-1 text-left flex items-center justify-between gap-2 bg-white"
+              />
             </div>
           )}
         </div>
@@ -1293,16 +1340,40 @@ export default function ProductsCandies() {
               onSubmit={createProduct}
               className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
             >
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Categoría
-                </label>
-                <input
-                  className="w-full border rounded-md px-3 py-2"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  placeholder="Ej: Gomitas"
+              <div className="md:col-span-2">
+                <MobileHtmlSelect
+                  label="Categoría"
+                  value={
+                    categoryPickedNew ||
+                    (category.trim() &&
+                      !categoryOptions.includes(category.trim()))
+                      ? "__new__"
+                      : category
+                  }
+                  onChange={(v) => {
+                    if (v === "__new__") {
+                      setCategoryPickedNew(true);
+                      setCategory("");
+                    } else {
+                      setCategoryPickedNew(false);
+                      setCategory(v);
+                    }
+                  }}
+                  options={categorySelectFieldOptions}
+                  sheetTitle="Categoría"
+                  selectClassName="w-full border rounded-md px-3 py-2"
+                  buttonClassName="w-full border rounded-md px-3 py-2 text-left flex items-center justify-between gap-2 bg-white"
                 />
+                {(categoryPickedNew ||
+                  (category.trim() &&
+                    !categoryOptions.includes(category.trim()))) && (
+                  <input
+                    className="w-full border rounded-md px-3 py-2 mt-2"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    placeholder="Escribe la categoría (ej. Gomitas)"
+                  />
+                )}
               </div>
 
               <div className="md:col-span-2">
@@ -1318,22 +1389,15 @@ export default function ProductsCandies() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Empaque
-                </label>
-                <select
-                  className="w-full border rounded-md px-3 py-2"
+                <MobileHtmlSelect
+                  label="Empaque"
                   value={packaging}
-                  onChange={(e) => setPackaging(e.target.value)}
-                >
-                  <option value="">Seleccionar</option>
-                  <option value="Tarro">Tarro</option>
-                  <option value="Bolsa">Bolsa</option>
-                  <option value="Ristra">Ristra</option>
-                  <option value="Caja">Caja</option>
-                  <option value="Vaso">Vaso</option>
-                  <option value="Pana">Pana</option>
-                </select>
+                  onChange={setPackaging}
+                  options={packagingCreateOptions}
+                  sheetTitle="Empaque"
+                  selectClassName="w-full border rounded-md px-3 py-2"
+                  buttonClassName="w-full border rounded-md px-3 py-2 text-left flex items-center justify-between gap-2 bg-white"
+                />
               </div>
 
               <div>
@@ -1439,22 +1503,15 @@ export default function ProductsCandies() {
               placeholder="Buscar por categoría o producto…"
             />
             <div className="mt-2">
-              <label className="block text-xs font-semibold text-slate-700">
-                Empaque
-              </label>
-              <select
-                className="w-full border rounded-md px-3 py-2"
+              <MobileHtmlSelect
+                label="Empaque"
                 value={packagingFilter}
-                onChange={(e) => setPackagingFilter(e.target.value)}
-              >
-                <option value="">Todos</option>
-                <option value="Tarro">Tarro</option>
-                <option value="Bolsa">Bolsa</option>
-                <option value="Ristra">Ristra</option>
-                <option value="Caja">Caja</option>
-                <option value="Vaso">Vaso</option>
-                <option value="Pana">Pana</option>
-              </select>
+                onChange={setPackagingFilter}
+                options={packagingFilterOptions}
+                sheetTitle="Empaque"
+                selectClassName="w-full border rounded-md px-3 py-2"
+                buttonClassName="w-full border rounded-md px-3 py-2 text-left flex items-center justify-between gap-2 bg-white"
+              />
             </div>
           </div>
 
@@ -1593,13 +1650,55 @@ export default function ProductsCandies() {
                                           Categoría
                                         </div>
                                         {isEd ? (
-                                          <input
-                                            className="w-full border rounded px-2 py-1"
-                                            value={editCategory}
-                                            onChange={(e) =>
-                                              setEditCategory(e.target.value)
-                                            }
-                                          />
+                                          <div className="space-y-1">
+                                            <MobileHtmlSelect
+                                              label=""
+                                              value={
+                                                editCategoryPickedNew ||
+                                                (editCategory.trim() &&
+                                                  !categoryOptions.includes(
+                                                    editCategory.trim(),
+                                                  ))
+                                                  ? "__new__"
+                                                  : editCategory
+                                              }
+                                              onChange={(v) => {
+                                                if (v === "__new__") {
+                                                  setEditCategoryPickedNew(
+                                                    true,
+                                                  );
+                                                  setEditCategory("");
+                                                } else {
+                                                  setEditCategoryPickedNew(
+                                                    false,
+                                                  );
+                                                  setEditCategory(v);
+                                                }
+                                              }}
+                                              options={
+                                                categorySelectFieldOptions
+                                              }
+                                              sheetTitle="Categoría"
+                                              selectClassName="w-full border rounded px-2 py-1 text-sm"
+                                              buttonClassName="w-full border rounded px-2 py-1 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                                            />
+                                            {(editCategoryPickedNew ||
+                                              (editCategory.trim() &&
+                                                !categoryOptions.includes(
+                                                  editCategory.trim(),
+                                                ))) && (
+                                              <input
+                                                className="w-full border rounded px-2 py-1 text-sm"
+                                                value={editCategory}
+                                                onChange={(e) =>
+                                                  setEditCategory(
+                                                    e.target.value,
+                                                  )
+                                                }
+                                                placeholder="Nueva categoría"
+                                              />
+                                            )}
+                                          </div>
                                         ) : (
                                           <div className="font-semibold">
                                             {p.category}
@@ -1635,25 +1734,14 @@ export default function ProductsCandies() {
                                           Empaque
                                         </div>
                                         {isEd ? (
-                                          <select
-                                            className="w-full border rounded px-2 py-1"
+                                          <MobileHtmlSelect
                                             value={editPackaging}
-                                            onChange={(e) =>
-                                              setEditPackaging(e.target.value)
-                                            }
-                                          >
-                                            <option value="">
-                                              Seleccionar
-                                            </option>
-                                            <option value="Tarro">Tarro</option>
-                                            <option value="Bolsa">Bolsa</option>
-                                            <option value="Ristra">
-                                              Ristra
-                                            </option>
-                                            <option value="Caja">Caja</option>
-                                            <option value="Vaso">Vaso</option>
-                                            <option value="Pana">Pana</option>
-                                          </select>
+                                            onChange={setEditPackaging}
+                                            options={packagingEditSelectOptions}
+                                            sheetTitle="Empaque"
+                                            selectClassName="w-full border rounded px-2 py-1 text-sm"
+                                            buttonClassName="w-full border rounded px-2 py-1 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                                          />
                                         ) : (
                                           <div className="font-semibold">
                                             {p.packaging || "—"}
@@ -1739,18 +1827,18 @@ export default function ProductsCandies() {
                                     </div>
 
                                     {/* acciones */}
-                                    <div className="pt-2 flex gap-2">
+                                    <div className="pt-2 flex flex-wrap gap-2 items-center">
                                       {isEd ? (
                                         <>
                                           <button
-                                            className="flex-1 px-3 py-2 rounded bg-blue-600 text-white"
+                                            className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-blue-600 text-white"
                                             onClick={saveEdit}
                                             type="button"
                                           >
                                             Guardar
                                           </button>
                                           <button
-                                            className="flex-1 px-3 py-2 rounded bg-gray-800 text-white"
+                                            className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-800 text-white"
                                             onClick={() => {
                                               setScanTarget("edit");
                                               setScanOpen(true);
@@ -1760,7 +1848,7 @@ export default function ProductsCandies() {
                                             Escanear
                                           </button>
                                           <button
-                                            className="flex-1 px-3 py-2 rounded bg-gray-200"
+                                            className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-200"
                                             onClick={cancelEdit}
                                             type="button"
                                           >
@@ -1768,22 +1856,24 @@ export default function ProductsCandies() {
                                           </button>
                                         </>
                                       ) : (
-                                        <>
+                                        <div className="w-full flex justify-end">
                                           <button
-                                            className="flex-1 px-3 py-2 rounded bg-yellow-400"
-                                            onClick={() => startEdit(p)}
                                             type="button"
+                                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                                            aria-label="Acciones del producto"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setCatalogRowMenu({
+                                                id: p.id,
+                                                rect: (
+                                                  e.currentTarget as HTMLElement
+                                                ).getBoundingClientRect(),
+                                              });
+                                            }}
                                           >
-                                            Editar
+                                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
                                           </button>
-                                          <button
-                                            className="flex-1 px-3 py-2 rounded bg-red-600 text-white"
-                                            onClick={() => removeProduct(p)}
-                                            type="button"
-                                          >
-                                            Borrar
-                                          </button>
-                                        </>
+                                        </div>
                                       )}
                                     </div>
                                   </div>
@@ -1842,11 +1932,47 @@ export default function ProductsCandies() {
                     >
                       <td className="p-3 border-b">
                         {isEd ? (
-                          <input
-                            className="w-full border rounded px-2 py-1"
-                            value={editCategory}
-                            onChange={(e) => setEditCategory(e.target.value)}
-                          />
+                          <div className="space-y-1 min-w-[140px]">
+                            <MobileHtmlSelect
+                              label=""
+                              value={
+                                editCategoryPickedNew ||
+                                (editCategory.trim() &&
+                                  !categoryOptions.includes(
+                                    editCategory.trim(),
+                                  ))
+                                  ? "__new__"
+                                  : editCategory
+                              }
+                              onChange={(v) => {
+                                if (v === "__new__") {
+                                  setEditCategoryPickedNew(true);
+                                  setEditCategory("");
+                                } else {
+                                  setEditCategoryPickedNew(false);
+                                  setEditCategory(v);
+                                }
+                              }}
+                              options={categorySelectFieldOptions}
+                              sheetTitle="Categoría"
+                              selectClassName="w-full border rounded px-2 py-1 text-sm"
+                              buttonClassName="w-full border rounded px-2 py-1 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                            />
+                            {(editCategoryPickedNew ||
+                              (editCategory.trim() &&
+                                !categoryOptions.includes(
+                                  editCategory.trim(),
+                                ))) && (
+                              <input
+                                className="w-full border rounded px-2 py-1 text-sm"
+                                value={editCategory}
+                                onChange={(e) =>
+                                  setEditCategory(e.target.value)
+                                }
+                                placeholder="Nueva categoría"
+                              />
+                            )}
+                          </div>
                         ) : (
                           p.category
                         )}
@@ -1866,19 +1992,14 @@ export default function ProductsCandies() {
 
                       <td className="p-3 border-b">
                         {isEd ? (
-                          <select
-                            className="w-full border rounded px-2 py-1"
+                          <MobileHtmlSelect
                             value={editPackaging}
-                            onChange={(e) => setEditPackaging(e.target.value)}
-                          >
-                            <option value="">—</option>
-                            <option value="Tarro">Tarro</option>
-                            <option value="Bolsa">Bolsa</option>
-                            <option value="Ristra">Ristra</option>
-                            <option value="Caja">Caja</option>
-                            <option value="Vaso">Vaso</option>
-                            <option value="Pana">Pana</option>
-                          </select>
+                            onChange={setEditPackaging}
+                            options={packagingEditDashOptions}
+                            sheetTitle="Empaque"
+                            selectClassName="w-full border rounded px-2 py-1 text-sm"
+                            buttonClassName="w-full border rounded px-2 py-1 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                          />
                         ) : (
                           p.packaging || "—"
                         )}
@@ -2010,23 +2131,67 @@ export default function ProductsCandies() {
         </div>
       )}
 
+      <ActionMenu
+        anchorRect={catalogRowMenu?.rect ?? null}
+        isOpen={!!catalogRowMenu}
+        onClose={() => setCatalogRowMenu(null)}
+        width={200}
+      >
+        {catalogRowMenu &&
+          (() => {
+            const p = products.find((x) => x.id === catalogRowMenu.id);
+            if (!p) {
+              return (
+                <div className="px-3 py-2 text-sm text-gray-500">Sin datos</div>
+              );
+            }
+            return (
+              <div className="py-1">
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  onClick={() => {
+                    setCatalogRowMenu(null);
+                    startEdit(p);
+                  }}
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                  onClick={() => {
+                    setCatalogRowMenu(null);
+                    void removeProduct(p);
+                  }}
+                >
+                  Borrar
+                </button>
+              </div>
+            );
+          })()}
+      </ActionMenu>
+
       {msg ? (
         isMobile && msg === "✅ Producto guardado." ? (
-          <div className="mt-2 flex items-center gap-3">
-            <div className="flex-1 text-sm">{msg}</div>
-            <button
-              className="px-3 py-1 rounded bg-blue-600 text-white"
-              onClick={() => {
-                setMsg("");
-                cancelEdit();
-                setScanOpen(false);
-              }}
-            >
-              Aceptar
-            </button>
-          </div>
+          <>
+            <Toast message={msg} onClose={() => setMsg("")} />
+            <div className="mt-2 md:hidden">
+              <button
+                className="w-full px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold"
+                type="button"
+                onClick={() => {
+                  setMsg("");
+                  cancelEdit();
+                  setScanOpen(false);
+                }}
+              >
+                Aceptar y cerrar edición
+              </button>
+            </div>
+          </>
         ) : (
-          <p className="mt-2 text-sm">{msg}</p>
+          <Toast message={msg} onClose={() => setMsg("")} />
         )
       ) : null}
 
@@ -2065,15 +2230,40 @@ export default function ProductsCandies() {
               }}
               className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end text-sm"
             >
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Categoría
-                </label>
-                <input
-                  className="w-full border rounded-md px-3 py-2"
-                  value={editCategory}
-                  onChange={(e) => setEditCategory(e.target.value)}
+              <div className="md:col-span-2">
+                <MobileHtmlSelect
+                  label="Categoría"
+                  value={
+                    editCategoryPickedNew ||
+                    (editCategory.trim() &&
+                      !categoryOptions.includes(editCategory.trim()))
+                      ? "__new__"
+                      : editCategory
+                  }
+                  onChange={(v) => {
+                    if (v === "__new__") {
+                      setEditCategoryPickedNew(true);
+                      setEditCategory("");
+                    } else {
+                      setEditCategoryPickedNew(false);
+                      setEditCategory(v);
+                    }
+                  }}
+                  options={categorySelectFieldOptions}
+                  sheetTitle="Categoría"
+                  selectClassName="w-full border rounded-md px-3 py-2"
+                  buttonClassName="w-full border rounded-md px-3 py-2 text-left flex items-center justify-between gap-2 bg-white"
                 />
+                {(editCategoryPickedNew ||
+                  (editCategory.trim() &&
+                    !categoryOptions.includes(editCategory.trim()))) && (
+                  <input
+                    className="w-full border rounded-md px-3 py-2 mt-2"
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value)}
+                    placeholder="Escribe la categoría"
+                  />
+                )}
               </div>
 
               <div className="md:col-span-2">
@@ -2088,22 +2278,15 @@ export default function ProductsCandies() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Empaque
-                </label>
-                <select
-                  className="w-full border rounded-md px-3 py-2"
+                <MobileHtmlSelect
+                  label="Empaque"
                   value={editPackaging}
-                  onChange={(e) => setEditPackaging(e.target.value)}
-                >
-                  <option value="">Seleccionar</option>
-                  <option value="Tarro">Tarro</option>
-                  <option value="Bolsa">Bolsa</option>
-                  <option value="Ristra">Ristra</option>
-                  <option value="Caja">Caja</option>
-                  <option value="Vaso">Vaso</option>
-                  <option value="Pana">Pana</option>
-                </select>
+                  onChange={setEditPackaging}
+                  options={packagingEditSelectOptions}
+                  sheetTitle="Empaque"
+                  selectClassName="w-full border rounded-md px-3 py-2"
+                  buttonClassName="w-full border rounded-md px-3 py-2 text-left flex items-center justify-between gap-2 bg-white"
+                />
               </div>
 
               <div>

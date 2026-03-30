@@ -4,6 +4,8 @@ import BottomSheet from "./BottomSheet";
 export type MobileHtmlSelectOption = {
   value: string;
   label: string;
+  /** Deshabilita la opción en nativo y en el bottom sheet. */
+  disabled?: boolean;
 };
 
 type Props = {
@@ -73,6 +75,7 @@ export default function MobileHtmlSelect({
           <option
             key={o.value === "" ? "__empty" : String(o.value)}
             value={o.value}
+            disabled={o.disabled}
           >
             {o.label}
           </option>
@@ -103,10 +106,14 @@ export default function MobileHtmlSelect({
             <button
               key={o.value === "" ? "__empty" : String(o.value)}
               type="button"
-              className={`w-full text-left px-4 py-3.5 text-sm border-b border-slate-100 last:border-b-0 hover:bg-slate-50 ${
-                o.value === value ? "bg-slate-100 font-semibold" : ""
-              }`}
+              disabled={o.disabled}
+              className={`w-full text-left px-4 py-3.5 text-sm border-b border-slate-100 last:border-b-0 ${
+                o.disabled
+                  ? "opacity-40 cursor-not-allowed text-slate-400"
+                  : "hover:bg-slate-50"
+              } ${o.value === value ? "bg-slate-100 font-semibold" : ""}`}
               onClick={() => {
+                if (o.disabled) return;
                 onChange(o.value);
                 setOpen(false);
               }}

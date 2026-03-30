@@ -9,6 +9,8 @@ import {
 import { format } from "date-fns";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import * as XLSX from "xlsx";
 import {
@@ -81,6 +83,7 @@ export default function EvolutivoInventarioPollo({
   const { refreshKey, refresh } = useManualRefresh();
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
   const [priceFilter, setPriceFilter] = useState<string>("ALL");
+  const [toastMsg, setToastMsg] = useState("");
 
   // =========================
   // 1) Cargar productos
@@ -284,6 +287,34 @@ export default function EvolutivoInventarioPollo({
     );
   }, [filteredMoves, salePrices]);
 
+  const typeFilterSelectOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todos" },
+      { value: "INGRESO", label: "INGRESO" },
+      { value: "VENTA_CASH", label: "VENTA_CASH" },
+      { value: "VENTA_CREDITO", label: "VENTA_CREDITO" },
+      { value: "MERMA", label: "MERMA" },
+      { value: "ROBO", label: "ROBO" },
+    ],
+    [],
+  );
+
+  const priceFilterSelectOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todos" },
+      ...availablePrices.map((p) => ({ value: p, label: p })),
+    ],
+    [availablePrices],
+  );
+
+  const adjTypeSelectOptions = useMemo(
+    () => [
+      { value: "MERMA", label: "Merma por peso" },
+      { value: "ROBO", label: "Pérdida/Robo" },
+    ],
+    [],
+  );
+
   const displayedMoves = useMemo(() => {
     if (!filteredMoves || filteredMoves.length === 0)
       return [] as typeof filteredMoves;
@@ -388,11 +419,20 @@ export default function EvolutivoInventarioPollo({
   // Guardar ajuste manual
   // =========================
   const saveAdjustment = async () => {
-    if (!selected) return window.alert("Seleccioná un producto primero.");
+    if (!selected) {
+      setToastMsg("⚠️ Seleccioná un producto primero.");
+      return;
+    }
 
     const q = Number(adjQty || 0);
-    if (q <= 0) return window.alert("Ingresá una cantidad > 0.");
-    if (!adjDate) return window.alert("Seleccioná fecha.");
+    if (q <= 0) {
+      setToastMsg("⚠️ Ingresá una cantidad mayor a 0.");
+      return;
+    }
+    if (!adjDate) {
+      setToastMsg("⚠️ Seleccioná fecha.");
+      return;
+    }
 
     const user = auth.currentUser;
 
@@ -414,6 +454,7 @@ export default function EvolutivoInventarioPollo({
     setAdjQty(0);
     setAdjDesc("");
     refresh();
+    setToastMsg("✅ Movimiento registrado.");
   };
 
   return (
@@ -678,38 +719,29 @@ export default function EvolutivoInventarioPollo({
             </button>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-            <div className="w-full sm:w-auto flex items-center gap-2">
-              <label className="text-sm text-gray-700">Tipo:</label>
-              <select
-                className="border rounded px-2 py-2 w-full sm:w-auto"
+          <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 w-full">
+            <div className="w-full sm:w-auto min-w-0 flex-1">
+              <MobileHtmlSelect
+                label="Tipo"
                 value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-              >
-                <option value="ALL">Todos</option>
-                <option value="INGRESO">INGRESO</option>
-                <option value="VENTA_CASH">VENTA_CASH</option>
-                <option value="VENTA_CREDITO">VENTA_CREDITO</option>
-                <option value="MERMA">MERMA</option>
-                <option value="ROBO">ROBO</option>
-              </select>
+                onChange={setTypeFilter}
+                options={typeFilterSelectOptions}
+                sheetTitle="Filtrar por tipo"
+                selectClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm"
+                buttonClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm text-left flex items-center justify-between gap-2 bg-white"
+              />
             </div>
 
-            <div className="w-full sm:w-auto flex items-center gap-2">
-              <label className="text-sm text-gray-700">Precio:</label>
-              <select
-                className="border rounded px-2 py-2 w-full sm:w-auto"
+            <div className="w-full sm:w-auto min-w-0 flex-1">
+              <MobileHtmlSelect
+                label="Precio"
                 value={priceFilter}
-                onChange={(e) => setPriceFilter(e.target.value)}
-              >
-                <option value="ALL">Todos</option>
-                {availablePrices &&
-                  availablePrices.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-              </select>
+                onChange={setPriceFilter}
+                options={priceFilterSelectOptions}
+                sheetTitle="Filtrar por precio"
+                selectClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm"
+                buttonClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm text-left flex items-center justify-between gap-2 bg-white"
+              />
             </div>
           </div>
 
@@ -947,35 +979,26 @@ export default function EvolutivoInventarioPollo({
               Exportar Excel
             </button>
 
-            <div className="flex items-center space-x-2 ml-2">
-              <label className="text-sm text-gray-700">Tipo:</label>
-              <select
-                className="border rounded px-2 py-2"
+            <div className="flex flex-wrap items-end gap-2 ml-2">
+              <MobileHtmlSelect
+                label="Tipo"
                 value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-              >
-                <option value="ALL">Todos</option>
-                <option value="INGRESO">INGRESO</option>
-                <option value="VENTA_CASH">VENTA_CASH</option>
-                <option value="VENTA_CREDITO">VENTA_CREDITO</option>
-                <option value="MERMA">MERMA</option>
-                <option value="ROBO">ROBO</option>
-              </select>
+                onChange={setTypeFilter}
+                options={typeFilterSelectOptions}
+                sheetTitle="Filtrar por tipo"
+                selectClassName="border rounded px-2 py-2 text-sm min-w-[10rem]"
+                buttonClassName="border rounded px-2 py-2 text-sm min-w-[10rem] text-left flex items-center justify-between gap-2 bg-white"
+              />
 
-              <label className="text-sm text-gray-700">Precio:</label>
-              <select
-                className="border rounded px-2 py-2"
+              <MobileHtmlSelect
+                label="Precio"
                 value={priceFilter}
-                onChange={(e) => setPriceFilter(e.target.value)}
-              >
-                <option value="ALL">Todos</option>
-                {availablePrices &&
-                  availablePrices.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-              </select>
+                onChange={setPriceFilter}
+                options={priceFilterSelectOptions}
+                sheetTitle="Filtrar por precio"
+                selectClassName="border rounded px-2 py-2 text-sm min-w-[10rem]"
+                buttonClassName="border rounded px-2 py-2 text-sm min-w-[10rem] text-left flex items-center justify-between gap-2 bg-white"
+              />
             </div>
           </div>
 
@@ -1003,17 +1026,15 @@ export default function EvolutivoInventarioPollo({
                   </div>
 
                   <div>
-                    <label className="block text-sm text-gray-600 mb-1">
-                      Tipo
-                    </label>
-                    <select
-                      className="border rounded px-3 py-2 w-full text-sm"
+                    <MobileHtmlSelect
+                      label="Tipo"
                       value={adjType}
-                      onChange={(e) => setAdjType(e.target.value as AdjType)}
-                    >
-                      <option value="MERMA">Merma por peso</option>
-                      <option value="ROBO">Pérdida/Robo</option>
-                    </select>
+                      onChange={(v) => setAdjType(v as AdjType)}
+                      options={adjTypeSelectOptions}
+                      sheetTitle="Tipo de ajuste"
+                      selectClassName="border rounded px-3 py-2 w-full text-sm"
+                      buttonClassName="border rounded px-3 py-2 w-full text-sm text-left flex items-center justify-between gap-2 bg-white"
+                    />
                   </div>
 
                   <div>
@@ -1175,6 +1196,9 @@ export default function EvolutivoInventarioPollo({
       </div>
 
       {/* Mobile: already rendered above inside card (sm:hidden) */}
+      {toastMsg && (
+        <Toast message={toastMsg} onClose={() => setToastMsg("")} />
+      )}
     </div>
   );
 }

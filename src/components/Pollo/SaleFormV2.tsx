@@ -19,6 +19,8 @@ import { hasRole } from "../../utils/roles";
 import allocateFIFOAndUpdateBatches from "../../Services/allocateFIFO";
 import { roundQty, addQty, gteQty } from "../../Services/decimal";
 import RefreshButton from "../../components/common/RefreshButton";
+import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
+import Toast from "../../components/common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
 // --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
@@ -48,6 +50,7 @@ interface Product {
   price: number;
   measurement: string;
   category: string;
+  activeSalePrice?: number;
 }
 
 interface Users {
@@ -156,7 +159,6 @@ export default function SaleForm({
       if (changes.length > 0) {
         const note = `Precios actualizados: ${changes.join("; ")}`;
         setMessage(note);
-        setTimeout(() => setMessage(""), 4000);
       }
     } catch (e) {
       // no bloquear la UX por errores de precio
@@ -177,6 +179,8 @@ export default function SaleForm({
         price: Number(x.price ?? 0),
         measurement: x.measurement ?? "(sin unidad)",
         category: x.category ?? "(sin categoría)",
+        activeSalePrice:
+          x.activeSalePrice != null ? Number(x.activeSalePrice) : undefined,
       });
     });
     setProducts(list);
@@ -201,6 +205,15 @@ export default function SaleForm({
 
     const priceMap: Record<string, number> = {};
     for (const pid of Object.keys(batchesByProduct)) {
+      const prod = products.find((p) => p.id === pid);
+      if (
+        prod?.activeSalePrice != null &&
+        Number.isFinite(prod.activeSalePrice) &&
+        prod.activeSalePrice > 0
+      ) {
+        priceMap[pid] = prod.activeSalePrice;
+        continue;
+      }
       const list = batchesByProduct[pid].slice().sort((a, b) => {
         const da = (a.data.date ?? "") as string;
         const dbs = (b.data.date ?? "") as string;
@@ -300,7 +313,6 @@ export default function SaleForm({
       // update cart prices after loads
       await refreshCartPrices();
       setMessage("✅ Datos actualizados.");
-      setTimeout(() => setMessage(""), 3000);
     } finally {
       setIsRefreshing(false);
     }
@@ -369,18 +381,27 @@ export default function SaleForm({
     return roundQty(total);
   };
 
-  // Obtener precio de venta preferido desde los lotes (si existe), si no, usar precio del catálogo
+  // Precio de venta: prioridad → activeSalePrice del producto (precio vigente),
+  // luego último lote, luego catálogo.
   const getSalePriceFromBatches = async (
     productId: string,
     fallbackPrice = 0,
   ) => {
+    const prod = products.find((p) => p.id === productId);
+    if (
+      prod?.activeSalePrice != null &&
+      Number.isFinite(prod.activeSalePrice) &&
+      prod.activeSalePrice > 0
+    ) {
+      return prod.activeSalePrice;
+    }
+
     try {
       const q = query(
         collection(db, "inventory_batches"),
         where("productId", "==", productId),
       );
       const snap = await getDocs(q);
-      // Ordenar por fecha (date) desc, luego por createdAt desc para elegir lote más reciente
       const docsSorted = snap.docs
         .map((d) => ({ id: d.id, data: d.data() as any }))
         .sort((a, b) => {
@@ -952,6 +973,42 @@ export default function SaleForm({
     );
   }, [customers, customerQuery]);
 
+  const productHtmlSelectOptions = useMemo(
+    () => [
+      {
+        value: "",
+        label: "Selecciona un producto",
+        disabled: true,
+      },
+      ...selectableProducts.map((p) => ({
+        value: p.id,
+        label: `${p.productName} — ${p.measurement} — Precio C$ ${latestPriceById[p.id] ?? p.price} (Existencia: ${qty3(stockById[p.id] || 0)})`,
+        disabled: chosenIds.has(p.id),
+      })),
+    ],
+    [selectableProducts, latestPriceById, stockById, chosenIds],
+  );
+
+  const creditCustomerSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Selecciona un cliente" },
+      ...customers.map((c) => ({
+        value: c.id,
+        label: `${c.name} — Saldo: ${money(c.balance || 0)}`,
+        disabled: c.status === "BLOQUEADO",
+      })),
+    ],
+    [customers],
+  );
+
+  const clientTypeOptions = useMemo(
+    () => [
+      { value: "CONTADO", label: "Contado" },
+      { value: "CREDITO", label: "Crédito" },
+    ],
+    [],
+  );
+
   if (isMobile) {
     return (
       <div className="w-full max-w-lg mx-auto p-3 overflow-x-hidden min-w-0">
@@ -969,19 +1026,15 @@ export default function SaleForm({
               aria-label="Fecha de la venta"
             />
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-semibold">Tipo de cliente</label>
-            <select
-              className="w-full border rounded px-2 py-2"
-              value={clientType}
-              onChange={(e) =>
-                handleClientTypeChange(e.target.value as ClientType)
-              }
-            >
-              <option value="CONTADO">Contado</option>
-              <option value="CREDITO">Crédito</option>
-            </select>
-          </div>
+          <MobileHtmlSelect
+            label="Tipo de cliente"
+            value={clientType}
+            onChange={(v) => handleClientTypeChange(v as ClientType)}
+            options={clientTypeOptions}
+            selectClassName="w-full border rounded px-2 py-2"
+            buttonClassName="w-full border rounded px-2 py-2 text-left flex items-center justify-between gap-2 bg-white"
+            sheetTitle="Tipo de cliente"
+          />
 
           {clientType === "CONTADO" ? (
             <div className="space-y-2">
@@ -1344,11 +1397,7 @@ export default function SaleForm({
           )}
 
           {message && (
-            <div
-              className={`text-sm ${message.startsWith("✅") ? "text-green-600" : message.startsWith("⚠️") ? "text-yellow-600" : "text-red-600"}`}
-            >
-              {message}
-            </div>
+            <Toast message={message} onClose={() => setMessage("")} />
           )}
         </div>
       </div>
@@ -1378,31 +1427,16 @@ export default function SaleForm({
             Producto | Precio por Libra/Unidad
           </label>
           <div className="flex gap-2">
-            <select
-              className="flex-1 border border-gray-300 p-2 rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-400"
-              value={selectedProductId}
-              onChange={(e) => setSelectedProductId(e.target.value)}
-            >
-              <option value="" disabled>
-                Selecciona un producto
-              </option>
-              {selectableProducts.map((p) => (
-                <option
-                  key={p.id}
-                  value={p.id}
-                  disabled={chosenIds.has(p.id)}
-                  title={
-                    chosenIds.has(p.id)
-                      ? "Ya está en la lista"
-                      : `Disponible: ${qty3(stockById[p.id] || 0)}`
-                  }
-                >
-                  {p.productName} — {p.measurement} — Precio C${" "}
-                  {latestPriceById[p.id] ?? p.price} (Existencia:{" "}
-                  {qty3(stockById[p.id] || 0)})
-                </option>
-              ))}
-            </select>
+            <div className="flex-1 min-w-0">
+              <MobileHtmlSelect
+                value={selectedProductId}
+                onChange={setSelectedProductId}
+                options={productHtmlSelectOptions}
+                sheetTitle="Producto"
+                selectClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-400"
+                buttonClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl text-left flex items-center justify-between gap-2 bg-white"
+              />
+            </div>
             <button
               type="button"
               onClick={addSelectedProduct}
@@ -1431,19 +1465,15 @@ export default function SaleForm({
           </div>
 
           <div className="space-y-1">
-            <label className="block text-sm font-semibold text-gray-700">
-              Tipo de cliente
-            </label>
-            <select
-              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+            <MobileHtmlSelect
+              label="Tipo de cliente"
               value={clientType}
-              onChange={(e) =>
-                handleClientTypeChange(e.target.value as ClientType)
-              }
-            >
-              <option value="CONTADO">Contado</option>
-              <option value="CREDITO">Crédito</option>
-            </select>
+              onChange={(v) => handleClientTypeChange(v as ClientType)}
+              options={clientTypeOptions}
+              selectClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+              buttonClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl text-left flex items-center justify-between gap-2 bg-white"
+              sheetTitle="Tipo de cliente"
+            />
           </div>
 
           {clientType === "CONTADO" ? (
@@ -1460,26 +1490,15 @@ export default function SaleForm({
             </div>
           ) : (
             <div className="md:col-span-2 space-y-2">
-              <label className="block text-sm font-semibold text-gray-700">
-                Cliente (Crédito)
-              </label>
-
-              <select
-                className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+              <MobileHtmlSelect
+                label="Cliente (Crédito)"
                 value={customerId}
-                onChange={(e) => setCustomerId(e.target.value)}
-              >
-                <option value="">Selecciona un cliente</option>
-                {customers.map((c) => (
-                  <option
-                    key={c.id}
-                    value={c.status === "ACTIVO" ? c.id : ""}
-                    disabled={c.status === "BLOQUEADO"}
-                  >
-                    {c.name} — Saldo: {money(c.balance || 0)}
-                  </option>
-                ))}
-              </select>
+                onChange={setCustomerId}
+                options={creditCustomerSelectOptions}
+                selectClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+                buttonClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl text-left flex items-center justify-between gap-2 bg-white"
+                sheetTitle="Cliente (crédito)"
+              />
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div
@@ -1730,17 +1749,7 @@ export default function SaleForm({
         )}
 
         {message && (
-          <p
-            className={`text-sm mt-2 ${
-              message.startsWith("✅")
-                ? "text-green-600"
-                : message.startsWith("⚠️")
-                  ? "text-yellow-600"
-                  : "text-red-600"
-            }`}
-          >
-            {message}
-          </p>
+          <Toast message={message} onClose={() => setMessage("")} />
         )}
       </form>
 

@@ -16,6 +16,8 @@ import {
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
 
 import {
   BarChart,
@@ -111,6 +113,17 @@ export default function CashDeliveriesCandies() {
     return m;
   }, [sellers]);
 
+  const sellerSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Seleccionar..." },
+      ...sellers.map((s) => ({
+        value: s.id,
+        label: `${s.name} ${s.branch ? `(${s.branch})` : ""}`,
+      })),
+    ],
+    [sellers],
+  );
+
   // ===== Rows =====
   const [rows, setRows] = useState<CashDeliveryDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,6 +136,7 @@ export default function CashDeliveriesCandies() {
   const [newAmountDelivered, setNewAmountDelivered] = useState("");
   const [newExtraExpenses, setNewExtraExpenses] = useState("0");
   const [newComment, setNewComment] = useState("");
+  const [toastMsg, setToastMsg] = useState("");
 
   // ===== Edit =====
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -305,9 +319,14 @@ export default function CashDeliveriesCandies() {
 
   // ===== Actions =====
   async function addDelivery() {
-    if (!newSellerId) return alert("Seleccioná un vendedor.");
-    if (newAmountN <= 0)
-      return alert("Ingresá un Monto entregado válido (> 0).");
+    if (!newSellerId) {
+      setToastMsg("⚠️ Seleccioná un vendedor.");
+      return;
+    }
+    if (newAmountN <= 0) {
+      setToastMsg("⚠️ Ingresá un monto entregado válido (> 0).");
+      return;
+    }
 
     const seller = sellersMap.get(newSellerId);
     const sellerName = seller?.name ?? "Sin nombre";
@@ -335,6 +354,7 @@ export default function CashDeliveriesCandies() {
     setNewAmountDelivered("");
     setNewExtraExpenses("0");
     setNewComment("");
+    setToastMsg("✅ Movimiento guardado.");
   }
 
   function startEdit(r: CashDeliveryDoc) {
@@ -385,11 +405,13 @@ export default function CashDeliveriesCandies() {
     });
 
     cancelEdit();
+    setToastMsg("✅ Cambios guardados.");
   }
 
   async function removeRow(id: string) {
     if (!confirm("¿Eliminar este registro?")) return;
     await deleteDoc(doc(db, DELIVERIES_COLLECTION, id));
+    setToastMsg("✅ Registro eliminado.");
   }
 
   async function exportPDF() {
@@ -645,21 +667,21 @@ export default function CashDeliveriesCandies() {
               />
             </label>
 
-            <label className="space-y-1">
-              <span className="text-xs font-bold text-gray-600">Vendedor</span>
-              <select
+            <div className="space-y-1">
+              <MobileHtmlSelect
+                label={
+                  <span className="text-xs font-bold text-gray-600">
+                    Vendedor
+                  </span>
+                }
                 value={newSellerId}
-                onChange={(e) => setNewSellerId(e.target.value)}
-                className="w-full h-10 rounded-xl border border-gray-200 px-3 outline-none focus:ring-2 focus:ring-gray-900/10 bg-white"
-              >
-                <option value="">Seleccionar...</option>
-                {sellers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} {s.branch ? `(${s.branch})` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+                onChange={setNewSellerId}
+                options={sellerSelectOptions}
+                sheetTitle="Vendedor"
+                selectClassName="w-full h-10 rounded-xl border border-gray-200 px-3 outline-none focus:ring-2 focus:ring-gray-900/10 bg-white"
+                buttonClassName="w-full h-10 rounded-xl border border-gray-200 px-3 outline-none focus:ring-2 focus:ring-gray-900/10 bg-white text-left flex items-center justify-between gap-2"
+              />
+            </div>
 
             <label className="space-y-1">
               <span className="text-xs font-bold text-gray-600">
@@ -858,11 +880,10 @@ export default function CashDeliveriesCandies() {
                             />
                           </td>
 
-                          <td className="p-2">
-                            <select
+                          <td className="p-2 min-w-[10rem]">
+                            <MobileHtmlSelect
                               value={String(editDraft.sellerId ?? r.sellerId)}
-                              onChange={(e) => {
-                                const sellerId = e.target.value;
+                              onChange={(sellerId) => {
                                 const s = sellersMap.get(sellerId);
                                 setEditDraft((p) => ({
                                   ...p,
@@ -873,15 +894,11 @@ export default function CashDeliveriesCandies() {
                                   ),
                                 }));
                               }}
-                              className="h-9 px-3 rounded-xl border border-gray-200 bg-white outline-none"
-                            >
-                              <option value="">Seleccionar...</option>
-                              {sellers.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.name} {s.branch ? `(${s.branch})` : ""}
-                                </option>
-                              ))}
-                            </select>
+                              options={sellerSelectOptions}
+                              sheetTitle="Vendedor"
+                              selectClassName="h-9 px-3 rounded-xl border border-gray-200 bg-white outline-none w-full text-sm"
+                              buttonClassName="h-9 px-3 rounded-xl border border-gray-200 bg-white outline-none w-full text-sm text-left flex items-center justify-between gap-2"
+                            />
                           </td>
 
                           <td className="p-2 text-right">
@@ -1084,14 +1101,15 @@ export default function CashDeliveriesCandies() {
                         />
                       </label>
 
-                      <label className="space-y-1">
-                        <span className="text-xs font-bold text-gray-600">
-                          Vendedor
-                        </span>
-                        <select
+                      <div className="space-y-1">
+                        <MobileHtmlSelect
+                          label={
+                            <span className="text-xs font-bold text-gray-600">
+                              Vendedor
+                            </span>
+                          }
                           value={String(editDraft.sellerId ?? "")}
-                          onChange={(e) => {
-                            const sellerId = e.target.value;
+                          onChange={(sellerId) => {
                             const s = sellersMap.get(sellerId);
                             setEditDraft((p) => ({
                               ...p,
@@ -1102,16 +1120,12 @@ export default function CashDeliveriesCandies() {
                               ),
                             }));
                           }}
-                          className="w-full h-10 rounded-xl border border-gray-200 px-3 outline-none bg-white"
-                        >
-                          <option value="">Seleccionar...</option>
-                          {sellers.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name} {s.branch ? `(${s.branch})` : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                          options={sellerSelectOptions}
+                          sheetTitle="Vendedor"
+                          selectClassName="w-full h-10 rounded-xl border border-gray-200 px-3 outline-none bg-white"
+                          buttonClassName="w-full h-10 rounded-xl border border-gray-200 px-3 outline-none bg-white text-left flex items-center justify-between gap-2"
+                        />
+                      </div>
 
                       <label className="space-y-1">
                         <span className="text-xs font-bold text-gray-600">
@@ -1203,6 +1217,9 @@ export default function CashDeliveriesCandies() {
           )}
         </div>
       </div>
+      {toastMsg && (
+        <Toast message={toastMsg} onClose={() => setToastMsg("")} />
+      )}
     </div>
   );
 }

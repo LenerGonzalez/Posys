@@ -18,7 +18,11 @@ import {
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import RefreshButton from "../common/RefreshButton";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
+import ActionMenu from "../common/ActionMenu";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import { FiMoreVertical } from "react-icons/fi";
 import { backfillCandyInventoryFromMainOrder } from "../../Services/inventory_candies";
 
 // Small helpers used in this file
@@ -344,6 +348,29 @@ export default function CandyMainOrders() {
   const { refreshKey, refresh } = useManualRefresh();
 
   const [msg, setMsg] = useState("");
+  const [orderListMenu, setOrderListMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [modalItemMenu, setModalItemMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
+  /** Menús ⋮ dentro del modal (cabecera / Excel / pie) — móvil y web */
+  const [masterModalHeaderMenu, setMasterModalHeaderMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  const [masterModalExcelMenu, setMasterModalExcelMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  const [masterModalFooterMenu, setMasterModalFooterMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  /** Menú ⋮ barra del listado (tabla web) */
+  const [mainOrdersListToolbarMenu, setMainOrdersListToolbarMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  const orderFormRef = useRef<HTMLFormElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingOrder, setSavingOrder] = useState(false);
   const [addingItemToOrder, setAddingItemToOrder] = useState(false);
@@ -562,6 +589,33 @@ export default function CandyMainOrders() {
           .includes(q),
     );
   }, [catalogByCategory, productSearch]);
+
+  const orderCategorySelectOptions = useMemo(() => {
+    if (catalogCategories.length === 0) {
+      return [
+        {
+          value: "",
+          label: catalogLoading
+            ? "Cargando..."
+            : "No hay categorías en catálogo",
+        },
+      ];
+    }
+    return [
+      { value: "Todas", label: "Todas" },
+      ...catalogCategories.map((c) => ({ value: c, label: c })),
+    ];
+  }, [catalogCategories, catalogLoading]);
+
+  const orderProductSelectOptions = useMemo(() => {
+    const emptyLabel = catalogLoading
+      ? "Cargando catálogo..."
+      : "Selecciona producto";
+    return [
+      { value: "", label: emptyLabel },
+      ...productsForSelect.map((p) => ({ value: p.id, label: p.name })),
+    ];
+  }, [productsForSelect, catalogLoading]);
 
   // al seleccionar producto, auto-llenar datos
   useEffect(() => {
@@ -1010,6 +1064,7 @@ export default function CandyMainOrders() {
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name, "es"))
       .map((p) => ({
+
         Producto: p.name,
         Paquetes: "",
       }));
@@ -2236,14 +2291,12 @@ export default function CandyMainOrders() {
         </div>
       </div>
 
-      {msg && !openOrderModal && (
-        <div className="mb-3 p-2 rounded border text-sm bg-white">{msg}</div>
-      )}
+      {msg && <Toast message={msg} onClose={() => setMsg("")} />}
 
       {/* MODAL ORDEN MAESTRA */}
       {openOrderModal && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-2 md:p-6">
-          <div className="relative bg-white p-4 md:p-6 rounded shadow-lg w-[98vw] max-w-none max-h-[96vh] overflow-y-auto text-sm">
+          <div className="relative bg-white p-3 sm:p-5 md:p-6 rounded-2xl shadow-lg w-[98vw] max-w-none max-h-[96vh] overflow-y-auto text-sm flex flex-col gap-3">
             {savingOrder && (
               <div className="absolute inset-0 bg-white/70 z-50 flex items-center justify-center">
                 <div className="bg-white border rounded-xl px-4 py-3 shadow flex items-center gap-3">
@@ -2274,53 +2327,28 @@ export default function CandyMainOrders() {
 
             {/* Header sticky */}
             <div className="sticky top-0 bg-white z-20 pb-3 border-b">
-              <div className="flex items-center gap-3">
-                <h3 className="text-lg md:text-xl font-bold">
+              <div className="flex items-start gap-2">
+                <h3 className="text-base md:text-xl font-bold min-w-0 flex-1 leading-snug">
                   {editingOrderId
                     ? "Editar Orden Maestra"
                     : "Nueva Orden Maestra"}
                 </h3>
 
-                <div className="ml-auto flex flex-wrap items-center gap-2 justify-end">
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 text-sm"
-                    disabled={
-                      savingOrder ||
-                      refreshingSalePrices ||
-                      !orderItems.length
-                    }
-                    title="Vuelve a cargar precios desde Precios ventas (útil si los acabás de cargar en otra pestaña)"
-                    onClick={() => void refreshSalePricesFromCurrentPrices(false)}
-                  >
-                    {refreshingSalePrices
-                      ? "Actualizando…"
-                      : "Actualizar precios"}
-                  </button>
-                  {editingOrderId && (
-                    <button
-                      type="button"
-                      className="px-3 py-2 rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60"
-                      disabled={savingOrder || backfillingInventory}
-                      onClick={backfillInventoryForCurrentOrder}
-                    >
-                      {backfillingInventory
-                        ? "Creando inventario..."
-                        : "Crear inventario faltante"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-60"
-                    disabled={savingOrder}
-                    onClick={() => {
-                      resetOrderForm();
-                      setOpenOrderModal(false);
-                    }}
-                  >
-                    Cerrar
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="shrink-0 p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                  aria-label="Acciones de la orden"
+                  title="Actualizar precios, inventario, cerrar"
+                  onClick={(e) =>
+                    setMasterModalHeaderMenu({
+                      rect: (
+                        e.currentTarget as HTMLElement
+                      ).getBoundingClientRect(),
+                    })
+                  }
+                >
+                  <FiMoreVertical className="w-5 h-5 text-gray-800" />
+                </button>
               </div>
 
               {/* Config rápida (logística + % utilidades) */}
@@ -2403,7 +2431,11 @@ export default function CandyMainOrders() {
               )}
             </div>
 
-            <form onSubmit={handleSaveOrder} className="space-y-4 pt-4">
+            <form
+              ref={orderFormRef}
+              onSubmit={handleSaveOrder}
+              className="space-y-4 pt-4"
+            >
               {/* file input (oculto) */}
               <input
                 ref={fileInputRef}
@@ -2419,11 +2451,11 @@ export default function CandyMainOrders() {
               >
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="md:col-span-2">
-                    <label className="block text-sm font-semibold">
+                    <label className="block text-[14px] md:text-sm font-semibold text-gray-600 md:text-gray-900">
                       Nombre de Orden
                     </label>
                     <input
-                      className="w-full border p-2 rounded"
+                      className="w-full border rounded px-2 py-1.5 md:p-2 text-[11px] leading-snug md:text-sm md:leading-normal placeholder:text-[11px] md:placeholder:text-sm"
                       value={orderName}
                       onChange={(e) => setOrderName(e.target.value)}
                       placeholder="Ej: Pedido enero 19"
@@ -2478,69 +2510,46 @@ export default function CandyMainOrders() {
                 <div className="border rounded p-3 bg-gray-50">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <div>
-                      <label className="block text-sm font-semibold">
-                        Categoría (dinámica)
-                      </label>
-                      <select
-                        className="w-full border p-2 rounded"
-                        value={orderCategory}
-                        onChange={(e) => {
-                          setOrderCategory(e.target.value);
+                      <MobileHtmlSelect
+                        label="Categoría (dinámica)"
+                        value={
+                          catalogCategories.length === 0 ? "" : orderCategory
+                        }
+                        onChange={(v) => {
+                          setOrderCategory(v || "Todas");
                           setOrderProductId("");
                         }}
                         disabled={catalogLoading}
-                      >
-                        {catalogCategories.length === 0 ? (
-                          <option value="">
-                            {catalogLoading
-                              ? "Cargando..."
-                              : "No hay categorías en catálogo"}
-                          </option>
-                        ) : (
-                          <>
-                            <option key="todas" value="Todas">
-                              Todas
-                            </option>
-                            {catalogCategories.map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                          </>
-                        )}
-                      </select>
+                        options={orderCategorySelectOptions}
+                        sheetTitle="Categoría"
+                        selectClassName="w-full border p-2 rounded"
+                        buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                      />
                     </div>
 
-                    <div className="md:col-span-2">
-                      <label className="block text-sm font-semibold">
-                        Buscar producto
-                      </label>
-                      <input
-                        className="w-full border p-2 rounded mb-2"
-                        placeholder="Buscar producto..."
-                        value={productSearch}
-                        onChange={(e) => setProductSearch(e.target.value)}
-                      />
+                    <div className="md:col-span-2 space-y-2">
+                      <div>
+                        <label className="block text-sm font-semibold">
+                          Buscar producto
+                        </label>
+                        <input
+                          className="w-full border p-2 rounded mb-2"
+                          placeholder="Buscar producto..."
+                          value={productSearch}
+                          onChange={(e) => setProductSearch(e.target.value)}
+                        />
+                      </div>
 
-                      <label className="block text-sm font-semibold">
-                        Producto (catálogo)
-                      </label>
-                      <select
-                        className="w-full border p-2 rounded"
+                      <MobileHtmlSelect
+                        label="Producto (catálogo)"
                         value={orderProductId}
-                        onChange={(e) => setOrderProductId(e.target.value)}
-                      >
-                        <option value="">
-                          {catalogLoading
-                            ? "Cargando catálogo..."
-                            : "Selecciona producto"}
-                        </option>
-                        {productsForSelect.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setOrderProductId}
+                        disabled={catalogLoading}
+                        options={orderProductSelectOptions}
+                        sheetTitle="Producto"
+                        selectClassName="w-full border p-2 rounded"
+                        buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                      />
                     </div>
 
                     <div>
@@ -2594,34 +2603,22 @@ export default function CandyMainOrders() {
                 </div>
               </div>
 
-              {/* Acciones Excel (desktop) */}
-              <div className="hidden md:flex items-center justify-end gap-2">
+              {/* Plantilla / import / export — menú ⋮ (móvil y web) */}
+              <div className="flex items-center justify-end">
                 <button
                   type="button"
-                  onClick={handleDownloadTemplate}
-                  className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                  title="Descarga plantilla (Productos + Config)"
+                  className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                  aria-label="Plantilla, importar y exportar Excel"
+                  title="Descargar plantilla, importar o exportar"
+                  onClick={(e) =>
+                    setMasterModalExcelMenu({
+                      rect: (
+                        e.currentTarget as HTMLElement
+                      ).getBoundingClientRect(),
+                    })
+                  }
                 >
-                  Descargar plantilla
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handlePickExcel}
-                  disabled={importing}
-                  className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                  title="Importa desde Excel (Productos + Config)"
-                >
-                  {importing ? "Importando..." : "Importar Excel"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleExportOrderToExcel}
-                  className="px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
-                  title="Exporta la orden actual (Productos + Resumen)"
-                >
-                  Exportar Excel
+                  <FiMoreVertical className="w-5 h-5 text-gray-800" />
                 </button>
               </div>
 
@@ -2925,10 +2922,19 @@ export default function CandyMainOrders() {
                               <td className="p-2 text-center">
                                 <button
                                   type="button"
-                                  className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
-                                  onClick={() => removeItemFromOrder(it.id)}
+                                  className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                                  aria-label="Acciones"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setModalItemMenu({
+                                      id: it.id,
+                                      rect: (
+                                        e.currentTarget as HTMLElement
+                                      ).getBoundingClientRect(),
+                                    });
+                                  }}
                                 >
-                                  Quitar
+                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
                                 </button>
                               </td>
                             </tr>
@@ -3014,10 +3020,19 @@ export default function CandyMainOrders() {
 
                             <button
                               type="button"
-                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
-                              onClick={() => removeItemFromOrder(it.id)}
+                              className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                              aria-label="Acciones"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setModalItemMenu({
+                                  id: it.id,
+                                  rect: (
+                                    e.currentTarget as HTMLElement
+                                  ).getBoundingClientRect(),
+                                });
+                              }}
                             >
-                              Quitar
+                              <FiMoreVertical className="w-5 h-5 text-gray-700" />
                             </button>
                           </div>
 
@@ -3384,15 +3399,23 @@ export default function CandyMainOrders() {
                   </div>
 
                   <div className="mt-3 border rounded p-3 bg-white">
-                    <div className="flex justify-end">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-gray-600">
+                        Plantilla, importar o exportar: menú ⋮ arriba o aquí
+                      </span>
                       <button
                         type="button"
-                        className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                        onClick={handleExportOrderToExcel}
-                        disabled={!computed.items.length}
-                        title="Exporta la orden actual (productos + resumen)"
+                        className="shrink-0 p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                        aria-label="Excel: plantilla, importar, exportar"
+                        onClick={(e) =>
+                          setMasterModalExcelMenu({
+                            rect: (
+                              e.currentTarget as HTMLElement
+                            ).getBoundingClientRect(),
+                          })
+                        }
                       >
-                        Exportar orden a Excel
+                        <FiMoreVertical className="w-5 h-5 text-gray-800" />
                       </button>
                     </div>
                   </div>
@@ -3401,32 +3424,20 @@ export default function CandyMainOrders() {
 
               {/* ===== Botonera sticky ===== */}
               <div className="sticky bottom-0 bg-white pt-3 mt-4 border-t">
-                <div className="flex justify-end gap-2">
+                <div className="flex justify-end">
                   <button
                     type="button"
-                    onClick={resetOrderForm}
-                    className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    aria-label="Limpiar, cerrar o guardar orden"
+                    onClick={(e) =>
+                      setMasterModalFooterMenu({
+                        rect: (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect(),
+                      })
+                    }
                   >
-                    Limpiar orden
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetOrderForm();
-                      setOpenOrderModal(false);
-                    }}
-                    className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                  >
-                    Cerrar
-                  </button>
-
-                  <button
-                    type="submit"
-                    className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-                    disabled={savingOrder || orderItems.length === 0}
-                  >
-                    {savingOrder ? "Guardando..." : "Guardar orden"}
+                    <FiMoreVertical className="w-5 h-5 text-gray-800" />
                   </button>
                 </div>
 
@@ -3449,6 +3460,165 @@ export default function CandyMainOrders() {
                 </div>
               </div>
             </form>
+
+            <ActionMenu
+              anchorRect={masterModalHeaderMenu?.rect ?? null}
+              isOpen={!!masterModalHeaderMenu}
+              onClose={() => setMasterModalHeaderMenu(null)}
+              width={260}
+            >
+              {masterModalHeaderMenu && (
+                <div className="py-1">
+                  <button
+                    type="button"
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                      savingOrder ||
+                      refreshingSalePrices ||
+                      !orderItems.length
+                        ? "text-gray-400 cursor-not-allowed"
+                        : ""
+                    }`}
+                    disabled={
+                      savingOrder ||
+                      refreshingSalePrices ||
+                      !orderItems.length
+                    }
+                    onClick={() => {
+                      setMasterModalHeaderMenu(null);
+                      void refreshSalePricesFromCurrentPrices(false);
+                    }}
+                  >
+                    {refreshingSalePrices
+                      ? "Actualizando…"
+                      : "Actualizar precios"}
+                  </button>
+                  {editingOrderId ? (
+                    <button
+                      type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                        savingOrder || backfillingInventory
+                          ? "text-gray-400 cursor-not-allowed"
+                          : ""
+                      }`}
+                      disabled={savingOrder || backfillingInventory}
+                      onClick={() => {
+                        setMasterModalHeaderMenu(null);
+                        void backfillInventoryForCurrentOrder();
+                      }}
+                    >
+                      {backfillingInventory
+                        ? "Creando inventario..."
+                        : "Crear inventario faltante"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    disabled={savingOrder}
+                    onClick={() => {
+                      setMasterModalHeaderMenu(null);
+                      resetOrderForm();
+                      setOpenOrderModal(false);
+                    }}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              )}
+            </ActionMenu>
+
+            <ActionMenu
+              anchorRect={masterModalExcelMenu?.rect ?? null}
+              isOpen={!!masterModalExcelMenu}
+              onClose={() => setMasterModalExcelMenu(null)}
+              width={220}
+            >
+              {masterModalExcelMenu && (
+                <div className="py-1">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setMasterModalExcelMenu(null);
+                      handleDownloadTemplate();
+                    }}
+                  >
+                    Descargar plantilla
+                  </button>
+                  <button
+                    type="button"
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                      importing ? "text-gray-400 cursor-not-allowed" : ""
+                    }`}
+                    disabled={importing}
+                    onClick={() => {
+                      setMasterModalExcelMenu(null);
+                      handlePickExcel();
+                    }}
+                  >
+                    {importing ? "Importando..." : "Importar Excel"}
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setMasterModalExcelMenu(null);
+                      handleExportOrderToExcel();
+                    }}
+                  >
+                    Exportar Excel
+                  </button>
+                </div>
+              )}
+            </ActionMenu>
+
+            <ActionMenu
+              anchorRect={masterModalFooterMenu?.rect ?? null}
+              isOpen={!!masterModalFooterMenu}
+              onClose={() => setMasterModalFooterMenu(null)}
+              width={200}
+            >
+              {masterModalFooterMenu && (
+                <div className="py-1">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setMasterModalFooterMenu(null);
+                      resetOrderForm();
+                    }}
+                  >
+                    Limpiar orden
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setMasterModalFooterMenu(null);
+                      resetOrderForm();
+                      setOpenOrderModal(false);
+                    }}
+                  >
+                    Cerrar
+                  </button>
+                  <button
+                    type="button"
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                      savingOrder || orderItems.length === 0
+                        ? "text-gray-400 cursor-not-allowed"
+                        : "font-semibold text-blue-700"
+                    }`}
+                    disabled={savingOrder || orderItems.length === 0}
+                    onClick={() => {
+                      setMasterModalFooterMenu(null);
+                      orderFormRef.current?.requestSubmit();
+                    }}
+                  >
+                    {savingOrder ? "Guardando..." : "Guardar orden"}
+                  </button>
+                </div>
+              )}
+            </ActionMenu>
           </div>
         </div>
       )}
@@ -3486,41 +3656,27 @@ export default function CandyMainOrders() {
                   <div className="flex items-start gap-3">
                     <div className="flex-1">
                       <div className="text-xs text-gray-500">{fecha}</div>
-                      <div className="font-semibold text-base leading-tight">
+                      <div className="font-semibold text-sm leading-tight">
                         {o.name}
                       </div>
                     </div>
 
-                    <div className="flex gap-2">
-                      <button
-                        className="px-3 py-2 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
-                        onClick={() => openOrderForEdit(o)}
-                        aria-label="Ver / Editar orden"
-                        title="Ver / Editar"
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="w-4 h-4"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={1.5}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                          <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                        </svg>
-                      </button>
-                      <button
-                        className="px-3 py-2 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
-                        onClick={() => handleDeleteOrder(o)}
-                        aria-label="Eliminar orden"
-                        title="Eliminar"
-                      >
-                        ×
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+                      aria-label="Acciones de la orden"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOrderListMenu({
+                          id: o.id,
+                          rect: (
+                            e.currentTarget as HTMLElement
+                          ).getBoundingClientRect(),
+                        });
+                      }}
+                    >
+                      <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                    </button>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
@@ -3578,6 +3734,99 @@ export default function CandyMainOrders() {
           )}
         </div>
 
+        <ActionMenu
+          anchorRect={mainOrdersListToolbarMenu?.rect ?? null}
+          isOpen={!!mainOrdersListToolbarMenu}
+          onClose={() => setMainOrdersListToolbarMenu(null)}
+          width={240}
+        >
+          {mainOrdersListToolbarMenu && (
+            <div className="py-1">
+              <button
+                type="button"
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                  isBackfillingMain ? "text-gray-400 cursor-not-allowed" : ""
+                }`}
+                disabled={isBackfillingMain}
+                onClick={() => {
+                  setMainOrdersListToolbarMenu(null);
+                  void backfillMainOrdersLogistics();
+                }}
+              >
+                {isBackfillingMain
+                  ? "Actualizando prorrateo..."
+                  : "Actualizar prorrateo"}
+              </button>
+            </div>
+          )}
+        </ActionMenu>
+
+        <ActionMenu
+          anchorRect={orderListMenu?.rect ?? null}
+          isOpen={!!orderListMenu}
+          onClose={() => setOrderListMenu(null)}
+          width={220}
+        >
+          {orderListMenu &&
+            (() => {
+              const o = orders.find((x) => x.id === orderListMenu.id);
+              if (!o) {
+                return (
+                  <div className="px-3 py-2 text-sm text-gray-500">
+                    Sin datos
+                  </div>
+                );
+              }
+              return (
+                <div className="py-1">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setOrderListMenu(null);
+                      openOrderForEdit(o);
+                    }}
+                  >
+                    Ver / Editar orden
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                    onClick={() => {
+                      setOrderListMenu(null);
+                      void handleDeleteOrder(o);
+                    }}
+                  >
+                    Eliminar orden
+                  </button>
+                </div>
+              );
+            })()}
+        </ActionMenu>
+
+        <ActionMenu
+          anchorRect={modalItemMenu?.rect ?? null}
+          isOpen={!!modalItemMenu}
+          onClose={() => setModalItemMenu(null)}
+          width={200}
+        >
+          {modalItemMenu && (
+            <div className="py-1">
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                onClick={() => {
+                  const id = modalItemMenu.id;
+                  setModalItemMenu(null);
+                  removeItemFromOrder(id);
+                }}
+              >
+                Quitar de la orden
+              </button>
+            </div>
+          )}
+        </ActionMenu>
+
         {/* DESKTOP: tabla */}
         <div className="hidden md:block bg-white border rounded">
           <div className="p-3 border-b flex items-center justify-between">
@@ -3585,17 +3834,21 @@ export default function CandyMainOrders() {
               Total pedidos: <b>{orders.length}</b>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                onClick={backfillMainOrdersLogistics}
-                disabled={isBackfillingMain}
-              >
-                {isBackfillingMain
-                  ? "Actualizando prorrateo..."
-                  : "Actualizar prorrateo"}
-              </button>
-            </div>
+            <button
+              type="button"
+              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+              aria-label="Acciones del listado"
+              title="Actualizar prorrateo de órdenes maestras"
+              onClick={(e) =>
+                setMainOrdersListToolbarMenu({
+                  rect: (
+                    e.currentTarget as HTMLElement
+                  ).getBoundingClientRect(),
+                })
+              }
+            >
+              <FiMoreVertical className="w-5 h-5 text-slate-700" />
+            </button>
           </div>
 
           <div className="overflow-x-auto">
@@ -3674,36 +3927,21 @@ export default function CandyMainOrders() {
                           {grossEst.toFixed(2)}
                         </td>
                         <td className="p-2 border-b">
-                          <div className="flex gap-1 justify-center">
-                            <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
-                              onClick={() => openOrderForEdit(o)}
-                              aria-label="Ver / Editar orden"
-                              title="Ver / Editar"
-                            >
-                              <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                className="w-4 h-4"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth={1.5}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              >
-                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                              </svg>
-                            </button>
-                            <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
-                              onClick={() => handleDeleteOrder(o)}
-                              aria-label="Eliminar orden"
-                              title="Eliminar"
-                            >
-                              ×
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 mx-auto flex"
+                            aria-label="Acciones de la orden"
+                            onClick={(e) =>
+                              setOrderListMenu({
+                                id: o.id,
+                                rect: (
+                                  e.currentTarget as HTMLElement
+                                ).getBoundingClientRect(),
+                              })
+                            }
+                          >
+                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                          </button>
                         </td>
                       </tr>
                     );

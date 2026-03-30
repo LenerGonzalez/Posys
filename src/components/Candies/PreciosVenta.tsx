@@ -79,6 +79,7 @@ function buildMergedPriceRows(
   const list: PriceRow[] = [];
   for (const productId of ids) {
     const c = catalogById[productId];
+    if (!c) continue;
     const p = priceDocsById[productId];
     const invU = inventoryUnitsMap[productId];
     const prodU = unitsPerPackageMap[productId];

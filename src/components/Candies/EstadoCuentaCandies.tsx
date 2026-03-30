@@ -16,6 +16,8 @@ import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
 import KpiCard from "../common/KpiCard";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import {
@@ -312,6 +314,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   // filtros de tabla
   const [movementTypeFilter, setMovementTypeFilter] = useState<string>("ALL");
   const [vendorFilter, setVendorFilter] = useState<string>("ALL");
+  const [toastMsg, setToastMsg] = useState("");
 
   // ABONO modal
   const [abonoModalOpen, setAbonoModalOpen] = useState(false);
@@ -780,6 +783,63 @@ export default function EstadoCuentaCandies(): React.ReactElement {
     return Array.from(s);
   }, [rowsWithBalance]);
 
+  const movementTypeFilterSelectOptions = useMemo(
+    () =>
+      movementTypes.map((t) => ({
+        value: t,
+        label: t === "ALL" ? "Todos" : t,
+      })),
+    [movementTypes],
+  );
+
+  const vendorFilterSelectOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todos" },
+      ...sellers.map((v) => ({ value: v.id, label: v.name })),
+    ],
+    [sellers],
+  );
+
+  const saleTypeFilterOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todos" },
+      { value: "Cash", label: "Cash" },
+      { value: "Crédito", label: "Crédito" },
+    ],
+    [],
+  );
+
+  const modalLedgerTypeOptions = useMemo(
+    () => [
+      { value: "GASTO", label: "Gasto" },
+      { value: "REABASTECIMIENTO", label: "Reabastecimiento" },
+      { value: "RETIRO", label: "Retiro" },
+      { value: "DEPOSITO", label: "Deposito (salida)" },
+      { value: "PERDIDA", label: "Perdida por robo" },
+      { value: "PAGO_COMISION", label: "Pago Comisión" },
+      {
+        value: "PRESTAMO A NEGOCIO POR DUENO",
+        label: "Préstamo a negocio por dueño",
+      },
+      {
+        value: "DEVOLUCION A DUENO POR PRESTAMO",
+        label: "Devolución a dueño por préstamo",
+      },
+    ],
+    [],
+  );
+
+  const vendorModalSelectOptions = useMemo(() => {
+    const placeholder =
+      type === "PAGO_COMISION" || type === "DEPOSITO"
+        ? "Seleccionar..."
+        : "—";
+    return [
+      { value: "", label: placeholder },
+      ...sellers.map((v) => ({ value: v.id, label: v.name })),
+    ];
+  }, [type, sellers]);
+
   const filteredRows = useMemo(() => {
     let rows = rowsWithBalance;
 
@@ -880,23 +940,41 @@ export default function EstadoCuentaCandies(): React.ReactElement {
     const isOnlyOut = onlyOutTypes.includes(type);
     const isOnlyIn = onlyInTypes.includes(type);
 
-    if (!date) return window.alert("Poné una fecha.");
-    if (!description.trim()) return window.alert("Poné una descripción.");
+    if (!date) {
+      setToastMsg("⚠️ Poné una fecha.");
+      return;
+    }
+    if (!description.trim()) {
+      setToastMsg("⚠️ Poné una descripción.");
+      return;
+    }
 
     if (type === "PAGO_COMISION") {
-      if (!vendorId)
-        return window.alert("Seleccioná un vendedor para Pago Comisión.");
+      if (!vendorId) {
+        setToastMsg("⚠️ Seleccioná un vendedor para Pago Comisión.");
+        return;
+      }
     }
 
     if (isOnlyIn) {
-      if (inVal <= 0) return window.alert("Poné una entrada para este tipo.");
+      if (inVal <= 0) {
+        setToastMsg("⚠️ Poné una entrada para este tipo.");
+        return;
+      }
     } else if (isOnlyOut) {
-      if (outVal <= 0) return window.alert("Poné una salida para este tipo.");
+      if (outVal <= 0) {
+        setToastMsg("⚠️ Poné una salida para este tipo.");
+        return;
+      }
     } else {
-      if (inVal <= 0 && outVal <= 0)
-        return window.alert("Poné una entrada o una salida.");
-      if (inVal > 0 && outVal > 0)
-        return window.alert("Usá solo entrada o salida, no ambos.");
+      if (inVal <= 0 && outVal <= 0) {
+        setToastMsg("⚠️ Poné una entrada o una salida.");
+        return;
+      }
+      if (inVal > 0 && outVal > 0) {
+        setToastMsg("⚠️ Usá solo entrada o salida, no ambos.");
+        return;
+      }
     }
 
     const user = auth.currentUser;
@@ -921,12 +999,14 @@ export default function EstadoCuentaCandies(): React.ReactElement {
       if (editingId) {
         // ✅ solo edita lo manual (cash_ledger_candies)
         await updateDoc(doc(db, "cash_ledger_candies", editingId), payload);
+        setToastMsg("✅ Movimiento actualizado.");
       } else {
         await addDoc(collection(db, "cash_ledger_candies"), payload);
+        setToastMsg("✅ Movimiento guardado.");
       }
     } catch (e) {
       console.error(e);
-      window.alert("No se pudo guardar el movimiento. Revisa la consola.");
+      setToastMsg("❌ No se pudo guardar el movimiento. Revisa la consola.");
       return;
     }
 
@@ -1263,52 +1343,43 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           Agregar movimiento
         </button>
 
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
-            <label className="text-sm text-gray-700">Movimiento:</label>
-            <select
-              className="border rounded px-2 py-2 text-sm w-full sm:w-auto"
+        <div className="flex flex-col sm:flex-row gap-2 flex-wrap">
+          <div className="w-full sm:w-auto min-w-0 sm:min-w-[12rem]">
+            <MobileHtmlSelect
+              label="Movimiento"
               value={movementTypeFilter}
-              onChange={(e) => setMovementTypeFilter(e.target.value)}
-            >
-              {movementTypes.map((t) => (
-                <option key={t} value={t}>
-                  {t === "ALL" ? "Todos" : t}
-                </option>
-              ))}
-            </select>
+              onChange={setMovementTypeFilter}
+              options={movementTypeFilterSelectOptions}
+              sheetTitle="Filtrar movimiento"
+              selectClassName="border rounded px-2 py-2 text-sm w-full"
+              buttonClassName="border rounded px-2 py-2 text-sm w-full text-left flex items-center justify-between gap-2 bg-white"
+            />
           </div>
 
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
-            <label className="text-sm text-gray-700">Vendedor:</label>
-            <select
-              className="border rounded px-2 py-2 text-sm w-full sm:w-auto max-w-full"
+          <div className="w-full sm:w-auto min-w-0 sm:min-w-[12rem]">
+            <MobileHtmlSelect
+              label="Vendedor"
               value={vendorFilter}
-              onChange={(e) => setVendorFilter(e.target.value)}
-            >
-              <option value="ALL">Todos</option>
-              {sellers.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
+              onChange={setVendorFilter}
+              options={vendorFilterSelectOptions}
+              sheetTitle="Filtrar vendedor"
+              selectClassName="border rounded px-2 py-2 text-sm w-full"
+              buttonClassName="border rounded px-2 py-2 text-sm w-full text-left flex items-center justify-between gap-2 bg-white"
+            />
           </div>
 
-          {/* ✅ nuevo filtro Tipo */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
-            <label className="text-sm text-gray-700">Tipo:</label>
-            <select
-              className="border rounded px-2 py-2 text-sm w-full sm:w-auto"
+          <div className="w-full sm:w-auto min-w-0 sm:min-w-[10rem]">
+            <MobileHtmlSelect
+              label="Tipo"
               value={typeFilter}
-              onChange={(e) =>
-                setTypeFilter(e.target.value as "ALL" | "Cash" | "Crédito")
+              onChange={(v) =>
+                setTypeFilter(v as "ALL" | "Cash" | "Crédito")
               }
-            >
-              <option value="ALL">Todos</option>
-              <option value="Cash">Cash</option>
-              <option value="Crédito">Crédito</option>
-            </select>
+              options={saleTypeFilterOptions}
+              sheetTitle="Cash / Crédito"
+              selectClassName="border rounded px-2 py-2 text-sm w-full"
+              buttonClassName="border rounded px-2 py-2 text-sm w-full text-left flex items-center justify-between gap-2 bg-white"
+            />
           </div>
         </div>
       </div>
@@ -1351,27 +1422,15 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               </div>
 
               <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Tipo movimiento
-                </label>
-                <select
-                  className="border rounded px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Tipo movimiento"
                   value={type}
-                  onChange={(e) => setType(e.target.value as LedgerType)}
-                >
-                  <option value="GASTO">Gasto</option>
-                  <option value="REABASTECIMIENTO">Reabastecimiento</option>
-                  <option value="RETIRO">Retiro</option>
-                  <option value="DEPOSITO">Deposito (salida)</option>
-                  <option value="PERDIDA">Perdida por robo</option>
-                  <option value="PAGO_COMISION">Pago Comisión</option>
-                  <option value="PRESTAMO A NEGOCIO POR DUENO">
-                    Préstamo a negocio por dueño
-                  </option>
-                  <option value="DEVOLUCION A DUENO POR PRESTAMO">
-                    Devolución a dueño por préstamo
-                  </option>
-                </select>
+                  onChange={(v) => setType(v as LedgerType)}
+                  options={modalLedgerTypeOptions}
+                  sheetTitle="Tipo de movimiento"
+                  selectClassName="border rounded px-3 py-2 w-full"
+                  buttonClassName="border rounded px-3 py-2 w-full text-left flex items-center justify-between gap-2 bg-white"
+                />
 
                 {affectsOwnerDebt(type) && (
                   <div className="mt-1 text-xs text-amber-700">
@@ -1382,26 +1441,16 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
               {/* Vendedor para pago comisión */}
               <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Vendedor
-                </label>
-                <select
-                  className="border rounded px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Vendedor"
                   value={vendorId}
-                  onChange={(e) => setVendorId(e.target.value)}
+                  onChange={setVendorId}
+                  options={vendorModalSelectOptions}
                   disabled={!(type === "PAGO_COMISION" || type === "DEPOSITO")}
-                >
-                  <option value="">
-                    {type === "PAGO_COMISION" || type === "DEPOSITO"
-                      ? "Seleccionar..."
-                      : "—"}
-                  </option>
-                  {sellers.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
+                  sheetTitle="Vendedor"
+                  selectClassName="border rounded px-3 py-2 w-full"
+                  buttonClassName="border rounded px-3 py-2 w-full text-left flex items-center justify-between gap-2 bg-white"
+                />
                 {type === "PAGO_COMISION" && (
                   <div className="mt-1 text-xs text-gray-600">
                     Obligatorio: para que cuadre en la lista de comisiones.
@@ -1769,10 +1818,11 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                                   doc(db, "cash_ledger_candies", r.id),
                                 );
                                 refresh();
+                                setToastMsg("✅ Movimiento eliminado.");
                               } catch (e) {
                                 console.error(e);
-                                window.alert(
-                                  "No se pudo eliminar el movimiento. Revisa la consola.",
+                                setToastMsg(
+                                  "❌ No se pudo eliminar el movimiento. Revisa la consola.",
                                 );
                               }
                             }}
@@ -1912,6 +1962,9 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             )}
           </div>
         </div>
+      )}
+      {toastMsg && (
+        <Toast message={toastMsg} onClose={() => setToastMsg("")} />
       )}
     </div>
   );

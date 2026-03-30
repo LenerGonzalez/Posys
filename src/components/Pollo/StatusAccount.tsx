@@ -16,6 +16,8 @@ import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import {
   fetchBaseSummaryPollo,
@@ -95,6 +97,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   };
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const [movementTypeFilter, setMovementTypeFilter] = useState<string>("ALL");
+  const [toastMsg, setToastMsg] = useState("");
 
   // ========= helpers: qué tipos afectan CAJA =========
   const affectsCash = (t: LedgerType) => {
@@ -400,6 +403,41 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     return Array.from(s);
   }, [ledger]);
 
+  const movementTypeFilterSelectOptions = useMemo(
+    () =>
+      movementTypes.map((t) => ({
+        value: t,
+        label: t === "ALL" ? "Todos" : t,
+      })),
+    [movementTypes],
+  );
+
+  const modalMovementTypeOptions = useMemo(
+    () => [
+      { value: "GASTO", label: "Gasto" },
+      {
+        value: "REABASTECIMIENTO",
+        label: "Reabastecimiento (pagado con caja)",
+      },
+      { value: "RETIRO", label: "Retiro" },
+      { value: "DEPOSITO", label: "Deposito a Carmen Ortiz" },
+      { value: "PERDIDA", label: "Perdida por robo" },
+      {
+        value: "PRESTAMO A NEGOCIO POR DUENO",
+        label: "Préstamo a negocio por dueño (ENTRA A CAJA)",
+      },
+      {
+        value: "COMPRA DIRECTA POR DUENO (NO ENTRA A CAJA)",
+        label: "Compra directa por dueño (NO entra a caja)",
+      },
+      {
+        value: "DEVOLUCION A DUENO POR PRESTAMO",
+        label: "Devolución a dueño por préstamo (SALE de caja)",
+      },
+    ],
+    [],
+  );
+
   // Filtered ledger used for display (does not affect KPI totals)
   const filteredLedgerWithBalance = useMemo(() => {
     if (!movementTypeFilter || movementTypeFilter === "ALL")
@@ -559,18 +597,34 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     const isOnlyOut = onlyOutTypes.includes(type);
     const isOnlyIn = onlyInTypes.includes(type);
 
-    if (!date) return window.alert("Poné una fecha.");
-    if (!description.trim()) return window.alert("Poné una descripción.");
+    if (!date) {
+      setToastMsg("⚠️ Poné una fecha.");
+      return;
+    }
+    if (!description.trim()) {
+      setToastMsg("⚠️ Poné una descripción.");
+      return;
+    }
 
     if (isOnlyIn) {
-      if (inVal <= 0) return window.alert("Poné una entrada para este tipo.");
+      if (inVal <= 0) {
+        setToastMsg("⚠️ Poné una entrada para este tipo.");
+        return;
+      }
     } else if (isOnlyOut) {
-      if (outVal <= 0) return window.alert("Poné una salida para este tipo.");
+      if (outVal <= 0) {
+        setToastMsg("⚠️ Poné una salida para este tipo.");
+        return;
+      }
     } else {
-      if (inVal <= 0 && outVal <= 0)
-        return window.alert("Poné una entrada o una salida.");
-      if (inVal > 0 && outVal > 0)
-        return window.alert("Usá solo entrada o salida, no ambos.");
+      if (inVal <= 0 && outVal <= 0) {
+        setToastMsg("⚠️ Poné una entrada o una salida.");
+        return;
+      }
+      if (inVal > 0 && outVal > 0) {
+        setToastMsg("⚠️ Usá solo entrada o salida, no ambos.");
+        return;
+      }
     }
 
     const user = auth.currentUser;
@@ -591,13 +645,15 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     if (editingId) {
       try {
         await updateDoc(doc(db, "cash_ledger_pollo", editingId), payload);
+        setToastMsg("✅ Movimiento actualizado.");
       } catch (e) {
         console.error("Error updating movement:", e);
-        window.alert("No se pudo actualizar el movimiento. Revisa la consola.");
+        setToastMsg("❌ No se pudo actualizar el movimiento. Revisa la consola.");
         return;
       }
     } else {
       await addDoc(collection(db, "cash_ledger_pollo"), payload);
+      setToastMsg("✅ Movimiento guardado.");
     }
 
     setDescription("");
@@ -1028,19 +1084,16 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           Agregar movimiento
         </button>
 
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-          <label className="text-sm text-gray-700">Tipo:</label>
-          <select
-            className="border rounded px-2 py-1 text-sm w-full sm:w-auto"
+        <div className="flex flex-col sm:flex-row sm:items-end gap-2 w-full sm:w-auto min-w-0">
+          <MobileHtmlSelect
+            label="Tipo"
             value={movementTypeFilter}
-            onChange={(e) => setMovementTypeFilter(e.target.value)}
-          >
-            {movementTypes.map((t) => (
-              <option key={t} value={t}>
-                {t === "ALL" ? "Todos" : t}
-              </option>
-            ))}
-          </select>
+            onChange={setMovementTypeFilter}
+            options={movementTypeFilterSelectOptions}
+            sheetTitle="Filtrar por tipo"
+            selectClassName="border rounded px-2 py-1 text-sm w-full sm:w-72"
+            buttonClassName="border rounded px-2 py-1 text-sm w-full sm:w-72 text-left flex items-center justify-between gap-2 bg-white"
+          />
         </div>
       </div>
 
@@ -1080,31 +1133,15 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               </div>
 
               <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Tipo movimiento
-                </label>
-                <select
-                  className="border rounded px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Tipo movimiento"
                   value={type}
-                  onChange={(e) => setType(e.target.value as any)}
-                >
-                  <option value="GASTO">Gasto</option>
-                  <option value="REABASTECIMIENTO">
-                    Reabastecimiento (pagado con caja)
-                  </option>
-                  <option value="RETIRO">Retiro</option>
-                  <option value="DEPOSITO">Deposito a Carmen Ortiz</option>
-                  <option value="PERDIDA">Perdida por robo</option>
-                  <option value="PRESTAMO A NEGOCIO POR DUENO">
-                    Préstamo a negocio por dueño (ENTRA A CAJA)
-                  </option>
-                  <option value="COMPRA DIRECTA POR DUENO (NO ENTRA A CAJA)">
-                    Compra directa por dueño (NO entra a caja)
-                  </option>
-                  <option value="DEVOLUCION A DUENO POR PRESTAMO">
-                    Devolución a dueño por préstamo (SALE de caja)
-                  </option>
-                </select>
+                  onChange={(v) => setType(v as LedgerType)}
+                  options={modalMovementTypeOptions}
+                  sheetTitle="Tipo de movimiento"
+                  selectClassName="border rounded px-3 py-2 w-full"
+                  buttonClassName="border rounded px-3 py-2 w-full text-left flex items-center justify-between gap-2 bg-white"
+                />
 
                 {type === "COMPRA DIRECTA POR DUENO (NO ENTRA A CAJA)" && (
                   <div className="mt-1 text-xs text-sky-700">
@@ -1365,13 +1402,14 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                                   doc(db, "cash_ledger_pollo", r.id),
                                 );
                                 refresh();
+                                setToastMsg("✅ Movimiento eliminado.");
                               } catch (e) {
                                 console.error(
                                   "Error eliminando movimiento:",
                                   e,
                                 );
-                                window.alert(
-                                  "No se pudo eliminar el movimiento. Revisa la consola.",
+                                setToastMsg(
+                                  "❌ No se pudo eliminar el movimiento. Revisa la consola.",
                                 );
                               }
                             }}
@@ -1495,10 +1533,11 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                         try {
                           await deleteDoc(doc(db, "cash_ledger_pollo", r.id));
                           refresh();
+                          setToastMsg("✅ Movimiento eliminado.");
                         } catch (e) {
                           console.error("Error eliminando movimiento:", e);
-                          window.alert(
-                            "No se pudo eliminar el movimiento. Revisa la consola.",
+                          setToastMsg(
+                            "❌ No se pudo eliminar el movimiento. Revisa la consola.",
                           );
                         }
                       }}
@@ -1513,6 +1552,9 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           ))
         )}
       </div>
+      {toastMsg && (
+        <Toast message={toastMsg} onClose={() => setToastMsg("")} />
+      )}
     </div>
   );
 }

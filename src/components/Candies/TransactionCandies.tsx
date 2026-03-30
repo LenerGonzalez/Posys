@@ -18,6 +18,9 @@ import { hasRole } from "../../utils/roles";
 import { format } from "date-fns";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import ActionMenu from "../common/ActionMenu";
+import Toast from "../common/Toast";
+import { FiMoreVertical } from "react-icons/fi";
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -318,6 +321,10 @@ export default function TransactionsReportCandies({
 
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+  const [saleActionMenu, setSaleActionMenu] = useState<{
+    saleId: string;
+    rect: DOMRect;
+  } | null>(null);
 
   // Filtros: Cliente y Tipo
   const [filterCustomerId, setFilterCustomerId] = useState<string>("");
@@ -1375,26 +1382,23 @@ export default function TransactionsReportCandies({
                                 </div>
 
                                 {canDelete && (
-                                  <div className="pt-2 flex items-center justify-end gap-2">
+                                  <div className="pt-2 flex justify-end md:hidden">
                                     <button
-                                      className="px-3 py-2 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50"
-                                      onClick={() =>
-                                        setOpenMenuId((prev) =>
-                                          prev === s.id ? null : s.id,
-                                        )
-                                      }
+                                      type="button"
+                                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                                      aria-label="Acciones"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSaleActionMenu({
+                                          saleId: s.id,
+                                          rect: (
+                                            e.currentTarget as HTMLElement
+                                          ).getBoundingClientRect(),
+                                        });
+                                      }}
                                     >
-                                      ⋮ Acciones
+                                      <FiMoreVertical className="w-5 h-5 text-slate-700" />
                                     </button>
-
-                                    {openMenuId === s.id && (
-                                      <button
-                                        className="px-3 py-2 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
-                                        onClick={() => confirmDelete(s)}
-                                      >
-                                        Eliminar
-                                      </button>
-                                    )}
                                   </div>
                                 )}
                               </div>
@@ -1551,26 +1555,23 @@ export default function TransactionsReportCandies({
                                 </div>
 
                                 {canDelete && (
-                                  <div className="pt-2 flex items-center justify-end gap-2">
+                                  <div className="pt-2 flex justify-end md:hidden">
                                     <button
-                                      className="px-3 py-2 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50"
-                                      onClick={() =>
-                                        setOpenMenuId((prev) =>
-                                          prev === s.id ? null : s.id,
-                                        )
-                                      }
+                                      type="button"
+                                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                                      aria-label="Acciones"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSaleActionMenu({
+                                          saleId: s.id,
+                                          rect: (
+                                            e.currentTarget as HTMLElement
+                                          ).getBoundingClientRect(),
+                                        });
+                                      }}
                                     >
-                                      ⋮ Acciones
+                                      <FiMoreVertical className="w-5 h-5 text-slate-700" />
                                     </button>
-
-                                    {openMenuId === s.id && (
-                                      <button
-                                        className="px-3 py-2 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
-                                        onClick={() => confirmDelete(s)}
-                                      >
-                                        Eliminar
-                                      </button>
-                                    )}
                                   </div>
                                 )}
                               </div>
@@ -1590,6 +1591,31 @@ export default function TransactionsReportCandies({
           {renderPager()}
         </div>
       </div>
+
+      <ActionMenu
+        anchorRect={saleActionMenu?.rect ?? null}
+        isOpen={!!saleActionMenu}
+        onClose={() => setSaleActionMenu(null)}
+        width={200}
+      >
+        {saleActionMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+              onClick={() => {
+                const s = filteredSales.find(
+                  (x) => x.id === saleActionMenu.saleId,
+                );
+                setSaleActionMenu(null);
+                if (s) void confirmDelete(s);
+              }}
+            >
+              Eliminar venta
+            </button>
+          </div>
+        )}
+      </ActionMenu>
 
       {/* ===== DESKTOP: Tabla original ===== */}
       <div className="hidden md:block bg-white rounded-xl shadow-sm border border-slate-200 w-full overflow-x-auto">
@@ -1692,7 +1718,7 @@ export default function TransactionsReportCandies({
         {renderPager()}
       </div>
 
-      {msg && <p className="mt-2 text-sm">{msg}</p>}
+      {msg && <Toast message={msg} onClose={() => setMsg("")} />}
 
       {/* Modal: Detalle de piezas de la venta */}
       {itemsModalOpen && (

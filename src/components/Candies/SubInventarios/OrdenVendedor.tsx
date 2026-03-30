@@ -19,6 +19,7 @@ import {
 import * as XLSX from "xlsx";
 import { db, auth } from "../../../firebase";
 import RefreshButton from "../../common/RefreshButton";
+import MobileHtmlSelect from "../../common/MobileHtmlSelect";
 import LoadingOverlay from "../../common/LoadingOverlay";
 import useManualRefresh from "../../../hooks/useManualRefresh";
 import { hasRole } from "../../../utils/roles";
@@ -29,6 +30,8 @@ import {
 } from "../../../Services/Candies_vendor_orders";
 import { backfillCandyInventoryFromMainOrder } from "../../../Services/inventory_candies";
 import TrasladosModal from "./TrasladosModal";
+import ActionMenu from "../../common/ActionMenu";
+import { FiMoreVertical } from "react-icons/fi";
 
 // Helper: redondeo a 2 decimales (consistente con otros componentes)
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
@@ -347,6 +350,31 @@ export default function VendorCandyOrders({
     Record<string, number>
   >({});
   const [openTransferModal, setOpenTransferModal] = useState(false);
+  const [modalLineMenu, setModalLineMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [modalHeaderMenu, setModalHeaderMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  const [modalImportMenu, setModalImportMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  const [modalItemsToolbarMenu, setModalItemsToolbarMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  const [modalFooterMenu, setModalFooterMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
+  /** Menú ⋮ en listado móvil de pedidos (editar / eliminar) */
+  const [orderRowMenu, setOrderRowMenu] = useState<{
+    orderKey: string;
+    rect: DOMRect;
+  } | null>(null);
+  /** Menú ⋮ barra superior del listado (web) */
+  const [vendorListToolbarMenu, setVendorListToolbarMenu] = useState<{
+    rect: DOMRect;
+  } | null>(null);
   const [editingPackagesMap, setEditingPackagesMap] = useState<
     Record<string, boolean>
   >({});
@@ -471,6 +499,28 @@ export default function VendorCandyOrders({
       return name.includes(q);
     });
   }, [productsForPicker, productSearch]);
+
+  const sellerSelectOptions = useMemo(
+    () => [
+      { value: "", label: "-- Seleccionar --" },
+      ...sellers.map((s) => ({
+        value: s.id,
+        label: `${s.name} ${s.branch ? `(${s.branch})` : ""}`,
+      })),
+    ],
+    [sellers],
+  );
+
+  const productPickerSelectOptions = useMemo(
+    () => [
+      { value: "", label: "-- Seleccionar --" },
+      ...filteredProductsForPicker.map((p) => ({
+        value: p.id,
+        label: `${p.category} - ${p.name} (exist: ${availablePacks[p.id] ?? 0})`,
+      })),
+    ],
+    [filteredProductsForPicker, availablePacks],
+  );
 
   const selectedProduct = useMemo(
     () => productsAll.find((p) => p.id === selectedProductId) || null,
@@ -3128,20 +3178,10 @@ export default function VendorCandyOrders({
   };
 
   const downloadTemplateFromMainOrders = () => {
-    const headers = [
-      "productId",
-      "productName",
-      "category",
-      "Existentes",
-      "Paquetes",
-      // === PLAN: permitir margen en import ===
-      "vendorMarginPercent",
-      "uNeta",
-    ];
+    const headers = ["Producto", "Paquetes"];
 
     const list = productsAll
       .map((p) => ({
-        id: p.id,
         name: p.name,
         category: p.category,
         existentes: Number(p.existingPacks || 0),
@@ -3153,7 +3193,7 @@ export default function VendorCandyOrders({
 
     const rows: (string | number)[][] = [
       headers,
-      ...list.map((x) => [x.id, x.name, x.category, x.existentes, "", "", ""]),
+      ...list.map((x) => [x.name, ""]),
     ];
 
     downloadExcelFile("plantilla_orden_vendedor.xlsx", rows, "Plantilla");
@@ -3182,6 +3222,13 @@ export default function VendorCandyOrders({
           .trim()
           .toLowerCase(),
       );
+      const idxProductName = header.findIndex(
+        (h: string) =>
+          h === "producto" ||
+          h === "productname" ||
+          h === "nombre" ||
+          h === "nombre producto",
+      );
       const idxProductId = header.findIndex(
         (h: string) => h === "productid" || h === "producto id" || h === "id",
       );
@@ -3198,9 +3245,14 @@ export default function VendorCandyOrders({
           h === "margen_del_vendedor",
       );
 
-      if (idxProductId < 0 || idxPackages < 0) {
+      if (idxProductName < 0 && idxProductId < 0) {
         return setMsg(
-          "❌ Plantilla inválida: debe tener columnas productId y Paquetes.",
+          "❌ Plantilla inválida: debe tener columna Producto o productId.",
+        );
+      }
+      if (idxPackages < 0) {
+        return setMsg(
+          "❌ Plantilla inválida: debe tener columna Paquetes.",
         );
       }
 
@@ -3215,13 +3267,32 @@ export default function VendorCandyOrders({
 
       const toAdd: OrderItem[] = [];
 
+      let skippedNames: string[] = [];
+
       for (let i = 1; i < rowsXlsx.length; i++) {
         const r = rowsXlsx[i] || [];
-        const pid = String(r[idxProductId] || "").trim();
-        if (!pid) continue;
 
-        // find product and existing item (if any)
-        const p = productsAll.find((x) => x.id === pid) || null;
+        let pid = idxProductId >= 0 ? String(r[idxProductId] || "").trim() : "";
+        let p = pid ? productsAll.find((x) => x.id === pid) || null : null;
+
+        if (!p && idxProductName >= 0) {
+          const nameRaw = String(r[idxProductName] || "").trim().toLowerCase();
+          if (!nameRaw) continue;
+          p = productsAll.find(
+            (x) => x.name.trim().toLowerCase() === nameRaw,
+          ) || null;
+          if (p) pid = p.id;
+        }
+
+        if (!pid || !p) {
+          const label =
+            idxProductName >= 0
+              ? String(r[idxProductName] || "").trim()
+              : pid;
+          if (label) skippedNames.push(label);
+          continue;
+        }
+
         const it =
           orderItems.find((x) => x.productId === pid) || ({} as OrderItem);
         const id = it?.id || "";
@@ -3278,7 +3349,7 @@ export default function VendorCandyOrders({
         }
 
         // persist grossProfit and totals in Firestore if row exists
-        if (!String(id).startsWith("tmp_")) {
+        if (id && !String(id).startsWith("tmp_")) {
           const uPaquete =
             packs > 0 ? round2(Number(grossProfit || 0) / packs) : 0;
           const vendorMarginPercent =
@@ -3398,12 +3469,21 @@ export default function VendorCandyOrders({
         toAdd.push(item);
       }
 
-      if (!toAdd.length)
+      if (!toAdd.length && skippedNames.length === 0)
         return setMsg("⚠️ No se encontraron filas con Paquetes > 0.");
 
-      setOrderItems((prev) => [...toAdd, ...prev]);
-      setItemsPage(1);
-      setMsg(`✅ Importados ${toAdd.length} productos desde plantilla.`);
+      if (toAdd.length > 0) {
+        setOrderItems((prev) => [...toAdd, ...prev]);
+        setItemsPage(1);
+      }
+
+      let resultMsg = toAdd.length > 0
+        ? `✅ Importados ${toAdd.length} productos desde plantilla.`
+        : "⚠️ No se agregaron productos nuevos.";
+      if (skippedNames.length > 0) {
+        resultMsg += ` ⚠️ No encontrados (${skippedNames.length}): ${skippedNames.slice(0, 5).join(", ")}${skippedNames.length > 5 ? "..." : ""}`;
+      }
+      setMsg(resultMsg);
     } catch (e) {
       console.error(e);
       setMsg("❌ Error importando Excel.");
@@ -3977,71 +4057,23 @@ export default function VendorCandyOrders({
                 Total pedidos: <b>{orderSummaries.length}</b>
               </div>
 
-              <div className="flex items-center gap-2">
-                {/* {isAdmin && (
-                  <button
-                    className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                    onClick={() => {
-                      if (!openForm) {
-                        setMsg(
-                          "⚠️ Abrí un pedido para exportar productos asociados.",
-                        );
-                        return;
-                      }
-                      exportAssociatedItemsToExcel();
-                    }}
-                  >
-                    Exportar asociados
-                  </button>
-                )} */}
-                {isAdmin && (
-                  <>
-                    <button
-                      className="px-3 py-2 rounded border text-sm bg-blue-600 text-white hover:bg-blue-700"
-                      onClick={() => openNewOrder()}
-                      title="Nuevo pedido"
-                      aria-label="Nuevo pedido"
-                    >
-                      +
-                    </button>
-                    <button
-                      className={`px-3 py-2 rounded border text-sm ${
-                        isSyncingAll
-                          ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                          : "bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600"
-                      }`}
-                      onClick={() => {
-                        if (
-                          confirm(
-                            "¿Sincronizar todos los pedidos con Orden Maestra?",
-                          )
-                        ) {
-                          syncAllOrdersFromMaster();
-                        }
-                      }}
-                      disabled={isSyncingAll}
-                    >
-                      {isSyncingAll ? "Sincronizando..." : "Sincronizar todo"}
-                    </button>
-                    <button
-                      className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                      onClick={backfillCalculatedFields}
-                      disabled={isBackfilling}
-                    >
-                      {isBackfilling
-                        ? "Actualizando Firestore..."
-                        : "Update Firestore"}
-                    </button>
-                    {/* <button
-                      className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                      onClick={fixLegacyAssociatedFromRemaining}
-                      disabled={isBackfilling}
-                    >
-                      Reparar P. asociados legacy
-                    </button> */}
-                  </>
-                )}
-              </div>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+                  aria-label="Acciones del listado"
+                  title="Nuevo pedido, sincronizar, actualizar Firestore"
+                  onClick={(e) =>
+                    setVendorListToolbarMenu({
+                      rect: (
+                        e.currentTarget as HTMLElement
+                      ).getBoundingClientRect(),
+                    })
+                  }
+                >
+                  <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                </button>
+              ) : null}
             </div>
 
             <div className="overflow-x-auto max-w-full w-full">
@@ -4135,45 +4167,21 @@ export default function VendorCandyOrders({
                           </span>
                         </td>
                         <td className="p-3 border-b">
-                          <div className="flex gap-2">
-                            <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
-                              onClick={() => openEditOrder(o.orderKey)}
-                              aria-label="Editar pedido"
-                              title="Editar"
-                            >
-                              <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                className="w-4 h-4"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth={1.5}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              >
-                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                              </svg>
-                            </button>
-                            {/* recalc button removed per request */}
-                            {isAdmin && (
-                              <button
-                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
-                                onClick={() => {
-                                  if (
-                                    confirm("¿Eliminar este pedido completo?")
-                                  ) {
-                                    deleteOrder(o.orderKey);
-                                  }
-                                }}
-                                aria-label="Eliminar pedido"
-                                title="Eliminar"
-                              >
-                                ×
-                              </button>
-                            )}
-                          </div>
+                          <button
+                            type="button"
+                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                            aria-label="Acciones del pedido"
+                            onClick={(e) =>
+                              setOrderRowMenu({
+                                orderKey: o.orderKey,
+                                rect: (
+                                  e.currentTarget as HTMLElement
+                                ).getBoundingClientRect(),
+                              })
+                            }
+                          >
+                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                          </button>
                         </td>
                       </tr>
                     );
@@ -4229,42 +4237,31 @@ export default function VendorCandyOrders({
             </div>
 
             {pagedOrders.map((o) => (
-              <div
-                key={o.orderKey}
-                className="bg-white border rounded"
-                role="button"
-                tabIndex={0}
-                onClick={() => openEditOrder(o.orderKey)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    openEditOrder(o.orderKey);
-                  }
-                }}
-              >
-                <div className="p-2 flex items-center justify-between">
-                  <div>
+              <div key={o.orderKey} className="bg-white border rounded">
+                <div className="p-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold">{o.sellerName}</div>
                     <div className="text-xs text-gray-600">
                       {o.orderName || "—"} • {o.date}
                     </div>
                   </div>
 
-                  {isAdmin && (
-                    <button
-                      className="px-3 py-2 rounded bg-red-600 text-white text-sm hover:bg-red-700"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (confirm("¿Eliminar este pedido completo?")) {
-                          deleteOrder(o.orderKey);
-                        }
-                      }}
-                      aria-label="Eliminar pedido"
-                      title="Eliminar"
-                    >
-                      ×
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+                    aria-label="Acciones del pedido"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOrderRowMenu({
+                        orderKey: o.orderKey,
+                        rect: (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect(),
+                      });
+                    }}
+                  >
+                    <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                  </button>
                 </div>
 
                 <div className="px-2 pb-2">
@@ -4341,64 +4338,65 @@ export default function VendorCandyOrders({
               </div>
             )}
 
-            <div className="p-3 md:p-5 border-b flex items-center justify-between">
-              <div>
-                <div className="text-lg font-semibold">
+            <div className="p-3 md:p-5 border-b flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-base md:text-lg font-semibold">
                   {editingOrderKey ? "Editar pedido" : "Nuevo pedido"}
                 </div>
                 <div className="text-xs text-gray-600">
                   Nombre: {orderName || "—"}
                 </div>
-                <div className="text-xs text-gray-600">
+                <div className="text-xs text-gray-600 hidden sm:block">
                   U. Bruta viene de Orden Maestra. U. Vendedor e Inversionista
                   se calculan aquí. U. Neta = U. Bruta - Gastos - U. Vendedor.
                 </div>
               </div>
 
-              <div className="flex gap-2">
-                {isAdmin && editingOrderKey && (
-                  <button
-                    className={`px-3 py-2 rounded text-sm border ${
-                      isSyncingMaster
-                        ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                        : "bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600"
-                    }`}
-                    onClick={syncOrderFromMaster}
-                    disabled={isSyncingMaster}
-                  >
-                    {isSyncingMaster
-                      ? "Sincronizando..."
-                      : "Sincronizar con Orden Maestra"}
-                  </button>
-                )}
+              <div className="shrink-0">
                 <button
-                  className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                  onClick={closeForm}
+                  type="button"
+                  className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                  aria-label="Acciones del pedido"
+                  onClick={(e) =>
+                    setModalHeaderMenu({
+                      rect: (
+                        e.currentTarget as HTMLElement
+                      ).getBoundingClientRect(),
+                    })
+                  }
                 >
-                  Cerrar
+                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
                 </button>
-                {!isReadOnly && (
-                  <button
-                    className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
-                    onClick={saveOrder}
-                  >
-                    Guardar
-                  </button>
-                )}
               </div>
             </div>
 
             {/* Form */}
             <div className="p-3 md:p-5 space-y-3">
-              {/* Mobile collapse toggle */}
-              <button
-                type="button"
-                className="md:hidden w-full px-3 py-2 rounded border text-sm flex items-center justify-between"
-                onClick={() => setMobileMetaOpen((v) => !v)}
-              >
-                <span>Filtros y KPIs</span>
-                <span>{mobileMetaOpen ? "−" : "+"}</span>
-              </button>
+              {/* Mobile: filtros + menú plantilla/importar */}
+              <div className="md:hidden flex gap-2">
+                <button
+                  type="button"
+                  className="flex-1 min-w-0 px-3 py-2 rounded border text-sm flex items-center justify-between"
+                  onClick={() => setMobileMetaOpen((v) => !v)}
+                >
+                  <span>Filtros y KPIs</span>
+                  <span>{mobileMetaOpen ? "−" : "+"}</span>
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 p-2 rounded border border-gray-200 hover:bg-gray-50"
+                  aria-label="Plantilla e importar"
+                  onClick={(e) =>
+                    setModalImportMenu({
+                      rect: (
+                        e.currentTarget as HTMLElement
+                      ).getBoundingClientRect(),
+                    })
+                  }
+                >
+                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                </button>
+              </div>
 
               <div
                 className={`${mobileMetaOpen ? "block" : "hidden"} md:block space-y-3`}
@@ -4416,20 +4414,16 @@ export default function VendorCandyOrders({
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">Vendedor</label>
-                    <select
-                      className="w-full border rounded p-2 text-sm"
+                    <MobileHtmlSelect
+                      label="Vendedor"
                       value={sellerId}
-                      onChange={(e) => setSellerId(e.target.value)}
+                      onChange={setSellerId}
                       disabled={disableSellerSelect}
-                    >
-                      <option value="">-- Seleccionar --</option>
-                      {sellers.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} {s.branch ? `(${s.branch})` : ""}
-                        </option>
-                      ))}
-                    </select>
+                      options={sellerSelectOptions}
+                      sheetTitle="Vendedor"
+                      selectClassName="w-full border rounded p-2 text-sm"
+                      buttonClassName="w-full border rounded p-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                    />
                   </div>
 
                   <div>
@@ -4442,21 +4436,21 @@ export default function VendorCandyOrders({
                     />
                   </div>
 
-                  <div className="flex items-end gap-2">
+                  <div className="hidden md:flex items-end justify-end">
                     <button
-                      className="flex-1 px-3 py-2 rounded text-sm border border-amber-600 bg-amber-600 text-white hover:bg-amber-700"
-                      onClick={downloadTemplateFromMainOrders}
+                      type="button"
+                      className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                      aria-label="Plantilla e importar"
+                      onClick={(e) =>
+                        setModalImportMenu({
+                          rect: (
+                            e.currentTarget as HTMLElement
+                          ).getBoundingClientRect(),
+                        })
+                      }
                     >
-                      Plantilla
+                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
                     </button>
-
-                    <button
-                      className="flex-1 px-3 py-2 rounded text-sm border border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
-                      onClick={triggerImport}
-                    >
-                      Importar Excel
-                    </button>
-
                     <input
                       ref={importInputRef}
                       type="file"
@@ -4571,22 +4565,15 @@ export default function VendorCandyOrders({
                     </div>
 
                     <div className="md:col-span-2">
-                      <label className="text-xs text-gray-600">
-                        Seleccione Producto
-                      </label>
-                      <select
-                        className="w-full border rounded p-2 text-sm"
+                      <MobileHtmlSelect
+                        label="Seleccione Producto"
                         value={selectedProductId}
-                        onChange={(e) => setSelectedProductId(e.target.value)}
-                      >
-                        <option value="">-- Seleccionar --</option>
-                        {filteredProductsForPicker.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.category} - {p.name} (exist:{" "}
-                            {availablePacks[p.id] ?? 0})
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setSelectedProductId}
+                        options={productPickerSelectOptions}
+                        sheetTitle="Producto"
+                        selectClassName="w-full border rounded p-2 text-sm"
+                        buttonClassName="w-full border rounded p-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                      />
                     </div>
 
                     <div>
@@ -4620,14 +4607,50 @@ export default function VendorCandyOrders({
 
               {/* Items table */}
               <div className="border rounded">
-                <div className="p-3 border-b flex items-center justify-between">
-                  <div className="text-sm font-semibold">
+                <div className="p-3 border-b flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-3">
+                  <div className="text-sm font-semibold shrink-0">
                     Productos asociados ({orderItems.length})
                   </div>
 
-                  <div className="flex flex-wrap gap-2 items-center">
+                  {/* Móvil: búsqueda + margen; acciones en menú */}
+                  <div className="flex md:hidden flex-col gap-2 w-full">
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="border rounded px-2 py-1 text-sm flex-1 min-w-0"
+                        placeholder="Buscar producto"
+                        value={associatedSearch}
+                        onChange={(e) => {
+                          setAssociatedSearch(e.target.value);
+                          setItemsPage(1);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="shrink-0 p-2 rounded border border-gray-200 hover:bg-gray-50"
+                        aria-label="Acciones de productos"
+                        onClick={(e) =>
+                          setModalItemsToolbarMenu({
+                            rect: (
+                              e.currentTarget as HTMLElement
+                            ).getBoundingClientRect(),
+                          })
+                        }
+                      >
+                        <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                      </button>
+                    </div>
                     <input
-                      className="border rounded px-2 py-1 text-sm"
+                      className="border rounded px-2 py-1 text-sm w-full"
+                      placeholder="Margen % (aplicar desde menú ⋮)"
+                      value={bulkMarginPercent}
+                      onChange={(e) => setBulkMarginPercent(e.target.value)}
+                      inputMode="decimal"
+                    />
+                  </div>
+
+                  <div className="hidden md:flex flex-wrap gap-2 items-center justify-end flex-1 min-w-0">
+                    <input
+                      className="border rounded px-2 py-1 text-sm min-w-[8rem] max-w-xs flex-1"
                       placeholder="Buscar producto"
                       value={associatedSearch}
                       onChange={(e) => {
@@ -4635,43 +4658,27 @@ export default function VendorCandyOrders({
                         setItemsPage(1);
                       }}
                     />
-                    <div className="flex items-center gap-2">
-                      <input
-                        className="border rounded px-2 py-1 text-sm w-24"
-                        placeholder="Margen %"
-                        value={bulkMarginPercent}
-                        onChange={(e) => setBulkMarginPercent(e.target.value)}
-                        inputMode="decimal"
-                      />
-                      <button
-                        className={`px-3 py-2 rounded text-sm border ${
-                          !orderItems.length ||
-                          !String(bulkMarginPercent).trim()
-                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                            : "bg-blue-600 text-white hover:bg-blue-700 border-blue-600"
-                        }`}
-                        onClick={applyBulkMarginPercent}
-                        disabled={
-                          !orderItems.length ||
-                          !String(bulkMarginPercent).trim()
-                        }
-                      >
-                        Aplicar a todos
-                      </button>
-                    </div>
-                    {isAdmin && (
-                      <button
-                        className={`px-3 py-2 rounded text-sm border ${
-                          !orderItems.length
-                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                            : "bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600"
-                        }`}
-                        onClick={exportAssociatedItemsToExcel}
-                        disabled={!orderItems.length}
-                      >
-                        Exportar Excel
-                      </button>
-                    )}
+                    <input
+                      className="border rounded px-2 py-1 text-sm w-24 shrink-0"
+                      placeholder="Margen %"
+                      value={bulkMarginPercent}
+                      onChange={(e) => setBulkMarginPercent(e.target.value)}
+                      inputMode="decimal"
+                    />
+                    <button
+                      type="button"
+                      className="shrink-0 p-2 rounded border border-gray-200 hover:bg-gray-50"
+                      aria-label="Aplicar margen o exportar"
+                      onClick={(e) =>
+                        setModalItemsToolbarMenu({
+                          rect: (
+                            e.currentTarget as HTMLElement
+                          ).getBoundingClientRect(),
+                        })
+                      }
+                    >
+                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                    </button>
                   </div>
                 </div>
 
@@ -5079,7 +5086,7 @@ export default function VendorCandyOrders({
                                     </span>
                                     <button
                                       type="button"
-                                      className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
+                                      className="hidden md:inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
                                       onClick={() => openMarginEdit(it.id)}
                                       aria-label="Editar margen"
                                       title="Editar margen"
@@ -5121,15 +5128,20 @@ export default function VendorCandyOrders({
                             <td className="p-2 border-b">
                               {!isReadOnly && (
                                 <button
-                                  className="px-2 py-1 rounded bg-red-600 text-white text-[11px] hover:bg-red-700"
-                                  onClick={() => {
-                                    if (confirm("¿Eliminar este producto?")) {
-                                      removeItem(it.id);
-                                    }
+                                  type="button"
+                                  className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                                  aria-label="Acciones"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setModalLineMenu({
+                                      id: it.id,
+                                      rect: (
+                                        e.currentTarget as HTMLElement
+                                      ).getBoundingClientRect(),
+                                    });
                                   }}
-                                  aria-label="Eliminar producto"
                                 >
-                                  <span className="leading-none">×</span>
+                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
                                 </button>
                               )}
                             </td>
@@ -5271,29 +5283,6 @@ export default function VendorCandyOrders({
                                             >
                                               {it.packages}
                                             </span>
-                                            <button
-                                              type="button"
-                                              className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
-                                              onClick={() =>
-                                                openPackageEdit(it.id)
-                                              }
-                                              aria-label="Editar paquetes"
-                                              title="Editar paquetes"
-                                            >
-                                              <svg
-                                                xmlns="http://www.w3.org/2000/svg"
-                                                className="w-4 h-4"
-                                                viewBox="0 0 24 24"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                strokeWidth={1.5}
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              >
-                                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                                              </svg>
-                                            </button>
                                           </div>
                                         )
                                       ) : (
@@ -5356,29 +5345,6 @@ export default function VendorCandyOrders({
                                               >
                                                 {it.remainingPackages}
                                               </span>
-                                              <button
-                                                type="button"
-                                                className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
-                                                onClick={() =>
-                                                  openRemainingEdit(it.id)
-                                                }
-                                                aria-label="Editar restantes"
-                                                title="Editar restantes"
-                                              >
-                                                <svg
-                                                  xmlns="http://www.w3.org/2000/svg"
-                                                  className="w-4 h-4"
-                                                  viewBox="0 0 24 24"
-                                                  fill="none"
-                                                  stroke="currentColor"
-                                                  strokeWidth={1.5}
-                                                  strokeLinecap="round"
-                                                  strokeLinejoin="round"
-                                                >
-                                                  <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                                  <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                                                </svg>
-                                              </button>
                                             </div>
                                           )
                                         ) : (
@@ -5604,29 +5570,6 @@ export default function VendorCandyOrders({
                                               ).toFixed(3)}
                                               %
                                             </span>
-                                            <button
-                                              type="button"
-                                              className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
-                                              onClick={() =>
-                                                openMarginEdit(it.id)
-                                              }
-                                              aria-label="Editar margen"
-                                              title="Editar margen"
-                                            >
-                                              <svg
-                                                xmlns="http://www.w3.org/2000/svg"
-                                                className="w-4 h-4"
-                                                viewBox="0 0 24 24"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                strokeWidth={1.5}
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              >
-                                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                                <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                                              </svg>
-                                            </button>
                                           </div>
                                         )
                                       ) : (
@@ -5651,17 +5594,20 @@ export default function VendorCandyOrders({
 
                                     {!isReadOnly && (
                                       <button
-                                        className="px-2 py-1 rounded bg-red-600 text-white text-[11px]"
-                                        onClick={() => {
-                                          if (
-                                            confirm("¿Eliminar este producto?")
-                                          ) {
-                                            removeItem(it.id);
-                                          }
+                                        type="button"
+                                        className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                                        aria-label="Acciones"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setModalLineMenu({
+                                            id: it.id,
+                                            rect: (
+                                              e.currentTarget as HTMLElement
+                                            ).getBoundingClientRect(),
+                                          });
                                         }}
-                                        aria-label="Eliminar producto"
                                       >
-                                        <span className="leading-none">×</span>
+                                        <FiMoreVertical className="w-5 h-5 text-gray-700" />
                                       </button>
                                     )}
                                   </div>
@@ -5716,22 +5662,21 @@ export default function VendorCandyOrders({
                   )}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex justify-end">
                   <button
-                    className="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-                    onClick={closeForm}
+                    type="button"
+                    className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                    aria-label="Cancelar o guardar"
+                    onClick={(e) =>
+                      setModalFooterMenu({
+                        rect: (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect(),
+                      })
+                    }
                   >
-                    Cancelar
+                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
                   </button>
-
-                  {!isReadOnly && (
-                    <button
-                      className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
-                      onClick={saveOrder}
-                    >
-                      Guardar pedido
-                    </button>
-                  )}
                 </div>
               </div>
 
@@ -5744,6 +5689,329 @@ export default function VendorCandyOrders({
           </div>
         </div>
       )}
+
+      <ActionMenu
+        anchorRect={modalHeaderMenu?.rect ?? null}
+        isOpen={!!modalHeaderMenu}
+        onClose={() => setModalHeaderMenu(null)}
+        width={240}
+      >
+        {modalHeaderMenu && (
+          <div className="py-1">
+            {isAdmin && editingOrderKey && (
+              <button
+                type="button"
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                  isSyncingMaster ? "text-gray-400 cursor-not-allowed" : ""
+                }`}
+                disabled={isSyncingMaster}
+                onClick={() => {
+                  setModalHeaderMenu(null);
+                  if (!isSyncingMaster) syncOrderFromMaster();
+                }}
+              >
+                {isSyncingMaster
+                  ? "Sincronizando…"
+                  : "Sincronizar con Orden Maestra"}
+              </button>
+            )}
+            {!isReadOnly && (
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                onClick={() => {
+                  setModalHeaderMenu(null);
+                  saveOrder();
+                }}
+              >
+                Guardar
+              </button>
+            )}
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setModalHeaderMenu(null);
+                closeForm();
+              }}
+            >
+              Cerrar
+            </button>
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={modalImportMenu?.rect ?? null}
+        isOpen={!!modalImportMenu}
+        onClose={() => setModalImportMenu(null)}
+        width={220}
+      >
+        {modalImportMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setModalImportMenu(null);
+                downloadTemplateFromMainOrders();
+              }}
+            >
+              Descargar plantilla
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setModalImportMenu(null);
+                triggerImport();
+              }}
+            >
+              Importar Excel
+            </button>
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={modalItemsToolbarMenu?.rect ?? null}
+        isOpen={!!modalItemsToolbarMenu}
+        onClose={() => setModalItemsToolbarMenu(null)}
+        width={220}
+      >
+        {modalItemsToolbarMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                !orderItems.length || !String(bulkMarginPercent).trim()
+                  ? "text-gray-400 cursor-not-allowed"
+                  : ""
+              }`}
+              disabled={
+                !orderItems.length || !String(bulkMarginPercent).trim()
+              }
+              onClick={() => {
+                setModalItemsToolbarMenu(null);
+                if (orderItems.length && String(bulkMarginPercent).trim()) {
+                  applyBulkMarginPercent();
+                }
+              }}
+            >
+              Aplicar margen a todos
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                  !orderItems.length ? "text-gray-400 cursor-not-allowed" : ""
+                }`}
+                disabled={!orderItems.length}
+                onClick={() => {
+                  setModalItemsToolbarMenu(null);
+                  if (orderItems.length) exportAssociatedItemsToExcel();
+                }}
+              >
+                Exportar Excel
+              </button>
+            )}
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={modalFooterMenu?.rect ?? null}
+        isOpen={!!modalFooterMenu}
+        onClose={() => setModalFooterMenu(null)}
+        width={200}
+      >
+        {modalFooterMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setModalFooterMenu(null);
+                closeForm();
+              }}
+            >
+              Cancelar
+            </button>
+            {!isReadOnly && (
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                onClick={() => {
+                  setModalFooterMenu(null);
+                  saveOrder();
+                }}
+              >
+                Guardar pedido
+              </button>
+            )}
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={vendorListToolbarMenu?.rect ?? null}
+        isOpen={!!vendorListToolbarMenu}
+        onClose={() => setVendorListToolbarMenu(null)}
+        width={240}
+      >
+        {vendorListToolbarMenu && isAdmin && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setVendorListToolbarMenu(null);
+                openNewOrder();
+              }}
+            >
+              Nuevo pedido
+            </button>
+            <button
+              type="button"
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                isSyncingAll ? "text-gray-400 cursor-not-allowed" : ""
+              }`}
+              disabled={isSyncingAll}
+              onClick={() => {
+                setVendorListToolbarMenu(null);
+                if (
+                  confirm(
+                    "¿Sincronizar todos los pedidos con Orden Maestra?",
+                  )
+                ) {
+                  syncAllOrdersFromMaster();
+                }
+              }}
+            >
+              {isSyncingAll ? "Sincronizando..." : "Sincronizar todo"}
+            </button>
+            <button
+              type="button"
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                isBackfilling ? "text-gray-400 cursor-not-allowed" : ""
+              }`}
+              disabled={isBackfilling}
+              onClick={() => {
+                setVendorListToolbarMenu(null);
+                backfillCalculatedFields();
+              }}
+            >
+              {isBackfilling
+                ? "Actualizando Firestore..."
+                : "Update Firestore"}
+            </button>
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={orderRowMenu?.rect ?? null}
+        isOpen={!!orderRowMenu}
+        onClose={() => setOrderRowMenu(null)}
+        width={220}
+      >
+        {orderRowMenu && (
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                const k = orderRowMenu.orderKey;
+                setOrderRowMenu(null);
+                openEditOrder(k);
+              }}
+            >
+              Editar pedido
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                onClick={() => {
+                  const k = orderRowMenu.orderKey;
+                  setOrderRowMenu(null);
+                  if (confirm("¿Eliminar este pedido completo?")) {
+                    deleteOrder(k);
+                  }
+                }}
+              >
+                Eliminar pedido
+              </button>
+            )}
+          </div>
+        )}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={modalLineMenu?.rect ?? null}
+        isOpen={!!modalLineMenu}
+        onClose={() => setModalLineMenu(null)}
+        width={220}
+      >
+        {modalLineMenu && (
+          <div className="py-1">
+            {!isReadOnly && (
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                onClick={() => {
+                  const id = modalLineMenu.id;
+                  setModalLineMenu(null);
+                  openPackageEdit(id);
+                }}
+              >
+                Editar paquetes
+              </button>
+            )}
+            {isAdmin && !isReadOnly && (
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                onClick={() => {
+                  const id = modalLineMenu.id;
+                  setModalLineMenu(null);
+                  openRemainingEdit(id);
+                }}
+              >
+                Editar restantes
+              </button>
+            )}
+            {!isReadOnly && (
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                onClick={() => {
+                  const id = modalLineMenu.id;
+                  setModalLineMenu(null);
+                  openMarginEdit(id);
+                }}
+              >
+                Editar margen
+              </button>
+            )}
+            {!isReadOnly && (
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                onClick={() => {
+                  const id = modalLineMenu.id;
+                  setModalLineMenu(null);
+                  if (confirm("¿Eliminar este producto?")) {
+                    removeItem(id);
+                  }
+                }}
+              >
+                Eliminar producto
+              </button>
+            )}
+          </div>
+        )}
+      </ActionMenu>
 
       {/* Traslados modal */}
       <TrasladosModal
