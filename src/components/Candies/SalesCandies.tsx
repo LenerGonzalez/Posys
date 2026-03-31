@@ -17,6 +17,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { db } from "../../firebase";
+import { syncAbonoCommissionsForCustomer } from "../../Services/commissionAbonoCandies";
 import { hasRole } from "../../utils/roles";
 import LoadingOverlay from "../common/LoadingOverlay";
 import jsPDF from "jspdf";
@@ -1614,6 +1615,8 @@ export default function SalesCandiesPOS({
             ...base,
             type: "ABONO",
             amount: -Number(downPayment),
+            vendorId,
+            vendorName: vendorObj?.name || "",
           });
         }
         // Nota: no seteamos initialDebt aquí para evitar doble conteo con movimientos.
@@ -1663,6 +1666,21 @@ export default function SalesCandiesPOS({
           lastAbonoAmount: Number(lastAbono?.amount || 0),
           lastAbonoAt: Timestamp.now(),
         });
+      }
+
+      if (clientType === "CREDITO") {
+        const customerIdsToSync = new Set<string>();
+        if (customerId) customerIdsToSync.add(String(customerId));
+        for (const a of abonosToSave) {
+          if (a.customerId) customerIdsToSync.add(String(a.customerId));
+        }
+        for (const cid of customerIdsToSync) {
+          try {
+            await syncAbonoCommissionsForCustomer(cid);
+          } catch (e) {
+            console.warn("syncAbonoCommissionsForCustomer:", cid, e);
+          }
+        }
       }
 
       // 3) FIFO por producto, PERO AHORA SOBRE EL PEDIDO DEL VENDEDOR

@@ -21,7 +21,7 @@ export default function ActionMenu({
   useEffect(() => {
     if (!isOpen) return;
 
-    const onDown = (ev: MouseEvent) => {
+    const onPointerDown = (ev: PointerEvent) => {
       const target = ev.target as Node;
       if (ref.current && !ref.current.contains(target)) onClose();
     };
@@ -45,17 +45,17 @@ export default function ActionMenu({
       if (ev.key === "Escape") onClose();
     };
 
-    // Attach listeners on next tick so the opening click doesn't immediately
-    // trigger the outside handler (menu needs to be mounted first).
+    // Retraso breve: en táctil el mismo gesto que abre el menú puede disparar
+    // pointerdown en documento y cerrarlo al instante; pointerdown cubre mouse + touch.
     const timer = setTimeout(() => {
-      document.addEventListener("mousedown", onDown);
+      document.addEventListener("pointerdown", onPointerDown);
       document.addEventListener("scroll", onScroll, true);
       document.addEventListener("keydown", onKey);
-    }, 0);
+    }, 100);
 
     return () => {
       clearTimeout(timer);
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("scroll", onScroll, true);
       document.removeEventListener("keydown", onKey);
     };

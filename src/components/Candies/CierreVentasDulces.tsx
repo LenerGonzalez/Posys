@@ -25,6 +25,7 @@ import Toast from "../common/Toast";
 import ActionMenu from "../common/ActionMenu";
 import RefreshButton from "../common/RefreshButton";
 import { FiMoreVertical } from "react-icons/fi";
+import CommissionAbonoHelpButton from "../common/CommissionAbonoHelpModal";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -226,11 +227,21 @@ interface AbonoRow {
   amount: number;
   saleId?: string;
   vendorId?: string;
+  vendorName?: string;
   balanceBefore?: number;
   balanceAfter?: number;
   saleRemainingBefore?: number;
   saleRemainingAfter?: number;
   comment?: string;
+  /** Comisión vendedor atribuible a este abono (proporcional a la venta ligada) */
+  commissionOnPayment?: number;
+  commissionBreakdown?: {
+    saleId: string;
+    appliedAmount: number;
+    saleTotal: number;
+    saleCommissionTotal: number;
+    commissionPortion: number;
+  }[];
 }
 
 async function deleteARMovesBySaleId(saleId: string) {
@@ -1030,11 +1041,16 @@ export default function CierreVentasDulces({
             amount,
             saleId: saleId || undefined,
             vendorId: vendorId || undefined,
+            vendorName: String(x.vendorName || "").trim() || undefined,
             balanceBefore: Number(x.balanceBefore ?? NaN),
             balanceAfter: Number(x.balanceAfter ?? NaN),
             saleRemainingBefore: Number(x.saleRemainingBefore ?? NaN),
             saleRemainingAfter: Number(x.saleRemainingAfter ?? NaN),
             comment: String(x.comment || ""),
+            commissionOnPayment: Number(x.commissionOnPayment ?? 0) || 0,
+            commissionBreakdown: Array.isArray(x.commissionBreakdown)
+              ? x.commissionBreakdown
+              : undefined,
           });
         });
 
@@ -1491,8 +1507,6 @@ export default function CierreVentasDulces({
   const grossProfitVisible = round2(totalCharged - totalCOGSVisible);
 
   // Totales por tipo + comisión (se mantiene)
-  let totalPacksCredito = 0;
-  let totalPacksCash = 0;
   let totalPendienteCredito = 0;
   let totalCobradoCash = 0;
   let totalCommission = 0;
@@ -1506,10 +1520,8 @@ export default function CierreVentasDulces({
     const received = Number(s.amountReceived || 0);
 
     if (s.type === "CREDITO") {
-      totalPacksCredito += Math.round(s.quantity || 0);
       totalPendienteCredito += amt - received;
     } else {
-      totalPacksCash += Math.round(s.quantity || 0);
       totalCobradoCash += amt;
     }
   });
@@ -1534,7 +1546,17 @@ export default function CierreVentasDulces({
   const totalAbonos = round2(
     abonosRows.reduce((sum, r) => sum + Number(r.amount || 0), 0),
   );
+  const totalComisionDesbloqueadaAbonos = round2(
+    abonosRows.reduce(
+      (sum, r) => sum + Number(r.commissionOnPayment || 0),
+      0,
+    ),
+  );
   const totalCobrado = round2(totalCobradoCash + totalAbonos);
+  /** Comisión ventas cash + comisión desbloqueada por abonos parciales (mismo período) */
+  const totalComisionCashMasParcialAbonos = round2(
+    totalCommissionCash + totalComisionDesbloqueadaAbonos,
+  );
 
   // ✅ KPI: comisiones por vendedor en el periodo (CASH / CRÉDITO separados)
   const vendorCommissionRowsCash = React.useMemo(() => {
@@ -2960,7 +2982,7 @@ export default function CierreVentasDulces({
         <div
           className={`collapsible-content ${kpiCardOpen ? "block" : "hidden"} border-t p-4`}
         >
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
             {/* Card 1: Ventas flotantes y procesadas */}
             <div className="border rounded-xl p-3 shadow-sm bg-blue-50 border-blue-200 flex flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -3050,55 +3072,7 @@ export default function CierreVentasDulces({
               </div>
             </div>
 
-            {/* Card 3: Paquetes cash y crédito */}
-            <div className="border rounded-xl p-3 shadow-sm bg-purple-50 border-purple-200 flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                {/* Box icon outline */}
-                <svg
-                  className="text-purple-600 w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  viewBox="0 0 24 24"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 9h18" />
-                  <path d="M9 21V9" />
-                </svg>
-                <span className="text-xs text-purple-700 font-semibold">
-                  Paquetes cash
-                </span>
-                <span className="text-2xl font-bold ml-auto">
-                  {qty3(totalPacksCash)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {/* Gift icon outline */}
-                <svg
-                  className="text-pink-600 w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  viewBox="0 0 24 24"
-                >
-                  <rect x="2" y="7" width="20" height="10" rx="2" />
-                  <path d="M12 7v10" />
-                  <path d="M7 7c0-2.5 5-2.5 5 0" />
-                  <path d="M17 7c0-2.5-5-2.5-5 0" />
-                </svg>
-                <span className="text-xs text-pink-700 font-semibold">
-                  Paquetes crédito
-                </span>
-                <span className="text-2xl font-bold ml-auto">
-                  {qty3(totalPacksCredito)}
-                </span>
-              </div>
-              <div className="text-xs text-purple-700/70 mt-1">
-                Período: {startDate} → {endDate}
-              </div>
-            </div>
-
-            {/* Card 4: Comisión cash y crédito */}
+            {/* Card 3: Comisión cash y crédito */}
             <div className="border rounded-xl p-3 shadow-sm bg-yellow-50 border-yellow-200 flex flex-col gap-2">
               <div className="flex items-center gap-2">
                 {/* Money bag icon outline */}
@@ -3216,75 +3190,103 @@ export default function CierreVentasDulces({
       ) : (
         <div ref={pdfRef}>
           {/* Unified KPIs: moved above Transacciones Cash */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3 mb-4">
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 md:p-4 shadow-sm">
-              <div className="text-xs md:text-xs font-semibold text-amber-700">
-                Paquetes
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4 mb-4">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 md:p-5 shadow-sm flex flex-col">
+              <div className="text-xs font-semibold text-emerald-800 tracking-tight">
+                Crédito (pendiente, abonos y comisión)
               </div>
-              <div className="mt-1.5 md:mt-3 grid grid-cols-2 gap-1.5 md:gap-4 items-center">
-                <div className="text-center">
-                  <div className="text-xs md:text-sm text-amber-600">Cash</div>
-                  <div className="text-xl md:text-2xl font-extrabold text-amber-800 leading-none">
-                    {qty3(totalPacksCash)}
-                  </div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs md:text-sm text-amber-600">
-                    Crédito
-                  </div>
-                  <div className="text-xl md:text-2xl font-extrabold text-amber-800 leading-none">
-                    {qty3(totalPacksCredito)}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5 md:p-4 shadow-sm">
-              <div className="text-xs md:text-xs font-semibold text-emerald-700">
-                Total pendiente crédito
-              </div>
-              <div className="mt-1.5 md:mt-3 grid grid-cols-2 gap-1.5 md:gap-4 items-center">
-                <div className="text-center">
-                  <div className="text-xs md:text-sm text-emerald-600">
+              <p className="text-[11px] text-emerald-700/90 mt-1 leading-relaxed">
+                Saldo por cobrar en ventas crédito, abonos del período y
+                comisión total de esas ventas.
+              </p>
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
+                <div className="text-center min-w-0 px-1">
+                  <div className="text-[11px] text-emerald-600 mb-1.5">
                     Pendiente
                   </div>
-                  <div className="text-lg md:text-3xl font-extrabold text-emerald-800 leading-none">
+                  <div className="text-sm md:text-base font-bold text-emerald-900 tabular-nums leading-tight break-words">
                     C${money(totalPendienteCredito)}
                   </div>
                 </div>
-                <div className="text-center">
-                  <div className="text-xs md:text-sm text-emerald-600">
-                    Abonos
+                <div className="text-center min-w-0 px-1">
+                  <div className="text-[11px] text-emerald-600 mb-1.5">
+                    Abonos (período)
                   </div>
-                  <div className="text-base md:text-lg font-semibold text-emerald-700 leading-none">
+                  <div className="text-sm md:text-base font-semibold text-emerald-800 tabular-nums leading-tight break-words">
                     C${money(totalAbonos)}
+                  </div>
+                </div>
+                <div className="text-center min-w-0 px-1">
+                  <div className="text-[11px] text-emerald-600 mb-1.5">
+                    Comisión crédito
+                  </div>
+                  <div className="text-sm md:text-base font-semibold text-emerald-900 tabular-nums leading-tight break-words">
+                    C${money(totalCommissionCredito)}
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-2.5 md:p-4 shadow-sm">
-              <div className="text-xs md:text-xs font-semibold text-indigo-700">
-                Total cobrado
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 md:p-5 shadow-sm flex flex-col">
+              <div className="text-xs font-semibold text-indigo-800 tracking-tight">
+                Total cobrado (solo cash)
               </div>
-              <div className="mt-1.5 md:mt-3 grid grid-cols-2 gap-1.5 md:gap-4 items-center">
-                <div className="text-center">
-                  <div className="text-xs md:text-sm text-indigo-600">
+              <p className="text-[11px] text-indigo-600/85 mt-1 leading-relaxed">
+                Solo ventas al contado del período (sin abonos ni crédito).
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-4 md:gap-5 flex-1">
+                <div className="text-center min-w-0 px-1">
+                  <div className="text-[11px] text-indigo-600 mb-1.5">
+                    Ventas cash
+                  </div>
+                  <div className="text-base md:text-lg font-bold text-indigo-900 tabular-nums leading-tight break-words">
+                    C${money(totalCobradoCash)}
+                  </div>
+                </div>
+                <div className="text-center min-w-0 px-1">
+                  <div className="text-[11px] text-indigo-600 mb-1.5">
+                    Comisión cash
+                  </div>
+                  <div className="text-sm md:text-base font-semibold text-indigo-800 tabular-nums leading-tight break-words">
+                    C${money(totalCommissionCash)}
+                  </div>
+                </div>
+              </div>
+              <p className="text-[10px] text-indigo-600/75 mt-3 pt-2 border-t border-indigo-200/60 leading-relaxed">
+                Monto facturado contado + comisión reconocida en esas ventas.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 md:p-5 shadow-sm flex flex-col">
+              <div className="text-xs font-semibold text-teal-900 tracking-tight">
+                Cobro y comisión (cash + abonos)
+              </div>
+              <p className="text-[11px] text-teal-700/90 mt-1 leading-relaxed">
+                Cobrado = ventas cash + abonos del período. Comisión = comisión
+                cash + comisión parcial por abonos a cuenta.
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-4 md:gap-5 flex-1">
+                <div className="text-center min-w-0 px-1">
+                  <div className="text-[11px] text-teal-700 mb-1.5">
                     Cobrado
                   </div>
-                  <div className="text-lg md:text-3xl font-extrabold text-indigo-800 leading-none">
+                  <div className="text-base md:text-lg font-bold text-teal-950 tabular-nums leading-tight break-words">
                     C${money(totalCobrado)}
                   </div>
                 </div>
-                <div className="text-center">
-                  <div className="text-xs md:text-sm text-indigo-600">
+                <div className="text-center min-w-0 px-1">
+                  <div className="text-[11px] text-teal-700 mb-1.5">
                     Comisión
                   </div>
-                  <div className="text-base md:text-lg font-semibold text-indigo-700 leading-none">
-                    C${money(totalCommission)}
+                  <div className="text-sm md:text-base font-semibold text-teal-900 tabular-nums leading-tight break-words">
+                    C${money(totalComisionCashMasParcialAbonos)}
                   </div>
                 </div>
               </div>
+              <p className="text-[10px] text-teal-700/80 mt-3 pt-2 border-t border-teal-200/60 leading-relaxed">
+                Ingreso efectivo del período (contado + cobros a cuenta) y
+                comisión que corresponde a ese cobro.
+              </p>
             </div>
           </div>
 
@@ -3724,6 +3726,12 @@ export default function CierreVentasDulces({
                           Estado
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Fecha
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
+                          Registro
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold">
                           Producto
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
@@ -3743,30 +3751,24 @@ export default function CierreVentasDulces({
                             title="Calcula la Utilidad Neta por paquete"
                             className="px-3 py-2 text-left text-xs font-semibold"
                           >
-                            Un.Paq
+                            UNPaquete
                           </th>
                         )}
                         <th
                           title="Calcula la Utilidad vendedor por paquete"
                           className="px-3 py-2 text-left text-xs font-semibold"
                         >
-                          UvPaquete
+                          UVPaquete
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold">
-                          Gan. vendedor
+                          Comision
                         </th>
-                        {/* Columna 'Comision' oculta por solicitud del usuario */}
                         {isAdmin && (
                           <th className="px-3 py-2 text-left text-xs font-semibold">
                             U. Neta
                           </th>
                         )}
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
-                          Fecha
-                        </th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
-                          Registro
-                        </th>
+
                         <th className="px-3 py-2 text-left text-xs font-semibold">
                           Vendedor
                         </th>
@@ -3797,11 +3799,13 @@ export default function CierreVentasDulces({
                                 {s.status === "PROCESADA" ? (
                                   <svg
                                     xmlns="http://www.w3.org/2000/svg"
-                                    className="h-4 w-4"
+                                    className="h-3 w-3"
                                     viewBox="0 0 20 20"
                                     fill="currentColor"
-                                    aria-hidden="true"
+                                    role="img"
+                                    aria-label="Procesada"
                                   >
+                                    <title>Procesada</title>
                                     <path
                                       fillRule="evenodd"
                                       d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z"
@@ -3811,15 +3815,21 @@ export default function CierreVentasDulces({
                                 ) : (
                                   <svg
                                     xmlns="http://www.w3.org/2000/svg"
-                                    className="h-4 w-4"
+                                    className="h-3 w-3"
                                     viewBox="0 0 20 20"
                                     fill="currentColor"
-                                    aria-hidden="true"
+                                    role="img"
+                                    aria-label="Flotante"
                                   >
+                                    <title>Flotante</title>
                                     <path d="M6 4h2v12H6zM12 4h2v12h-2z" />
                                   </svg>
                                 )}
                               </span>
+                            </td>
+                            <td className="px-3 py-2">{s.date}</td>
+                            <td className="px-3 py-2">
+                              {s.registeredAt || "—"}
                             </td>
                             <td className="px-3 py-2 text-left text-slate-700">
                               {s.productName}
@@ -3863,7 +3873,19 @@ export default function CierreVentasDulces({
                                 return uv > 0 ? `C$${money(round2(uv))}` : "—";
                               })()}
                             </td>
-                            {/* Columna 'Comision' oculta */}
+                            <td className="px-3 py-2">
+                              {(() => {
+                                const v = getVendorGainLabel(s);
+                                return v && v !== "—" ? (
+                                  <span className="text-amber-800 font-bold">
+                                    {v}
+                                  </span>
+                                ) : (
+                                  "—"
+                                );
+                              })()}
+                            </td>
+
                             {isAdmin && (
                               <td className="px-3 py-2">
                                 {(() => {
@@ -3874,16 +3896,15 @@ export default function CierreVentasDulces({
                                     : upaqueteMap[s.vendorId || ""]?.[key];
                                   const qty = Number(s.quantity || 0);
                                   const total = Number(un || 0) * qty;
-                                  return un && total > 0
-                                    ? `C$${money(round2(total))}`
-                                    : "—";
+                                  return un && total > 0 ? (
+                                    <span className="text-emerald-700 font-bold">{`C$${money(round2(total))}`}</span>
+                                  ) : (
+                                    "—"
+                                  );
                                 })()}
                               </td>
                             )}
-                            <td className="px-3 py-2">{s.date}</td>
-                            <td className="px-3 py-2">
-                              {s.registeredAt || "—"}
-                            </td>
+
                             <td className="px-3 py-2 text-left">
                               {getSellerDisplayName(s)}
                             </td>
@@ -3923,7 +3944,7 @@ export default function CierreVentasDulces({
                       <tfoot className="bg-slate-100 font-semibold text-slate-800 border-t-2 border-slate-300">
                         <tr>
                           <td
-                            colSpan={3}
+                            colSpan={5}
                             className="px-3 py-2 text-left text-xs uppercase tracking-wide"
                           >
                             Totales ({creditSalesTableTotals.n} ventas)
@@ -3959,9 +3980,7 @@ export default function CierreVentasDulces({
                                 : "—"}
                             </td>
                           )}
-                          <td colSpan={3} className="px-3 py-2">
-                            —
-                          </td>
+                          <td className="px-3 py-2">—</td>
                           <td className="px-3 py-2">—</td>
                         </tr>
                       </tfoot>
@@ -4017,43 +4036,16 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">UvPaquete</span>
+                          <span className="text-slate-600">Uv x Paquete</span>
                           <strong>{getSaleCommissionLabel(s)}</strong>
                         </div>
 
-                        {/* <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">U. Vendedor</span>
-                          <strong>
-                            {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
+                        <div className="flex justify-between gap-3">
+                          <span className="text-slate-600">Comision</span>
+                          <strong className="text-amber-800 font-bold">
+                            {getVendorGainLabel(s)}
                           </strong>
                         </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">U. Vendedor</span>
-                          <strong>
-                            {getCommissionFromItems(s) > 0
-                              ? `C$${money(getCommissionFromItems(s))}`
-                              : "—"}
-                          </strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">U. Neta</span>
-                          <strong>
-                            {getVendorNetUtility(s) > 0
-                              ? `C$${money(getVendorNetUtility(s))}`
-                              : "—"}
-                          </strong>
-                        </div> */}
-
-                        {/* Se oculta detalle 'Comisión' en vista móvil */}
-
-                        {/* <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">U. Vendedor</span>
-                          <strong>
-                            {vendUtil > 0 ? `C$${money(vendUtil)}` : "—"}
-                          </strong>
-                        </div> */}
 
                         <div className="flex justify-between gap-3">
                           <span className="text-slate-600">Vendedor</span>
@@ -4115,6 +4107,25 @@ export default function CierreVentasDulces({
                 <div className="text-sm text-slate-500">Cargando abonos...</div>
               ) : (
                 <>
+                  <div className="mb-3 flex flex-wrap gap-3 text-sm text-slate-700">
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="inline-flex items-center gap-1.5 text-slate-600">
+                        Comisión desbloqueada por abonos (periodo):
+                        <CommissionAbonoHelpButton
+                          buttonClassName="text-emerald-800 hover:bg-emerald-200/70"
+                          iconClassName="h-4 w-4"
+                        />
+                      </span>
+                      <span className="font-bold text-emerald-900">
+                        C${money(totalComisionDesbloqueadaAbonos)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-500 self-center max-w-xl">
+                      Proporcional por venta (ref. venta); se guarda en cada
+                      movimiento ABONO en{" "}
+                      <code className="text-[11px]">ar_movements</code>.
+                    </div>
+                  </div>
                   <div className="pdf-desktop hidden md:block">
                     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                       <table className="min-w-full text-sm">
@@ -4127,6 +4138,9 @@ export default function CierreVentasDulces({
                               Cliente
                             </th>
                             <th className="px-3 py-2 text-left text-xs font-semibold">
+                              Vendedor
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
                               Venta
                             </th>
                             <th className="px-3 py-2 text-left text-xs font-semibold">
@@ -4134,6 +4148,15 @@ export default function CierreVentasDulces({
                             </th>
                             <th className="px-3 py-2 text-left text-xs font-semibold">
                               Abono
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold">
+                              <span className="inline-flex items-center gap-1">
+                                Comisión x abono
+                                <CommissionAbonoHelpButton
+                                  buttonClassName="text-slate-600 hover:bg-slate-100"
+                                  iconClassName="h-3.5 w-3.5"
+                                />
+                              </span>
                             </th>
                             <th className="px-3 py-2 text-left text-xs font-semibold">
                               Saldo final
@@ -4169,6 +4192,9 @@ export default function CierreVentasDulces({
                                 <td className="px-3 py-2 text-left">
                                   {r.customerName || "—"}
                                 </td>
+                                <td className="px-3 py-2 text-left text-xs">
+                                  {r.vendorName || r.vendorId || "—"}
+                                </td>
                                 <td className="px-3 py-2 text-left">
                                   {r.saleId || "—"}
                                 </td>
@@ -4177,6 +4203,22 @@ export default function CierreVentasDulces({
                                 </td>
                                 <td className="px-3 py-2">
                                   C${money(r.amount)}
+                                </td>
+                                <td
+                                  className="px-3 py-2 text-emerald-800 font-semibold text-xs"
+                                  title={
+                                    r.commissionBreakdown &&
+                                    r.commissionBreakdown.length > 0
+                                      ? r.commissionBreakdown
+                                          .map(
+                                            (b) =>
+                                              `${String(b.saleId).slice(0, 8)}…: C$${money(b.commissionPortion)}`,
+                                          )
+                                          .join(" | ")
+                                      : undefined
+                                  }
+                                >
+                                  C${money(r.commissionOnPayment || 0)}
                                 </td>
                                 <td className="px-3 py-2">
                                   {maybeMoney(after)}
@@ -4190,7 +4232,7 @@ export default function CierreVentasDulces({
                           {abonosRows.length === 0 && (
                             <tr>
                               <td
-                                colSpan={7}
+                                colSpan={9}
                                 className="px-3 py-6 text-center text-slate-500"
                               >
                                 Sin abonos para mostrar.
@@ -4242,6 +4284,12 @@ export default function CierreVentasDulces({
 
                           <div className="mt-2 text-sm space-y-1">
                             <div className="flex justify-between gap-3">
+                              <span className="text-slate-600">Vendedor</span>
+                              <strong className="text-right break-all text-xs">
+                                {r.vendorName || r.vendorId || "—"}
+                              </strong>
+                            </div>
+                            <div className="flex justify-between gap-3">
                               <span className="text-slate-600">Venta</span>
                               <strong className="text-right break-all">
                                 {r.saleId || "—"}
@@ -4253,12 +4301,36 @@ export default function CierreVentasDulces({
                               </span>
                               <strong>{maybeMoney(pending)}</strong>
                             </div>
+                            <div className="flex justify-between gap-3 items-start">
+                              <span className="text-slate-600 inline-flex items-center gap-1">
+                                Comisión x abono
+                                <CommissionAbonoHelpButton
+                                  buttonClassName="text-slate-600 hover:bg-slate-100"
+                                  iconClassName="h-3.5 w-3.5"
+                                />
+                              </span>
+                              <strong className="text-emerald-800">
+                                C${money(r.commissionOnPayment || 0)}
+                              </strong>
+                            </div>
                             <div className="flex justify-between gap-3">
                               <span className="text-slate-600">
                                 Saldo final
                               </span>
                               <strong>{maybeMoney(after)}</strong>
                             </div>
+                            {r.commissionBreakdown &&
+                              r.commissionBreakdown.length > 0 && (
+                                <ul className="text-[11px] text-slate-600 border-t border-slate-100 pt-2 space-y-0.5">
+                                  {r.commissionBreakdown.map((b, i) => (
+                                    <li key={i} className="break-all">
+                                      …{String(b.saleId).slice(-8)}: cobro C$
+                                      {money(b.appliedAmount)} → com. C$
+                                      {money(b.commissionPortion)}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
                             {r.comment && (
                               <div className="text-xs text-slate-600">
                                 {r.comment}

@@ -396,6 +396,9 @@ export default function ProductsCandies() {
     id: string;
     rect: DOMRect;
   } | null>(null);
+  /** Móvil: menú ⋮ del encabezado (crear / importar / filtros) */
+  const [mobileToolbarMenuRect, setMobileToolbarMenuRect] =
+    useState<DOMRect | null>(null);
 
   const packagingFilterOptions = useMemo(
     () => [{ value: "", label: "Todos" }, ...PACKAGING_OPTIONS],
@@ -1212,25 +1215,39 @@ export default function ProductsCandies() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Catalogo</h2>
-        <div className="flex gap-2">
-          <div className="flex gap-2">
-            <RefreshButton
-              onClick={refresh}
-              loading={loading || importLoading}
-            />
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <h2 className="text-2xl font-bold shrink-0">Catalogo</h2>
+        <div className="flex items-center gap-2 shrink-0">
+          <RefreshButton
+            onClick={refresh}
+            loading={loading || importLoading}
+          />
+          {isMobile ? (
             <button
               type="button"
-              className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
-              onClick={() => {
-                setMsg("");
-                setCreateOpen(true);
+              className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 active:bg-slate-100 touch-manipulation"
+              aria-label="Más acciones: crear, importar, filtros"
+              onClick={(e) => {
+                setCatalogRowMenu(null);
+                setMobileToolbarMenuRect(
+                  (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                );
               }}
             >
-              Crear Producto
+              <FiMoreVertical className="w-5 h-5 text-slate-700" />
             </button>
-            {!isMobile && (
+          ) : (
+            <>
+              <button
+                type="button"
+                className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
+                onClick={() => {
+                  setMsg("");
+                  setCreateOpen(true);
+                }}
+              >
+                Crear Producto
+              </button>
               <button
                 type="button"
                 className="px-3 py-2 rounded-md text-xs font-semibold bg-white border border-slate-200 shadow-sm hover:bg-slate-50"
@@ -1243,77 +1260,10 @@ export default function ProductsCandies() {
               >
                 Importar
               </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ✅ MOBILE: BOTONES COLAPSABLES */}
-      {isMobile && (
-        <div className="flex flex-col gap-2 mb-3">
-          {/* 🔄 REFRESCAR */}
-          {/* <button
-            type="button"
-            className="w-full px-3 py-2 rounded bg-white border shadow-sm"
-            onClick={refresh}
-            disabled={loading || importLoading}
-          >
-            Refrescar
-          </button> */}
-
-          {/* ➕ CREAR PRODUCTO */}
-          <button
-            type="button"
-            className="w-full px-3 py-2 rounded bg-gray-900 text-white"
-            onClick={() => {
-              setMsg("");
-              setCreateOpen(true);
-            }}
-          >
-            Crear Producto
-          </button>
-
-          {/* (Escanear producto) moved into filtros below */}
-
-          {/* 📥 IMPORTAR */}
-          <button
-            type="button"
-            className="w-full px-3 py-2 rounded bg-white border shadow-sm"
-            onClick={() => {
-              setImportOpen(true);
-              setImportRows([]);
-              setImportErrors([]);
-              setImportFileName("");
-            }}
-          >
-            Importar
-          </button>
-
-          {/* 🔍 FILTROS */}
-          <button
-            type="button"
-            className="w-full px-3 py-2 rounded bg-gray-200"
-            onClick={() => setFiltersOpen((v) => !v)}
-          >
-            {filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
-          </button>
-
-          {/* Empaque (mobile quick filter shown when filters open) */}
-          {filtersOpen && (
-            <div className="bg-white p-3 rounded shadow-sm border">
-              <MobileHtmlSelect
-                label="Empaque"
-                value={packagingFilter}
-                onChange={setPackagingFilter}
-                options={packagingFilterOptions}
-                sheetTitle="Empaque"
-                selectClassName="w-full border rounded px-2 py-1"
-                buttonClassName="w-full border rounded px-2 py-1 text-left flex items-center justify-between gap-2 bg-white"
-              />
-            </div>
+            </>
           )}
         </div>
-      )}
+      </div>
 
       {/* MODAL CREAR PRODUCTO */}
       {createOpen && (
@@ -1572,6 +1522,18 @@ export default function ProductsCandies() {
             </div>
           ) : (
             <div className="space-y-3">
+              {/* <p className="text-xs text-slate-500 px-1">
+                Arriba, junto a Actualizar, el menú
+                <span className="inline-flex align-middle mx-0.5 text-slate-700">
+                  <FiMoreVertical className="w-3.5 h-3.5" aria-hidden />
+                </span>
+                ofrece Crear producto, Importar y filtros. Abrí una categoría para
+                listar productos; en cada fila, el
+                <span className="inline-flex align-middle mx-0.5 text-slate-700">
+                  <FiMoreVertical className="w-3.5 h-3.5" aria-hidden />
+                </span>
+                a la derecha es Editar / Borrar.
+              </p> */}
               {pagedByCategory.map((group) => {
                 const isOpen = !!categoryOpenMap[group.category];
                 return (
@@ -1612,33 +1574,52 @@ export default function ProductsCandies() {
                               key={p.id}
                               className="bg-white border rounded-2xl shadow-sm overflow-hidden"
                             >
-                              {/* header card (colapsada): nombre + "precio isla" (aquí solo tenemos providerPrice) */}
-                              <button
-                                type="button"
-                                className="w-full px-3 py-3 flex items-center justify-between text-left"
-                                onClick={() =>
-                                  setOpenCardId((cur) =>
-                                    cur === p.id ? null : p.id,
-                                  )
-                                }
-                              >
-                                <div className="min-w-0">
-                                  <div className="font-bold truncate">
-                                    {p.name}
+                              {/* header card (colapsada): nombre + precio + menú acciones (mismo ActionMenu que web) */}
+                              <div className="flex items-stretch border-b border-transparent">
+                                <button
+                                  type="button"
+                                  className="flex-1 min-w-0 px-3 py-3 flex items-center justify-between text-left"
+                                  onClick={() =>
+                                    setOpenCardId((cur) =>
+                                      cur === p.id ? null : p.id,
+                                    )
+                                  }
+                                >
+                                  <div className="min-w-0 pr-2">
+                                    <div className="font-bold truncate">
+                                      {p.name}
+                                    </div>
+                                    <div className="text-xs text-gray-600 truncate">
+                                      {p.category}
+                                    </div>
                                   </div>
-                                  <div className="text-xs text-gray-600 truncate">
-                                    {p.category}
+                                  <div className="text-right shrink-0">
+                                    <div className="text-xs text-gray-600">
+                                      Precio proveedor
+                                    </div>
+                                    <div className="font-bold tabular-nums">
+                                      {money(p.providerPrice)}
+                                    </div>
                                   </div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="text-xs text-gray-600">
-                                    Precio proveedor
-                                  </div>
-                                  <div className="font-bold tabular-nums">
-                                    {money(p.providerPrice)}
-                                  </div>
-                                </div>
-                              </button>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="shrink-0 px-2 py-3 border-l border-slate-100 hover:bg-slate-50 active:bg-slate-100 touch-manipulation"
+                                  aria-label="Acciones del producto"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setMobileToolbarMenuRect(null);
+                                    setCatalogRowMenu({
+                                      id: p.id,
+                                      rect: (
+                                        e.currentTarget as HTMLElement
+                                      ).getBoundingClientRect(),
+                                    });
+                                  }}
+                                >
+                                  <FiMoreVertical className="w-5 h-5 text-slate-700" />
+                                </button>
+                              </div>
 
                               {expanded && (
                                 <div className="px-3 pb-3 border-t">
@@ -1826,56 +1807,35 @@ export default function ProductsCandies() {
                                       </div>
                                     </div>
 
-                                    {/* acciones */}
-                                    <div className="pt-2 flex flex-wrap gap-2 items-center">
-                                      {isEd ? (
-                                        <>
-                                          <button
-                                            className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-blue-600 text-white"
-                                            onClick={saveEdit}
-                                            type="button"
-                                          >
-                                            Guardar
-                                          </button>
-                                          <button
-                                            className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-800 text-white"
-                                            onClick={() => {
-                                              setScanTarget("edit");
-                                              setScanOpen(true);
-                                            }}
-                                            type="button"
-                                          >
-                                            Escanear
-                                          </button>
-                                          <button
-                                            className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-200"
-                                            onClick={cancelEdit}
-                                            type="button"
-                                          >
-                                            Cancelar
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <div className="w-full flex justify-end">
-                                          <button
-                                            type="button"
-                                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
-                                            aria-label="Acciones del producto"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setCatalogRowMenu({
-                                                id: p.id,
-                                                rect: (
-                                                  e.currentTarget as HTMLElement
-                                                ).getBoundingClientRect(),
-                                              });
-                                            }}
-                                          >
-                                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                                          </button>
-                                        </div>
-                                      )}
-                                    </div>
+                                    {/* acciones inline solo en modo edición; Editar/Borrar vía ⋮ en el header */}
+                                    {isEd && (
+                                      <div className="pt-2 flex flex-wrap gap-2 items-center">
+                                        <button
+                                          className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-blue-600 text-white"
+                                          onClick={saveEdit}
+                                          type="button"
+                                        >
+                                          Guardar
+                                        </button>
+                                        <button
+                                          className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-800 text-white"
+                                          onClick={() => {
+                                            setScanTarget("edit");
+                                            setScanOpen(true);
+                                          }}
+                                          type="button"
+                                        >
+                                          Escanear
+                                        </button>
+                                        <button
+                                          className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-200"
+                                          onClick={cancelEdit}
+                                          type="button"
+                                        >
+                                          Cancelar
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               )}
@@ -2170,6 +2130,50 @@ export default function ProductsCandies() {
               </div>
             );
           })()}
+      </ActionMenu>
+
+      <ActionMenu
+        anchorRect={mobileToolbarMenuRect}
+        isOpen={!!mobileToolbarMenuRect}
+        onClose={() => setMobileToolbarMenuRect(null)}
+        width={220}
+      >
+        <div className="py-1">
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 font-medium"
+            onClick={() => {
+              setMobileToolbarMenuRect(null);
+              setMsg("");
+              setCreateOpen(true);
+            }}
+          >
+            Crear producto
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+            onClick={() => {
+              setMobileToolbarMenuRect(null);
+              setImportOpen(true);
+              setImportRows([]);
+              setImportErrors([]);
+              setImportFileName("");
+            }}
+          >
+            Importar
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 border-t border-slate-100"
+            onClick={() => {
+              setMobileToolbarMenuRect(null);
+              setFiltersOpen((v) => !v);
+            }}
+          >
+            {filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
+          </button>
+        </div>
       </ActionMenu>
 
       {msg ? (

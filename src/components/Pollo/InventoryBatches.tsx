@@ -23,10 +23,17 @@ import useManualRefresh from "../../hooks/useManualRefresh";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
-import { FiInfo, FiMenu } from "react-icons/fi";
+import { FiChevronDown, FiInfo, FiMenu } from "react-icons/fi";
 import ActionMenu from "../common/ActionMenu";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerMoneyStrip,
+  DrawerSectionTitle,
+  DrawerStatGrid,
+} from "../common/DrawerContentCards";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -312,6 +319,10 @@ export default function InventoryBatches({
 
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [detailGroup, setDetailGroup] = useState<GroupRow | null>(null);
+  /** Web (md+): panel lateral con detalle del pedido (evita tabla ancha con scroll horizontal). */
+  const [desktopDrawerGroup, setDesktopDrawerGroup] = useState<GroupRow | null>(
+    null,
+  );
 
   // confirmar pago
   const [showPayDialog, setShowPayDialog] = useState(false);
@@ -322,8 +333,8 @@ export default function InventoryBatches({
     setExpandedGroupId((prev) => (prev === groupId ? null : groupId));
 
   // estado para KPIs colapsable
+  /** Panel de KPIs (Resumen / Finanzas / Cobros): inicia colapsado. */
   const [kpisExpanded, setKpisExpanded] = useState<boolean>(false);
-  const toggleKpis = () => setKpisExpanded((v) => !v);
 
   type AvailabilityFilter = "all" | "with" | "without";
   const [availabilityFilter, setAvailabilityFilter] =
@@ -337,6 +348,10 @@ export default function InventoryBatches({
   const [salePonderadoDetailKey, setSalePonderadoDetailKey] = useState<
     string | null
   >(null);
+  /** Paneles de costo/venta ponderados: inician colapsados. */
+  const [weightedCostPanelExpanded, setWeightedCostPanelExpanded] =
+    useState(false);
+  const [saleVsCostPanelExpanded, setSaleVsCostPanelExpanded] = useState(false);
   /** Menú ⋮ junto a Refrescar (exportar / crear lote). */
   const [mainToolsMenuRect, setMainToolsMenuRect] =
     useState<DOMRect | null>(null);
@@ -362,6 +377,16 @@ export default function InventoryBatches({
     const parts: string[] = [];
     if (lbs > 0) parts.push(`${lbs.toFixed(3)} lb`);
     if (uds > 0) parts.push(`${uds.toFixed(3)} un`);
+    if (parts.length === 0) return "0";
+    return parts.join(" • ");
+  };
+
+  /** Resumen por fila de pedido: lb / un / caj (solo partes > 0). */
+  const formatGroupQtyLine = (lbs: number, uds: number, caj: number) => {
+    const parts: string[] = [];
+    if (lbs > 0) parts.push(`${lbs.toFixed(3)} lb`);
+    if (uds > 0) parts.push(`${uds.toFixed(3)} un`);
+    if (caj > 0) parts.push(`${caj.toFixed(3)} caj`);
     if (parts.length === 0) return "0";
     return parts.join(" • ");
   };
@@ -1291,11 +1316,19 @@ export default function InventoryBatches({
 
   // ===== Acciones de grupo =====
   const openDetail = (g: GroupRow) => {
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(min-width: 768px)").matches
+    ) {
+      setDesktopDrawerGroup(g);
+      return;
+    }
     setDetailGroup(g);
     setShowDetailModal(true);
   };
 
   const openForEdit = (g: GroupRow) => {
+    setDesktopDrawerGroup(null);
     setEditingGroupId(g.groupId);
     setEditingGroupItems(g.items);
 
@@ -1334,6 +1367,7 @@ export default function InventoryBatches({
         await deleteDoc(doc(db, "inventory_batches", b.id));
       }
       setMsg("🗑️ Pedido eliminado");
+      setDesktopDrawerGroup(null);
       refresh();
     } catch (e) {
       console.error(e);
@@ -1342,6 +1376,7 @@ export default function InventoryBatches({
   };
 
   const payGroup = (g: GroupRow) => {
+    setDesktopDrawerGroup(null);
     setSelectedGroup(g);
     setShowPayDialog(true);
   };
@@ -1889,8 +1924,26 @@ export default function InventoryBatches({
         </div>
       </ActionMenu>
 
-      {/* KPIs: 3 tarjetas */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+      {/* KPIs: 3 tarjetas dentro de panel colapsable */}
+      <div className="mb-4 border border-slate-200 rounded-2xl bg-slate-50 p-4 shadow-sm">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between gap-3 text-left rounded-xl -m-1 p-1 hover:bg-slate-100/80 transition-colors"
+          aria-expanded={kpisExpanded}
+          onClick={() => setKpisExpanded((v) => !v)}
+        >
+          <span className="font-semibold text-slate-800">
+            Indicadores de contabilidad y administración
+          </span>
+          <FiChevronDown
+            className={`shrink-0 w-5 h-5 text-slate-500 transition-transform ${
+              kpisExpanded ? "rotate-180" : ""
+            }`}
+            aria-hidden
+          />
+        </button>
+        {kpisExpanded && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
         <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl p-4 shadow-md">
           <div className="flex items-center gap-3">
             <svg
@@ -2060,6 +2113,8 @@ export default function InventoryBatches({
             </div>
           </div>
         </div>
+          </div>
+        )}
       </div>
 
       {weightedCostInventoryRows.length > 0 && (
@@ -2067,10 +2122,31 @@ export default function InventoryBatches({
           className="mb-4 border border-slate-200 rounded-2xl bg-slate-50 p-4 shadow-sm"
           data-weighted-cost-root
         >
-          <h4 className="font-semibold text-slate-800 mb-1">
-            Costo de compra ponderado (stock disponible)
-          </h4>
-          <p className="text-xs text-slate-600 mb-3 leading-relaxed">
+          <button
+            type="button"
+            className="w-full flex items-center justify-between gap-3 text-left rounded-xl -m-1 p-1 hover:bg-slate-100/80 transition-colors"
+            aria-expanded={weightedCostPanelExpanded}
+            onClick={() => {
+              setWeightedCostPanelExpanded((v) => {
+                const next = !v;
+                if (!next) setWeightedCostDetailKey(null);
+                return next;
+              });
+            }}
+          >
+            <span className="font-semibold text-slate-800">
+              Costo de compra ponderado (stock disponible)
+            </span>
+            <FiChevronDown
+              className={`shrink-0 w-5 h-5 text-slate-500 transition-transform ${
+                weightedCostPanelExpanded ? "rotate-180" : ""
+              }`}
+              aria-hidden
+            />
+          </button>
+          {weightedCostPanelExpanded && (
+            <>
+          <p className="text-xs text-slate-600 mb-3 leading-relaxed mt-2">
             Si hay varios lotes del mismo producto con distinto costo, aquí ves
             el costo unitario medio del inventario restante. En la venta, el
             descuento de inventario sigue el orden{" "}
@@ -2203,16 +2279,39 @@ export default function InventoryBatches({
               </tbody>
             </table>
           </div>
+            </>
+          )}
         </div>
       )}
 
       {/* ===== PANEL: Precio de venta ponderado + margen (con lotes) ===== */}
       {weightedCostInventoryRows.length > 0 && (
         <div className="mb-4 border border-indigo-200 rounded-2xl bg-indigo-50/50 p-4 shadow-sm">
-          <h4 className="font-semibold text-indigo-900 mb-1">
-            Precio de venta ponderado vs costo (stock disponible)
-          </h4>
-          <p className="text-xs text-indigo-700/70 mb-3 leading-relaxed">
+          <button
+            type="button"
+            className="w-full flex items-center justify-between gap-3 text-left rounded-xl -m-1 p-1 hover:bg-indigo-100/60 transition-colors"
+            aria-expanded={saleVsCostPanelExpanded}
+            onClick={() => {
+              setSaleVsCostPanelExpanded((v) => {
+                const next = !v;
+                if (!next) setSalePonderadoDetailKey(null);
+                return next;
+              });
+            }}
+          >
+            <span className="font-semibold text-indigo-900">
+              Precio de venta ponderado vs costo (stock disponible)
+            </span>
+            <FiChevronDown
+              className={`shrink-0 w-5 h-5 text-indigo-600 transition-transform ${
+                saleVsCostPanelExpanded ? "rotate-180" : ""
+              }`}
+              aria-hidden
+            />
+          </button>
+          {saleVsCostPanelExpanded && (
+            <>
+          <p className="text-xs text-indigo-700/70 mb-3 leading-relaxed mt-2">
             Compara el precio de venta ponderado con el costo ponderado de cada
             producto. Toca <strong>ℹ</strong> para ver cada lote individual y
             comparar precios entre lote viejo y lote nuevo. El{" "}
@@ -2457,6 +2556,8 @@ export default function InventoryBatches({
               </tfoot>
             </table>
           </div>
+            </>
+          )}
         </div>
       )}
 
@@ -2702,137 +2803,136 @@ export default function InventoryBatches({
       </div>
 
       {/* ===================== */}
-      {/* DESKTOP (md+): TU TABLA */}
+      {/* DESKTOP (md+): lista compacta + drawer lateral */}
       {/* ===================== */}
-      <div className="hidden md:block bg-white p-4 rounded-lg shadow-lg border w-full overflow-x-auto">
-        <table className="min-w-[1100px] w-full text-sm bg-white divide-y divide-gray-200">
+      <div className="hidden md:block bg-white p-4 rounded-lg shadow-lg border w-full">
+        <p className="text-xs text-gray-500 mb-3">
+          Tocá una fila para abrir el detalle completo en el panel derecho (sin
+          scroll horizontal).
+        </p>
+        <table className="w-full table-fixed text-sm border-collapse">
+          <colgroup>
+            <col className="w-[5.25rem]" />
+            <col />
+            <col className="w-[6.25rem]" />
+            <col className="w-[6.25rem]" />
+            <col className="w-[9rem]" />
+            <col className="w-10" />
+          </colgroup>
           <thead>
-            <tr className="whitespace-nowrap">
-              <th className="p-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 min-w-[320px]">
-                Fecha
+            <tr className="text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200">
+              <th className="px-2 py-2.5">Fecha</th>
+              <th className="px-3 py-2.5 min-w-0">Pedido</th>
+              <th className="px-1.5 py-2.5 text-right text-[11px] leading-tight">
+                Ingresado
               </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Lb Ing.
+              <th className="px-1.5 py-2.5 text-right text-[11px] leading-tight">
+                Existencia
               </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Lb Rest
-              </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Un. Ing
-              </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Un. Rest
-              </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Caj In
-              </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Caj Rest
-              </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Facturado
-              </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
+              <th className="px-2 py-2.5 text-right text-[11px] leading-tight whitespace-nowrap">
                 Esperado
               </th>
-              <th className="p-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Utilidad
-              </th>
-              <th className="p-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Estado
-              </th>
-              <th className="p-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50">
-                Acciones
-              </th>
+              <th className="px-1 py-2.5 text-center w-10" aria-label="Acciones" />
             </tr>
           </thead>
-
-          <tbody>
+          <tbody className="divide-y divide-gray-100">
             {loading ? (
               <tr>
-                <td colSpan={12} className="p-4 text-center">
+                <td colSpan={6} className="p-4 text-center text-gray-500">
                   Cargando…
                 </td>
               </tr>
             ) : groupedRows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="p-4 text-center">
+                <td colSpan={6} className="p-4 text-center text-gray-500">
                   Sin lotes
                 </td>
               </tr>
             ) : (
-              groupedRows.map((g) => (
-                <tr key={g.groupId} className="group hover:bg-gray-50">
-                  <td className="p-3 align-middle text-left min-w-0">
-                    <button
-                      className="underline text-blue-700 hover:text-blue-900"
-                      onClick={() => openDetail(g)}
+              groupedRows.map((g) => {
+                const ingresadoLine = formatGroupQtyLine(
+                  g.lbsIn,
+                  g.udsIn,
+                  g.cajillasIn,
+                );
+                const existenciaLine = formatGroupQtyLine(
+                  g.lbsRem,
+                  g.udsRem,
+                  g.cajillasRem,
+                );
+                const hasExistencia =
+                  g.lbsRem > 0 || g.udsRem > 0 || g.cajillasRem > 0;
+                const existenciaColorClass = hasExistencia
+                  ? "text-green-600"
+                  : "text-red-600";
+                return (
+                <tr
+                  key={g.groupId}
+                  role="button"
+                  tabIndex={0}
+                  className="hover:bg-gray-50 cursor-pointer transition-colors"
+                  onClick={() => setDesktopDrawerGroup(g)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setDesktopDrawerGroup(g);
+                    }
+                  }}
+                >
+                  <td className="px-2 py-2.5 align-middle whitespace-nowrap text-gray-800 text-[13px]">
+                    {g.date}
+                  </td>
+                  <td className="px-3 py-2.5 align-middle min-w-0">
+                    <div
+                      className="font-medium text-gray-900 truncate"
                       title={g.orderName}
                     >
-                      {g.date}
-                    </button>
-                    <div className="text-sm text-gray-400 mt-1 truncate">
-                      <span className="text-gray-600 font-medium mr-1 text-sm">
-                        {g.orderName}
-                      </span>
-                      <span className="text-gray-500 text-sm">
-                        {Array.from(
-                          new Set(
-                            g.items.map((it) =>
-                              String(it.productName || "").trim(),
-                            ),
+                      {g.orderName}
+                    </div>
+                    <div
+                      className="text-xs text-gray-500 truncate mt-0.5"
+                      title={Array.from(
+                        new Set(
+                          g.items.map((it) =>
+                            String(it.productName || "").trim(),
                           ),
-                        )
-                          .filter(Boolean)
-                          .slice(0, 6)
-                          .join(", ")}
-                        {g.items.length > 6 ? "…" : ""}
-                      </span>
+                        ),
+                      )
+                        .filter(Boolean)
+                        .join(", ")}
+                    >
+                      {Array.from(
+                        new Set(
+                          g.items.map((it) =>
+                            String(it.productName || "").trim(),
+                          ),
+                        ),
+                      )
+                        .filter(Boolean)
+                        .slice(0, 4)
+                        .join(", ")}
+                      {g.items.length > 4 ? "…" : ""}
                     </div>
                   </td>
-                  {/* Tipo column hidden for now - removed to give Fecha more space */}
-                  <td className="p-3 align-middle text-right">
-                    {g.lbsIn.toFixed(3)}
+                  <td
+                    className="px-1.5 py-2 align-middle text-right text-sm font-semibold tabular-nums leading-snug text-gray-900"
+                    title={ingresadoLine}
+                  >
+                    {ingresadoLine}
                   </td>
-                  <td className="p-3 align-middle text-right">
-                    {g.lbsRem.toFixed(3)}
+                  <td
+                    className={`px-1.5 py-2 align-middle text-right text-sm font-semibold tabular-nums leading-snug ${existenciaColorClass}`}
+                    title={existenciaLine}
+                  >
+                    {existenciaLine}
                   </td>
-                  <td className="p-3 align-middle text-right">
-                    {g.udsIn.toFixed(3)}
-                  </td>
-                  <td className="p-3 align-middle text-right">
-                    {g.udsRem.toFixed(3)}
-                  </td>
-                  <td className="p-3 align-middle text-right">
-                    {g.cajillasIn.toFixed(3)}
-                  </td>
-                  <td className="p-3 align-middle text-right">
-                    {g.cajillasRem.toFixed(3)}
-                  </td>
-                  <td className="p-3 align-middle text-right">
-                    {money(g.totalFacturado)}
-                  </td>
-                  <td className="p-3 align-middle text-right">
+                  <td className="px-2 py-2 align-middle text-right text-sm font-semibold tabular-nums whitespace-nowrap text-gray-900">
                     {money(g.totalEsperado)}
                   </td>
-                  <td className="p-3 align-middle text-right">
-                    {money(g.utilidadBruta)}
-                  </td>
-                  <td className="p-3 align-middle text-center">
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs ${
-                        g.status === "PAGADO"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-yellow-100 text-yellow-700"
-                      }`}
-                    >
-                      {g.status}
-                    </span>
-                  </td>
-                  <td className="p-3 align-middle text-center">
+                  <td className="px-1 py-2 align-middle text-center">
                     <button
                       type="button"
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
                       title="Acciones del pedido"
                       aria-label={`Acciones: ${g.orderName}`}
                       onClick={(e) => {
@@ -2848,11 +2948,191 @@ export default function InventoryBatches({
                     </button>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
+
+      <SlideOverDrawer
+        open={desktopDrawerGroup != null}
+        onClose={() => setDesktopDrawerGroup(null)}
+        title={desktopDrawerGroup?.orderName ?? ""}
+        subtitle={desktopDrawerGroup?.date}
+        titleId="inv-batch-drawer-title"
+        badge={
+          desktopDrawerGroup ? (
+            <span
+              className={`inline-block px-2 py-0.5 rounded text-xs ${
+                desktopDrawerGroup.status === "PAGADO"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-yellow-100 text-yellow-700"
+              }`}
+            >
+              {desktopDrawerGroup.status}
+            </span>
+          ) : null
+        }
+        footer={
+          desktopDrawerGroup ? (
+            <>
+              <button
+                type="button"
+                className="px-3 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                onClick={() => {
+                  const g = desktopDrawerGroup;
+                  setDetailGroup(g);
+                  setShowDetailModal(true);
+                  setDesktopDrawerGroup(null);
+                }}
+              >
+                Ver en modal
+              </button>
+              {isAdmin && desktopDrawerGroup.status === "PENDIENTE" && (
+                <button
+                  type="button"
+                  className="px-3 py-2 text-sm rounded-lg bg-green-600 text-white hover:bg-green-700"
+                  onClick={() => payGroup(desktopDrawerGroup)}
+                >
+                  Pagar inventario
+                </button>
+              )}
+              {isAdmin && (
+                <>
+                  <button
+                    type="button"
+                    className="px-3 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                    onClick={() => openForEdit(desktopDrawerGroup)}
+                  >
+                    Editar pedido
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700"
+                    onClick={() => deleteGroup(desktopDrawerGroup)}
+                  >
+                    Borrar pedido
+                  </button>
+                </>
+              )}
+            </>
+          ) : null
+        }
+      >
+        {desktopDrawerGroup ? (
+          <>
+            <DrawerStatGrid
+              items={[
+                {
+                  label: "Lb ingresadas",
+                  value: desktopDrawerGroup.lbsIn.toFixed(3),
+                },
+                {
+                  label: "Lb restantes",
+                  value: desktopDrawerGroup.lbsRem.toFixed(3),
+                },
+                {
+                  label: "Un. ingresadas",
+                  value: desktopDrawerGroup.udsIn.toFixed(3),
+                },
+                {
+                  label: "Un. restantes",
+                  value: desktopDrawerGroup.udsRem.toFixed(3),
+                },
+                {
+                  label: "Caj. ingresadas",
+                  value: desktopDrawerGroup.cajillasIn.toFixed(3),
+                },
+                {
+                  label: "Caj. restantes",
+                  value: desktopDrawerGroup.cajillasRem.toFixed(3),
+                },
+              ]}
+            />
+
+            <DrawerMoneyStrip
+              items={[
+                {
+                  label: "Total facturado",
+                  value: money(desktopDrawerGroup.totalFacturado),
+                  tone: "blue",
+                },
+                {
+                  label: "Total esperado",
+                  value: money(desktopDrawerGroup.totalEsperado),
+                  tone: "slate",
+                },
+                {
+                  label: "Utilidad bruta",
+                  value: money(desktopDrawerGroup.utilidadBruta),
+                  tone: "emerald",
+                },
+              ]}
+            />
+
+            <DrawerSectionTitle>Productos del pedido</DrawerSectionTitle>
+            <div className="mt-2 space-y-3">
+              {desktopDrawerGroup.items.map((b) => {
+                const inv = Number(b.invoiceTotal || 0);
+                const exp = Number(b.expectedTotal || 0);
+                const remQty = Number(b.remaining) || 0;
+                const existenciaColorClass =
+                  remQty <= 0 ? "text-red-600" : "text-green-600";
+                return (
+                  <DrawerDetailDlCard
+                    key={b.id}
+                    title={b.productName}
+                    rows={[
+                      {
+                        label: "Unidad",
+                        value: (b.unit || "").toUpperCase(),
+                        ddClassName: "text-sm font-medium text-gray-900",
+                      },
+                      {
+                        label: "Ingresado",
+                        value: b.quantity.toFixed(3),
+                      },
+                      {
+                        label: "Restantes",
+                        value: b.remaining.toFixed(3),
+                        ddClassName: `text-sm font-semibold tabular-nums ${existenciaColorClass}`,
+                      },
+                      {
+                        label: "P. compra",
+                        value: money(b.purchasePrice),
+                      },
+                      {
+                        label: "P. venta",
+                        value: money(b.salePrice),
+                      },
+                      {
+                        label: "Estado lote",
+                        value: b.status,
+                        ddClassName: "text-sm font-medium text-gray-900",
+                      },
+                      {
+                        label: "Total factura",
+                        value: money(inv),
+                      },
+                      {
+                        label: "Total esperado",
+                        value: money(exp),
+                      },
+                      {
+                        label: "Utilidad",
+                        value: money(exp - inv),
+                        ddClassName:
+                          "text-sm font-semibold tabular-nums text-emerald-800",
+                      },
+                    ]}
+                  />
+                );
+              })}
+            </div>
+          </>
+        ) : null}
+      </SlideOverDrawer>
 
       {msg && <Toast message={msg} onClose={() => setMsg("")} />}
 

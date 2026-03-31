@@ -5,12 +5,15 @@ interface RefreshButtonProps {
   onClick: () => void;
   loading?: boolean;
   className?: string;
+  /** Tooltip / accesibilidad (por defecto: Refrescar datos) */
+  title?: string;
 }
 
 export default function RefreshButton({
   onClick,
   loading,
   className = "",
+  title: titleProp,
 }: RefreshButtonProps) {
   return (
     <button
@@ -19,7 +22,7 @@ export default function RefreshButton({
       disabled={loading}
       className={`flex items-center gap-2 px-3 py-2 rounded-full bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200 text-xs font-semibold shadow-sm
         disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
-      title="Refrescar datos"
+      title={titleProp ?? "Refrescar datos"}
     >
       <FiRefreshCw
         className={`w-4 h-4 ${loading ? "animate-spin text-blue-500" : ""}`}

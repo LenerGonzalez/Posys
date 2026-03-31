@@ -20,6 +20,12 @@ import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
 import KpiCard from "../common/KpiCard";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerMoneyStrip,
+  DrawerSectionTitle,
+  DrawerDetailDlCard,
+} from "../common/DrawerContentCards";
 import {
   fetchBaseSummaryCandies,
   type BaseSummaryCandies,
@@ -63,6 +69,14 @@ type UnifiedRow = {
 
 type SaleType = "CONTADO" | "CREDITO";
 const today = () => format(new Date(), "yyyy-MM-dd");
+const firstOfMonth = () => {
+  const d = new Date();
+  return format(new Date(d.getFullYear(), d.getMonth(), 1), "yyyy-MM-dd");
+};
+const lastOfMonth = () => {
+  const d = new Date();
+  return format(new Date(d.getFullYear(), d.getMonth() + 1, 0), "yyyy-MM-dd");
+};
 
 const money = (n: unknown) => {
   const v = Number(n ?? 0) || 0;
@@ -200,8 +214,8 @@ function getARKind(x: any): "ABONO" | "CARGO" | "OTHER" {
 }
 
 export default function EstadoCuentaCandies(): React.ReactElement {
-  const [from, setFrom] = useState(today());
-  const [to, setTo] = useState(today());
+  const [from, setFrom] = useState(firstOfMonth());
+  const [to, setTo] = useState(lastOfMonth());
   const [loading, setLoading] = useState(true);
 
   const [base, setBase] = useState<BaseSummaryCandies | null>(null);
@@ -228,11 +242,19 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   const [salesRows, setSalesRows] = useState<UnifiedRow[]>([]);
   const [abonosRows, setAbonosRows] = useState<UnifiedRow[]>([]);
 
-  // ===== modal items (copiado de TransactionsReportCandies) =====
-  const [itemsModalOpen, setItemsModalOpen] = useState(false);
-  const [itemsModalLoading, setItemsModalLoading] = useState(false);
-  const [itemsModalSaleId, setItemsModalSaleId] = useState<string | null>(null);
-  const [itemsModalRows, setItemsModalRows] = useState<
+  // ===== drawer items (detalle de productos de la venta) =====
+  const [itemsDrawerOpen, setItemsDrawerOpen] = useState(false);
+  const [itemsDrawerLoading, setItemsDrawerLoading] = useState(false);
+  const [itemsDrawerSale, setItemsDrawerSale] = useState<{
+    saleId: string;
+    date: string;
+    vendorName: string;
+    saleAmount: number;
+    commission: number;
+    packages: number;
+    type: string;
+  } | null>(null);
+  const [itemsDrawerRows, setItemsDrawerRows] = useState<
     {
       productName: string;
       qty: number;
@@ -243,11 +265,19 @@ export default function EstadoCuentaCandies(): React.ReactElement {
     }[]
   >([]);
 
-  const openItemsModal = async (saleId: string) => {
-    setItemsModalOpen(true);
-    setItemsModalLoading(true);
-    setItemsModalSaleId(saleId);
-    setItemsModalRows([]);
+  const openItemsDrawer = async (saleId: string, row?: UnifiedRow) => {
+    setItemsDrawerOpen(true);
+    setItemsDrawerLoading(true);
+    setItemsDrawerSale({
+      saleId,
+      date: row?.date || "",
+      vendorName: row?.vendorName || "—",
+      saleAmount: Number(row?.saleAmount || 0),
+      commission: Number(row?.commission || 0),
+      packages: Number(row?.packages || 0),
+      type: row?.type || "",
+    });
+    setItemsDrawerRows([]);
 
     try {
       const docSnap = await getDoc(doc(db, "sales_candies", saleId));
@@ -269,11 +299,11 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         commission: Number(it.margenVendedor || 0),
       }));
 
-      setItemsModalRows(rows);
+      setItemsDrawerRows(rows);
     } catch (e) {
       console.error(e);
     } finally {
-      setItemsModalLoading(false);
+      setItemsDrawerLoading(false);
     }
   };
 
@@ -1076,6 +1106,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   // ===== cards comisiones =====
   const totalComisionCash = base?.comisionCash ?? 0;
   const totalComisionCredit = base?.comisionCredit ?? 0;
+  const totalComisionParcialAbonos = base?.comisionParcialAbonos ?? 0;
+  const totalComisionCashYParcial =
+    Number(totalComisionCash || 0) + Number(totalComisionParcialAbonos || 0);
+  const saldoPostComision = Number(saldoFinal || 0) - Number(totalComisionCash || 0);
   const listComCash = base?.comisionesCashBySeller ?? [];
   const listComCredit = base?.comisionesCreditBySeller ?? [];
 
@@ -1226,10 +1260,26 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                   </div>
 
                   <div className="text-xs text-gray-600 mt-2">
-                    Comisiones Crédito
+                    Comisiones Crédito (ventas)
                   </div>
                   <div className="text-xl font-bold break-words max-w-full">
                     {money(totalComisionCredit)}
+                  </div>
+
+                  <div className="text-xs text-gray-600 mt-2">
+                    Comisiones por abonos (parcial)
+                  </div>
+                  <div className="text-lg font-bold break-words max-w-full text-emerald-800">
+                    {money(totalComisionParcialAbonos)}
+                  </div>
+
+                  <div className="border-t border-gray-200 pt-2 mt-2">
+                    <div className="text-xs text-gray-700 font-semibold">
+                      Total (cash + abonos parciales)
+                    </div>
+                    <div className="text-xl font-bold break-words max-w-full text-orange-700">
+                      {money(totalComisionCashYParcial)}
+                    </div>
                   </div>
                 </div>
               )}
@@ -1272,11 +1322,21 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           {/* Commission details removed (now summarized in the Comisiones card above) */}
 
           {/* KPIs secundarios (fila 2) */}
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="border rounded-2xl p-3 bg-blue-50">
               <div className="text-xs text-gray-600">Arqueo Ventas</div>
               <div className="text-2xl font-bold break-words max-w-full">
                 {money(totalsLedger.depositSum || 0)}
+              </div>
+            </div>
+
+            <div className="border rounded-2xl p-3 bg-teal-50">
+              <div className="text-xs text-gray-600">Saldo post comisión</div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                Saldo final − comisión cash
+              </div>
+              <div className="text-2xl font-bold break-words max-w-full mt-1">
+                {money(saldoPostComision)}
               </div>
             </div>
 
@@ -1307,14 +1367,26 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             </div>
           </div>
 
-          <div className="border rounded-2xl p-3 bg-sky-50 text-center">
+          <div className="border rounded-2xl p-3 bg-sky-50 text-center col-span-2">
             <div className="text-xs text-gray-600">Comisiones Cash</div>
             <div className="text-lg font-bold break-words max-w-full">
               {money(totalComisionCash)}
             </div>
+            <div className="text-xs text-gray-600 mt-2">
+              Parcial (abonos)
+            </div>
+            <div className="text-base font-bold text-emerald-800">
+              {money(totalComisionParcialAbonos)}
+            </div>
+            <div className="text-xs text-gray-700 mt-2 font-semibold">
+              Total cash + parcial
+            </div>
+            <div className="text-lg font-bold text-orange-700">
+              {money(totalComisionCashYParcial)}
+            </div>
           </div>
 
-          <div className="border rounded-2xl p-3 bg-red-50 text-center">
+          <div className="border rounded-2xl p-3 bg-red-50 text-center col-span-2">
             <div className="text-xs text-gray-600">Gastos del periodo</div>
             <div className="text-lg font-bold break-words max-w-full">
               {money(totalsLedger.gastosSum)}
@@ -1726,7 +1798,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                     <button
                       type="button"
                       className="underline text-blue-600 hover:text-blue-800"
-                      onClick={() => openItemsModal(r.saleId!)}
+                      onClick={() => openItemsDrawer(r.saleId!, r)}
                       title="Ver detalle de productos"
                     >
                       {r.packages}
@@ -1848,79 +1920,59 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         </table>
       </div>
 
-      {/* Modal detalle items */}
-      {itemsModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">
-                Productos/paquetes vendidos{" "}
-                {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
-              </h3>
+      {/* Drawer detalle items de venta */}
+      <SlideOverDrawer
+        open={itemsDrawerOpen}
+        onClose={() => setItemsDrawerOpen(false)}
+        title={`Venta${itemsDrawerSale?.type ? ` — ${itemsDrawerSale.type}` : ""}`}
+        subtitle={itemsDrawerSale?.date || ""}
+        badge={
+          itemsDrawerSale?.vendorName && itemsDrawerSale.vendorName !== "—" ? (
+            <span className="text-[11px] px-2 py-[2px] rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+              {itemsDrawerSale.vendorName}
+            </span>
+          ) : null
+        }
+        titleId="drawer-items-candies"
+      >
+        {itemsDrawerSale && (
+          <DrawerMoneyStrip
+            items={[
+              { label: "Total venta", value: money(itemsDrawerSale.saleAmount), tone: "blue" },
+              { label: "Paquetes", value: String(itemsDrawerSale.packages), tone: "slate" },
+              { label: "Comisión", value: money(itemsDrawerSale.commission), tone: "emerald" },
+            ]}
+          />
+        )}
 
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                onClick={() => setItemsModalOpen(false)}
-              >
-                Cerrar
-              </button>
-            </div>
+        <DrawerSectionTitle>
+          Productos ({itemsDrawerRows.length})
+        </DrawerSectionTitle>
 
-            <div className="bg-white rounded border overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Producto</th>
-                    <th className="p-2 border text-right">Paquetes</th>
-                    <th className="p-2 border text-right">Precio</th>
-                    <th className="p-2 border text-right">Descuento</th>
-                    <th className="p-2 border text-right">Monto</th>
-                    <th className="p-2 border text-right">Comisión</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {itemsModalLoading ? (
-                    <tr>
-                      <td colSpan={6} className="p-4 text-center">
-                        Cargando…
-                      </td>
-                    </tr>
-                  ) : itemsModalRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="p-4 text-center">
-                        Sin ítems en esta venta.
-                      </td>
-                    </tr>
-                  ) : (
-                    itemsModalRows.map((it, idx) => (
-                      <tr key={idx} className="text-center">
-                        <td className="p-2 border text-left">
-                          {it.productName}
-                        </td>
-                        <td className="p-2 border text-right">{it.qty}</td>
-                        <td className="p-2 border text-right">
-                          {money(it.unitPrice)}
-                        </td>
-                        <td className="p-2 border text-right">
-                          {money(it.discount || 0)}
-                        </td>
-                        <td className="p-2 border text-right">
-                          {money(it.total)}
-                        </td>
-                        <td className="p-2 border text-right">
-                          {money(it.commission || 0)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* info cliente (si algún día querés mostrarlo en este modal, lo tenés en el sale doc) */}
-          </div>
+        <div className="mt-2 space-y-2">
+          {itemsDrawerLoading ? (
+            <div className="text-sm text-gray-500 text-center py-6">Cargando…</div>
+          ) : itemsDrawerRows.length === 0 ? (
+            <div className="text-sm text-gray-500 text-center py-6">Sin ítems en esta venta.</div>
+          ) : (
+            itemsDrawerRows.map((it, idx) => (
+              <DrawerDetailDlCard
+                key={idx}
+                title={it.productName || "Sin nombre"}
+                rows={[
+                  { label: "Paquetes", value: it.qty },
+                  { label: "Precio unit.", value: money(it.unitPrice) },
+                  { label: "Descuento", value: money(it.discount || 0) },
+                  { label: "Monto línea", value: money(it.total), ddClassName: "text-sm font-bold tabular-nums text-gray-900" },
+                  ...(Number(it.commission || 0) > 0
+                    ? [{ label: "Comisión", value: money(it.commission || 0), ddClassName: "text-sm font-semibold tabular-nums text-emerald-700" }]
+                    : []),
+                ]}
+              />
+            ))
+          )}
         </div>
-      )}
+      </SlideOverDrawer>
 
       {/* Modal pequeño para ABONO (cliente) */}
       {abonoModalOpen && (

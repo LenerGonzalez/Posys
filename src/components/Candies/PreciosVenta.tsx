@@ -2051,16 +2051,26 @@ export default function PrecioVentas({
           </div>
         ) : (
           <div className="space-y-2">
-            {pagedByCategory.map(([cat, items]) => {
+            {pagedByCategory.map(([cat, items], catIdx) => {
               const expandedCategory = openMobileCategory === cat;
+              const categoryCardPalette = [
+                "bg-gradient-to-br from-amber-50 via-orange-50/90 to-amber-100/80 border-amber-200/90",
+                "bg-gradient-to-br from-sky-50 via-cyan-50/90 to-sky-100/80 border-sky-200/90",
+                "bg-gradient-to-br from-violet-50 via-purple-50/90 to-violet-100/80 border-violet-200/90",
+                "bg-gradient-to-br from-emerald-50 via-teal-50/90 to-emerald-100/80 border-emerald-200/90",
+                "bg-gradient-to-br from-rose-50 via-pink-50/90 to-rose-100/80 border-rose-200/90",
+                "bg-gradient-to-br from-indigo-50 via-blue-50/90 to-indigo-100/80 border-indigo-200/90",
+              ];
+              const catCardClass =
+                categoryCardPalette[catIdx % categoryCardPalette.length];
               return (
                 <div
                   key={cat}
-                  className="bg-white border rounded-2xl shadow-sm overflow-hidden"
+                  className={`rounded-2xl border shadow-sm overflow-hidden ${catCardClass}`}
                 >
                   <button
                     type="button"
-                    className="w-full px-3 py-3 flex items-center justify-between text-left"
+                    className="w-full px-3 py-3 flex items-center justify-between text-left active:bg-white/40"
                     onClick={() => toggleCategory(cat)}
                   >
                     <div className="min-w-0">
@@ -2072,13 +2082,13 @@ export default function PrecioVentas({
                         {items.length === 1 ? "Producto" : "Productos"}
                       </div>
                     </div>
-                    <div className="text-sm font-semibold">
+                    <div className="text-sm font-semibold text-slate-800">
                       {expandedCategory ? "Cerrar" : "Ver"}
                     </div>
                   </button>
 
                   {expandedCategory && (
-                    <div className="px-3 pb-3 border-t space-y-2">
+                    <div className="px-3 pb-3 border-t border-white/50 bg-white/60 space-y-2">
                       {items.map((r) => {
                         const expanded = openCardId === r.productId;
                         const isEditingCatalog = editingId === r.productId;
@@ -2134,10 +2144,10 @@ export default function PrecioVentas({
                                 </div>
                               </div>
                               <div className="text-right">
-                                <div className="text-[12px] text-gray-600">
-                                  Precio
+                                <div className="text-[12px] text-emerald-800/80">
+                                  Precio Isla
                                 </div>
-                                <div className="text-sm font-semibold tabular-nums">
+                                <div className="text-sm font-bold tabular-nums text-emerald-600">
                                   {money(r.priceIsla)}
                                 </div>
                               </div>
@@ -2156,28 +2166,19 @@ export default function PrecioVentas({
                                       </div>
 
                                       <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
+                                        <div className="text-[12px] text-emerald-800/80">
                                           Precio Isla (paq)
                                         </div>
-                                        <div className="text-sm font-semibold tabular-nums">
+                                        <div className="text-sm font-bold tabular-nums text-emerald-600">
                                           {money(r.priceIsla)}
                                         </div>
                                       </div>
 
                                       <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
-                                          Precio Rivas (paq)
-                                        </div>
-                                        <div className="text-sm font-semibold tabular-nums">
-                                          {money(r.priceRivas)}
-                                        </div>
-                                      </div>
-
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
+                                        <div className="text-[12px] text-emerald-800/80">
                                           Precio x Unidad
                                         </div>
-                                        <div className="text-sm font-semibold tabular-nums">
+                                        <div className="text-sm font-bold tabular-nums text-emerald-600">
                                           {money(
                                             r.priceIsla /
                                               (r.unitsPerPackage || 1),

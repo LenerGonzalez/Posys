@@ -1,5 +1,5 @@
 // src/components/Candies/CustomersCandy.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   addDoc,
@@ -18,8 +18,23 @@ import {
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
+import {
+  syncAbonoCommissionsForCustomer,
+  buildSaleMetaMap,
+  fetchSellersCandiesCommissionMap,
+  commissionFromSaleDoc,
+  saleTotalFromDoc,
+} from "../../Services/commissionAbonoCandies";
 import { FiMoreVertical } from "react-icons/fi";
 import ActionMenu from "../common/ActionMenu";
+import RefreshButton from "../common/RefreshButton";
+import CommissionAbonoHelpButton from "../common/CommissionAbonoHelpModal";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerMoneyStrip,
+  DrawerSectionTitle,
+} from "../common/DrawerContentCards";
 import MobileKpiTwoColumn from "../common/MobileKpiTwoColumn";
 import Toast from "../common/Toast";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
@@ -70,6 +85,17 @@ interface MovementRow {
   ref?: { saleId?: string };
   comment?: string;
   createdAt?: Timestamp;
+  /** Estado de cobro del CARGO (venta a crédito), sincronizado al abonar */
+  debtStatus?: string;
+  /** Comisión vendedor atribuible a este abono (proporcional al total de la venta ligada) */
+  commissionOnPayment?: number;
+  commissionBreakdown?: {
+    saleId: string;
+    appliedAmount: number;
+    saleTotal: number;
+    saleCommissionTotal: number;
+    commissionPortion: number;
+  }[];
 }
 
 interface SellerRow {
@@ -79,6 +105,174 @@ interface SellerRow {
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+const roundCurrency = (n: number) =>
+  Math.round((Number(n) || 0) * 100) / 100;
+
+const PAID_DEBT_FLAGS = new Set([
+  "PAGADA",
+  "PAGADO",
+  "CERRADA",
+  "CERRADO",
+  "LIQUIDADA",
+  "LIQUIDADO",
+]);
+
+function normalizeDebtStatus(value?: string): "PENDIENTE" | "PAGADA" {
+  const upper = String(value || "")
+    .trim()
+    .toUpperCase();
+  if (PAID_DEBT_FLAGS.has(upper)) return "PAGADA";
+  return "PENDIENTE";
+}
+
+/** Saldo pendiente de una venta (CARGO − abonos con ref.saleId). */
+function getPendingForSale(rows: MovementRow[], saleId: string): number {
+  const cargo = rows.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  if (!cargo) return 0;
+  const cargoAmt = Number(cargo.amount);
+  const paid = rows
+    .filter(
+      (m) =>
+        m.type === "ABONO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) < 0,
+    )
+    .reduce((acc, m) => acc + Math.abs(Number(m.amount) || 0), 0);
+  return roundCurrency(Math.max(0, cargoAmt - paid));
+}
+
+function getCargoSaleDate(rows: MovementRow[], saleId: string): string {
+  const sid = String(saleId || "").trim();
+  const c = rows.find(
+    (m) =>
+      m.type === "CARGO" &&
+      String(m.ref?.saleId || "").trim() === sid &&
+      Number(m.amount) > 0,
+  );
+  return (c?.date || "").trim().slice(0, 10);
+}
+
+async function resolveMinAbonoDateFromSaleCandies(
+  rows: MovementRow[],
+  saleId: string,
+): Promise<string> {
+  const fromCargo = getCargoSaleDate(rows, saleId);
+  if (fromCargo) return fromCargo;
+  const sid = String(saleId || "").trim();
+  if (!sid) return "";
+  try {
+    const snap = await getDoc(doc(db, "sales_candies", sid));
+    if (!snap.exists()) return "";
+    const x = snap.data() as any;
+    const raw =
+      formatLocalDate(x.date ?? x.timestamp ?? x.createdAt ?? "") || "";
+    return raw.slice(0, 10);
+  } catch {
+    return "";
+  }
+}
+
+function getTotalAbonadoForSale(rows: MovementRow[], saleId: string): number {
+  return roundCurrency(
+    rows
+      .filter(
+        (m) =>
+          m.type === "ABONO" &&
+          m.ref?.saleId === saleId &&
+          Number(m.amount) < 0,
+      )
+      .reduce((acc, m) => acc + Math.abs(Number(m.amount) || 0), 0),
+  );
+}
+
+function buildSaleAbonoLedger(
+  rows: MovementRow[],
+  saleId: string,
+): Array<
+  MovementRow & {
+    saldoInicial: number;
+    saldoFinal: number;
+    montoAbs: number;
+  }
+> {
+  const cargo = rows.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  if (!cargo) return [];
+  let running = Number(cargo.amount);
+  const abonos = rows
+    .filter(
+      (m) =>
+        m.type === "ABONO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) < 0,
+    )
+    .slice()
+    .sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const as = a.createdAt?.seconds || 0;
+      const bs = b.createdAt?.seconds || 0;
+      return as - bs;
+    });
+
+  const chronological = abonos.map((ab) => {
+    const inicial = roundCurrency(running);
+    const monto = Math.abs(Number(ab.amount) || 0);
+    running = roundCurrency(running - monto);
+    return {
+      ...ab,
+      saldoInicial: inicial,
+      saldoFinal: running,
+      montoAbs: monto,
+    };
+  });
+  return chronological.slice().reverse();
+}
+
+const FULL_PAYMENT_COMMENT_PREFIX = "Pago total factura";
+
+function isFullPaymentAbonoComment(comment?: string): boolean {
+  return String(comment || "").startsWith(FULL_PAYMENT_COMMENT_PREFIX);
+}
+
+function computeDebtStatusFromPendingForSale(
+  list: MovementRow[],
+  saleId: string,
+): "PENDIENTE" | "PAGADA" {
+  return getPendingForSale(list, saleId) <= 0.005 ? "PAGADA" : "PENDIENTE";
+}
+
+async function syncCargoDebtStatusForSaleId(
+  list: MovementRow[],
+  saleId: string,
+): Promise<MovementRow[]> {
+  const cargo = list.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  if (!cargo) return list;
+  const next = computeDebtStatusFromPendingForSale(list, saleId);
+  const normalized = normalizeDebtStatus(cargo.debtStatus);
+  if (normalized !== next) {
+    await updateDoc(doc(db, "ar_movements", cargo.id), {
+      debtStatus: next,
+    });
+  }
+  return list.map((row) =>
+    row.id === cargo.id ? { ...row, debtStatus: next } : row,
+  );
+}
 
 /** Fecha local YYYY-MM-DD (alineado con Clientes Pollo). */
 const formatLocalDate = (v: any) => {
@@ -304,8 +498,8 @@ export default function CustomersCandy({
   const [fMin, setFMin] = useState<string>(""); // saldo mínimo
   const [fMax, setFMax] = useState<string>(""); // saldo máximo
 
-  // ===== Modal Detalle de Ítems (venta) =====
-  const [itemsModalOpen, setItemsModalOpen] = useState(false);
+  // ===== Drawer Detalle de Ítems (venta) =====
+  const [itemsDrawerOpen, setItemsDrawerOpen] = useState(false);
   const [itemsModalLoading, setItemsModalLoading] = useState(false);
   const [itemsModalSaleId, setItemsModalSaleId] = useState<string | null>(null);
   const [itemsModalRows, setItemsModalRows] = useState<
@@ -315,14 +509,27 @@ export default function CustomersCandy({
       unitPrice: number;
       discount?: number;
       total: number;
+      lineCommission: number;
+      commissionPerPackage: number;
     }[]
   >([]);
 
-  const openItemsModal = async (saleId: string) => {
-    setItemsModalOpen(true);
+  const [itemsDrawerMeta, setItemsDrawerMeta] = useState<{
+    totalPackages: number;
+    saleAmount: number;
+    commissionTotal: number;
+    saleDate?: string;
+  } | null>(null);
+
+  const [statementHeaderMenuRect, setStatementHeaderMenuRect] =
+    useState<DOMRect | null>(null);
+
+  const openItemsDrawer = async (saleId: string) => {
+    setItemsDrawerOpen(true);
     setItemsModalLoading(true);
     setItemsModalSaleId(saleId);
     setItemsModalRows([]);
+    setItemsDrawerMeta(null);
 
     try {
       // ✅ más robusto: primero por ID del doc
@@ -349,14 +556,66 @@ export default function CustomersCandy({
         }
       } else if (data?.item) arr = [data.item];
 
-      const rows = arr.map((it: any) => ({
+      const sellers = await fetchSellersCandiesCommissionMap();
+      const commissionTotal = data
+        ? commissionFromSaleDoc(data, sellers)
+        : 0;
+
+      const rowsRaw = arr.map((it: any) => ({
         productName: String(it.productName || ""),
         qty: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
         unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? it.price ?? 0),
         discount: Number(it.discount || 0),
         total: Number(it.total ?? it.lineFinal ?? it.amount ?? 0),
+        marginRaw: Number(it.margenVendedor || 0),
       }));
+
+      const sumMargin = rowsRaw.reduce((a, r) => a + r.marginRaw, 0);
+      const sumLineTot = rowsRaw.reduce((a, r) => a + r.total, 0);
+
+      const rows = rowsRaw.map((r) => {
+        let lineComm = r.marginRaw;
+        if (
+          !(lineComm > 0.005) &&
+          sumMargin < 0.005 &&
+          sumLineTot > 0 &&
+          commissionTotal > 0
+        ) {
+          lineComm = roundCurrency((r.total / sumLineTot) * commissionTotal);
+        }
+        const commPerPkg =
+          r.qty > 0 ? roundCurrency(lineComm / r.qty) : 0;
+        return {
+          productName: r.productName,
+          qty: r.qty,
+          unitPrice: r.unitPrice,
+          discount: r.discount,
+          total: r.total,
+          lineCommission: roundCurrency(lineComm),
+          commissionPerPackage: commPerPkg,
+        };
+      });
+
       setItemsModalRows(rows);
+
+      const totalPk = rows.reduce((a, r) => a + r.qty, 0);
+      const saleAmount = data
+        ? saleTotalFromDoc(data)
+        : rows.reduce((a, r) => a + r.total, 0);
+
+      const saleDate =
+        data?.date != null
+          ? String(data.date).slice(0, 10)
+          : data?.createdAt?.toDate?.()
+            ? data.createdAt.toDate().toISOString().slice(0, 10)
+            : undefined;
+
+      setItemsDrawerMeta({
+        totalPackages: totalPk,
+        saleAmount: roundCurrency(saleAmount),
+        commissionTotal: roundCurrency(commissionTotal),
+        saleDate,
+      });
     } catch (e) {
       console.error(e);
     } finally {
@@ -413,12 +672,34 @@ export default function CustomersCandy({
   );
   const [abonoComment, setAbonoComment] = useState<string>("");
   const [savingAbono, setSavingAbono] = useState(false);
+  const [abonoTargetSaleId, setAbonoTargetSaleId] = useState<string | null>(
+    null,
+  );
+  const [saleMenuAnchor, setSaleMenuAnchor] = useState<{
+    saleId: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [saleLedgerSaleId, setSaleLedgerSaleId] = useState<string | null>(null);
+  const [movementRowMenu, setMovementRowMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [ledgerMovementMenu, setLedgerMovementMenu] = useState<{
+    rowId: string;
+    rect: DOMRect;
+  } | null>(null);
+  const [stComisionTotalCredito, setStComisionTotalCredito] = useState(0);
+  const [abonoSalePreviewMeta, setAbonoSalePreviewMeta] = useState<{
+    total: number;
+    commission: number;
+  } | null>(null);
 
   // ===== Editar / Eliminar movimiento =====
   const [editMovId, setEditMovId] = useState<string | null>(null);
   const [eMovDate, setEMovDate] = useState<string>("");
   const [eMovAmount, setEMovAmount] = useState<number>(0);
   const [eMovComment, setEMovComment] = useState<string>("");
+  const [editMinSaleDate, setEditMinSaleDate] = useState<string>("");
 
   // 👉 Modal Crear Cliente
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -435,152 +716,153 @@ export default function CustomersCandy({
     null,
   );
 
-  // Cargar vendedores + clientes y saldos
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
+  const loadCustomers = useCallback(async () => {
+    try {
+      setLoading(true);
 
-        if (isVendor && !sellerIdSafe) {
-          setRows([]);
-          setMsg(
-            "❌ Este usuario no tiene vendedor asociado (sellerCandyId vacío).",
+      if (isVendor && !sellerIdSafe) {
+        setRows([]);
+        setMsg(
+          "❌ Este usuario no tiene vendedor asociado (sellerCandyId vacío).",
+        );
+        return;
+      }
+
+      // vendedores activos
+      const vSnap = await getDocs(collection(db, "sellers_candies"));
+      const vList: SellerRow[] = [];
+      vSnap.forEach((d) => {
+        const x = d.data() as any;
+        const st = String(x.status || "ACTIVO");
+        if (st !== "ACTIVO") return;
+        vList.push({ id: d.id, name: String(x.name || ""), status: st });
+      });
+      setSellers(vList);
+
+      // clientes
+      const qC = isVendor
+        ? query(
+            collection(db, "customers_candies"),
+            where("vendorId", "==", sellerIdSafe),
+            orderBy("createdAt", "desc"),
+          )
+        : query(
+            collection(db, "customers_candies"),
+            orderBy("createdAt", "desc"),
           );
-          return;
-        }
 
-        // vendedores activos
-        const vSnap = await getDocs(collection(db, "sellers_candies"));
-        const vList: SellerRow[] = [];
-        vSnap.forEach((d) => {
-          const x = d.data() as any;
-          const st = String(x.status || "ACTIVO");
-          if (st !== "ACTIVO") return;
-          vList.push({ id: d.id, name: String(x.name || ""), status: st });
+      const snap = await getDocs(qC);
+      const list: CustomerRow[] = [];
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        list.push({
+          id: d.id,
+          name: x.name ?? "",
+          phone: x.phone ?? "+505 ",
+          place: (x.place as Place) ?? "",
+          notes: x.notes ?? "",
+          status: (x.status as Status) ?? "ACTIVO",
+          creditLimit: Number(x.creditLimit ?? 0),
+          createdAt: x.createdAt ?? Timestamp.now(),
+          balance: 0,
+          sellerId: x.sellerId || "",
+
+          vendorId: x.vendorId || "",
+          vendorName: x.vendorName || "",
+          initialDebt: Number(x.initialDebt || 0),
+          initialDebtDate: String(x.initialDebtDate || "").trim(),
+
+          lastAbonoDate: "",
+          lastAbonoAmount: 0,
         });
-        setSellers(vList);
+      });
 
-        // clientes
-        const qC = isVendor
-          ? query(
-              collection(db, "customers_candies"),
-              where("vendorId", "==", sellerIdSafe),
-              orderBy("createdAt", "desc"),
-            )
-          : query(
-              collection(db, "customers_candies"),
-              orderBy("createdAt", "desc"),
-            );
+      // Saldos + último abono
+      for (const c of list) {
+        try {
+          const qMov = query(
+            collection(db, "ar_movements"),
+            where("customerId", "==", c.id),
+          );
+          const mSnap = await getDocs(qMov);
 
-        const snap = await getDocs(qC);
-        const list: CustomerRow[] = [];
-        snap.forEach((d) => {
-          const x = d.data() as any;
-          list.push({
-            id: d.id,
-            name: x.name ?? "",
-            phone: x.phone ?? "+505 ",
-            place: (x.place as Place) ?? "",
-            notes: x.notes ?? "",
-            status: (x.status as Status) ?? "ACTIVO",
-            creditLimit: Number(x.creditLimit ?? 0),
-            createdAt: x.createdAt ?? Timestamp.now(),
-            balance: 0,
-            sellerId: x.sellerId || "",
+          let sumMov = 0;
+          let lastAbono: any = null;
+          const movements: MovementRow[] = [];
 
-            vendorId: x.vendorId || "",
-            vendorName: x.vendorName || "",
-            initialDebt: Number(x.initialDebt || 0),
-            initialDebtDate: String(x.initialDebtDate || "").trim(),
+          mSnap.forEach((m) => {
+            const x = m.data() as any;
+            const amt = Number(x.amount || 0);
+            sumMov += amt;
 
-            lastAbonoDate: "",
-            lastAbonoAmount: 0,
-          });
-        });
+            const d =
+              x.date ??
+              (x.createdAt?.toDate?.()
+                ? x.createdAt.toDate().toISOString().slice(0, 10)
+                : "");
 
-        // Saldos + último abono
-        for (const c of list) {
-          try {
-            const qMov = query(
-              collection(db, "ar_movements"),
-              where("customerId", "==", c.id),
-            );
-            const mSnap = await getDocs(qMov);
-
-            let sumMov = 0;
-            let lastAbono: any = null;
-            const movements: MovementRow[] = [];
-
-            mSnap.forEach((m) => {
-              const x = m.data() as any;
-              const amt = Number(x.amount || 0);
-              sumMov += amt;
-
-              const d =
-                x.date ??
-                (x.createdAt?.toDate?.()
-                  ? x.createdAt.toDate().toISOString().slice(0, 10)
-                  : "");
-
-              movements.push({
-                id: m.id,
-                date: d,
-                type:
-                  (x.type as "CARGO" | "ABONO") ??
-                  (amt < 0 ? "ABONO" : "CARGO"),
-                amount: amt,
-                ref: x.ref || {},
-                comment: x.comment || "",
-                createdAt: x.createdAt,
-              });
-
-              // detectar abonos (negativos)
-              if (amt < 0) {
-                const ts = x.createdAt?.seconds
-                  ? Number(x.createdAt.seconds)
-                  : 0;
-
-                if (!lastAbono || ts >= lastAbono.ts) {
-                  lastAbono = { date: d, amount: Math.abs(amt), ts };
-                }
-              }
+            movements.push({
+              id: m.id,
+              date: d,
+              type:
+                (x.type as "CARGO" | "ABONO") ??
+                (amt < 0 ? "ABONO" : "CARGO"),
+              amount: amt,
+              ref: x.ref || {},
+              comment: x.comment || "",
+              createdAt: x.createdAt,
             });
 
-            const init = Number(c.initialDebt || 0);
-            const effectiveInit = getEffectiveInitialDebt(
-              init,
-              String(c.initialDebtDate || ""),
-              movements,
-            );
+            // detectar abonos (negativos)
+            if (amt < 0) {
+              const ts = x.createdAt?.seconds
+                ? Number(x.createdAt.seconds)
+                : 0;
 
-            // ✅ balance incluye deuda inicial efectiva
-            c.balance = effectiveInit + sumMov;
-
-            if (lastAbono) {
-              c.lastAbonoDate = lastAbono?.date;
-              c.lastAbonoAmount = lastAbono?.amount;
-            } else {
-              c.lastAbonoDate = "";
-              c.lastAbonoAmount = 0;
+              if (!lastAbono || ts >= lastAbono.ts) {
+                lastAbono = { date: d, amount: Math.abs(amt), ts };
+              }
             }
+          });
 
-            await loadLastSaleForCustomer(c);
-          } catch {
-            c.balance = Number(c.initialDebt || 0);
+          const init = Number(c.initialDebt || 0);
+          const effectiveInit = getEffectiveInitialDebt(
+            init,
+            String(c.initialDebtDate || ""),
+            movements,
+          );
+
+          // ✅ balance incluye deuda inicial efectiva
+          c.balance = effectiveInit + sumMov;
+
+          if (lastAbono) {
+            c.lastAbonoDate = lastAbono?.date;
+            c.lastAbonoAmount = lastAbono?.amount;
+          } else {
             c.lastAbonoDate = "";
             c.lastAbonoAmount = 0;
           }
-        }
 
-        setRows(list);
-      } catch (e) {
-        console.error(e);
-        setMsg("❌ Error cargando clientes.");
-      } finally {
-        setLoading(false);
+          await loadLastSaleForCustomer(c);
+        } catch {
+          c.balance = Number(c.initialDebt || 0);
+          c.lastAbonoDate = "";
+          c.lastAbonoAmount = 0;
+        }
       }
-    })();
+
+      setRows(list);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error cargando clientes.");
+    } finally {
+      setLoading(false);
+    }
   }, [isVendor, sellerIdSafe]);
+
+  useEffect(() => {
+    void loadCustomers();
+  }, [loadCustomers]);
 
   const resetForm = () => {
     setName("");
@@ -873,6 +1155,50 @@ export default function CustomersCandy({
     });
   };
 
+  const fetchMovementRowsForCustomer = async (
+    customerId: string,
+  ): Promise<MovementRow[]> => {
+    const qMov = query(
+      collection(db, "ar_movements"),
+      where("customerId", "==", customerId),
+    );
+    const snap = await getDocs(qMov);
+    const list: MovementRow[] = [];
+    snap.forEach((d) => {
+      const x = d.data() as any;
+      const date =
+        x.date ??
+        (x.createdAt?.toDate?.()
+          ? x.createdAt.toDate().toISOString().slice(0, 10)
+          : "");
+      const amount = Number(x.amount || 0);
+      list.push({
+        id: d.id,
+        date,
+        type:
+          (x.type as "CARGO" | "ABONO") ?? (amount < 0 ? "ABONO" : "CARGO"),
+        amount,
+        ref: x.ref || {},
+        comment: x.comment || "",
+        createdAt: x.createdAt,
+        debtStatus: normalizeDebtStatus(
+          x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
+        ),
+        commissionOnPayment: Number(x.commissionOnPayment || 0),
+        commissionBreakdown: Array.isArray(x.commissionBreakdown)
+          ? x.commissionBreakdown
+          : undefined,
+      });
+    });
+    list.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const as = a.createdAt?.seconds || 0;
+      const bs = b.createdAt?.seconds || 0;
+      return as - bs;
+    });
+    return list;
+  };
+
   // ===== Abrir estado de cuenta =====
   const openStatement = async (customer: CustomerRow) => {
     setStCustomer(customer);
@@ -894,43 +1220,21 @@ export default function CustomersCandy({
     setAbonoAmount(0);
     setAbonoDate(new Date().toISOString().slice(0, 10));
     setAbonoComment("");
+    setAbonoTargetSaleId(null);
+    setSaleMenuAnchor(null);
+    setSaleLedgerSaleId(null);
+    setAbonoSalePreviewMeta(null);
     setEditMovId(null);
+    setEditMinSaleDate("");
+    setMovementRowMenu(null);
+    setLedgerMovementMenu(null);
+    setItemsDrawerOpen(false);
+    setStatementHeaderMenuRect(null);
 
     setStLoading(true);
     try {
-      const qMov = query(
-        collection(db, "ar_movements"),
-        where("customerId", "==", customer.id),
-      );
-      const snap = await getDocs(qMov);
-      const list: MovementRow[] = [];
-      snap.forEach((d) => {
-        const x = d.data() as any;
-        const date =
-          x.date ??
-          (x.createdAt?.toDate?.()
-            ? x.createdAt.toDate().toISOString().slice(0, 10)
-            : "");
-        const amount = Number(x.amount || 0);
-        list.push({
-          id: d.id,
-          date,
-          type:
-            (x.type as "CARGO" | "ABONO") ?? (amount < 0 ? "ABONO" : "CARGO"),
-          amount,
-          ref: x.ref || {},
-          comment: x.comment || "",
-          createdAt: x.createdAt,
-        });
-      });
-
-      list.sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        const as = a.createdAt?.seconds || 0;
-        const bs = b.createdAt?.seconds || 0;
-        return as - bs;
-      });
-
+      await syncAbonoCommissionsForCustomer(customer.id);
+      const list = await fetchMovementRowsForCustomer(customer.id);
       setStRows(list);
       recomputeKpis(
         list,
@@ -940,6 +1244,26 @@ export default function CustomersCandy({
     } catch (e) {
       console.error(e);
       setMsg("❌ No se pudo cargar el estado de cuenta");
+    } finally {
+      setStLoading(false);
+    }
+  };
+
+  const refreshStatement = async () => {
+    if (!stCustomer) return;
+    setStLoading(true);
+    try {
+      await syncAbonoCommissionsForCustomer(stCustomer.id);
+      const list = await fetchMovementRowsForCustomer(stCustomer.id);
+      setStRows(list);
+      recomputeKpis(
+        list,
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+      );
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ No se pudo actualizar el estado de cuenta");
     } finally {
       setStLoading(false);
     }
@@ -957,13 +1281,130 @@ export default function CustomersCandy({
     return abonos.length ? abonos[abonos.length - 1] : null;
   };
 
-  const stEffectiveInitialDebt = useMemo(() => {
-    return getEffectiveInitialDebt(
-      Number(stCustomer?.initialDebt || 0),
-      String(stCustomer?.initialDebtDate || ""),
-      stRows,
-    );
-  }, [stCustomer?.initialDebt, stCustomer?.initialDebtDate, stRows]);
+  const stCommissionDesdeAbonos = useMemo(() => {
+    return stRows
+      .filter((x) => Number(x.amount) < 0)
+      .reduce((a, x) => a + Number(x.commissionOnPayment || 0), 0);
+  }, [stRows]);
+
+  const saleVentasRows = useMemo(() => {
+    return stRows
+      .filter(
+        (m) =>
+          m.type === "CARGO" &&
+          Boolean(m.ref?.saleId) &&
+          Number(m.amount) > 0,
+      )
+      .slice()
+      .sort((a, b) => {
+        if (a.date !== b.date) return b.date.localeCompare(a.date);
+        return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+      });
+  }, [stRows]);
+
+  const saleIdsForCommissionKey = useMemo(
+    () =>
+      saleVentasRows
+        .map((m) => m.ref?.saleId)
+        .filter((x): x is string => Boolean(x))
+        .join(","),
+    [saleVentasRows],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!showStatement || !stCustomer) {
+      setStComisionTotalCredito(0);
+      return;
+    }
+    const ids = saleIdsForCommissionKey
+      ? saleIdsForCommissionKey.split(",").filter(Boolean)
+      : [];
+    if (ids.length === 0) {
+      setStComisionTotalCredito(0);
+      return;
+    }
+    (async () => {
+      try {
+        const sellers = await fetchSellersCandiesCommissionMap();
+        const meta = await buildSaleMetaMap(ids, sellers);
+        const sum = Object.values(meta).reduce(
+          (a, b) => a + Number(b.commission || 0),
+          0,
+        );
+        if (!cancelled) setStComisionTotalCredito(roundCurrency(sum));
+      } catch {
+        if (!cancelled) setStComisionTotalCredito(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showStatement, stCustomer?.id, saleIdsForCommissionKey]);
+
+  const stComisionPendiente = useMemo(
+    () =>
+      Math.max(
+        0,
+        roundCurrency(stComisionTotalCredito - stCommissionDesdeAbonos),
+      ),
+    [stComisionTotalCredito, stCommissionDesdeAbonos],
+  );
+
+  const saleLedgerComputed = useMemo(() => {
+    if (!saleLedgerSaleId) return [];
+    return buildSaleAbonoLedger(stRows, saleLedgerSaleId);
+  }, [stRows, saleLedgerSaleId]);
+
+  /** Panel de edición (compra/abono de la venta): en modal principal o en «Cuenta de la venta». */
+  const showLedgerStyleEditPanel =
+    !!editMovId &&
+    showStatement &&
+    (() => {
+      const em = stRows.find((x) => x.id === editMovId);
+      if (!em) return false;
+      if (em.type === "CARGO" && em.ref?.saleId && Number(em.amount) > 0) {
+        if (saleLedgerSaleId) return em.ref.saleId === saleLedgerSaleId;
+        return true;
+      }
+      if (
+        em.type === "ABONO" &&
+        em.ref?.saleId &&
+        saleLedgerSaleId &&
+        em.ref.saleId === saleLedgerSaleId
+      ) {
+        return true;
+      }
+      return false;
+    })();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!showAbono || !abonoTargetSaleId) {
+      setAbonoSalePreviewMeta(null);
+      return;
+    }
+    (async () => {
+      try {
+        const sellers = await fetchSellersCandiesCommissionMap();
+        const meta = await buildSaleMetaMap([abonoTargetSaleId], sellers);
+        const m = meta[abonoTargetSaleId];
+        if (!cancelled) setAbonoSalePreviewMeta(m || null);
+      } catch {
+        if (!cancelled) setAbonoSalePreviewMeta(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showAbono, abonoTargetSaleId]);
+
+  const abonoPreviewCommission = useMemo(() => {
+    const amt = Number(abonoAmount || 0);
+    const m = abonoSalePreviewMeta;
+    if (!m || !(amt > 0) || !(m.total > 0)) return null;
+    return roundCurrency((m.commission * amt) / m.total);
+  }, [abonoAmount, abonoSalePreviewMeta]);
 
   // ===== Registrar ABONO =====
   const saveAbono = async () => {
@@ -981,33 +1422,47 @@ export default function CustomersCandy({
       return;
     }
 
+    if (abonoTargetSaleId) {
+      const pend = getPendingForSale(stRows, abonoTargetSaleId);
+      if (safeAmt > pend + 0.005) {
+        setMsg(
+          `El abono no puede superar el saldo pendiente (${money(pend)}) de esta venta.`,
+        );
+        return;
+      }
+      const saleD = getCargoSaleDate(stRows, abonoTargetSaleId);
+      if (saleD && abonoDate < saleD) {
+        setMsg(
+          `La fecha del abono no puede ser anterior a la fecha de la venta (${saleD}).`,
+        );
+        return;
+      }
+    }
+
     try {
       setSavingAbono(true);
-      const payload = {
+      const payload: Record<string, unknown> = {
         customerId: stCustomer.id,
         type: "ABONO",
         amount: -safeAmt,
         date: abonoDate,
         comment: abonoComment || "",
         createdAt: Timestamp.now(),
+        vendorId: stCustomer.vendorId || "",
+        vendorName: stCustomer.vendorName || "",
       };
-      const ref = await addDoc(collection(db, "ar_movements"), payload);
-
-      const newRow: MovementRow = {
-        id: ref.id,
-        date: abonoDate,
-        type: "ABONO",
-        amount: -safeAmt,
-        comment: abonoComment || "",
-        createdAt: Timestamp.now(),
-      };
-
-      const newList = [...stRows, newRow].sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        const as = a.createdAt?.seconds || 0;
-        const bs = b.createdAt?.seconds || 0;
-        return as - bs;
-      });
+      if (abonoTargetSaleId) {
+        payload.ref = { saleId: abonoTargetSaleId };
+      }
+      await addDoc(collection(db, "ar_movements"), payload);
+      await syncAbonoCommissionsForCustomer(stCustomer.id);
+      let newList = await fetchMovementRowsForCustomer(stCustomer.id);
+      if (abonoTargetSaleId) {
+        newList = await syncCargoDebtStatusForSaleId(
+          newList,
+          abonoTargetSaleId,
+        );
+      }
 
       setStRows(newList);
       recomputeKpis(
@@ -1054,6 +1509,7 @@ export default function CustomersCandy({
       setAbonoAmount(0);
       setAbonoComment("");
       setAbonoDate(new Date().toISOString().slice(0, 10));
+      setAbonoTargetSaleId(null);
       setShowAbono(false);
       setMsg("✅ Abono registrado");
     } catch (e) {
@@ -1064,12 +1520,336 @@ export default function CustomersCandy({
     }
   };
 
+  const payFullSale = async (saleId: string) => {
+    if (!stCustomer) return;
+    setMsg("");
+    const pending = getPendingForSale(stRows, saleId);
+    if (!(pending > 0.005)) {
+      setMsg("No hay saldo pendiente para esta venta.");
+      return;
+    }
+    const cargo = stRows.find(
+      (m) =>
+        m.type === "CARGO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) > 0,
+    );
+    if (!cargo) {
+      setMsg("No se encontró el cargo de esta venta.");
+      return;
+    }
+    const payAmt = roundCurrency(pending);
+    const payDate = formatLocalDate(new Date());
+    const saleD = (cargo.date || "").slice(0, 10);
+    if (saleD && payDate < saleD) {
+      setMsg(
+        `La fecha de pago no puede ser anterior a la fecha de la venta (${saleD}).`,
+      );
+      return;
+    }
+
+    const okPay = confirm(
+      `¿Confirmar el pago total de esta factura por ${money(payAmt)}?`,
+    );
+    if (!okPay) return;
+
+    try {
+      setSavingAbono(true);
+      const payload = {
+        customerId: stCustomer.id,
+        type: "ABONO",
+        amount: -payAmt,
+        date: payDate,
+        comment: `${FULL_PAYMENT_COMMENT_PREFIX} (${saleId.slice(0, 8)}…)`,
+        createdAt: Timestamp.now(),
+        ref: { saleId },
+        vendorId: stCustomer.vendorId || "",
+        vendorName: stCustomer.vendorName || "",
+      };
+      await addDoc(collection(db, "ar_movements"), payload);
+      await syncAbonoCommissionsForCustomer(stCustomer.id);
+      let newList = await fetchMovementRowsForCustomer(stCustomer.id);
+      newList = await syncCargoDebtStatusForSaleId(newList, saleId);
+
+      setStRows(newList);
+      recomputeKpis(
+        newList,
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+      );
+
+      const sumMov = newList.reduce(
+        (acc, it) => acc + (Number(it.amount) || 0),
+        0,
+      );
+      const effectiveInit = getEffectiveInitialDebt(
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+        newList,
+      );
+      const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
+
+      setRows((prev) =>
+        prev.map((c) =>
+          c.id === stCustomer.id
+            ? {
+                ...c,
+                balance: nuevoSaldo,
+                lastAbonoDate: payDate,
+                lastAbonoAmount: payAmt,
+              }
+            : c,
+        ),
+      );
+      setStCustomer((prev) =>
+        prev
+          ? {
+              ...prev,
+              balance: nuevoSaldo,
+              lastAbonoDate: payDate,
+              lastAbonoAmount: payAmt,
+            }
+          : prev,
+      );
+
+      setMsg("✅ Factura pagada");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al registrar el pago");
+    } finally {
+      setSavingAbono(false);
+    }
+  };
+
+  const revertFullPaymentSale = async (saleId: string) => {
+    if (!stCustomer) return;
+    const candidates = stRows
+      .filter(
+        (m) =>
+          m.type === "ABONO" &&
+          m.ref?.saleId === saleId &&
+          isFullPaymentAbonoComment(m.comment),
+      )
+      .slice()
+      .sort(
+        (a, b) =>
+          (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0),
+      );
+    const abono = candidates[0];
+    if (!abono) {
+      setMsg("No hay un pago total registrado para revertir.");
+      return;
+    }
+    const revertAmt = Math.abs(Number(abono.amount) || 0);
+    const ok = confirm(
+      `¿Confirmar revertir el pago total?\n\nSe eliminará el abono de ${money(revertAmt)} y la factura volverá a Pendiente si queda saldo por cobrar.`,
+    );
+    if (!ok) return;
+
+    try {
+      setSavingAbono(true);
+      await deleteDoc(doc(db, "ar_movements", abono.id));
+      await syncAbonoCommissionsForCustomer(stCustomer.id);
+      let newList = await fetchMovementRowsForCustomer(stCustomer.id);
+      newList = await syncCargoDebtStatusForSaleId(newList, saleId);
+
+      setStRows(newList);
+      recomputeKpis(
+        newList,
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+      );
+
+      const sumMov = newList.reduce(
+        (acc, it) => acc + (Number(it.amount) || 0),
+        0,
+      );
+      const effectiveInit = getEffectiveInitialDebt(
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+        newList,
+      );
+      const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
+      const last = getLastAbonoFromList(newList);
+
+      setRows((prev) =>
+        prev.map((c) =>
+          c.id === stCustomer.id
+            ? {
+                ...c,
+                balance: nuevoSaldo,
+                lastAbonoDate: last?.date || "",
+                lastAbonoAmount: last?.amount || 0,
+              }
+            : c,
+        ),
+      );
+      setStCustomer((prev) =>
+        prev
+          ? {
+              ...prev,
+              balance: nuevoSaldo,
+              lastAbonoDate: last?.date || "",
+              lastAbonoAmount: last?.amount || 0,
+            }
+          : prev,
+      );
+
+      setMsg("✅ Pago total revertido");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al revertir el pago");
+    } finally {
+      setSavingAbono(false);
+    }
+  };
+
+  const renderEditMovementPanelLedger = () => {
+    if (!editMovId) return null;
+    const em = stRows.find((x) => x.id === editMovId);
+    if (!em) return null;
+
+    const isAbonoVenta = em.type === "ABONO" && em.ref?.saleId;
+    const isCargoVenta =
+      em.type === "CARGO" &&
+      em.ref?.saleId &&
+      Number(em.amount) > 0;
+
+    return (
+      <div className="mt-4 border rounded-lg p-4 bg-amber-50 border-amber-200">
+        <div className="font-semibold mb-2">
+          Editar movimiento ({em.type === "ABONO" ? "Abono" : "Compra"})
+        </div>
+        {isAbonoVenta ? (
+          <div className="max-w-xs">
+            <label className="block text-xs font-medium text-gray-600">
+              Fecha
+            </label>
+            <input
+              type="date"
+              className="w-full border p-2 rounded"
+              value={eMovDate}
+              min={editMinSaleDate || undefined}
+              onChange={(e) => setEMovDate(e.target.value)}
+            />
+            <p className="text-[11px] text-gray-600 mt-2">
+              Solo puedes cambiar la fecha; no debe ser anterior a la fecha de
+              la venta.
+            </p>
+          </div>
+        ) : isCargoVenta ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs font-medium text-gray-600">
+                Fecha
+              </label>
+              <input
+                type="date"
+                className="w-full border p-2 rounded"
+                value={eMovDate}
+                min={editMinSaleDate || undefined}
+                onChange={(e) => setEMovDate(e.target.value)}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-600">
+                Comentario
+              </label>
+              <input
+                className="w-full border p-2 rounded"
+                value={eMovComment}
+                onChange={(e) => setEMovComment(e.target.value)}
+              />
+            </div>
+            <p className="md:col-span-2 text-[11px] text-gray-600">
+              El monto de la venta no se edita aquí (ni paquetes).
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs font-medium text-gray-600">
+                Fecha
+              </label>
+              <input
+                type="date"
+                className="w-full border p-2 rounded"
+                value={eMovDate}
+                min={
+                  em.type === "ABONO" && em.ref?.saleId && editMinSaleDate
+                    ? editMinSaleDate
+                    : undefined
+                }
+                onChange={(e) => setEMovDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600">
+                Monto
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                className="w-full border p-2 rounded text-right"
+                value={Number.isNaN(eMovAmount) ? "" : eMovAmount}
+                onChange={(e) => {
+                  const num = Number(e.target.value || 0);
+                  const safe = Number.isFinite(num)
+                    ? Math.max(0, parseFloat(num.toFixed(2)))
+                    : 0;
+                  setEMovAmount(safe);
+                }}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-600">
+                Comentario
+              </label>
+              <input
+                className="w-full border p-2 rounded"
+                value={eMovComment}
+                onChange={(e) => setEMovComment(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+        <div className="mt-3 flex gap-2 justify-end">
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
+            onClick={cancelEditMovement}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+            onClick={() => void saveEditMovement()}
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // ===== Editar movimiento =====
   const startEditMovement = (m: MovementRow) => {
     setEditMovId(m.id);
     setEMovDate(m.date || new Date().toISOString().slice(0, 10));
     setEMovAmount(Math.abs(Number(m.amount || 0)));
     setEMovComment(m.comment || "");
+    setEditMinSaleDate("");
+    if (m.ref?.saleId && (m.type === "ABONO" || m.type === "CARGO")) {
+      void (async () => {
+        const d = await resolveMinAbonoDateFromSaleCandies(
+          stRows,
+          m.ref!.saleId!,
+        );
+        setEditMinSaleDate(d ? d.slice(0, 10) : "");
+      })();
+    }
   };
 
   const cancelEditMovement = () => {
@@ -1077,6 +1857,7 @@ export default function CustomersCandy({
     setEMovDate("");
     setEMovAmount(0);
     setEMovComment("");
+    setEditMinSaleDate("");
   };
 
   const saveEditMovement = async () => {
@@ -1084,6 +1865,166 @@ export default function CustomersCandy({
     const idx = stRows.findIndex((x) => x.id === editMovId);
     if (idx === -1) return;
     const old = stRows[idx];
+
+    if (!eMovDate) {
+      setMsg("Selecciona la fecha.");
+      return;
+    }
+
+    const ed = eMovDate.slice(0, 10);
+
+    if (old.type === "CARGO") {
+      if (old.ref?.saleId) {
+        const saleD = await resolveMinAbonoDateFromSaleCandies(
+          stRows,
+          old.ref.saleId,
+        );
+        if (saleD && ed < saleD) {
+          setMsg(
+            `La fecha del movimiento no puede ser anterior a la fecha de la venta (${saleD}).`,
+          );
+          return;
+        }
+      }
+      try {
+        await updateDoc(doc(db, "ar_movements", editMovId), {
+          date: eMovDate,
+          comment: eMovComment || "",
+        });
+
+        await syncAbonoCommissionsForCustomer(stCustomer.id);
+        let newList = await fetchMovementRowsForCustomer(stCustomer.id);
+        if (old.ref?.saleId) {
+          newList = await syncCargoDebtStatusForSaleId(newList, old.ref.saleId);
+        }
+
+        setStRows(newList);
+        recomputeKpis(
+          newList,
+          Number(stCustomer.initialDebt || 0),
+          String(stCustomer.initialDebtDate || ""),
+        );
+
+        const sumMov = newList.reduce(
+          (acc, it) => acc + (Number(it.amount) || 0),
+          0,
+        );
+        const effectiveInit = getEffectiveInitialDebt(
+          Number(stCustomer.initialDebt || 0),
+          String(stCustomer.initialDebtDate || ""),
+          newList,
+        );
+        const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
+
+        const last = getLastAbonoFromList(newList);
+
+        setRows((prev) =>
+          prev.map((c) =>
+            c.id === stCustomer.id
+              ? {
+                  ...c,
+                  balance: nuevoSaldo,
+                  lastAbonoDate: last?.date || "",
+                  lastAbonoAmount: last?.amount || 0,
+                }
+              : c,
+          ),
+        );
+        setStCustomer((prev) =>
+          prev
+            ? {
+                ...prev,
+                balance: nuevoSaldo,
+                lastAbonoDate: last?.date || "",
+                lastAbonoAmount: last?.amount || 0,
+              }
+            : prev,
+        );
+
+        cancelEditMovement();
+        setMsg("✅ Movimiento actualizado");
+      } catch (e) {
+        console.error(e);
+        setMsg("❌ Error al actualizar movimiento");
+      }
+      return;
+    }
+
+    if (old.type === "ABONO" && old.ref?.saleId) {
+      const saleD = await resolveMinAbonoDateFromSaleCandies(
+        stRows,
+        old.ref.saleId,
+      );
+      if (saleD && ed < saleD) {
+        setMsg(
+          `La fecha del abono no puede ser anterior a la fecha de la venta (${saleD}).`,
+        );
+        return;
+      }
+
+      try {
+        await updateDoc(doc(db, "ar_movements", editMovId), {
+          date: eMovDate,
+        });
+
+        await syncAbonoCommissionsForCustomer(stCustomer.id);
+        let newList = await fetchMovementRowsForCustomer(stCustomer.id);
+        newList = await syncCargoDebtStatusForSaleId(
+          newList,
+          old.ref.saleId,
+        );
+
+        setStRows(newList);
+        recomputeKpis(
+          newList,
+          Number(stCustomer.initialDebt || 0),
+          String(stCustomer.initialDebtDate || ""),
+        );
+
+        const sumMov = newList.reduce(
+          (acc, it) => acc + (Number(it.amount) || 0),
+          0,
+        );
+        const effectiveInit = getEffectiveInitialDebt(
+          Number(stCustomer.initialDebt || 0),
+          String(stCustomer.initialDebtDate || ""),
+          newList,
+        );
+        const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
+
+        const last = getLastAbonoFromList(newList);
+
+        setRows((prev) =>
+          prev.map((c) =>
+            c.id === stCustomer.id
+              ? {
+                  ...c,
+                  balance: nuevoSaldo,
+                  lastAbonoDate: last?.date || "",
+                  lastAbonoAmount: last?.amount || 0,
+                }
+              : c,
+          ),
+        );
+        setStCustomer((prev) =>
+          prev
+            ? {
+                ...prev,
+                balance: nuevoSaldo,
+                lastAbonoDate: last?.date || "",
+                lastAbonoAmount: last?.amount || 0,
+              }
+            : prev,
+        );
+
+        cancelEditMovement();
+        setMsg("✅ Movimiento actualizado");
+      } catch (e) {
+        console.error(e);
+        setMsg("❌ Error al actualizar movimiento");
+      }
+      return;
+    }
 
     const entered = Number(eMovAmount || 0);
     if (!(entered > 0)) {
@@ -1102,19 +2043,8 @@ export default function CustomersCandy({
         comment: eMovComment || "",
       });
 
-      const newList = [...stRows];
-      newList[idx] = {
-        ...old,
-        date: eMovDate,
-        amount: signed,
-        comment: eMovComment || "",
-      };
-      newList.sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        const as = a.createdAt?.seconds || 0;
-        const bs = b.createdAt?.seconds || 0;
-        return as - bs;
-      });
+      await syncAbonoCommissionsForCustomer(stCustomer.id);
+      const newList = await fetchMovementRowsForCustomer(stCustomer.id);
 
       setStRows(newList);
       recomputeKpis(
@@ -1188,6 +2118,10 @@ export default function CustomersCandy({
       setLoading(true);
 
       if (m.type === "CARGO" && m.ref?.saleId) {
+        if (saleLedgerSaleId === m.ref.saleId) {
+          setSaleLedgerSaleId(null);
+          cancelEditMovement();
+        }
         try {
           await restoreSaleAndDeleteCandy(m.ref.saleId);
         } catch (e) {
@@ -1204,12 +2138,14 @@ export default function CustomersCandy({
         }
       }
 
-      const newList = stRows.filter((x) => {
-        if (m.type === "CARGO" && m.ref?.saleId) {
-          return x.ref?.saleId !== m.ref.saleId;
-        }
-        return x.id !== m.id;
-      });
+      await syncAbonoCommissionsForCustomer(stCustomer.id);
+      let newList = await fetchMovementRowsForCustomer(stCustomer.id);
+      if (m.type === "ABONO" && m.ref?.saleId) {
+        newList = await syncCargoDebtStatusForSaleId(
+          newList,
+          m.ref.saleId,
+        );
+      }
 
       setStRows(newList);
       recomputeKpis(
@@ -1255,6 +2191,10 @@ export default function CustomersCandy({
       );
 
       setExpandedMovementId(null);
+      if (m.ref?.saleId && saleLedgerSaleId === m.ref.saleId) {
+        setSaleLedgerSaleId(null);
+        cancelEditMovement();
+      }
       setMsg("🗑️ Movimiento eliminado");
     } catch (e) {
       console.error(e);
@@ -1372,18 +2312,24 @@ export default function CustomersCandy({
 
   return (
     <div className="max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <h2 className="text-xl font-bold">Clientes</h2>
-        <button
-          className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-          onClick={() => {
-            setShowCreateModal(true);
-            if (isVendor) setVendorId(sellerIdSafe);
-          }}
-          type="button"
-        >
-          Crear Cliente
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <RefreshButton
+            onClick={() => void loadCustomers()}
+            loading={loading}
+          />
+          <button
+            className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+            onClick={() => {
+              setShowCreateModal(true);
+              if (isVendor) setVendorId(sellerIdSafe);
+            }}
+            type="button"
+          >
+            Crear Cliente
+          </button>
+        </div>
       </div>
 
       <div className="md:hidden mb-4">
@@ -2224,207 +3170,196 @@ export default function CustomersCandy({
 
       {/* ===== Modal: Estado de cuenta ===== */}
       {showStatement && (
+        <>
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-5xl p-4 max-h-[92vh] overflow-auto">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-lg font-bold">
                 Estado de cuenta — {stCustomer?.name || ""}
               </h3>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap justify-end items-center">
+                <RefreshButton
+                  onClick={() => void refreshStatement()}
+                  loading={stLoading}
+                  className="shrink-0"
+                  title="Sincronizar comisiones y recargar movimientos"
+                />
                 <button
-                  className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-                  onClick={() => {
-                    setAbonoAmount(0);
-                    setAbonoDate(new Date().toISOString().slice(0, 10));
-                    setAbonoComment("");
-                    setShowAbono(true);
-                  }}
+                  type="button"
+                  className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 inline-flex shrink-0"
+                  aria-label="Más acciones del estado de cuenta"
+                  onClick={(e) =>
+                    setStatementHeaderMenuRect(
+                      (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                    )
+                  }
                 >
-                  Abonar
-                </button>
-                <button
-                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                  onClick={() => setShowStatement(false)}
-                >
-                  Cerrar
+                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
                 </button>
               </div>
             </div>
 
-            {/* ================= WEB KPI (igual que antes) ================= */}
+            {/* ================= WEB KPI ================= */}
             <div className="hidden md:block">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Deuda inicial</div>
-                  <div className="text-xl font-semibold">
-                    {money(Number(stEffectiveInitialDebt || 0))}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                <div className="rounded-2xl border border-slate-200/90 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Saldo y cobros
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-slate-600">Saldo actual</div>
+                      <div className="text-xl font-bold text-slate-900 tabular-nums">
+                        {money(stKpis.saldoActual)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-600">Total abonado</div>
+                      <div className="text-xl font-bold text-slate-900 tabular-nums">
+                        {money(stKpis.totalAbonado)}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Saldo actual</div>
-                  <div className="text-xl font-semibold">
-                    {money(stKpis.saldoActual)}
+                <div className="relative overflow-hidden rounded-2xl p-4 shadow-lg ring-1 ring-white/20 bg-gradient-to-br from-violet-600 via-indigo-600 to-fuchsia-700 text-white">
+                  <div
+                    className="pointer-events-none absolute -right-6 -top-10 h-32 w-32 rounded-full bg-white/15 blur-2xl"
+                    aria-hidden
+                  />
+                  <div className="relative">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-white/80">
+                      Saldo restante
+                    </div>
+                    <div className="mt-2 text-3xl font-bold tabular-nums tracking-tight">
+                      {money(stKpis.saldoRestante)}
+                    </div>
+                    <p className="mt-2 text-xs text-white/80 leading-snug">
+                      Monto pendiente según el estado de cuenta del cliente.
+                    </p>
                   </div>
                 </div>
 
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Total abonado</div>
-                  <div className="text-xl font-semibold">
-                    {money(stKpis.totalAbonado)}
+                <div className="rounded-2xl border border-emerald-200/80 bg-gradient-to-b from-emerald-50/90 to-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-900/80">
+                      Comisiones (ventas crédito)
+                    </div>
+                    <CommissionAbonoHelpButton />
                   </div>
-                </div>
-
-                <div className="p-3 border rounded bg-gray-50">
-                  <div className="text-xs text-gray-600">Saldo restante</div>
-                  <div className="text-xl font-semibold">
-                    {money(stKpis.saldoRestante)}
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="text-slate-600">Comisión total</span>
+                      <span className="font-bold tabular-nums text-slate-900">
+                        {money(stComisionTotalCredito)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="text-slate-600">
+                        Comisión parcial abonada
+                      </span>
+                      <span className="font-bold tabular-nums text-emerald-800">
+                        {money(stCommissionDesdeAbonos)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 rounded-lg bg-emerald-100/70 px-2 py-1.5 text-sm border border-emerald-200/60">
+                      <span className="text-emerald-900 font-medium">
+                        Comisión pendiente
+                      </span>
+                      <span className="font-bold tabular-nums text-emerald-950">
+                        {money(stComisionPendiente)}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white rounded border overflow-x-auto">
+              <div className="mb-3 text-sm text-gray-600">
+                <button
+                  type="button"
+                  className="text-blue-600 underline hover:text-blue-800"
+                  onClick={() => {
+                    setAbonoTargetSaleId(null);
+                    setAbonoAmount(0);
+                    setAbonoDate(formatLocalDate(new Date()));
+                    setAbonoComment("");
+                    setShowAbono(true);
+                  }}
+                >
+                  Registrar abono general (no ligado a una venta)
+                </button>
+              </div>
+
+              <div className="bg-white rounded border overflow-x-auto mb-3">
                 <table className="min-w-full text-sm">
                   <thead className="bg-gray-100">
                     <tr>
                       <th className="p-2 border">Fecha</th>
-                      <th className="p-2 border">Tipo</th>
-                      <th className="p-2 border">Referencia</th>
-                      <th className="p-2 border">Comentario</th>
-                      <th className="p-2 border">Monto</th>
-                      <th className="p-2 border">Acciones</th>
+                      <th className="p-2 border">Total venta</th>
+                      <th className="p-2 border">Pendiente</th>
+                      <th className="p-2 border">Estado</th>
+                      <th className="p-2 border w-12"> </th>
                     </tr>
                   </thead>
                   <tbody>
                     {stLoading ? (
                       <tr>
-                        <td colSpan={6} className="p-4 text-center">
+                        <td colSpan={5} className="p-4 text-center">
                           Cargando…
                         </td>
                       </tr>
-                    ) : stRows.length === 0 ? (
+                    ) : saleVentasRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="p-4 text-center">
-                          Sin movimientos
+                        <td colSpan={5} className="p-4 text-center">
+                          Sin ventas a crédito registradas
                         </td>
                       </tr>
                     ) : (
-                      stRows.map((m) => {
-                        const isEditing = editMovId === m.id;
+                      saleVentasRows.map((m) => {
+                        const saleId = m.ref!.saleId!;
+                        const pending = getPendingForSale(stRows, saleId);
+                        const normalizedDebt = normalizeDebtStatus(
+                          m.debtStatus,
+                        );
                         return (
-                          <tr key={m.id} className="text-center">
-                            <td className="p-2 border">
-                              {isEditing ? (
-                                <input
-                                  type="date"
-                                  className="w-full border p-1 rounded"
-                                  value={eMovDate}
-                                  onChange={(e) => setEMovDate(e.target.value)}
-                                />
-                              ) : (
-                                m.date || "—"
-                              )}
-                            </td>
-                            <td className="p-2 border">
-                              {m.amount >= 0 ? (
-                                m.ref?.saleId ? (
-                                  <button
-                                    type="button"
-                                    className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700 underline"
-                                    title="Ver dulces de esta compra"
-                                    onClick={() =>
-                                      openItemsModal(m.ref!.saleId!)
-                                    }
-                                  >
-                                    COMPRA (CARGO)
-                                  </button>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">
-                                    COMPRA (CARGO)
-                                  </span>
-                                )
-                              ) : (
-                                <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
-                                  ABONO
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-2 border">
-                              {m.ref?.saleId ? `Venta #${m.ref.saleId}` : "—"}
-                            </td>
-                            <td className="p-2 border">
-                              {isEditing ? (
-                                <input
-                                  className="w-full border p-1 rounded"
-                                  value={eMovComment}
-                                  onChange={(e) =>
-                                    setEMovComment(e.target.value)
-                                  }
-                                  placeholder="Comentario"
-                                />
-                              ) : (
-                                <span title={m.comment || ""}>
-                                  {(m.comment || "").length > 40
-                                    ? (m.comment || "").slice(0, 40) + "…"
-                                    : m.comment || "—"}
-                                </span>
-                              )}
-                            </td>
+                          <tr
+                            key={m.id}
+                            className="text-center cursor-pointer hover:bg-slate-50/90 transition-colors"
+                            onClick={() => void openItemsDrawer(saleId)}
+                          >
+                            <td className="p-2 border">{m.date || "—"}</td>
                             <td className="p-2 border font-semibold">
-                              {isEditing ? (
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  inputMode="decimal"
-                                  className="w-full border p-1 rounded text-right"
-                                  value={
-                                    Number.isNaN(eMovAmount) ? "" : eMovAmount
-                                  }
-                                  onChange={(e) => {
-                                    const num = Number(e.target.value || 0);
-                                    const safe = Number.isFinite(num)
-                                      ? Math.max(0, parseFloat(num.toFixed(2)))
-                                      : 0;
-                                    setEMovAmount(safe);
-                                  }}
-                                  placeholder="0.00"
-                                />
-                              ) : (
-                                money(m.amount)
-                              )}
+                              {money(m.amount)}
+                            </td>
+                            <td className="p-2 border font-medium text-orange-800">
+                              {money(pending)}
                             </td>
                             <td className="p-2 border">
-                              {isEditing ? (
-                                <div className="flex gap-2 justify-center">
-                                  <button
-                                    className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
-                                    onClick={saveEditMovement}
-                                  >
-                                    Guardar
-                                  </button>
-                                  <button
-                                    className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                                    onClick={cancelEditMovement}
-                                  >
-                                    Cancelar
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="flex gap-2 justify-center">
-                                  <button
-                                    className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                                    onClick={() => startEditMovement(m)}
-                                  >
-                                    Editar
-                                  </button>
-                                  <button
-                                    className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                                    onClick={() => deleteMovement(m)}
-                                  >
-                                    Borrar
-                                  </button>
-                                </div>
-                              )}
+                              <span
+                                className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                              >
+                                {normalizedDebt === "PAGADA"
+                                  ? "Pagada"
+                                  : "Pendiente"}
+                              </span>
+                            </td>
+                            <td className="p-2 border">
+                              <button
+                                type="button"
+                                className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                                aria-label="Acciones de venta"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSaleMenuAnchor({
+                                    saleId,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  });
+                                }}
+                              >
+                                <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                              </button>
                             </td>
                           </tr>
                         );
@@ -2434,6 +3369,10 @@ export default function CustomersCandy({
                 </table>
               </div>
             </div>
+
+            {showLedgerStyleEditPanel && !saleLedgerSaleId && (
+              <div className="mb-3">{renderEditMovementPanelLedger()}</div>
+            )}
 
             {/* ================= MOBILE COLAPSABLE ================= */}
             <div className="md:hidden space-y-3">
@@ -2451,44 +3390,161 @@ export default function CustomersCandy({
                 </button>
 
                 {stOpenAccount && (
-                  <div className="px-3 pb-3 grid grid-cols-2 gap-2">
-                    <div className="bg-gray-50 border rounded-xl p-2">
-                      <div className="text-[11px] text-gray-500">
-                        Deuda inicial
+                  <div className="px-3 pb-3 space-y-2">
+                    <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 shadow-sm">
+                      <div className="text-[11px] font-semibold uppercase text-slate-500">
+                        Saldo y cobros
                       </div>
-                      <div className="font-bold">
-                        {money(Number(stEffectiveInitialDebt || 0))}
-                      </div>
-                    </div>
-
-                    <div className="bg-gray-50 border rounded-xl p-2">
-                      <div className="text-[11px] text-gray-500">
-                        Saldo actual
-                      </div>
-                      <div className="font-bold">
-                        {money(stKpis.saldoActual)}
-                      </div>
-                    </div>
-
-                    <div className="bg-gray-50 border rounded-xl p-2">
-                      <div className="text-[11px] text-gray-500">
-                        Total abonado
-                      </div>
-                      <div className="font-bold">
-                        {money(stKpis.totalAbonado)}
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <div>
+                          <div className="text-[11px] text-slate-600">
+                            Saldo actual
+                          </div>
+                          <div className="font-bold tabular-nums text-slate-900">
+                            {money(stKpis.saldoActual)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-600">
+                            Total abonado
+                          </div>
+                          <div className="font-bold tabular-nums text-slate-900">
+                            {money(stKpis.totalAbonado)}
+                          </div>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="bg-gray-50 border rounded-xl p-2">
-                      <div className="text-[11px] text-gray-500">
-                        Saldo restante
+                    <div className="relative overflow-hidden rounded-2xl p-4 shadow-lg bg-gradient-to-br from-violet-600 via-indigo-600 to-fuchsia-700 text-white">
+                      <div
+                        className="pointer-events-none absolute -right-4 -top-8 h-24 w-24 rounded-full bg-white/15 blur-2xl"
+                        aria-hidden
+                      />
+                      <div className="relative">
+                        <div className="text-[11px] font-semibold uppercase text-white/80">
+                          Saldo restante
+                        </div>
+                        <div className="mt-1 text-2xl font-bold tabular-nums">
+                          {money(stKpis.saldoRestante)}
+                        </div>
                       </div>
-                      <div className="font-bold">
-                        {money(stKpis.saldoRestante)}
+                    </div>
+
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-3">
+                      <div className="flex items-start justify-between gap-1">
+                        <div className="text-[11px] font-semibold uppercase text-emerald-900/90">
+                          Comisiones (crédito)
+                        </div>
+                        <CommissionAbonoHelpButton />
+                      </div>
+                      <div className="mt-2 space-y-1.5 text-sm">
+                        <div className="flex justify-between gap-2">
+                          <span className="text-slate-600">Comisión total</span>
+                          <span className="font-bold tabular-nums">
+                            {money(stComisionTotalCredito)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <span className="text-slate-600">
+                            Parcial abonada
+                          </span>
+                          <span className="font-bold tabular-nums text-emerald-800">
+                            {money(stCommissionDesdeAbonos)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-2 rounded-lg bg-white/70 px-2 py-1 border border-emerald-200/60">
+                          <span className="font-medium text-emerald-900">
+                            Pendiente
+                          </span>
+                          <span className="font-bold tabular-nums text-emerald-950">
+                            {money(stComisionPendiente)}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 )}
+              </div>
+
+              <div className="border rounded-2xl overflow-hidden md:hidden">
+                <div className="px-3 py-2 text-sm font-semibold border-b bg-slate-50">
+                  Ventas a crédito
+                </div>
+                <div className="p-3 space-y-3">
+                  {stLoading ? (
+                    <div className="text-center text-sm">Cargando…</div>
+                  ) : saleVentasRows.length === 0 ? (
+                    <div className="text-center text-sm text-gray-500">
+                      Sin ventas a crédito registradas
+                    </div>
+                  ) : (
+                    saleVentasRows.map((m) => {
+                      const saleId = m.ref!.saleId!;
+                      const pending = getPendingForSale(stRows, saleId);
+                      const normalizedDebt = normalizeDebtStatus(m.debtStatus);
+                      return (
+                        <div
+                          key={m.id}
+                          role="button"
+                          tabIndex={0}
+                          className="rounded-xl border-2 border-sky-200 bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/50 p-3 shadow-md cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                          onClick={() => void openItemsDrawer(saleId)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              void openItemsDrawer(saleId);
+                            }
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-semibold text-slate-900">
+                                {m.date || "—"}
+                              </div>
+                              <div className="text-xs text-gray-600 mt-1">
+                                Total:{" "}
+                                <span className="font-semibold text-gray-900">
+                                  {money(m.amount)}
+                                </span>
+                              </div>
+                              <div className="text-xs text-orange-800 mt-0.5">
+                                Pendiente: {money(pending)}
+                              </div>
+                              <div className="mt-2">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                                >
+                                  {normalizedDebt === "PAGADA"
+                                    ? "Pagada"
+                                    : "Pendiente"}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-sky-700/90 mt-2">
+                                Toca la tarjeta para ver el detalle de compra
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="p-2 rounded-lg border border-gray-200 shrink-0 bg-white"
+                              aria-label="Acciones de venta"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSaleMenuAnchor({
+                                  saleId,
+                                  rect: (
+                                    e.currentTarget as HTMLElement
+                                  ).getBoundingClientRect(),
+                                });
+                              }}
+                            >
+                              <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
 
               {/* Contenedor 2: Movimientos */}
@@ -2515,7 +3571,8 @@ export default function CustomersCandy({
                     ) : (
                       stRows.map((m) => {
                         const movOpen = expandedMovementId === m.id;
-                        const isEditing = editMovId === m.id;
+                        const isEditing =
+                          editMovId === m.id && !showLedgerStyleEditPanel;
                         const tipoLabel = m.amount >= 0 ? "CARGO" : "ABONO";
                         const tipoClass =
                           m.amount >= 0
@@ -2582,7 +3639,7 @@ export default function CustomersCandy({
                                       type="button"
                                       className="mt-2 text-xs underline text-blue-600"
                                       onClick={() =>
-                                        openItemsModal(m.ref!.saleId!)
+                                        void openItemsDrawer(m.ref!.saleId!)
                                       }
                                     >
                                       Ver productos de la venta
@@ -2594,7 +3651,13 @@ export default function CustomersCandy({
                                   <div className="text-[11px] text-gray-500">
                                     Comentario
                                   </div>
-                                  {isEditing ? (
+                                  {isEditing &&
+                                  m.type === "ABONO" &&
+                                  m.ref?.saleId ? (
+                                    <div className="font-medium text-gray-700">
+                                      {(m.comment || "").trim() || "—"}
+                                    </div>
+                                  ) : isEditing ? (
                                     <input
                                       className="w-full border p-2 rounded-xl"
                                       value={eMovComment}
@@ -2610,9 +3673,32 @@ export default function CustomersCandy({
                                   )}
                                 </div>
 
+                                {m.amount < 0 && !isEditing && (
+                                  <div className="text-sm rounded-lg bg-emerald-50 border border-emerald-100 p-2">
+                                    <div className="text-[11px] text-gray-600">
+                                      Comisión por este abono (por venta)
+                                    </div>
+                                    <div className="font-bold text-emerald-800">
+                                      {money(Number(m.commissionOnPayment || 0))}
+                                    </div>
+                                    {m.commissionBreakdown &&
+                                      m.commissionBreakdown.length > 0 && (
+                                        <ul className="text-[10px] text-gray-600 mt-1 space-y-0.5">
+                                          {m.commissionBreakdown.map((b, i) => (
+                                            <li key={i} className="break-all">
+                                              …{String(b.saleId || "").slice(-8)}: cobro{" "}
+                                              {money(Number(b.appliedAmount || 0))} → com.{" "}
+                                              {money(Number(b.commissionPortion || 0))}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                  </div>
+                                )}
+
                                 {/* edición */}
-                                {isEditing && (
-                                  <div className="grid grid-cols-2 gap-2">
+                                {isEditing &&
+                                  (m.type === "ABONO" && m.ref?.saleId ? (
                                     <div>
                                       <div className="text-[11px] text-gray-500">
                                         Fecha
@@ -2621,41 +3707,99 @@ export default function CustomersCandy({
                                         type="date"
                                         className="w-full border p-2 rounded-xl"
                                         value={eMovDate}
+                                        min={
+                                          editMinSaleDate || undefined
+                                        }
                                         onChange={(e) =>
                                           setEMovDate(e.target.value)
                                         }
                                       />
+                                      <p className="text-[11px] text-gray-600 mt-1">
+                                        Solo fecha; no anterior a la venta.
+                                      </p>
                                     </div>
-                                    <div>
-                                      <div className="text-[11px] text-gray-500">
-                                        Monto
+                                  ) : m.type === "CARGO" &&
+                                    m.ref?.saleId &&
+                                    Number(m.amount) > 0 ? (
+                                    <div className="space-y-2">
+                                      <div>
+                                        <div className="text-[11px] text-gray-500">
+                                          Fecha
+                                        </div>
+                                        <input
+                                          type="date"
+                                          className="w-full border p-2 rounded-xl"
+                                          value={eMovDate}
+                                          min={
+                                            editMinSaleDate || undefined
+                                          }
+                                          onChange={(e) =>
+                                            setEMovDate(e.target.value)
+                                          }
+                                        />
                                       </div>
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        inputMode="decimal"
-                                        className="w-full border p-2 rounded-xl text-right"
-                                        value={
-                                          Number.isNaN(eMovAmount)
-                                            ? ""
-                                            : eMovAmount
-                                        }
-                                        onChange={(e) => {
-                                          const num = Number(
-                                            e.target.value || 0,
-                                          );
-                                          const safe = Number.isFinite(num)
-                                            ? Math.max(
-                                                0,
-                                                parseFloat(num.toFixed(2)),
-                                              )
-                                            : 0;
-                                          setEMovAmount(safe);
-                                        }}
-                                      />
+                                      <div>
+                                        <div className="text-[11px] text-gray-500">
+                                          Comentario
+                                        </div>
+                                        <input
+                                          className="w-full border p-2 rounded-xl"
+                                          value={eMovComment}
+                                          onChange={(e) =>
+                                            setEMovComment(e.target.value)
+                                          }
+                                          placeholder="Comentario"
+                                        />
+                                      </div>
+                                      <p className="text-[11px] text-gray-600">
+                                        El monto de la venta no se edita aquí.
+                                      </p>
                                     </div>
-                                  </div>
-                                )}
+                                  ) : (
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <div className="text-[11px] text-gray-500">
+                                          Fecha
+                                        </div>
+                                        <input
+                                          type="date"
+                                          className="w-full border p-2 rounded-xl"
+                                          value={eMovDate}
+                                          onChange={(e) =>
+                                            setEMovDate(e.target.value)
+                                          }
+                                        />
+                                      </div>
+                                      <div>
+                                        <div className="text-[11px] text-gray-500">
+                                          Monto
+                                        </div>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          inputMode="decimal"
+                                          className="w-full border p-2 rounded-xl text-right"
+                                          value={
+                                            Number.isNaN(eMovAmount)
+                                              ? ""
+                                              : eMovAmount
+                                          }
+                                          onChange={(e) => {
+                                            const num = Number(
+                                              e.target.value || 0,
+                                            );
+                                            const safe = Number.isFinite(num)
+                                              ? Math.max(
+                                                  0,
+                                                  parseFloat(num.toFixed(2)),
+                                                )
+                                              : 0;
+                                            setEMovAmount(safe);
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  ))}
 
                                 {/* acciones */}
                                 {isEditing ? (
@@ -2676,20 +3820,22 @@ export default function CustomersCandy({
                                     </button>
                                   </div>
                                 ) : (
-                                  <div className="grid grid-cols-2 gap-2 pt-1">
+                                  <div className="flex justify-end pt-1">
                                     <button
-                                      className="px-3 py-2 rounded-xl text-white bg-yellow-600 hover:bg-yellow-700"
-                                      onClick={() => startEditMovement(m)}
                                       type="button"
+                                      className="p-2 rounded-xl border border-gray-200 bg-white inline-flex"
+                                      aria-label="Acciones de movimiento"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMovementRowMenu({
+                                          id: m.id,
+                                          rect: (
+                                            e.currentTarget as HTMLElement
+                                          ).getBoundingClientRect(),
+                                        });
+                                      }}
                                     >
-                                      Editar
-                                    </button>
-                                    <button
-                                      className="px-3 py-2 rounded-xl text-white bg-red-600 hover:bg-red-700"
-                                      onClick={() => deleteMovement(m)}
-                                      type="button"
-                                    >
-                                      Borrar
+                                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
                                     </button>
                                   </div>
                                 )}
@@ -2706,11 +3852,21 @@ export default function CustomersCandy({
 
             {/* ===== Modal Abonar ===== */}
             {showAbono && (
-              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[90]">
                 <div className="bg-white rounded-lg shadow-2xl border w-[95%] max-w-md p-4">
                   <h3 className="text-lg font-bold">
-                    Registrar abono — {stCustomer?.name || ""}
+                    {abonoTargetSaleId
+                      ? `Abonar — ${stCustomer?.name || ""}`
+                      : `Registrar abono — ${stCustomer?.name || ""}`}
                   </h3>
+                  {abonoTargetSaleId && (
+                    <p className="text-sm text-gray-600 mt-1">
+                      Máximo pendiente de esta venta:{" "}
+                      <span className="font-semibold">
+                        {money(getPendingForSale(stRows, abonoTargetSaleId))}
+                      </span>
+                    </p>
+                  )}
 
                   <div className="grid grid-cols-1 gap-3">
                     <div>
@@ -2721,8 +3877,21 @@ export default function CustomersCandy({
                         type="date"
                         className="w-full border p-2 rounded"
                         value={abonoDate}
+                        min={
+                          abonoTargetSaleId
+                            ? getCargoSaleDate(stRows, abonoTargetSaleId) ||
+                              undefined
+                            : undefined
+                        }
                         onChange={(e) => setAbonoDate(e.target.value)}
                       />
+                      {abonoTargetSaleId &&
+                        getCargoSaleDate(stRows, abonoTargetSaleId) && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            No anterior a la venta (
+                            {getCargoSaleDate(stRows, abonoTargetSaleId)})
+                          </p>
+                        )}
                     </div>
 
                     <div>
@@ -2747,6 +3916,13 @@ export default function CustomersCandy({
                       <div className="text-xs text-gray-500 mt-1">
                         Se registrará como ABONO (negativo) con 2 decimales.
                       </div>
+                      {abonoPreviewCommission != null &&
+                        abonoPreviewCommission > 0 && (
+                          <p className="text-xs text-emerald-800 mt-2 font-medium">
+                            Comisión vendedor (aprox.):{" "}
+                            {money(abonoPreviewCommission)}
+                          </p>
+                        )}
                     </div>
 
                     <div>
@@ -2768,15 +3944,20 @@ export default function CustomersCandy({
 
                   <div className="mt-4 flex justify-end gap-2">
                     <button
+                      type="button"
                       className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
-                      onClick={() => setShowAbono(false)}
+                      onClick={() => {
+                        setShowAbono(false);
+                        setAbonoTargetSaleId(null);
+                      }}
                       disabled={savingAbono}
                     >
                       Cancelar
                     </button>
                     <button
+                      type="button"
                       className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
-                      onClick={saveAbono}
+                      onClick={() => void saveAbono()}
                       disabled={savingAbono}
                     >
                       {savingAbono ? "Guardando..." : "Guardar abono"}
@@ -2787,118 +3968,557 @@ export default function CustomersCandy({
             )}
           </div>
         </div>
-      )}
 
-      {/* Modal: Detalle de piezas de la venta (dulces) */}
-      {itemsModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[65]">
-          <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">
-                Dulces vendidos{" "}
-                {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
-              </h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                onClick={() => setItemsModalOpen(false)}
-              >
-                Cerrar
-              </button>
-            </div>
+        <ActionMenu
+          anchorRect={statementHeaderMenuRect}
+          isOpen={!!statementHeaderMenuRect}
+          onClose={() => setStatementHeaderMenuRect(null)}
+          width={220}
+        >
+          <div className="py-1">
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setStatementHeaderMenuRect(null);
+                setAbonoTargetSaleId(null);
+                setAbonoAmount(0);
+                setAbonoDate(formatLocalDate(new Date()));
+                setAbonoComment("");
+                setShowAbono(true);
+              }}
+            >
+              Abono general
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setStatementHeaderMenuRect(null);
+                setShowStatement(false);
+                setItemsDrawerOpen(false);
+              }}
+            >
+              Cerrar
+            </button>
+          </div>
+        </ActionMenu>
 
-            {/* Desktop table */}
-            <div className="hidden md:block bg-white rounded border overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="p-2 border">Producto</th>
-                    <th className="p-2 border text-right">Cantidad</th>
-                    <th className="p-2 border text-right">Precio</th>
-                    <th className="p-2 border text-right">Descuento</th>
-                    <th className="p-2 border text-right">Monto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {itemsModalLoading ? (
+        <ActionMenu
+          anchorRect={saleMenuAnchor?.rect ?? null}
+          isOpen={!!saleMenuAnchor}
+          onClose={() => setSaleMenuAnchor(null)}
+          width={260}
+        >
+          {saleMenuAnchor &&
+            (() => {
+              const sid = saleMenuAnchor.saleId;
+              const cargoM = stRows.find(
+                (x) =>
+                  x.type === "CARGO" &&
+                  x.ref?.saleId === sid &&
+                  Number(x.amount) > 0,
+              );
+              if (!cargoM) {
+                return (
+                  <div className="px-3 py-2 text-sm text-gray-500">
+                    Sin datos
+                  </div>
+                );
+              }
+              const pend = getPendingForSale(stRows, sid);
+              return (
+                <div className="py-1">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setSaleMenuAnchor(null);
+                      void openItemsDrawer(sid);
+                    }}
+                  >
+                    Ver detalle de compra
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                    disabled={savingAbono || !(pend > 0.005)}
+                    onClick={() => {
+                      setSaleMenuAnchor(null);
+                      void payFullSale(sid);
+                    }}
+                  >
+                    Pagar
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                    disabled={savingAbono || !(pend > 0.005)}
+                    onClick={() => {
+                      setSaleMenuAnchor(null);
+                      setAbonoTargetSaleId(sid);
+                      setAbonoAmount(0);
+                      setAbonoDate(formatLocalDate(new Date()));
+                      setAbonoComment("");
+                      setShowAbono(true);
+                    }}
+                  >
+                    Abonar
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setSaleMenuAnchor(null);
+                      setSaleLedgerSaleId(sid);
+                    }}
+                  >
+                    Movimientos
+                  </button>
+                  {stRows.some(
+                    (m) =>
+                      m.type === "ABONO" &&
+                      m.ref?.saleId === sid &&
+                      isFullPaymentAbonoComment(m.comment),
+                  ) && (
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-amber-800 disabled:opacity-50"
+                      disabled={savingAbono}
+                      onClick={() => {
+                        setSaleMenuAnchor(null);
+                        void revertFullPaymentSale(sid);
+                      }}
+                    >
+                      Revertir pago total
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                        onClick={() => {
+                          setSaleMenuAnchor(null);
+                          startEditMovement(cargoM);
+                        }}
+                      >
+                        Editar movimiento
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                        onClick={() => {
+                          setSaleMenuAnchor(null);
+                          void deleteMovement(cargoM);
+                        }}
+                      >
+                        Eliminar venta
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+        </ActionMenu>
+
+        <ActionMenu
+          anchorRect={movementRowMenu?.rect ?? null}
+          isOpen={!!movementRowMenu}
+          onClose={() => setMovementRowMenu(null)}
+          width={260}
+        >
+          {movementRowMenu &&
+            (() => {
+              const m = stRows.find((x) => x.id === movementRowMenu.id);
+              if (!m) {
+                return (
+                  <div className="px-3 py-2 text-sm text-gray-500">
+                    Sin datos
+                  </div>
+                );
+              }
+              return (
+                <div className="py-1">
+                  {m.ref?.saleId &&
+                    m.type === "CARGO" &&
+                    Number(m.amount) > 0 && (
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                        onClick={() => {
+                          setMovementRowMenu(null);
+                          void openItemsDrawer(m.ref!.saleId!);
+                        }}
+                      >
+                        Ver detalle de compra
+                      </button>
+                    )}
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setMovementRowMenu(null);
+                      startEditMovement(m);
+                    }}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                    onClick={() => {
+                      setMovementRowMenu(null);
+                      void deleteMovement(m);
+                    }}
+                  >
+                    Borrar
+                  </button>
+                </div>
+              );
+            })()}
+        </ActionMenu>
+
+        <ActionMenu
+          anchorRect={ledgerMovementMenu?.rect ?? null}
+          isOpen={!!ledgerMovementMenu && isAdmin}
+          onClose={() => setLedgerMovementMenu(null)}
+          width={220}
+        >
+          {ledgerMovementMenu &&
+            isAdmin &&
+            (() => {
+              const row = stRows.find((x) => x.id === ledgerMovementMenu.rowId);
+              if (!row) {
+                return (
+                  <div className="px-3 py-2 text-sm text-gray-500">
+                    Sin datos
+                  </div>
+                );
+              }
+              return (
+                <div className="py-1">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setLedgerMovementMenu(null);
+                      startEditMovement(row);
+                    }}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                    onClick={() => {
+                      setLedgerMovementMenu(null);
+                      void deleteMovement(row);
+                    }}
+                  >
+                    Borrar
+                  </button>
+                </div>
+              );
+            })()}
+        </ActionMenu>
+
+        {saleLedgerSaleId && (
+          <div className="fixed inset-0 z-[62] flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => {
+                setSaleLedgerSaleId(null);
+                cancelEditMovement();
+              }}
+            />
+            <div
+              className="relative z-10 bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl max-h-[85vh] overflow-auto p-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div>
+                  <h3 className="text-lg font-bold">Cuenta de la venta</h3>
+                  <p className="text-sm text-gray-600">
+                    Cliente: {stCustomer?.name || "—"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 shrink-0"
+                  onClick={() => {
+                    setSaleLedgerSaleId(null);
+                    cancelEditMovement();
+                  }}
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              <div className="rounded-2xl border-2 border-slate-200/90 bg-gradient-to-br from-white via-slate-50/40 to-white p-4 shadow-md mb-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col items-stretch justify-center rounded-xl bg-gradient-to-b from-emerald-50 to-emerald-100/70 border border-emerald-300/60 px-3 py-3 shadow-inner">
+                    <span className="inline-flex self-center rounded-full bg-emerald-600/90 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+                      Saldo
+                    </span>
+                    <span className="text-center text-lg font-bold text-emerald-950 mt-2 tabular-nums">
+                      {money(getPendingForSale(stRows, saleLedgerSaleId))}
+                    </span>
+                    <span className="text-[10px] text-center text-emerald-800/80 mt-1">
+                      Pendiente de esta venta
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-stretch justify-center rounded-xl bg-gradient-to-b from-rose-50 to-rose-100/70 border border-rose-300/60 px-3 py-3 shadow-inner">
+                    <span className="inline-flex self-center rounded-full bg-rose-600/90 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+                      Abonos
+                    </span>
+                    <span className="text-center text-lg font-bold text-rose-950 mt-2 tabular-nums">
+                      {money(
+                        getTotalAbonadoForSale(stRows, saleLedgerSaleId),
+                      )}
+                    </span>
+                    <span className="text-[10px] text-center text-rose-800/80 mt-1">
+                      Total abonado a la venta
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {showLedgerStyleEditPanel && !!saleLedgerSaleId && (
+                <div className="mb-3">{renderEditMovementPanelLedger()}</div>
+              )}
+
+              <div className="hidden md:block border rounded overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-100">
                     <tr>
-                      <td colSpan={5} className="p-4 text-center">
-                        Cargando…
-                      </td>
+                      <th className="p-2 border text-left">Fecha</th>
+                      <th className="p-2 border text-right">Monto</th>
+                      <th className="p-2 border text-right">Comisión</th>
+                      <th className="p-2 border text-right">Saldo inicial</th>
+                      <th className="p-2 border text-right">Saldo final</th>
+                      <th className="p-2 border text-left">Comentario</th>
+                      {isAdmin && (
+                        <th className="p-2 border text-center">Acciones</th>
+                      )}
                     </tr>
-                  ) : itemsModalRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-4 text-center">
-                        Sin ítems en esta venta.
-                      </td>
-                    </tr>
-                  ) : (
-                    itemsModalRows.map((it, idx) => (
-                      <tr key={idx} className="text-center">
-                        <td className="p-2 border text-left">
-                          {it.productName}
-                        </td>
-                        <td className="p-2 border text-right">{it.qty}</td>
-                        <td className="p-2 border text-right">
-                          {money(it.unitPrice)}
-                        </td>
-                        <td className="p-2 border text-right">
-                          {money(it.discount || 0)}
-                        </td>
-                        <td className="p-2 border text-right font-semibold">
-                          {money(it.total)}
+                  </thead>
+                  <tbody>
+                    {saleLedgerComputed.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={isAdmin ? 7 : 6}
+                          className="p-4 text-center text-gray-500"
+                        >
+                          No hay abonos con referencia a esta venta. Los abonos
+                          generales del cliente siguen reflejados en los KPI del
+                          estado de cuenta.
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    ) : (
+                      saleLedgerComputed.map((row) => (
+                        <tr key={row.id} className="text-center">
+                          <td className="p-2 border">{row.date || "—"}</td>
+                          <td className="p-2 border text-right font-medium">
+                            {money(-row.montoAbs)}
+                          </td>
+                          <td className="p-2 border text-right text-xs font-semibold text-emerald-800">
+                            {money(Number(row.commissionOnPayment || 0))}
+                          </td>
+                          <td className="p-2 border text-right">
+                            {money(row.saldoInicial)}
+                          </td>
+                          <td className="p-2 border text-right">
+                            {money(row.saldoFinal)}
+                          </td>
+                          <td className="p-2 border text-left text-xs">
+                            {row.comment || "—"}
+                          </td>
+                          {isAdmin && (
+                            <td className="p-2 border">
+                              <div className="flex justify-center">
+                                <button
+                                  type="button"
+                                  className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                                  aria-label="Acciones de abono"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setLedgerMovementMenu({
+                                      rowId: row.id,
+                                      rect: (
+                                        e.currentTarget as HTMLElement
+                                      ).getBoundingClientRect(),
+                                    });
+                                  }}
+                                >
+                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-            {/* Mobile: product cards */}
-            <div className="md:hidden space-y-3">
-              {itemsModalLoading ? (
-                <div className="p-4 text-center text-sm">Cargando…</div>
-              ) : itemsModalRows.length === 0 ? (
-                <div className="p-4 text-center text-sm">
-                  Sin ítems en esta venta.
-                </div>
-              ) : (
-                itemsModalRows.map((it, idx) => (
-                  <div
-                    key={idx}
-                    className="bg-white border rounded-lg p-3 shadow-sm"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="text-sm font-medium">
-                        {it.productName}
+              <div className="md:hidden space-y-3 mt-3">
+                {saleLedgerComputed.length === 0 ? (
+                  <div className="p-3 text-sm text-gray-500 border rounded">
+                    No hay abonos con referencia a esta venta.
+                  </div>
+                ) : (
+                  saleLedgerComputed.map((row) => (
+                    <div
+                      key={row.id}
+                      className="rounded-xl border-2 border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 shadow-md"
+                    >
+                      <div className="flex justify-between text-sm">
+                        <span className="font-medium">{row.date}</span>
+                        <span className="font-semibold">
+                          {money(-row.montoAbs)}
+                        </span>
                       </div>
-                      <div className="text-sm font-semibold">
-                        {money(it.total)}
+                      <div className="mt-2 text-xs text-emerald-800 font-semibold">
+                        Comisión: {money(Number(row.commissionOnPayment || 0))}
                       </div>
-                    </div>
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-600">
-                      <div>
-                        <div className="text-[11px]">Cantidad</div>
-                        <div className="font-medium">{it.qty}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px]">Precio</div>
-                        <div className="font-medium">{money(it.unitPrice)}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px]">Descuento</div>
-                        <div className="font-medium">
-                          {it.discount ? money(it.discount) : "—"}
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                        <div>
+                          <div className="text-[11px]">Saldo inicial</div>
+                          <div className="font-medium text-gray-900">
+                            {money(row.saldoInicial)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px]">Saldo final</div>
+                          <div className="font-medium text-gray-900">
+                            {money(row.saldoFinal)}
+                          </div>
                         </div>
                       </div>
+                      <div className="mt-2 text-sm text-gray-700">
+                        {row.comment || "—"}
+                      </div>
+                      {isAdmin && (
+                        <div className="mt-2 flex justify-end">
+                          <button
+                            type="button"
+                            className="p-2 rounded-lg border border-gray-200 bg-white inline-flex"
+                            aria-label="Acciones de abono"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLedgerMovementMenu({
+                                rowId: row.id,
+                                rect: (
+                                  e.currentTarget as HTMLElement
+                                ).getBoundingClientRect(),
+                              });
+                            }}
+                          >
+                            <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))
-              )}
+                  ))
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
+        </>
       )}
+
+      <SlideOverDrawer
+        open={itemsDrawerOpen}
+        onClose={() => {
+          setItemsDrawerOpen(false);
+          setItemsDrawerMeta(null);
+        }}
+        titleId="candies-items-drawer-title"
+        title={
+          <>
+            Dulces vendidos
+            {itemsModalSaleId ? (
+              <span className="text-gray-500 font-normal">
+                {" "}
+                — #{itemsModalSaleId}
+              </span>
+            ) : null}
+          </>
+        }
+        subtitle={
+          itemsDrawerMeta?.saleDate
+            ? `Fecha de compra: ${itemsDrawerMeta.saleDate}`
+            : "Detalle de la compra"
+        }
+        zIndexClassName="z-[78]"
+        panelMaxWidthClassName="max-w-2xl"
+      >
+        {itemsModalLoading ? (
+          <p className="text-sm text-gray-600 px-1">Cargando…</p>
+        ) : itemsModalRows.length === 0 ? (
+          <p className="text-sm text-gray-600 px-1">Sin ítems en esta venta.</p>
+        ) : (
+          <>
+            {itemsDrawerMeta && (
+              <DrawerMoneyStrip
+                items={[
+                  {
+                    label: "Paquetes",
+                    value: String(itemsDrawerMeta.totalPackages),
+                    tone: "blue",
+                  },
+                  {
+                    label: "Monto",
+                    value: money(itemsDrawerMeta.saleAmount),
+                    tone: "slate",
+                  },
+                  {
+                    label: "Comisión",
+                    value: money(itemsDrawerMeta.commissionTotal),
+                    tone: "emerald",
+                  },
+                ]}
+              />
+            )}
+            <div className="space-y-3 px-1 pb-4">
+              <DrawerSectionTitle
+                className={itemsDrawerMeta ? "mt-4" : "mt-0"}
+              >
+                Líneas de venta
+              </DrawerSectionTitle>
+              {itemsModalRows.map((it, idx) => (
+                <DrawerDetailDlCard
+                  key={idx}
+                  title={it.productName || `Producto ${idx + 1}`}
+                  rows={[
+                    { label: "Paquetes", value: String(it.qty) },
+                    { label: "Precio unit.", value: money(it.unitPrice) },
+                    {
+                      label: "Descuento",
+                      value: it.discount ? money(it.discount) : "—",
+                    },
+                    { label: "Monto", value: money(it.total) },
+                    {
+                      label: "Comisión línea",
+                      value: money(it.lineCommission),
+                    },
+                    {
+                      label: "Comisión / paquete",
+                      value:
+                        it.qty > 0
+                          ? money(it.commissionPerPackage)
+                          : "—",
+                    },
+                  ]}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </SlideOverDrawer>
     </div>
   );
 }

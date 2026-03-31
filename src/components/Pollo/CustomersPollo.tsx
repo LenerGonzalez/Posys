@@ -27,6 +27,12 @@ import {
 } from "react-icons/fi";
 import ActionMenu from "../common/ActionMenu";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerMoneyStrip,
+  DrawerSectionTitle,
+} from "../common/DrawerContentCards";
 
 const PLACES = [
   "Altagracia",
@@ -633,25 +639,40 @@ export default function CustomersPollo({
   const [fMin, setFMin] = useState<string>("");
   const [fMax, setFMax] = useState<string>("");
 
-  // modal detalle ítems
-  const [itemsModalOpen, setItemsModalOpen] = useState(false);
+  // drawer detalle ítems (venta)
+  const [itemsDrawerOpen, setItemsDrawerOpen] = useState(false);
   const [itemsModalLoading, setItemsModalLoading] = useState(false);
   const [itemsModalSaleId, setItemsModalSaleId] = useState<string | null>(null);
-  const [itemsModalSaleDate, setItemsModalSaleDate] = useState("");
   const [itemsModalRows, setItemsModalRows] = useState<SaleItemRow[]>([]);
+  const [itemsDrawerMeta, setItemsDrawerMeta] = useState<{
+    totalQty: number;
+    saleAmount: number;
+    lineCount: number;
+    saleDate?: string;
+  } | null>(null);
 
-  const openItemsModal = async (saleId: string) => {
-    setItemsModalOpen(true);
+  const openItemsDrawer = async (saleId: string) => {
+    setItemsDrawerOpen(true);
     setItemsModalLoading(true);
     setItemsModalSaleId(saleId);
     setItemsModalRows([]);
-    setItemsModalSaleDate("");
+    setItemsDrawerMeta(null);
 
     try {
       const res = await loadSaleDetailRows(saleId);
       if (res) {
         setItemsModalRows(res.rows);
-        setItemsModalSaleDate(res.saleDateLabel);
+        const totalQty = res.rows.reduce((a, r) => a + Number(r.qty || 0), 0);
+        const saleAmount = res.rows.reduce(
+          (a, r) => a + Number(r.total || 0),
+          0,
+        );
+        setItemsDrawerMeta({
+          totalQty,
+          saleAmount: roundCurrency(saleAmount),
+          lineCount: res.rows.length,
+          saleDate: res.saleDateLabel,
+        });
       }
     } catch (e) {
       console.error(e);
@@ -694,6 +715,7 @@ export default function CustomersPollo({
     saldoActual: 0,
     totalAbonado: 0,
     totalCargos: 0,
+    saldoRestante: 0,
   });
   const [exportingAllXlsx, setExportingAllXlsx] = useState(false);
   const [exportingPdfId, setExportingPdfId] = useState<string | null>(null);
@@ -1307,6 +1329,7 @@ export default function CustomersPollo({
       saldoActual,
       totalAbonado: totalAbonos,
       totalCargos: Number(initialDebtValue || 0) + totalCargosMov,
+      saldoRestante: saldoActual,
     });
   };
 
@@ -1316,8 +1339,8 @@ export default function CustomersPollo({
     setSaleLedgerSaleId(null);
     setAbonoTargetSaleId(null);
     setShowAbono(false);
-    setItemsModalOpen(false);
-    setItemsModalSaleDate("");
+    setItemsDrawerOpen(false);
+    setItemsDrawerMeta(null);
     setEditMovId(null);
     setEMovDate("");
     setEMovComment("");
@@ -1331,6 +1354,7 @@ export default function CustomersPollo({
       saldoActual: 0,
       totalAbonado: 0,
       totalCargos: 0,
+      saldoRestante: 0,
     });
     setShowStatement(true);
 
@@ -3140,88 +3164,242 @@ export default function CustomersPollo({
                   </div>
                 </div>
 
-                {/* KPIs: saldo = deuda inicial + movimientos; cargos y abonos son desglose */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-               
-                  <div className="p-3 border-2 rounded-xl border-sky-200 bg-gradient-to-br from-sky-50 to-white shadow-sm">
-                    <div className="text-xs font-medium text-sky-800">
-                      Total ventas a crédito
+                {/* ================= WEB KPI (misma UI que Dulces) ================= */}
+                <div className="hidden md:block">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                    <div className="rounded-2xl border border-slate-200/90 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Saldo y cobros
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <div>
+                          <div className="text-xs text-slate-600">
+                            Saldo actual
+                          </div>
+                          <div className="text-xl font-bold text-slate-900 tabular-nums">
+                            {money(stKpis.saldoActual)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-slate-600">
+                            Total abonado
+                          </div>
+                          <div className="text-xl font-bold text-slate-900 tabular-nums">
+                            {money(stKpis.totalAbonado)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-xl font-semibold text-sky-950">
-                      {money(stKpis.totalCargos)}
+
+                    <div className="relative overflow-hidden rounded-2xl p-4 shadow-lg ring-1 ring-white/20 bg-gradient-to-br from-violet-600 via-indigo-600 to-fuchsia-700 text-white">
+                      <div
+                        className="pointer-events-none absolute -right-6 -top-10 h-32 w-32 rounded-full bg-white/15 blur-2xl"
+                        aria-hidden
+                      />
+                      <div className="relative">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-white/80">
+                          Saldo restante
+                        </div>
+                        <div className="mt-2 text-3xl font-bold tabular-nums tracking-tight">
+                          {money(stKpis.saldoRestante)}
+                        </div>
+                        <p className="mt-2 text-xs text-white/80 leading-snug">
+                          Monto pendiente según el estado de cuenta del cliente.
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-[10px] text-sky-700/90 mt-1 leading-snug">
-                      Deuda inicial más compras registradas a cuenta.
-                    </p>
+
+                    <div className="rounded-2xl border border-emerald-200/80 bg-gradient-to-b from-emerald-50/90 to-white p-4 shadow-sm">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-900/80">
+                        Compras a crédito
+                      </div>
+                      <div className="mt-3 text-2xl font-bold tabular-nums text-emerald-950">
+                        {money(stKpis.totalCargos)}
+                      </div>
+                      <p className="mt-2 text-xs text-emerald-800/90 leading-snug">
+                        Deuda inicial más compras registradas a cuenta.
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="p-3 border-2 rounded-xl border-emerald-200 bg-gradient-to-br from-emerald-50 to-white shadow-sm">
-                    <div className="text-xs font-medium text-emerald-700">
-                      Total abonado
-                    </div>
-                    <div className="text-xl font-semibold text-emerald-900">
-                      {money(stKpis.totalAbonado)}
-                    </div>
-                    <p className="text-[10px] text-emerald-700/90 mt-1 leading-snug">
-                      Suma de todos los abonos registrados.
-                    </p>
+                  <div className="mb-3 text-sm text-gray-600">
+                    <button
+                      type="button"
+                      className="text-blue-600 underline hover:text-blue-800"
+                      onClick={() => {
+                        setAbonoTargetSaleId(null);
+                        setAbonoAmount(0);
+                        setAbonoDate(formatLocalDate(new Date()));
+                        setAbonoComment("");
+                        setShowAbono(true);
+                      }}
+                    >
+                      Registrar abono general (no ligado a una venta)
+                    </button>
                   </div>
-                  <div className="p-3 border-2 rounded-xl border-indigo-200 bg-gradient-to-br from-indigo-50 to-white shadow-sm">
-                    <div className="text-xs font-medium text-indigo-700">
-                      Saldo actual
-                    </div>
-                    <div className="text-xl font-semibold text-indigo-900">
-                      {money(stKpis.saldoActual)}
-                    </div>
-                    <p className="text-[10px] text-indigo-600/90 mt-1 leading-snug">
-                      Total ventas menos los abonos realizados.
-                    </p>
+
+                  <div className="bg-white rounded border overflow-x-auto mb-3">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="p-2 border">Fecha</th>
+                          <th className="p-2 border">Total venta</th>
+                          <th className="p-2 border">Pendiente</th>
+                          <th className="p-2 border">Estado</th>
+                          <th className="p-2 border w-12"> </th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {stLoading ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Cargando…
+                            </td>
+                          </tr>
+                        ) : saleVentasRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Sin ventas a crédito registradas
+                            </td>
+                          </tr>
+                        ) : (
+                          saleVentasRows.map((m) => {
+                            const saleId = m.ref!.saleId!;
+                            const pending = getPendingForSale(stRows, saleId);
+                            const normalizedDebt = normalizeDebtStatus(
+                              m.debtStatus,
+                            );
+                            return (
+                              <tr
+                                key={m.id}
+                                className="text-center cursor-pointer hover:bg-slate-50/90 transition-colors"
+                                onClick={() => void openItemsDrawer(saleId)}
+                              >
+                                <td className="p-2 border">{m.date || "—"}</td>
+                                <td className="p-2 border font-semibold">
+                                  {money(m.amount)}
+                                </td>
+                                <td className="p-2 border font-medium text-orange-800">
+                                  {money(pending)}
+                                </td>
+                                <td className="p-2 border">
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                                  >
+                                    {normalizedDebt === "PAGADA"
+                                      ? "Pagada"
+                                      : "Pendiente"}
+                                  </span>
+                                </td>
+                                <td className="p-2 border">
+                                  <button
+                                    type="button"
+                                    className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                                    aria-label="Acciones de venta"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSaleMenuAnchor({
+                                        saleId,
+                                        rect: (
+                                          e.currentTarget as HTMLElement
+                                        ).getBoundingClientRect(),
+                                      });
+                                    }}
+                                  >
+                                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 
-                <div className="mb-3 text-sm text-gray-600">
-                  <button
-                    type="button"
-                    className="text-blue-600 underline hover:text-blue-800"
-                    onClick={() => {
-                      setAbonoTargetSaleId(null);
-                      setAbonoAmount(0);
-                      setAbonoDate(formatLocalDate(new Date()));
-                      setAbonoComment("");
-                      setShowAbono(true);
-                    }}
-                  >
-                    Registrar abono general (no ligado a una venta)
-                  </button>
-                </div>
+                {/* ================= MOBILE (KPI colapsable + ventas) ================= */}
+                <div className="md:hidden space-y-3">
+                  <div className="border rounded-2xl overflow-hidden">
+                    <button
+                      type="button"
+                      className="w-full px-3 py-3 flex items-center justify-between text-left"
+                      onClick={() => setStOpenAccount((v) => !v)}
+                    >
+                      <div className="font-semibold">Estado de cuenta</div>
+                      <div className="text-sm text-gray-500">
+                        {stOpenAccount ? "Ocultar" : "Ver"}
+                      </div>
+                    </button>
 
-                {/* Tabla (desktop): solo ventas a crédito */}
-                <div className="hidden md:block bg-white rounded border overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="p-2 border">Fecha</th>
-                        <th className="p-2 border">Total venta</th>
-                        <th className="p-2 border">Pendiente</th>
-                        <th className="p-2 border">Estado</th>
-                        <th className="p-2 border">Detalle</th>
-                        <th className="p-2 border w-12"> </th>
-                      </tr>
-                    </thead>
+                    {stOpenAccount && (
+                      <div className="px-3 pb-3 space-y-2">
+                        <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase text-slate-500">
+                            Saldo y cobros
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <div>
+                              <div className="text-[11px] text-slate-600">
+                                Saldo actual
+                              </div>
+                              <div className="font-bold tabular-nums text-slate-900">
+                                {money(stKpis.saldoActual)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-slate-600">
+                                Total abonado
+                              </div>
+                              <div className="font-bold tabular-nums text-slate-900">
+                                {money(stKpis.totalAbonado)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
 
-                    <tbody>
+                        <div className="relative overflow-hidden rounded-2xl p-4 shadow-lg bg-gradient-to-br from-violet-600 via-indigo-600 to-fuchsia-700 text-white">
+                          <div
+                            className="pointer-events-none absolute -right-4 -top-8 h-24 w-24 rounded-full bg-white/15 blur-2xl"
+                            aria-hidden
+                          />
+                          <div className="relative">
+                            <div className="text-[11px] font-semibold uppercase text-white/80">
+                              Saldo restante
+                            </div>
+                            <div className="mt-1 text-2xl font-bold tabular-nums">
+                              {money(stKpis.saldoRestante)}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-3">
+                          <div className="text-[11px] font-semibold uppercase text-emerald-900/90">
+                            Compras a crédito
+                          </div>
+                          <div className="mt-2 text-xl font-bold tabular-nums text-emerald-950">
+                            {money(stKpis.totalCargos)}
+                          </div>
+                          <p className="mt-1 text-[11px] text-emerald-800/90">
+                            Deuda inicial más compras a cuenta.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border rounded-2xl overflow-hidden">
+                    <div className="px-3 py-2 text-sm font-semibold border-b bg-slate-50">
+                      Ventas a crédito
+                    </div>
+                    <div className="p-3 space-y-3">
                       {stLoading ? (
-                        <tr>
-                          <td colSpan={6} className="p-4 text-center">
-                            Cargando…
-                          </td>
-                        </tr>
+                        <div className="text-center text-sm">Cargando…</div>
                       ) : saleVentasRows.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} className="p-4 text-center">
-                            Sin ventas a crédito registradas
-                          </td>
-                        </tr>
+                        <div className="text-center text-sm text-gray-500">
+                          Sin ventas a crédito registradas
+                        </div>
                       ) : (
                         saleVentasRows.map((m) => {
                           const saleId = m.ref!.saleId!;
@@ -3230,36 +3408,59 @@ export default function CustomersPollo({
                             m.debtStatus,
                           );
                           return (
-                            <tr key={m.id} className="text-center">
-                              <td className="p-2 border">{m.date || "—"}</td>
-                              <td className="p-2 border font-semibold">
-                                {money(m.amount)}
-                              </td>
-                              <td className="p-2 border font-medium text-orange-800">
-                                {money(pending)}
-                              </td>
-                              <td className="p-2 border">
-                                <span
-                                  className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
-                                >
-                                  {normalizedDebt === "PAGADA"
-                                    ? "Pagada"
-                                    : "Pendiente"}
-                                </span>
-                              </td>
-                              <td className="p-2 border">
+                            <div
+                              key={m.id}
+                              role="button"
+                              tabIndex={0}
+                              className="rounded-xl border-2 border-sky-200 bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/50 p-3 shadow-md cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                              onClick={() => void openItemsDrawer(saleId)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  void openItemsDrawer(saleId);
+                                }
+                              }}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-900">
+                                    {m.date || "—"}
+                                  </div>
+                                  <div className="text-xs text-gray-600 mt-1">
+                                    Total:{" "}
+                                    <span className="font-semibold text-gray-900">
+                                      {money(m.amount)}
+                                    </span>
+                                  </div>
+                                  <div className="text-xs text-orange-800 mt-0.5">
+                                    Pendiente: {money(pending)}
+                                  </div>
+                                  <div className="mt-2">
+                                    <span
+                                      className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
+                                    >
+                                      {normalizedDebt === "PAGADA"
+                                        ? "Pagada"
+                                        : "Pendiente"}
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-sky-700/90 mt-2">
+                                    Toca la tarjeta para ver el detalle de compra
+                                  </p>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-amber-800 font-semibold underline mt-1"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void openItemsDrawer(saleId);
+                                    }}
+                                  >
+                                    Ver detalle de compra
+                                  </button>
+                                </div>
                                 <button
                                   type="button"
-                                  className="px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700 underline"
-                                  onClick={() => openItemsModal(saleId)}
-                                >
-                                  Ver detalle
-                                </button>
-                              </td>
-                              <td className="p-2 border">
-                                <button
-                                  type="button"
-                                  className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                                  className="p-2 rounded-lg border border-gray-200 shrink-0 bg-white"
                                   aria-label="Acciones de venta"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -3273,85 +3474,13 @@ export default function CustomersPollo({
                                 >
                                   <FiMoreVertical className="w-5 h-5 text-gray-700" />
                                 </button>
-                              </td>
-                            </tr>
+                              </div>
+                            </div>
                           );
                         })
                       )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile: tarjetas por venta */}
-                <div className="md:hidden space-y-3">
-                  {stLoading ? (
-                    <div className="p-4 text-center text-sm">Cargando…</div>
-                  ) : saleVentasRows.length === 0 ? (
-                    <div className="p-4 text-center text-sm">
-                      Sin ventas a crédito registradas
                     </div>
-                  ) : (
-                    saleVentasRows.map((m) => {
-                      const saleId = m.ref!.saleId!;
-                      const pending = getPendingForSale(stRows, saleId);
-                      const normalizedDebt = normalizeDebtStatus(m.debtStatus);
-                      return (
-                        <div
-                          key={m.id}
-                          className="rounded-xl border-2 border-sky-200 bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/50 p-3 shadow-md"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="text-sm font-semibold text-slate-900">
-                                {m.date || "—"}
-                              </div>
-                              <div className="text-xs text-gray-600 mt-1">
-                                Total:{" "}
-                                <span className="font-semibold text-gray-900">
-                                  {money(m.amount)}
-                                </span>
-                              </div>
-                              <div className="text-xs text-orange-800 mt-0.5">
-                                Pendiente: {money(pending)}
-                              </div>
-                              <div className="mt-2">
-                                <span
-                                  className={`px-2 py-0.5 rounded text-xs ${normalizedDebt === "PAGADA" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}
-                                >
-                                  {normalizedDebt === "PAGADA"
-                                    ? "Pagada"
-                                    : "Pendiente"}
-                                </span>
-                              </div>
-                              <button
-                                type="button"
-                                className="text-xs text-yellow-700 underline mt-2"
-                                onClick={() => openItemsModal(saleId)}
-                              >
-                                Ver detalle de compra
-                              </button>
-                            </div>
-                            <button
-                              type="button"
-                              className="p-2 rounded-lg border border-gray-200 shrink-0"
-                              aria-label="Acciones de venta"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSaleMenuAnchor({
-                                  saleId,
-                                  rect: (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect(),
-                                });
-                              }}
-                            >
-                              <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
+                  </div>
                 </div>
 
                 {editMovId && !ledgerInlineEdit && renderEditMovementPanel()}
@@ -3674,132 +3803,89 @@ export default function CustomersPollo({
               </div>
             )}
 
-            {/* items modal (sobre el estado de cuenta) */}
-            {itemsModalOpen && (
-              <div
-                className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]"
-                style={{ zIndex: 60 }}
-              >
-                <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl p-4">
-                  <div className="flex items-start justify-between mb-2 gap-2">
-                    <div className="min-w-0">
-                      <h3 className="text-lg font-bold">Productos vendidos</h3>
-                      {itemsModalSaleDate ? (
-                        <p className="text-sm text-gray-600 mt-0.5">
-                          {itemsModalSaleDate}
-                        </p>
-                      ) : null}
-                    </div>
-                    <button
-                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 shrink-0"
-                      onClick={() => {
-                        setItemsModalOpen(false);
-                        setItemsModalSaleDate("");
-                      }}
-                    >
-                      Cerrar
-                    </button>
-                  </div>
-                  {/* Desktop table */}
-                  <div className="hidden md:block bg-white rounded border overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead className="bg-gray-100">
-                        <tr>
-                          <th className="p-2 border">Producto</th>
-                          <th className="p-2 border text-right">Cantidad</th>
-                          <th className="p-2 border text-right">Precio</th>
-                          <th className="p-2 border text-right">Descuento</th>
-                          <th className="p-2 border text-right">Monto</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {itemsModalLoading ? (
-                          <tr>
-                            <td colSpan={5} className="p-4 text-center">
-                              Cargando…
-                            </td>
-                          </tr>
-                        ) : itemsModalRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="p-4 text-center">
-                              Sin ítems en esta venta.
-                            </td>
-                          </tr>
-                        ) : (
-                          itemsModalRows.map((it, idx) => (
-                            <tr key={idx} className="text-center">
-                              <td className="p-2 border text-left">
-                                {it.productName}
-                              </td>
-                              <td className="p-2 border text-right">
-                                {it.qty}
-                              </td>
-                              <td className="p-2 border text-right">
-                                {money(it.unitPrice)}
-                              </td>
-                              <td className="p-2 border text-right">
-                                {money(it.discount || 0)}
-                              </td>
-                              <td className="p-2 border text-right font-semibold">
-                                {money(it.total)}
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Mobile: cards */}
-                  <div className="md:hidden space-y-3">
-                    {itemsModalLoading ? (
-                      <div className="p-4 text-center text-sm">Cargando…</div>
-                    ) : itemsModalRows.length === 0 ? (
-                      <div className="p-4 text-center text-sm">
-                        Sin ítems en esta venta.
-                      </div>
-                    ) : (
-                      itemsModalRows.map((it, idx) => (
-                        <div
-                          key={idx}
-                          className="bg-white border rounded-lg p-3 shadow-sm"
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="text-sm font-medium">
-                              {it.productName}
-                            </div>
-                            <div className="text-sm font-semibold">
-                              {money(it.total)}
-                            </div>
-                          </div>
-                          <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-600">
-                            <div>
-                              <div className="text-[11px]">Cantidad</div>
-                              <div className="font-medium">{it.qty}</div>
-                            </div>
-                            <div>
-                              <div className="text-[11px]">Precio</div>
-                              <div className="font-medium">
-                                {money(it.unitPrice)}
-                              </div>
-                            </div>
-                            <div>
-                              <div className="text-[11px]">Descuento</div>
-                              <div className="font-medium">
-                                {it.discount ? money(it.discount) : "—"}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
           </div>,
           document.body,
         )}
+
+      <SlideOverDrawer
+        open={itemsDrawerOpen}
+        onClose={() => {
+          setItemsDrawerOpen(false);
+          setItemsDrawerMeta(null);
+          setItemsModalSaleId(null);
+        }}
+        titleId="pollo-items-drawer-title"
+        title={
+          <>
+            Productos vendidos
+            {itemsModalSaleId ? (
+              <span className="text-gray-500 font-normal">
+                {" "}
+                — #{itemsModalSaleId}
+              </span>
+            ) : null}
+          </>
+        }
+        subtitle={
+          itemsDrawerMeta?.saleDate
+            ? `Compra: ${itemsDrawerMeta.saleDate}`
+            : "Detalle de la compra"
+        }
+        zIndexClassName="z-[78]"
+        panelMaxWidthClassName="max-w-2xl"
+      >
+        {itemsModalLoading ? (
+          <p className="text-sm text-gray-600 px-1">Cargando…</p>
+        ) : itemsModalRows.length === 0 ? (
+          <p className="text-sm text-gray-600 px-1">Sin ítems en esta venta.</p>
+        ) : (
+          <>
+            {itemsDrawerMeta && (
+              <DrawerMoneyStrip
+                items={[
+                  {
+                    label: "Cantidad",
+                    value: String(roundCurrency(itemsDrawerMeta.totalQty)),
+                    tone: "blue",
+                  },
+                  {
+                    label: "Monto",
+                    value: money(itemsDrawerMeta.saleAmount),
+                    tone: "slate",
+                  },
+                  {
+                    label: "Líneas",
+                    value: String(itemsDrawerMeta.lineCount),
+                    tone: "emerald",
+                  },
+                ]}
+              />
+            )}
+            <div className="space-y-3 px-1 pb-4">
+              <DrawerSectionTitle
+                className={itemsDrawerMeta ? "mt-4" : "mt-0"}
+              >
+                Líneas de venta
+              </DrawerSectionTitle>
+              {itemsModalRows.map((it, idx) => (
+                <DrawerDetailDlCard
+                  key={idx}
+                  title={it.productName || `Producto ${idx + 1}`}
+                  rows={[
+                    { label: "Cantidad", value: String(it.qty) },
+                    { label: "Precio unit.", value: money(it.unitPrice) },
+                    {
+                      label: "Descuento",
+                      value: it.discount ? money(it.discount) : "—",
+                    },
+                    { label: "Monto", value: money(it.total) },
+                  ]}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </SlideOverDrawer>
 
       {/* ===== Modal Abonar ===== */}
       {showAbono && (

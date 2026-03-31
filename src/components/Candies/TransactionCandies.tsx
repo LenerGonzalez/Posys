@@ -18,6 +18,12 @@ import { hasRole } from "../../utils/roles";
 import { format } from "date-fns";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerMoneyStrip,
+  DrawerSectionTitle,
+} from "../common/DrawerContentCards";
 import ActionMenu from "../common/ActionMenu";
 import Toast from "../common/Toast";
 import { FiMoreVertical } from "react-icons/fi";
@@ -1720,97 +1726,94 @@ export default function TransactionsReportCandies({
 
       {msg && <Toast message={msg} onClose={() => setMsg("")} />}
 
-      {/* Modal: Detalle de piezas de la venta */}
-      {itemsModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-[98%] max-w-5xl p-6 max-h-[90vh] overflow-auto md:max-h-none md:overflow-visible">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <h3 className="text-lg font-bold">
-                  Productos/paquetes vendidos{" "}
-                  {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
-                </h3>
-
-                {modalSale && (
-                  <div className="text-sm text-slate-700 mt-1">
-                    Fecha de venta:{" "}
-                    <span className="font-semibold">{modalSale.date}</span>
-                  </div>
-                )}
-
-                {modalSale && (
-                  <div className="text-sm text-slate-700 mt-1">
-                    Comisión de vendedor:{" "}
-                    <span className="font-semibold">
-                      {getCommissionAmount(modalSale) > 0
+      <SlideOverDrawer
+        open={itemsModalOpen}
+        onClose={() => setItemsModalOpen(false)}
+        title={`Productos/paquetes vendidos${
+          itemsModalSaleId ? ` — #${itemsModalSaleId}` : ""
+        }`}
+        subtitle={
+          modalSale?.date
+            ? `Fecha de venta: ${modalSale.date}`
+            : undefined
+        }
+        titleId="tx-candies-items-drawer-title"
+        panelMaxWidthClassName="max-w-2xl"
+      >
+        {itemsModalLoading ? (
+          <p className="text-sm text-gray-500 py-10 text-center">Cargando…</p>
+        ) : itemsModalRows.length === 0 ? (
+          <p className="text-sm text-gray-500 py-10 text-center">
+            Sin ítems en esta venta.
+          </p>
+        ) : (
+          <>
+            {modalSale && (
+              <DrawerMoneyStrip
+                items={[
+                  {
+                    label: "Total venta",
+                    value: money(modalSale.total),
+                    tone: "blue",
+                  },
+                  {
+                    label: "Comisión vendedor",
+                    value:
+                      getCommissionAmount(modalSale) > 0
                         ? money(getCommissionAmount(modalSale))
-                        : "—"}
-                    </span>
-                  </div>
-                )}
-              </div>
+                        : "—",
+                    tone: "emerald",
+                  },
+                  {
+                    label: "Tipo",
+                    value:
+                      modalSale.type === "CREDITO" ? "Crédito" : "Cash",
+                    tone: "slate",
+                  },
+                ]}
+              />
+            )}
 
-              <button
-                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
-                onClick={() => setItemsModalOpen(false)}
-              >
-                Cerrar
-              </button>
+            <DrawerSectionTitle
+              className={modalSale ? "mt-4" : "mt-0"}
+            >
+              Líneas de la venta
+            </DrawerSectionTitle>
+            <div className="mt-2 space-y-3">
+              {itemsModalRows.map((it, idx) => (
+                <DrawerDetailDlCard
+                  key={idx}
+                  title={it.productName || "(sin nombre)"}
+                  rows={[
+                    {
+                      label: "Paquetes",
+                      value: String(it.qty),
+                    },
+                    {
+                      label: "Precio unitario",
+                      value: money(it.unitPrice),
+                    },
+                    {
+                      label: "Descuento",
+                      value: money(it.discount || 0),
+                    },
+                    {
+                      label: "Monto línea",
+                      value: money(it.total),
+                    },
+                    {
+                      label: "Comisión",
+                      value: money(it.commission || 0),
+                      ddClassName:
+                        "text-sm font-semibold tabular-nums text-emerald-800",
+                    },
+                  ]}
+                />
+              ))}
             </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto overflow-y-auto max-h-[60vh] md:max-h-none">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-100 sticky top-0 z-10">
-                  <tr className="text-[11px] uppercase tracking-wider text-slate-600">
-                    <th className="p-3 border-b text-left">Producto</th>
-                    <th className="p-3 border-b text-right">Paquetes</th>
-                    <th className="p-3 border-b text-right">Precio</th>
-                    <th className="p-3 border-b text-right">Descuento</th>
-                    <th className="p-3 border-b text-right">Monto</th>
-                    <th className="p-3 border-b text-right">Comision</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {itemsModalLoading ? (
-                    <tr>
-                      <td colSpan={6} className="p-4 text-center">
-                        Cargando…
-                      </td>
-                    </tr>
-                  ) : itemsModalRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="p-4 text-center">
-                        Sin ítems en esta venta.
-                      </td>
-                    </tr>
-                  ) : (
-                    itemsModalRows.map((it, idx) => (
-                      <tr key={idx} className="odd:bg-white even:bg-slate-50">
-                        <td className="p-3 border-b text-left">
-                          {it.productName}
-                        </td>
-                        <td className="p-3 border-b text-right">{it.qty}</td>
-                        <td className="p-3 border-b text-right">
-                          {money(it.unitPrice)}
-                        </td>
-                        <td className="p-3 border-b text-right">
-                          {money(it.discount || 0)}
-                        </td>
-                        <td className="p-3 border-b text-right">
-                          {money(it.total)}
-                        </td>
-                        <td className="p-3 border-b text-right">
-                          {money(it.commission || 0)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </SlideOverDrawer>
     </div>
   );
 }

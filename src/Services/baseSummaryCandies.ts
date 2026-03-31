@@ -23,6 +23,8 @@ export type BaseSummaryCandies = {
   // comisiones (totales)
   comisionCash: number;
   comisionCredit: number;
+  /** Comisión atribuible a abonos parciales (commissionOnPayment en ar_movements, período) */
+  comisionParcialAbonos: number;
 
   // comisiones por vendedor para cards
   comisionesCashBySeller: {
@@ -187,6 +189,16 @@ export async function fetchBaseSummaryCandies(
     0,
   );
 
+  let comisionParcialAbonos = 0;
+  for (const d of arSnap.docs) {
+    const x = d.data() as any;
+    const amt = Number(x.amount ?? 0);
+    if (amt < 0) {
+      comisionParcialAbonos += Number(x.commissionOnPayment || 0) || 0;
+    }
+  }
+  comisionParcialAbonos = Number((comisionParcialAbonos || 0).toFixed(2));
+
   let packsCash = 0,
     packsCredit = 0;
   let salesCash = 0,
@@ -270,6 +282,7 @@ export async function fetchBaseSummaryCandies(
     saldoBase,
     comisionCash: Number((comisionCash || 0).toFixed(2)),
     comisionCredit: Number((comisionCredit || 0).toFixed(2)),
+    comisionParcialAbonos,
     comisionesCashBySeller,
     comisionesCreditBySeller,
   };

@@ -16,6 +16,12 @@ import { hasRole } from "../../utils/roles";
 import { format, isValid, parse } from "date-fns";
 import { restoreSaleAndDelete } from "../../Services/inventory";
 import RefreshButton from "../../components/common/RefreshButton";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerMoneyStrip,
+  DrawerSectionTitle,
+} from "../common/DrawerContentCards";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import useManualRefresh from "../../hooks/useManualRefresh";
 
@@ -1997,83 +2003,85 @@ export default function TransactionsPollo({
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 
-      {/* Modal: Detalle de piezas de la venta */}
-      {itemsModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-[95%] max-w-3xl max-h-[90vh] overflow-hidden">
-            <div className="flex items-start justify-between gap-3 px-4 py-3 border-b bg-slate-50">
-              <div className="min-w-0">
-                <h3 className="text-lg font-bold text-slate-900 truncate">
-                  Productos vendidos{" "}
-                  {itemsModalSaleId ? `— #${itemsModalSaleId}` : ""}
-                </h3>
-                <div className="text-xs text-slate-600 mt-1">
-                  Fecha de compra: <b>{modalSale?.date || "—"}</b>
-                </div>
-              </div>
+      <SlideOverDrawer
+        open={itemsModalOpen}
+        onClose={() => setItemsModalOpen(false)}
+        title={`Productos vendidos${
+          itemsModalSaleId ? ` — #${itemsModalSaleId}` : ""
+        }`}
+        subtitle={
+          modalSale?.date
+            ? `Fecha de compra: ${modalSale.date}`
+            : undefined
+        }
+        titleId="tx-pollo-items-drawer-title"
+        panelMaxWidthClassName="max-w-2xl"
+      >
+        {itemsModalLoading ? (
+          <p className="text-sm text-gray-500 py-10 text-center">Cargando…</p>
+        ) : itemsModalRows.length === 0 ? (
+          <p className="text-sm text-gray-500 py-10 text-center">
+            Sin ítems en esta venta.
+          </p>
+        ) : (
+          <>
+            {modalSale && (
+              <DrawerMoneyStrip
+                items={[
+                  {
+                    label: "Total venta",
+                    value: money(modalSale.total),
+                    tone: "blue",
+                  },
+                  {
+                    label: "Tipo",
+                    value:
+                      modalSale.type === "CREDITO" ? "Crédito" : "Cash",
+                    tone: "slate",
+                  },
+                  {
+                    label: "Cliente",
+                    value: getSaleCustomerName(modalSale, customersById),
+                    tone: "emerald",
+                  },
+                ]}
+              />
+            )}
 
-              <button
-                className="px-3 py-1 rounded bg-white border border-slate-200 hover:bg-slate-100"
-                onClick={() => setItemsModalOpen(false)}
-              >
-                Cerrar
-              </button>
+            <DrawerSectionTitle
+              className={modalSale ? "mt-4" : "mt-0"}
+            >
+              Productos de la venta
+            </DrawerSectionTitle>
+            <div className="mt-2 space-y-3">
+              {itemsModalRows.map((it, idx) => (
+                <DrawerDetailDlCard
+                  key={idx}
+                  title={it.productName || "(sin nombre)"}
+                  rows={[
+                    {
+                      label: "Libras o unidades",
+                      value: qty3(Number(it.qty) || 0),
+                    },
+                    {
+                      label: "Precio unitario",
+                      value: money(it.unitPrice),
+                    },
+                    {
+                      label: "Descuento",
+                      value: money(it.discount || 0),
+                    },
+                    {
+                      label: "Monto línea",
+                      value: money(it.total),
+                    },
+                  ]}
+                />
+              ))}
             </div>
-
-            <div className="bg-white border-t border-slate-200 overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-100 sticky top-0 z-10">
-                  <tr className="text-[11px] uppercase tracking-wider text-slate-600">
-                    <th className="p-3 border-b text-left">Producto</th>
-                    <th className="p-3 border-b text-right">Libras/Unidades</th>
-                    <th className="p-3 border-b text-right">Precio</th>
-                    <th className="p-3 border-b text-right">Descuento</th>
-                    <th className="p-3 border-b text-right">Monto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {itemsModalLoading ? (
-                    <tr>
-                      <td colSpan={5} className="p-4 text-center">
-                        Cargando…
-                      </td>
-                    </tr>
-                  ) : itemsModalRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-4 text-center">
-                        Sin ítems en esta venta.
-                      </td>
-                    </tr>
-                  ) : (
-                    itemsModalRows.map((it, idx) => (
-                      <tr
-                        key={idx}
-                        className="text-center odd:bg-white even:bg-slate-50"
-                      >
-                        <td className="p-3 border-b text-left whitespace-nowrap">
-                          {it.productName}
-                        </td>
-                        <td className="p-3 border-b text-right whitespace-nowrap">
-                          {it.qty}
-                        </td>
-                        <td className="p-3 border-b text-right whitespace-nowrap">
-                          {money(it.unitPrice)}
-                        </td>
-                        <td className="p-3 border-b text-right whitespace-nowrap">
-                          {money(it.discount || 0)}
-                        </td>
-                        <td className="p-3 border-b text-right font-semibold whitespace-nowrap">
-                          {money(it.total)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </SlideOverDrawer>
     </div>
   );
 }
