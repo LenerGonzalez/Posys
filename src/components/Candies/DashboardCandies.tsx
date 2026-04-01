@@ -12,8 +12,8 @@ import { db } from "../../firebase";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import RefreshButton from "../common/RefreshButton";
 import Toast from "../common/Toast";
-import ActionMenu from "../common/ActionMenu";
-import { FiMoreVertical } from "react-icons/fi";
+import Button from "../common/Button";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
 
@@ -1377,8 +1377,10 @@ export default function FinancialDashboardCandies() {
                       <tr key={r.customerId} className="text-center">
                         <td className="p-2 border">{r.name}</td>
                         <td className="p-2 border">
-                          <button
-                            className="underline text-blue-600 hover:text-blue-800"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                             onClick={() =>
                               openCustomerModal({
                                 customerId: r.customerId,
@@ -1388,7 +1390,7 @@ export default function FinancialDashboardCandies() {
                             title="Ver paquetes fiados del periodo"
                           >
                             {r.paquetesAsociados}
-                          </button>
+                          </Button>
                         </td>
                         <td className="p-2 border">{money(r.saldoTotal)}</td>
                         <td className="p-2 border font-semibold">
@@ -1455,8 +1457,10 @@ export default function FinancialDashboardCandies() {
                           {v.vendorName}
                         </td>
                         <td className="p-2 border whitespace-nowrap">
-                          <button
-                            className="underline text-blue-600 hover:text-blue-800"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                             onClick={() =>
                               openVendorModal(
                                 v.vendorId,
@@ -1466,11 +1470,13 @@ export default function FinancialDashboardCandies() {
                             }
                           >
                             {v.paquetesAsociados}
-                          </button>
+                          </Button>
                         </td>
                         <td className="p-2 border whitespace-nowrap">
-                          <button
-                            className="underline text-blue-600 hover:text-blue-800"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                             onClick={() =>
                               openVendorModal(
                                 v.vendorId,
@@ -1480,17 +1486,19 @@ export default function FinancialDashboardCandies() {
                             }
                           >
                             {v.paquetesRestantes}
-                          </button>
+                          </Button>
                         </td>
                         <td className="p-2 border whitespace-nowrap">
-                          <button
-                            className="underline text-blue-600 hover:text-blue-800"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                             onClick={() =>
                               openVendorModal(v.vendorId, v.vendorName, "CASH")
                             }
                           >
                             {v.paquetesVendidos}
-                          </button>
+                          </Button>
                         </td>
                         <td className="p-2 border whitespace-nowrap">
                           {money(v.totalVendido)}
@@ -1499,8 +1507,10 @@ export default function FinancialDashboardCandies() {
                           {money(v.comisionCash)}
                         </td>
                         <td className="p-2 border whitespace-nowrap">
-                          <button
-                            className="underline text-blue-600 hover:text-blue-800"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                             onClick={() =>
                               openVendorModal(
                                 v.vendorId,
@@ -1510,7 +1520,7 @@ export default function FinancialDashboardCandies() {
                             }
                           >
                             {v.paquetesFiados}
-                          </button>
+                          </Button>
                         </td>
                         <td className="p-2 border whitespace-nowrap">
                           {money(v.totalFiado)}
@@ -1560,8 +1570,10 @@ export default function FinancialDashboardCandies() {
                 <tr key={r.customerId} className="text-center">
                   <td className="p-2 border">{r.name}</td>
                   <td className="p-2 border">
-                    <button
-                      className="underline text-blue-600 hover:text-blue-800"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                       onClick={() =>
                         openCustomerModal({
                           customerId: r.customerId,
@@ -1571,7 +1583,7 @@ export default function FinancialDashboardCandies() {
                       title="Ver paquetes fiados del periodo"
                     >
                       {r.paquetesAsociados}
-                    </button>
+                    </Button>
                   </td>
                   <td className="p-2 border">{money(r.saldoTotal)}</td>
                   <td className="p-2 border font-semibold">
@@ -1635,34 +1647,40 @@ export default function FinancialDashboardCandies() {
                     {v.vendorName}
                   </td>
                   <td className="p-2 border whitespace-nowrap">
-                    <button
-                      className="underline text-blue-600 hover:text-blue-800"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                       onClick={() =>
                         openVendorModal(v.vendorId, v.vendorName, "ASSOCIATED")
                       }
                     >
                       {v.paquetesAsociados}
-                    </button>
+                    </Button>
                   </td>
                   <td className="p-2 border whitespace-nowrap">
-                    <button
-                      className="underline text-blue-600 hover:text-blue-800"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                       onClick={() =>
                         openVendorModal(v.vendorId, v.vendorName, "REMAINING")
                       }
                     >
                       {v.paquetesRestantes}
-                    </button>
+                    </Button>
                   </td>
                   <td className="p-2 border whitespace-nowrap">
-                    <button
-                      className="underline text-blue-600 hover:text-blue-800"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                       onClick={() =>
                         openVendorModal(v.vendorId, v.vendorName, "CASH")
                       }
                     >
                       {v.paquetesVendidos}
-                    </button>
+                    </Button>
                   </td>
                   <td className="p-2 border whitespace-nowrap">
                     {money(v.totalVendido)}
@@ -1671,14 +1689,16 @@ export default function FinancialDashboardCandies() {
                     {money(v.comisionCash)}
                   </td>
                   <td className="p-2 border whitespace-nowrap">
-                    <button
-                      className="underline text-blue-600 hover:text-blue-800"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                       onClick={() =>
                         openVendorModal(v.vendorId, v.vendorName, "CREDIT")
                       }
                     >
                       {v.paquetesFiados}
-                    </button>
+                    </Button>
                   </td>
                   <td className="p-2 border whitespace-nowrap">
                     {money(v.totalFiado)}
@@ -1744,12 +1764,14 @@ export default function FinancialDashboardCandies() {
                           {r.type}
                         </td>
                         <td className="p-2 border whitespace-nowrap">
-                          <button
-                            className="underline text-blue-600 hover:text-blue-800"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                             onClick={() => openSaleModal(r.id)}
                           >
                             {r.paquetes}
-                          </button>
+                          </Button>
                         </td>
                         <td className="p-2 border whitespace-nowrap">
                           {money(r.avgPrice)}
@@ -1758,9 +1780,8 @@ export default function FinancialDashboardCandies() {
                           {money(r.total)}
                         </td>
                         <td className="p-2 border whitespace-nowrap">
-                          <button
-                            type="button"
-                            className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                          <ActionMenuTrigger
+                            className="inline-flex"
                             aria-label="Acciones"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1771,9 +1792,7 @@ export default function FinancialDashboardCandies() {
                                 ).getBoundingClientRect(),
                               });
                             }}
-                          >
-                            <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                          </button>
+                          />
                         </td>
                       </tr>
                     ))
@@ -1876,12 +1895,14 @@ export default function FinancialDashboardCandies() {
                   <td className="p-2 border whitespace-nowrap">{r.customer}</td>
                   <td className="p-2 border whitespace-nowrap">{r.type}</td>
                   <td className="p-2 border whitespace-nowrap">
-                    <button
-                      className="underline text-blue-600 hover:text-blue-800"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="!p-0 min-h-0 h-auto !rounded-none underline text-blue-600 hover:text-blue-800 hover:!bg-transparent active:!bg-transparent font-normal"
                       onClick={() => openSaleModal(r.id)}
                     >
                       {r.paquetes}
-                    </button>
+                    </Button>
                   </td>
                   <td className="p-2 border whitespace-nowrap">
                     {money(r.avgPrice)}
@@ -1890,9 +1911,8 @@ export default function FinancialDashboardCandies() {
                     {money(r.total)}
                   </td>
                   <td className="p-2 border whitespace-nowrap">
-                    <button
-                      type="button"
-                      className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                    <ActionMenuTrigger
+                      className="inline-flex"
                       aria-label="Acciones"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1903,9 +1923,7 @@ export default function FinancialDashboardCandies() {
                           ).getBoundingClientRect(),
                         });
                       }}
-                    >
-                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                    </button>
+                    />
                   </td>
                 </tr>
               ))
@@ -1977,9 +1995,10 @@ export default function FinancialDashboardCandies() {
       >
         {saleTxMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal"
               onClick={() => {
                 const id = saleTxMenu.id;
                 setSaleTxMenu(null);
@@ -1987,10 +2006,11 @@ export default function FinancialDashboardCandies() {
               }}
             >
               Ver detalle
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-semibold !text-red-700 hover:!bg-red-50"
               onClick={() => {
                 const id = saleTxMenu.id;
                 setSaleTxMenu(null);
@@ -1998,7 +2018,7 @@ export default function FinancialDashboardCandies() {
               }}
             >
               Eliminar venta
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>
@@ -2013,12 +2033,14 @@ export default function FinancialDashboardCandies() {
               <h3 className="text-lg font-bold">
                 Detalle cliente — {modalCustomer?.name || ""}
               </h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                type="button"
+                variant="secondary"
+                className="!rounded-lg px-3 py-1"
                 onClick={() => setModalOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-3">
@@ -2112,12 +2134,14 @@ export default function FinancialDashboardCandies() {
           <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-5xl p-4">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-lg font-bold">{vendorModalTitle}</h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                type="button"
+                variant="secondary"
+                className="!rounded-lg px-3 py-1"
                 onClick={() => setVendorModalOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             {(vendorModalMode === "ASSOCIATED" ||
@@ -2128,17 +2152,23 @@ export default function FinancialDashboardCandies() {
                     Página {vendorModalPage} de {vendorModalTotalPages}
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      className="px-3 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="!rounded-lg px-3 py-1"
                       onClick={() =>
                         setVendorModalPage((p) => Math.max(1, p - 1))
                       }
                       disabled={vendorModalPage <= 1}
                     >
                       Anterior
-                    </button>
-                    <button
-                      className="px-3 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="!rounded-lg px-3 py-1"
                       onClick={() =>
                         setVendorModalPage((p) =>
                           Math.min(vendorModalTotalPages, p + 1),
@@ -2147,7 +2177,7 @@ export default function FinancialDashboardCandies() {
                       disabled={vendorModalPage >= vendorModalTotalPages}
                     >
                       Siguiente
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -2254,12 +2284,14 @@ export default function FinancialDashboardCandies() {
               <h3 className="text-lg font-bold">
                 Detalle de venta — {saleModalSale.date}
               </h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                type="button"
+                variant="secondary"
+                className="!rounded-lg px-3 py-1"
                 onClick={() => setSaleModalOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <div className="bg-white rounded border overflow-x-auto mb-3">
@@ -2299,12 +2331,15 @@ export default function FinancialDashboardCandies() {
                 <span className="font-semibold">Total venta:&nbsp;</span>
                 {money(saleModalSale.total)}
               </div>
-              <button
-                className="text-xs bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700"
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                className="!rounded-lg text-xs px-3 py-1"
                 onClick={() => handleDeleteSale(saleModalSale.id)}
               >
                 Eliminar venta
-              </button>
+              </Button>
             </div>
           </div>
         </div>

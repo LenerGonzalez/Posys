@@ -18,6 +18,7 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
+import Button from "../common/Button";
 
 import {
   BarChart,
@@ -464,12 +465,14 @@ export default function CashDeliveriesCandies() {
           </p>
         </div>
 
-        <button
+        <Button
+          type="button"
+          variant="primary"
           onClick={exportPDF}
-          className="h-10 px-4 rounded-xl bg-gray-900 text-white font-extrabold hover:bg-gray-800 active:scale-[0.99] transition"
+          className="h-10 !rounded-xl !bg-gray-900 hover:!bg-gray-800 active:scale-[0.99] transition font-extrabold"
         >
           Exportar a PDF
-        </button>
+        </Button>
       </div>
 
       {/* Filters */}
@@ -758,12 +761,14 @@ export default function CashDeliveriesCandies() {
           </div>
 
           <div className="mt-3">
-            <button
+            <Button
+              type="button"
+              variant="primary"
               onClick={addDelivery}
-              className="w-full md:w-auto h-10 px-4 rounded-xl bg-gray-900 text-white font-extrabold hover:bg-gray-800 active:scale-[0.99] transition"
+              className="w-full md:w-auto h-10 !rounded-xl !bg-gray-900 hover:!bg-gray-800 active:scale-[0.99] transition font-extrabold"
             >
               Guardar movimiento
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -833,18 +838,24 @@ export default function CashDeliveriesCandies() {
                             <td className="p-2">{r.comment}</td>
                             <td className="p-2">
                               <div className="flex gap-2">
-                                <button
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
                                   onClick={() => startEdit(r)}
-                                  className="h-8 px-3 rounded-xl border border-gray-200 font-extrabold hover:bg-gray-50"
+                                  className="!rounded-xl h-8 font-extrabold"
                                 >
                                   Editar
-                                </button>
-                                <button
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="danger"
+                                  size="sm"
                                   onClick={() => removeRow(r.id)}
-                                  className="h-8 px-3 rounded-xl border border-gray-200 font-extrabold text-red-700 hover:bg-red-50"
+                                  className="!rounded-xl h-8 font-extrabold"
                                 >
                                   Eliminar
-                                </button>
+                                </Button>
                               </div>
                             </td>
                           </tr>
@@ -967,18 +978,24 @@ export default function CashDeliveriesCandies() {
 
                           <td className="p-2">
                             <div className="flex gap-2">
-                              <button
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="sm"
                                 onClick={() => saveEdit(r.id)}
-                                className="h-8 px-3 rounded-xl bg-gray-900 text-white font-extrabold hover:bg-gray-800"
+                                className="!rounded-xl h-8 font-extrabold !bg-gray-900 hover:!bg-gray-800"
                               >
                                 Guardar
-                              </button>
-                              <button
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
                                 onClick={cancelEdit}
-                                className="h-8 px-3 rounded-xl border border-gray-200 font-extrabold hover:bg-gray-50"
+                                className="!rounded-xl h-8 font-extrabold"
                               >
                                 Cancelar
-                              </button>
+                              </Button>
                             </div>
                           </td>
                         </tr>
@@ -1060,18 +1077,22 @@ export default function CashDeliveriesCandies() {
                     </div>
 
                     <div className="mt-3 flex gap-2">
-                      <button
+                      <Button
+                        type="button"
+                        variant="outline"
                         onClick={() => startEdit(r)}
-                        className="flex-1 h-10 rounded-xl border border-gray-200 font-extrabold hover:bg-gray-50"
+                        className="flex-1 h-10 !rounded-xl font-extrabold"
                       >
                         Editar
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="danger"
                         onClick={() => removeRow(r.id)}
-                        className="flex-1 h-10 rounded-xl border border-gray-200 font-extrabold text-red-700 hover:bg-red-50"
+                        className="flex-1 h-10 !rounded-xl font-extrabold"
                       >
                         Eliminar
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -1196,18 +1217,22 @@ export default function CashDeliveriesCandies() {
                       </label>
 
                       <div className="flex gap-2">
-                        <button
+                        <Button
+                          type="button"
+                          variant="primary"
                           onClick={() => saveEdit(editingId)}
-                          className="flex-1 h-10 rounded-xl bg-gray-900 text-white font-extrabold hover:bg-gray-800"
+                          className="flex-1 h-10 !rounded-xl font-extrabold !bg-gray-900 hover:!bg-gray-800"
                         >
                           Guardar
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
                           onClick={cancelEdit}
-                          className="flex-1 h-10 rounded-xl border border-gray-200 font-extrabold hover:bg-gray-50"
+                          className="flex-1 h-10 !rounded-xl font-extrabold"
                         >
                           Cancelar
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </div>

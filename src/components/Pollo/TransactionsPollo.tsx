@@ -24,6 +24,7 @@ import {
 } from "../common/DrawerContentCards";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import Button from "../common/Button";
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -1299,51 +1300,64 @@ export default function TransactionsPollo({
     return (
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
         <div className="flex items-center gap-1 flex-wrap">
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="!rounded-md !px-2 !py-1"
             onClick={goFirst}
             disabled={page === 1}
           >
             « Primero
-          </button>
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="!rounded-md !px-2 !py-1"
             onClick={goPrev}
             disabled={page === 1}
           >
             ‹ Anterior
-          </button>
+          </Button>
           {pages.map((p, idx) =>
             typeof p === "number" ? (
-              <button
+              <Button
+                type="button"
                 key={idx}
-                className={`px-3 py-1 border rounded ${
-                  p === page ? "bg-blue-600 text-white" : ""
-                }`}
+                variant={p === page ? "primary" : "outline"}
+                size="sm"
+                className="!rounded-md !px-3 !py-1"
                 onClick={() => setPage(p)}
               >
                 {p}
-              </button>
+              </Button>
             ) : (
               <span key={idx} className="px-2">
                 …
               </span>
             ),
           )}
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="!rounded-md !px-2 !py-1"
             onClick={goNext}
             disabled={page === totalPages}
           >
             Siguiente ›
-          </button>
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="!rounded-md !px-2 !py-1"
             onClick={goLast}
             disabled={page === totalPages}
           >
             Último »
-          </button>
+          </Button>
         </div>
         <div className="text-sm text-gray-600">
           Página {page} de {totalPages} • {filteredSales.length} transacción(es)
@@ -1402,9 +1416,11 @@ export default function TransactionsPollo({
 
                 <span className="text-gray-700">
                   <b>Libras:</b>{" "}
-                  <button
+                  <Button
                     type="button"
-                    className="underline text-blue-600"
+                    variant="ghost"
+                    size="sm"
+                    className="underline !text-blue-600 hover:!text-blue-800 !min-h-0 !p-0 !shadow-none border-0 !rounded-none !bg-transparent hover:!bg-transparent font-normal"
                     onClick={(e) => {
                       e.preventDefault();
                       openItemsModal(s.id);
@@ -1412,7 +1428,7 @@ export default function TransactionsPollo({
                     title="Ver detalle"
                   >
                     {qty3(s.quantity)}
-                  </button>
+                  </Button>
                 </span>
 
                 <span className="text-gray-700">
@@ -1460,14 +1476,16 @@ export default function TransactionsPollo({
               <div className="flex items-center justify-between">
                 <span className="text-gray-600">Libras/Unidades</span>
                 <span className="font-medium">
-                  <button
+                  <Button
                     type="button"
-                    className="underline text-blue-600"
+                    variant="ghost"
+                    size="sm"
+                    className="underline !text-blue-600 hover:!text-blue-800 !min-h-0 !p-0 !shadow-none border-0 !rounded-none !bg-transparent hover:!bg-transparent font-normal"
                     onClick={() => openItemsModal(s.id)}
                     title="Ver detalle"
                   >
                     {qty3(s.quantity)}
-                  </button>
+                  </Button>
                 </span>
               </div>
 
@@ -1479,22 +1497,26 @@ export default function TransactionsPollo({
               <div className="flex items-center justify-between">
                 {canDelete && (
                   <div className="pt-2 flex items-center justify-end gap-2 w-full">
-                    <button
-                      className="px-3 py-2 rounded border hover:bg-gray-50"
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="!rounded-lg hover:!bg-gray-50"
                       onClick={() =>
                         setOpenMenuId((prev) => (prev === s.id ? null : s.id))
                       }
                     >
                       ⋮ Acciones
-                    </button>
+                    </Button>
 
                     {openMenuId === s.id && (
-                      <button
-                        className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                      <Button
+                        type="button"
+                        variant="danger"
+                        className="!rounded-lg"
                         onClick={() => confirmDelete(s)}
                       >
                         Eliminar
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}
@@ -1512,9 +1534,10 @@ export default function TransactionsPollo({
       <h2 className="text-2xl font-bold mb-3">Ventas del dia</h2>
 
       <div className="bg-white border rounded shadow-sm mb-4">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          variant="ghost"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold !rounded-none border-0 !shadow-none !justify-between hover:!bg-slate-50"
           onClick={() => setFiltersCardOpen((prev) => !prev)}
           aria-expanded={filtersCardOpen}
         >
@@ -1524,7 +1547,7 @@ export default function TransactionsPollo({
           >
             ▼
           </span>
-        </button>
+        </Button>
         {filtersCardOpen && (
           <div className="p-4 border-t">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end text-sm">
@@ -1629,18 +1652,22 @@ export default function TransactionsPollo({
                 />
               </div>
 
-              <button
-                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 w-full"
+              <Button
+                type="button"
+                variant="primary"
+                className="sm:col-span-2 lg:col-span-1 !rounded-lg !bg-green-600 hover:!bg-green-700 !text-white w-full"
                 onClick={handleExportExcel}
               >
                 Exportar Excel
-              </button>
-              <button
-                className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 w-full"
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                className="sm:col-span-2 lg:col-span-1 !rounded-lg w-full"
                 onClick={handleExportPDF}
               >
                 Exportar PDF
-              </button>
+              </Button>
               <div className="sm:col-span-2 lg:col-span-1 flex">
                 <RefreshButton
                   onClick={refresh}
@@ -1654,9 +1681,10 @@ export default function TransactionsPollo({
       </div>
 
       <div className="bg-white border rounded shadow-sm mb-4">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          variant="ghost"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold !rounded-none border-0 !shadow-none !justify-between hover:!bg-slate-50"
           onClick={() => setKpisCardOpen((prev) => !prev)}
           aria-expanded={kpisCardOpen}
         >
@@ -1666,7 +1694,7 @@ export default function TransactionsPollo({
           >
             ▼
           </span>
-        </button>
+        </Button>
         {kpisCardOpen && (
           <div className="p-4 border-t">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1782,9 +1810,10 @@ export default function TransactionsPollo({
       </div>
 
       <div className="bg-white border rounded shadow-sm">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          variant="ghost"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold !rounded-none border-0 !shadow-none !justify-between hover:!bg-slate-50"
           onClick={() => setTransactionsCardOpen((prev) => !prev)}
           aria-expanded={transactionsCardOpen}
         >
@@ -1794,7 +1823,7 @@ export default function TransactionsPollo({
           >
             ▼
           </span>
-        </button>
+        </Button>
         {transactionsCardOpen && (
           <div className="p-3 border-t space-y-4">
             <div className="block md:hidden space-y-3">
@@ -1949,14 +1978,16 @@ export default function TransactionsPollo({
                               {s.type === "CREDITO" ? "Crédito" : "Cash"}
                             </td>
                             <td className="p-3 border-b text-right whitespace-nowrap">
-                              <button
+                              <Button
                                 type="button"
-                                className="underline text-blue-600 hover:text-blue-800"
+                                variant="ghost"
+                                size="sm"
+                                className="underline !text-blue-600 hover:!text-blue-800 !min-h-0 !p-0 !shadow-none border-0 !rounded-none !bg-transparent hover:!bg-transparent font-normal"
                                 title="Ver detalle de productos de esta venta"
                                 onClick={() => openItemsModal(s.id)}
                               >
                                 {qty3(s.quantity)}
-                              </button>
+                              </Button>
                             </td>
                             <td className="p-3 border-b text-right whitespace-nowrap">
                               {money(s.total)}
@@ -1964,8 +1995,11 @@ export default function TransactionsPollo({
 
                             {canDelete && (
                               <td className="p-3 border-b text-right relative whitespace-nowrap">
-                                <button
-                                  className="px-2 py-1 rounded border hover:bg-gray-50"
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="!rounded-md !px-2 !py-1 hover:!bg-gray-50"
                                   onClick={() =>
                                     setOpenMenuId((prev) =>
                                       prev === s.id ? null : s.id,
@@ -1974,15 +2008,17 @@ export default function TransactionsPollo({
                                   title="Acciones"
                                 >
                                   ⋮
-                                </button>
+                                </Button>
                                 {openMenuId === s.id && (
                                   <div className="absolute right-2 mt-1 w-28 bg-white border rounded shadow z-10 text-left">
-                                    <button
-                                      className="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      className="block w-full text-left !rounded-none !justify-start px-3 py-2 hover:!bg-gray-100 !text-red-600 !shadow-none font-normal"
                                       onClick={() => confirmDelete(s)}
                                     >
                                       Eliminar
-                                    </button>
+                                    </Button>
                                   </div>
                                 )}
                               </td>

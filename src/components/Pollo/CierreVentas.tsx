@@ -16,7 +16,9 @@ import {
   updateDoc,
   runTransaction,
 } from "firebase/firestore";
-import ActionMenu from "../../components/common/ActionMenu";
+import ActionMenu, {
+  ActionMenuTrigger,
+} from "../../components/common/ActionMenu";
 import Toast from "../../components/common/Toast";
 import { format, endOfMonth, startOfMonth } from "date-fns";
 import { hasRole } from "../../utils/roles";
@@ -25,6 +27,7 @@ import jsPDF from "jspdf";
 import * as XLSX from "xlsx";
 import { restoreSaleAndDelete } from "../../Services/inventory";
 import RefreshButton from "../../components/common/RefreshButton";
+import Button from "../../components/common/Button";
 import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import { canAction } from "../../utils/access";
@@ -58,6 +61,8 @@ interface SaleDataRaw {
   avgUnitCost?: number;
   cogsAmount?: number;
   items?: any[];
+  /** Por línea: venta − costo (se guarda desde SaleFormV2). */
+  grossProfit?: number;
   unitPrice?: number;
   edited?: boolean;
   editedAt?: FireTimestamp;
@@ -87,6 +92,8 @@ interface SaleData {
   }[];
   avgUnitCost?: number;
   cogsAmount?: number;
+  /** Línea: monto venta − costo FIFO (persistido o derivado). */
+  grossProfit?: number;
   unitPrice?: number;
   edited?: boolean;
 }
@@ -115,6 +122,8 @@ interface CombinedDailyRow {
   totalLbs: number;
   totalUnits: number;
   totalAmount: number;
+  /** Suma U.Bruta del día+producto en el periodo. */
+  totalGross: number;
   product?: string;
 }
 
@@ -124,6 +133,13 @@ const round2 = (n: number) =>
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
+
+/** U.Bruta por fila: usa `grossProfit` guardado o (monto − costo). */
+function saleGrossProfit(s: SaleData): number {
+  const g = Number(s.grossProfit);
+  if (Number.isFinite(g)) return round2(g);
+  return round2((s.amount || 0) - Number(s.cogsAmount ?? 0));
+}
 
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const dateFromField = raw.date ? String(raw.date) : "";
@@ -163,6 +179,11 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
           0,
           Number(it?.unitPrice || 0) * qty - Number(it?.discount || 0),
         );
+      const cogsLine = Number(it?.cogsAmount ?? 0);
+      const gpStored = Number(it?.grossProfit);
+      const grossProfit = Number.isFinite(gpStored)
+        ? round2(gpStored)
+        : round2(lineFinal - cogsLine);
 
       return {
         id: `${id}#${idx}`,
@@ -183,19 +204,27 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
           ? it.allocations
           : raw.allocations,
         avgUnitCost: Number(it?.avgUnitCost ?? raw.avgUnitCost ?? 0),
-        cogsAmount: Number(it?.cogsAmount ?? 0),
+        cogsAmount: cogsLine,
+        grossProfit,
         unitPrice: Number(it?.unitPrice || 0),
         edited: !!raw.edited,
       };
     });
   }
 
+  const amt = Number(raw.amount ?? raw.amountCharged ?? 0);
+  const cogsLegacy = Number(raw.cogsAmount ?? 0);
+  const gpLegacy = Number(raw.grossProfit);
+  const grossProfitLegacy = Number.isFinite(gpLegacy)
+    ? round2(gpLegacy)
+    : round2(amt - cogsLegacy);
+
   return [
     {
       id,
       productName: raw.productName ?? "(sin nombre)",
       quantity: Number(raw.quantity ?? 0),
-      amount: Number(raw.amount ?? raw.amountCharged ?? 0),
+      amount: amt,
       amountSuggested: Number(raw.amountSuggested ?? 0),
       date,
       createdAt: createdAtDt,
@@ -208,7 +237,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       measurement: String(raw.measurement ?? ""),
       allocations: raw.allocations,
       avgUnitCost: raw.avgUnitCost,
-      cogsAmount: raw.cogsAmount,
+      cogsAmount: cogsLegacy,
+      grossProfit: grossProfitLegacy,
       unitPrice: Number(raw.unitPrice || 0),
       edited: !!raw.edited,
     },
@@ -322,10 +352,11 @@ export default function CierreVentas({
     right?: React.ReactNode;
   }) => {
     return (
-      <button
+      <Button
         type="button"
+        variant="secondary"
         onClick={onToggle}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border bg-gray-50 hover:bg-gray-100 active:bg-gray-200"
+        className="!rounded-xl w-full justify-between gap-3 px-4 py-3 font-normal shadow-sm"
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className="font-semibold truncate">{title}</span>
@@ -336,7 +367,7 @@ export default function CierreVentas({
         <div className="shrink-0 text-lg font-bold leading-none">
           {open ? "−" : "+"}
         </div>
-      </button>
+      </Button>
     );
   };
 
@@ -443,8 +474,8 @@ export default function CierreVentas({
     fetchClosure();
   }, [today, refreshKey]);
 
-  // Ventas visibles (con filtro por producto)
-  const visibleSales = React.useMemo(() => {
+  /** Misma base que la tabla pero sin filtrar por producto (para opciones del selector). */
+  const salesBaseWithoutProductFilter = React.useMemo(() => {
     let base: SaleData[] = [];
 
     if (filter === "FLOTANTE") {
@@ -465,20 +496,45 @@ export default function CierreVentas({
       base = base.filter((s) => s.type === operationFilter);
     }
 
-    const pf = productFilter.trim().toLowerCase();
-    if (pf) {
-      const norm = (x: string) =>
-        String(x || "")
-          .toLowerCase()
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "");
+    return base;
+  }, [filter, salesV2, floatersExtra, operationFilter]);
 
-      const pfNorm = norm(pf);
-      base = base.filter((s) => norm(s.productName).includes(pfNorm));
+  const productFilterOptions = React.useMemo(() => {
+    const names = new Set<string>();
+    for (const s of salesBaseWithoutProductFilter) {
+      const n = String(s.productName || "").trim();
+      if (n) names.add(n);
+    }
+    const sorted = Array.from(names).sort((a, b) =>
+      a.localeCompare(b, "es"),
+    );
+    return [
+      { value: "", label: "Todos los productos" },
+      ...sorted.map((name) => ({ value: name, label: name })),
+    ];
+  }, [salesBaseWithoutProductFilter]);
+
+  /** Si el producto elegido ya no está en la lista (p. ej. tras cambiar filtros), limpiar. */
+  useEffect(() => {
+    const pf = productFilter.trim();
+    if (!pf) return;
+    const ok = productFilterOptions.some((o) => o.value === pf);
+    if (!ok) setProductFilter("");
+  }, [productFilterOptions, productFilter]);
+
+  // Ventas visibles (con filtro por producto = selección exacta)
+  const visibleSales = React.useMemo(() => {
+    let base = salesBaseWithoutProductFilter;
+
+    const pf = productFilter.trim();
+    if (pf) {
+      base = base.filter(
+        (s) => String(s.productName || "").trim() === pf,
+      );
     }
 
     return base;
-  }, [filter, salesV2, floatersExtra, productFilter, operationFilter]);
+  }, [salesBaseWithoutProductFilter, productFilter]);
 
   const visibleSalesSorted = React.useMemo(
     () => [...visibleSales].sort(compareSaleNewestFirst),
@@ -646,6 +702,7 @@ export default function CierreVentas({
           totalLbs: 0,
           totalUnits: 0,
           totalAmount: 0,
+          totalGross: 0,
         };
       }
 
@@ -656,6 +713,9 @@ export default function CierreVentas({
       }
 
       map[key].totalAmount = round2(map[key].totalAmount + (s.amount || 0));
+      map[key].totalGross = round2(
+        map[key].totalGross + saleGrossProfit(s),
+      );
     });
 
     return Object.values(map).sort((a, b) => {
@@ -682,17 +742,20 @@ export default function CierreVentas({
   // Consolidado por producto
   const productMap: Record<
     string,
-    { totalQuantity: number; totalAmount: number }
+    { totalQuantity: number; totalAmount: number; totalGross: number }
   > = {};
   visibleSales.forEach((s) => {
     const key = s.productName || "(sin nombre)";
     if (!productMap[key])
-      productMap[key] = { totalQuantity: 0, totalAmount: 0 };
+      productMap[key] = { totalQuantity: 0, totalAmount: 0, totalGross: 0 };
     productMap[key].totalQuantity = round3(
       productMap[key].totalQuantity + (s.quantity || 0),
     );
     productMap[key].totalAmount = round2(
       productMap[key].totalAmount + (s.amount || 0),
+    );
+    productMap[key].totalGross = round2(
+      productMap[key].totalGross + saleGrossProfit(s),
     );
   });
 
@@ -701,7 +764,12 @@ export default function CierreVentas({
       productName,
       totalQuantity: v.totalQuantity,
       totalAmount: v.totalAmount,
+      totalGross: v.totalGross,
     }),
+  );
+
+  const totalGrossAll = round2(
+    visibleSales.reduce((sum, s) => sum + saleGrossProfit(s), 0),
   );
 
   // Guardar cierre (misma lógica tuya)
@@ -1045,6 +1113,7 @@ export default function CierreVentas({
 
           if (itemIdx !== null && Array.isArray(saleData.items)) {
             const items = [...saleData.items];
+            const lineGross = round2(newAmount - cogsAmount);
             items[itemIdx] = {
               ...items[itemIdx],
               qty,
@@ -1053,15 +1122,28 @@ export default function CierreVentas({
               allocations: newAllocs,
               cogsAmount,
               avgUnitCost,
+              grossProfit: lineGross,
             };
             const totalAmt = items.reduce(
               (sum: number, it: any) => sum + Number(it.lineFinal ?? 0),
               0,
             );
+            const grossProfitTotal = round2(
+              items.reduce(
+                (sum: number, it: any) =>
+                  sum +
+                  (Number.isFinite(Number(it.grossProfit))
+                    ? Number(it.grossProfit)
+                    : Number(it.lineFinal ?? 0) -
+                      Number(it.cogsAmount ?? 0)),
+                0,
+              ),
+            );
             tx.update(saleRef, {
               items,
               amount: round2(totalAmt),
               amountCharged: round2(totalAmt),
+              grossProfitTotal,
               clientName: editClient,
               date: editDate,
               edited: true,
@@ -1079,6 +1161,7 @@ export default function CierreVentas({
               allocations: newAllocs,
               cogsAmount,
               avgUnitCost,
+              grossProfit: round2(newAmount - cogsAmount),
               edited: true,
               editedAt: Timestamp.now(),
               editedBy: editorEmail,
@@ -1093,20 +1176,33 @@ export default function CierreVentas({
           const saleData = saleSnap.data() as any;
           const items = [...(saleData.items || [])];
           if (items[itemIdx]) {
+            const prevCogs = Number(items[itemIdx].cogsAmount ?? 0);
             items[itemIdx] = {
               ...items[itemIdx],
               unitPrice: price,
               lineFinal: newAmount,
+              grossProfit: round2(newAmount - prevCogs),
             };
           }
           const totalAmt = items.reduce(
             (sum: number, it: any) => sum + Number(it.lineFinal ?? 0),
             0,
           );
+          const grossProfitTotal = round2(
+            items.reduce(
+              (sum: number, it: any) =>
+                sum +
+                (Number.isFinite(Number(it.grossProfit))
+                  ? Number(it.grossProfit)
+                  : Number(it.lineFinal ?? 0) - Number(it.cogsAmount ?? 0)),
+              0,
+            ),
+          );
           await updateDoc(saleRef, {
             items,
             amount: round2(totalAmt),
             amountCharged: round2(totalAmt),
+            grossProfitTotal,
             clientName: editClient,
             date: editDate,
             edited: true,
@@ -1114,10 +1210,15 @@ export default function CierreVentas({
             editedBy: editorEmail,
           });
         } else {
+          const saleSnap = await getDoc(saleRef);
+          const prevCogs = saleSnap.exists()
+            ? Number((saleSnap.data() as any).cogsAmount ?? 0)
+            : 0;
           await updateDoc(saleRef, {
             unitPrice: price,
             amount: newAmount,
             amountCharged: newAmount,
+            grossProfit: round2(newAmount - prevCogs),
             clientName: editClient,
             date: editDate,
             edited: true,
@@ -1231,6 +1332,7 @@ export default function CierreVentas({
         Producto: s.productName,
         "Libras - Unidad": s.quantity,
         Monto: s.amount,
+        U_Bruta: saleGrossProfit(s),
         Vendedor: displaySeller(s.userEmail),
       }));
 
@@ -1268,51 +1370,59 @@ export default function CierreVentas({
     return (
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
         <div className="flex items-center gap-1 flex-wrap">
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          <Button
+            variant="outline"
+            size="sm"
+            className="!px-2 !py-1"
             onClick={() => onPage(1)}
             disabled={page === 1}
           >
             « Primero
-          </button>
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="!px-2 !py-1"
             onClick={() => onPage(Math.max(1, page - 1))}
             disabled={page === 1}
           >
             ‹ Anterior
-          </button>
+          </Button>
           {pages.map((p, idx) =>
             typeof p === "number" ? (
-              <button
+              <Button
                 key={idx}
-                className={`px-3 py-1 border rounded ${
-                  p === page ? "bg-blue-600 text-white" : ""
-                }`}
+                variant={p === page ? "primary" : "outline"}
+                size="sm"
+                className="!px-3 !py-1 min-w-[2.25rem]"
                 onClick={() => onPage(p)}
               >
                 {p}
-              </button>
+              </Button>
             ) : (
               <span key={idx} className="px-2">
                 …
               </span>
             ),
           )}
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          <Button
+            variant="outline"
+            size="sm"
+            className="!px-2 !py-1"
             onClick={() => onPage(Math.min(totalPages, page + 1))}
             disabled={page === totalPages}
           >
             Siguiente ›
-          </button>
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-50"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="!px-2 !py-1"
             onClick={() => onPage(totalPages)}
             disabled={page === totalPages}
           >
             Último »
-          </button>
+          </Button>
         </div>
         <div className="text-sm text-gray-600">
           Página {page} de {totalPages} • {totalItems} registro(s)
@@ -1332,6 +1442,9 @@ export default function CierreVentas({
     const totalAmount = round2(
       totalsSrc.reduce((sum, s) => sum + (s.amount || 0), 0),
     );
+    const totalGross = round2(
+      totalsSrc.reduce((sum, s) => sum + saleGrossProfit(s), 0),
+    );
     const showAllPagesHint =
       totalsSrc.length > rows.length && rows.length > 0;
 
@@ -1346,8 +1459,9 @@ export default function CierreVentas({
               <th className="p-3 border-b text-left">Tipo</th>
               <th className="p-3 border-b text-left">Producto</th>
               <th className="p-3 border-b text-right">Precio</th>
-              <th className="p-3 border-b text-right">Libras - Unidad</th>
+              <th className="p-3 border-b text-right">Lbs/Und</th>
               <th className="p-3 border-b text-right">Monto</th>
+              <th className="p-3 border-b text-right">U.Bruta</th>
               <th className="p-3 border-b text-left">Vendedor</th>
               <th className="p-3 border-b text-center w-10"></th>
             </tr>
@@ -1397,24 +1511,23 @@ export default function CierreVentas({
                 </td>
                 <td className="p-3 border-b text-right">{qty3(s.quantity)}</td>
                 <td className="p-3 border-b text-right">C${money(s.amount)}</td>
+                <td className="p-3 border-b text-right tabular-nums">
+                  C${money(saleGrossProfit(s))}
+                </td>
                 <td className="p-3 border-b text-left">
                   {displaySeller(s.userEmail)}
                 </td>
                 <td className="p-3 border-b text-center">
                   {canEditSale ? (
-                    <button
+                    <ActionMenuTrigger
+                      className="!h-8 !w-8"
+                      title="Acciones"
+                      aria-label="Acciones"
                       onClick={(e) => {
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                         setRowActionMenu({ rect, sale: s });
                       }}
-                      className="p-1 rounded hover:bg-gray-200"
-                      title="Acciones"
-                      aria-label="Acciones"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-                      </svg>
-                    </button>
+                    />
                   ) : (
                     <span className="text-gray-400 text-xs">—</span>
                   )}
@@ -1423,7 +1536,7 @@ export default function CierreVentas({
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={10} className="p-3 text-center text-gray-500">
+                <td colSpan={11} className="p-3 text-center text-gray-500">
                   Sin ventas para mostrar.
                 </td>
               </tr>
@@ -1447,6 +1560,9 @@ export default function CierreVentas({
                 </td>
                 <td className="p-3 border-b text-right font-semibold">
                   C${money(totalAmount)}
+                </td>
+                <td className="p-3 border-b text-right font-semibold tabular-nums">
+                  C${money(totalGross)}
                 </td>
                 <td colSpan={2} />
               </tr>
@@ -1475,6 +1591,7 @@ export default function CierreVentas({
             <th className="p-3 border-b text-right">Libras</th>
             <th className="p-3 border-b text-right">Unidades</th>
             <th className="p-3 border-b text-right">Monto</th>
+            <th className="p-3 border-b text-right">U.Bruta</th>
           </tr>
         </thead>
         <tbody>
@@ -1491,6 +1608,9 @@ export default function CierreVentas({
               <td className="p-3 border-b text-right">{qty3(r.totalUnits)}</td>
               <td className="p-3 border-b text-right">
                 C${money(r.totalAmount)}
+              </td>
+              <td className="p-3 border-b text-right tabular-nums">
+                C${money(r.totalGross)}
               </td>
             </tr>
           ))}
@@ -1514,12 +1634,15 @@ export default function CierreVentas({
               <td className="p-3 border-b text-right font-semibold">
                 C${money(totalsSrc.reduce((sum, r) => sum + r.totalAmount, 0))}
               </td>
+              <td className="p-3 border-b text-right font-semibold tabular-nums">
+                C${money(totalsSrc.reduce((sum, r) => sum + r.totalGross, 0))}
+              </td>
             </tr>
           )}
 
           {rows.length === 0 && (
             <tr>
-              <td colSpan={5} className="p-3 text-center text-gray-500">
+              <td colSpan={6} className="p-3 text-center text-gray-500">
                 Sin ventas para mostrar.
               </td>
             </tr>
@@ -1545,28 +1668,17 @@ export default function CierreVentas({
 
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} />
-          <button
-            type="button"
+          <ActionMenuTrigger
+            title="Más acciones"
+            aria-label="Más acciones"
+            className="!h-10 !w-10"
             onClick={(e) => {
               setRowActionMenu(null);
               setHeaderToolsMenuRect(
                 e.currentTarget.getBoundingClientRect(),
               );
             }}
-            title="Más acciones"
-            aria-label="Más acciones"
-            className="bg-gray-100 text-gray-800 p-2 rounded hover:bg-gray-200"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-            </svg>
-          </button>
+          />
         </div>
 
         <ActionMenu
@@ -1575,27 +1687,33 @@ export default function CierreVentas({
           onClose={() => setHeaderToolsMenuRect(null)}
           width={220}
         >
-          <button
-            type="button"
-            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
-            disabled={!cierreVentas}
-            onClick={() => {
-              setHeaderToolsMenuRect(null);
-              void handleSaveClosure();
-            }}
-          >
-            Cerrar ventas del día
-          </button>
-          <button
-            type="button"
-            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
-            onClick={() => {
-              setHeaderToolsMenuRect(null);
-              exportToXLSX();
-            }}
-          >
-            Exportar transacciones (XLSX)
-          </button>
+          <div className="py-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
+              disabled={!cierreVentas}
+              onClick={() => {
+                setHeaderToolsMenuRect(null);
+                void handleSaveClosure();
+              }}
+            >
+              Cerrar ventas del día
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
+              onClick={() => {
+                setHeaderToolsMenuRect(null);
+                exportToXLSX();
+              }}
+            >
+              Exportar transacciones (XLSX)
+            </Button>
+          </div>
         </ActionMenu>
       </div>
 
@@ -1612,7 +1730,9 @@ export default function CierreVentas({
               {operationFilter !== "ALL"
                 ? ` • ${operationFilter === "CREDITO" ? "Crédito" : "Cash"}`
                 : ""}
-              {productFilter.trim() ? ` • "${productFilter.trim()}"` : ""}
+              {productFilter.trim()
+                ? ` • ${productFilter.trim()}`
+                : ""}
             </span>
           }
         />
@@ -1671,13 +1791,13 @@ export default function CierreVentas({
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-gray-600">Producto</label>
-                <input
-                  type="text"
-                  className="border rounded px-2 py-2 w-full"
-                  placeholder="Buscar por producto..."
+                <MobileHtmlSelect
+                  label="Producto"
                   value={productFilter}
-                  onChange={(e) => setProductFilter(e.target.value)}
+                  onChange={setProductFilter}
+                  options={productFilterOptions}
+                  sheetTitle="Producto"
+                  selectClassName="border rounded px-2 py-2 w-full"
                 />
               </div>
             </div>
@@ -1703,7 +1823,8 @@ export default function CierreVentas({
                       onToggle={() => setIndicadoresOpen((v) => !v)}
                       right={
                         <span className="ml-1">
-                          Totales • C${money(totalSalesAll)}
+                          Ventas C${money(totalSalesAll)} • U.B. C$
+                          {money(totalGrossAll)}
                         </span>
                       }
                     />
@@ -1847,6 +1968,15 @@ export default function CierreVentas({
                                   {qty3(totalUnitsAll)}
                                 </div>
                               </div>
+                              <div className="p-3 rounded bg-white border md:col-span-2">
+                                <div className="text-xs text-slate-600">
+                                  Utilidad bruta total (venta − costo, periodo
+                                  filtrado)
+                                </div>
+                                <div className="mt-1 text-xl font-bold text-violet-900">
+                                  C${money(totalGrossAll)}
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1881,6 +2011,9 @@ export default function CierreVentas({
                                 <th className="p-3 border-b text-right">
                                   Total dinero
                                 </th>
+                                <th className="p-3 border-b text-right">
+                                  U.Bruta
+                                </th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1898,6 +2031,9 @@ export default function CierreVentas({
                                   <td className="p-3 border-b text-right">
                                     C${money(row.totalAmount)}
                                   </td>
+                                  <td className="p-3 border-b text-right tabular-nums">
+                                    C${money(row.totalGross)}
+                                  </td>
                                 </tr>
                               ))}
                               {productSummaryArray.length > 0 && (
@@ -1912,12 +2048,15 @@ export default function CierreVentas({
                                   <td className="p-3 border-b text-right font-semibold">
                                     C${money(totalSalesAll)}
                                   </td>
+                                  <td className="p-3 border-b text-right font-semibold tabular-nums">
+                                    C${money(totalGrossAll)}
+                                  </td>
                                 </tr>
                               )}
                               {productSummaryArray.length === 0 && (
                                 <tr>
                                   <td
-                                    colSpan={3}
+                                    colSpan={4}
                                     className="p-3 text-center text-gray-500"
                                   >
                                     Sin datos para consolidar.
@@ -1941,17 +2080,19 @@ export default function CierreVentas({
                           <div className="text-xs text-slate-500">
                             {combinedDailyRows.length} día(s)
                           </div>
-                          <button
+                          <Button
                             type="button"
+                            size="sm"
+                            variant="primary"
                             onClick={() => setCombinedTableOpen((v) => !v)}
-                            className={`text-xs px-3 py-1.5 rounded border font-semibold transition ${
+                            className={`text-xs !px-3 !py-1.5 !font-semibold ${
                               combinedOpenEffective
-                                ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700"
-                                : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+                                ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                                : "!bg-blue-600 hover:!bg-blue-700 !border-blue-600"
                             }`}
                           >
                             {combinedOpenEffective ? "Cerrar" : "Ver"}
-                          </button>
+                          </Button>
                         </div>
                       </div>
 
@@ -1981,22 +2122,24 @@ export default function CierreVentas({
                       <div className="text-xs text-slate-500">
                         {cashSales.length} registro(s)
                       </div>
-                      <button
+                      <Button
                         type="button"
+                        size="sm"
+                        variant="primary"
                         onClick={() => setCashTableOpen((v) => !v)}
-                        className={`text-xs px-3 py-1.5 rounded border font-semibold transition ${
+                        className={`text-xs !px-3 !py-1.5 !font-semibold ${
                           cashOpenEffective
-                            ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700"
-                            : "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700"
+                            ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                            : "!bg-emerald-600 hover:!bg-emerald-700 !border-emerald-600"
                         }`}
                       >
                         {cashOpenEffective ? "Cerrar" : "Ver"}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   {cashOpenEffective && (
                     <>
-                      {renderSalesTable(cashRowsForTable)}
+                      {renderSalesTable(cashRowsForTable, cashSales)}
                       {!pdfMode &&
                         renderProPager(
                           cashPage,
@@ -2019,17 +2162,19 @@ export default function CierreVentas({
                       <div className="text-xs text-slate-500">
                         {creditSales.length} registro(s)
                       </div>
-                      <button
+                      <Button
                         type="button"
+                        size="sm"
+                        variant="primary"
                         onClick={() => setCreditTableOpen((v) => !v)}
-                        className={`text-xs px-3 py-1.5 rounded border font-semibold transition ${
+                        className={`text-xs !px-3 !py-1.5 !font-semibold ${
                           creditOpenEffective
-                            ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700"
-                            : "bg-amber-500 text-white border-amber-500 hover:bg-amber-600"
+                            ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                            : "!bg-amber-500 hover:!bg-amber-600 !border-amber-500"
                         }`}
                       >
                         {creditOpenEffective ? "Cerrar" : "Ver"}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   {creditOpenEffective && (
@@ -2059,7 +2204,8 @@ export default function CierreVentas({
               onToggle={() => setVentasOpen((v) => !v)}
               right={
                 <span className="ml-1">
-                  {visibleSales.length} • C${money(totalCharged)}
+                  {visibleSales.length} • C${money(totalCharged)} • U.B. C$
+                  {money(totalGrossAll)}
                 </span>
               }
             />
@@ -2088,6 +2234,9 @@ export default function CierreVentas({
 
                       <div className="text-right shrink-0 ml-3">
                         <div className="font-bold">C${money(s.amount)}</div>
+                        <div className="text-xs text-violet-800 font-semibold">
+                          U.B. C${money(saleGrossProfit(s))}
+                        </div>
                         <span
                           className={`text-xs px-2 py-0.5 rounded ${
                             s.status === "PROCESADA"
@@ -2110,10 +2259,17 @@ export default function CierreVentas({
                       </div>
                     </summary>
 
-                    <div className="px-4 pb-4 pt-2 text-sm space-y-2">
+                      <div className="px-4 pb-4 pt-2 text-sm space-y-2">
                       <div className="flex justify-between gap-3">
                         <span className="text-gray-600">Cantidad</span>
                         <strong>{qty3(s.quantity)}</strong>
+                      </div>
+
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-600">U.Bruta</span>
+                        <strong className="text-violet-900">
+                          C${money(saleGrossProfit(s))}
+                        </strong>
                       </div>
 
                       <div className="flex justify-between gap-3">
@@ -2153,18 +2309,14 @@ export default function CierreVentas({
 
                       {canEditSale && (
                         <div className="pt-2 flex justify-end">
-                          <button
+                          <ActionMenuTrigger
+                            aria-label="Acciones"
+                            title="Acciones"
                             onClick={(e) => {
                               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                               setRowActionMenu({ rect, sale: s });
                             }}
-                            className="flex items-center gap-1 text-xs bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-lg"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
-                              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-                            </svg>
-                            Acciones
-                          </button>
+                          />
                         </div>
                       )}
                     </div>
@@ -2194,19 +2346,25 @@ export default function CierreVentas({
         width={180}
       >
         {rowActionMenu && (
-          <>
+          <div className="py-1">
             {rowActionMenu.sale.status === "FLOTANTE" && (
               <>
-                <button
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   onClick={() => {
                     openEdit(rowActionMenu.sale);
                   }}
                 >
                   Editar venta
-                </button>
-                <button
-                  className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
                   onClick={() => {
                     const id = rowActionMenu.sale.id;
                     setRowActionMenu(null);
@@ -2214,12 +2372,15 @@ export default function CierreVentas({
                   }}
                 >
                   Eliminar venta
-                </button>
+                </Button>
               </>
             )}
             {rowActionMenu.sale.status === "PROCESADA" && (
-              <button
-                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
                 onClick={() => {
                   const id = rowActionMenu.sale.id;
                   setRowActionMenu(null);
@@ -2227,9 +2388,9 @@ export default function CierreVentas({
                 }}
               >
                 Revertir a flotante
-              </button>
+              </Button>
             )}
-          </>
+          </div>
         )}
       </ActionMenu>
 
@@ -2389,36 +2550,40 @@ export default function CierreVentas({
               </div>
 
               <div className="sticky bottom-0 bg-white border-t px-5 py-3 flex gap-2 justify-end rounded-b-2xl shrink-0">
-                <button
+                <Button
+                  variant="outline"
+                  size="md"
                   onClick={() => {
                     if (editConfirm) setEditConfirm(false);
                     else setEditing(null);
                   }}
-                  className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
+                  className="!rounded-xl"
                   disabled={editSaving}
                 >
                   {editConfirm ? "Volver" : "Cancelar"}
-                </button>
+                </Button>
                 {(() => {
                   const qtyOk = (parseFloat(editQty) || 0) > 0;
                   const priceOk = (parseFloat(editPrice) || 0) > 0;
                   const fieldsValid = qtyOk && priceOk;
                   return !editConfirm ? (
-                    <button
+                    <Button
+                      variant="primary"
                       onClick={() => setEditConfirm(true)}
-                      className="px-4 py-2 text-sm rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+                      className="!rounded-xl !bg-indigo-600 hover:!bg-indigo-700"
                       disabled={!fieldsValid || editChanges.length === 0}
                     >
                       Revisar cambios
-                    </button>
+                    </Button>
                   ) : (
-                    <button
+                    <Button
+                      variant="primary"
                       onClick={saveEdit}
-                      className="px-4 py-2 text-sm rounded-lg text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                      className="!rounded-xl !bg-green-600 hover:!bg-green-700"
                       disabled={editSaving || !fieldsValid || editChanges.length === 0}
                     >
                       {editSaving ? "Guardando..." : "Confirmar y guardar"}
-                    </button>
+                    </Button>
                   );
                 })()}
               </div>

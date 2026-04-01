@@ -15,8 +15,8 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
-import ActionMenu from "../common/ActionMenu";
-import { FiMoreVertical } from "react-icons/fi";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
+import Button from "../common/Button";
 
 type RoleCandies =
   | ""
@@ -2266,39 +2266,34 @@ export default function DataCenterCandies({
           </h2>
 
           <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-end">
-            <button
+            <Button
+              type="button"
+              variant="primary"
               onClick={handleDownloadPDF}
-              className="
-                inline-flex items-center justify-center gap-2
-                w-full sm:w-auto
-                px-3 py-2 text-sm font-semibold
-                rounded-lg md:rounded-md
-                bg-green-600 text-white hover:bg-green-700 transition-colors
-              "
+              size="sm"
+              className="w-full sm:w-auto !bg-green-600 hover:!bg-green-700 active:!bg-green-800 !rounded-lg md:!rounded-md shadow-none"
             >
               Exportar PDF
-            </button>
+            </Button>
 
-            <button
+            <Button
+              type="button"
+              variant="primary"
               onClick={exportCSV}
-              className="
-                inline-flex items-center justify-center gap-2
-                w-full sm:w-auto
-                px-3 py-2 text-sm font-semibold
-                rounded-lg md:rounded-md
-                bg-gray-800 text-white hover:bg-black transition-colors
-              "
+              size="sm"
+              className="w-full sm:w-auto !bg-gray-800 hover:!bg-black active:!bg-gray-900 !rounded-lg md:!rounded-md shadow-none"
             >
               Exportar CSV
-            </button>
+            </Button>
           </div>
         </div>
 
         {/* FILTROS */}
         <div className="bg-white border rounded-2xl shadow-sm mb-3">
-          <button
+          <Button
             type="button"
-            className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+            variant="ghost"
+            className="w-full justify-between !rounded-t-2xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-gray-800 shadow-none hover:bg-gray-50/90"
             onClick={() => setFiltersOpen((v) => !v)}
             aria-expanded={filtersOpen}
           >
@@ -2308,7 +2303,7 @@ export default function DataCenterCandies({
             >
               ▼
             </span>
-          </button>
+          </Button>
           <div
             className={`collapsible-content ${filtersOpen ? "block" : "hidden"} border-t p-3 sm:p-4`}
           >
@@ -2452,34 +2447,40 @@ export default function DataCenterCandies({
         {/* CHIPS/TABS */}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
           <div className="flex gap-2">
-            <button
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={() => {
                 setVendorOrderKey("");
                 setDataView("MACRO");
               }}
               className={[
-                "px-3 py-2 rounded-full text-sm font-semibold border transition-colors",
+                "!rounded-full px-3 py-2 text-sm font-semibold transition-colors shadow-none",
                 dataView === "MACRO"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-800 border-gray-200 hover:bg-gray-50",
+                  ? "!bg-gray-900 !text-white !border-gray-900 hover:!bg-gray-800"
+                  : "!bg-white !text-gray-800 !border-gray-200 hover:!bg-gray-50",
               ].join(" ")}
             >
               Data Macro
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={() => {
                 setVendorOrderKey("");
                 setDataView("DETALLE");
               }}
               className={[
-                "px-3 py-2 rounded-full text-sm font-semibold border transition-colors",
+                "!rounded-full px-3 py-2 text-sm font-semibold transition-colors shadow-none",
                 dataView === "DETALLE"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-800 border-gray-200 hover:bg-gray-50",
+                  ? "!bg-gray-900 !text-white !border-gray-900 hover:!bg-gray-800"
+                  : "!bg-white !text-gray-800 !border-gray-200 hover:!bg-gray-50",
               ].join(" ")}
             >
               Data Detalle
-            </button>
+            </Button>
           </div>
 
           {/* ✅ Gastos ya NO son manuales */}
@@ -2498,9 +2499,10 @@ export default function DataCenterCandies({
             <>
               {/* KPIs Macro */}
               <div className="bg-white border rounded-2xl shadow-sm mb-4">
-                <button
+                <Button
                   type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  variant="ghost"
+                  className="w-full justify-between !rounded-t-2xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-gray-800 shadow-none hover:bg-gray-50/90"
                   onClick={() => setKpiOpen((v) => !v)}
                   aria-expanded={kpiOpen}
                 >
@@ -2510,7 +2512,7 @@ export default function DataCenterCandies({
                   >
                     ▼
                   </span>
-                </button>
+                </Button>
                 <div
                   className={`collapsible-content ${kpiOpen ? "block" : "hidden"} border-t p-3`}
                 >
@@ -2609,9 +2611,10 @@ export default function DataCenterCandies({
             <>
               {/* KPIs */}
               <div className="bg-white border rounded-2xl shadow-sm mb-4">
-                <button
+                <Button
                   type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  variant="ghost"
+                  className="w-full justify-between !rounded-t-2xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-gray-800 shadow-none hover:bg-gray-50/90"
                   onClick={() => setKpiOpen((v) => !v)}
                   aria-expanded={kpiOpen}
                 >
@@ -2621,7 +2624,7 @@ export default function DataCenterCandies({
                   >
                     ▼
                   </span>
-                </button>
+                </Button>
                 <div
                   className={`collapsible-content ${kpiOpen ? "block" : "hidden"} border-t p-3`}
                 >
@@ -2900,9 +2903,10 @@ export default function DataCenterCandies({
 
               {/* Órdenes vendedores */}
               <div className="bg-white border rounded-2xl shadow-sm mb-4">
-                <button
+                <Button
                   type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  variant="ghost"
+                  className="w-full justify-between !rounded-t-2xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-gray-800 shadow-none hover:bg-gray-50/90"
                   onClick={() => setVendorOrdersOpen((v) => !v)}
                   aria-expanded={vendorOrdersOpen}
                 >
@@ -2912,7 +2916,7 @@ export default function DataCenterCandies({
                   >
                     ▼
                   </span>
-                </button>
+                </Button>
                 <div
                   className={`collapsible-content ${vendorOrdersOpen ? "block" : "hidden"} border-t p-3 sm:p-4`}
                 >
@@ -2996,10 +3000,10 @@ export default function DataCenterCandies({
                                     {o.date ? `• ${o.date}` : ""}
                                   </div>
                                 </div>
-                                <button
-                                  type="button"
-                                  className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 shrink-0"
+                                <ActionMenuTrigger
+                                  className="shrink-0"
                                   aria-label="Acciones"
+                                  iconClassName="h-5 w-5 text-gray-800"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setVendorOrderRowMenu({
@@ -3009,9 +3013,7 @@ export default function DataCenterCandies({
                                       ).getBoundingClientRect(),
                                     });
                                   }}
-                                >
-                                  <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                                </button>
+                                />
                               </div>
 
                               <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
@@ -3102,14 +3104,17 @@ export default function DataCenterCandies({
                                     C${money(o.totalEsperado)}
                                   </td>
                                   <td className="border p-2">
-                                    <button
-                                      className="text-xs bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-black"
+                                    <Button
+                                      type="button"
+                                      variant="primary"
+                                      size="sm"
+                                      className="!bg-gray-800 hover:!bg-black active:!bg-gray-900 !rounded-lg text-xs shadow-none"
                                       onClick={() =>
                                         setVendorOrderKey(o.orderKey)
                                       }
                                     >
                                       Ver detalle
-                                    </button>
+                                    </Button>
                                   </td>
                                 </tr>
                               ))}
@@ -3125,12 +3130,15 @@ export default function DataCenterCandies({
                                 Detalle orden vendedor •{" "}
                                 {vendorOrderDetail.orderId}
                               </h4>
-                              <button
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
                                 onClick={() => setVendorOrderKey("")}
-                                className="w-full sm:w-auto text-sm px-3 py-2 border rounded-lg hover:bg-gray-50"
+                                className="w-full sm:w-auto !rounded-lg shadow-none"
                               >
                                 Cerrar
-                              </button>
+                              </Button>
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm mb-4">
@@ -3267,9 +3275,10 @@ export default function DataCenterCandies({
 
               {/* Existencias */}
               <div className="bg-white border rounded-2xl shadow-sm mb-4">
-                <button
+                <Button
                   type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  variant="ghost"
+                  className="w-full justify-between !rounded-t-2xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-gray-800 shadow-none hover:bg-gray-50/90"
                   onClick={() => setExistenciasOpen((v) => !v)}
                   aria-expanded={existenciasOpen}
                 >
@@ -3279,7 +3288,7 @@ export default function DataCenterCandies({
                   >
                     ▼
                   </span>
-                </button>
+                </Button>
                 <div
                   className={`collapsible-content ${existenciasOpen ? "block" : "hidden"} border-t p-3`}
                 >
@@ -3312,9 +3321,10 @@ export default function DataCenterCandies({
 
               {/* Vendedores */}
               <div className="bg-white border rounded-2xl shadow-sm mb-4">
-                <button
+                <Button
                   type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  variant="ghost"
+                  className="w-full justify-between !rounded-t-2xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-gray-800 shadow-none hover:bg-gray-50/90"
                   onClick={() => setVendedoresOpen((v) => !v)}
                   aria-expanded={vendedoresOpen}
                 >
@@ -3324,7 +3334,7 @@ export default function DataCenterCandies({
                   >
                     ▼
                   </span>
-                </button>
+                </Button>
                 <div
                   className={`collapsible-content ${vendedoresOpen ? "block" : "hidden"} border-t p-3`}
                 >
@@ -3380,9 +3390,10 @@ export default function DataCenterCandies({
 
               {/* Saldos pendientes */}
               <div className="bg-white border rounded-2xl shadow-sm mb-6">
-                <button
+                <Button
                   type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                  variant="ghost"
+                  className="w-full justify-between !rounded-t-2xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-gray-800 shadow-none hover:bg-gray-50/90"
                   onClick={() => setSaldosOpen((v) => !v)}
                   aria-expanded={saldosOpen}
                 >
@@ -3392,7 +3403,7 @@ export default function DataCenterCandies({
                   >
                     ▼
                   </span>
-                </button>
+                </Button>
                 <div
                   className={`collapsible-content ${saldosOpen ? "block" : "hidden"} border-t p-3 sm:p-4`}
                 >
@@ -3442,10 +3453,9 @@ export default function DataCenterCandies({
                               </span>
                             </div>
                             <div className="mt-2 flex justify-end">
-                              <button
-                                type="button"
-                                className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                              <ActionMenuTrigger
                                 aria-label="Acciones"
+                                iconClassName="h-5 w-5 text-gray-800"
                                 onClick={(e) =>
                                   setArRowMenu({
                                     row: c,
@@ -3454,9 +3464,7 @@ export default function DataCenterCandies({
                                     ).getBoundingClientRect(),
                                   })
                                 }
-                              >
-                                <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                              </button>
+                              />
                             </div>
                           </div>
                         ))}
@@ -3489,13 +3497,15 @@ export default function DataCenterCandies({
                                   {c.lastPayment || "—"}
                                 </td>
                                 <td className="border p-2">
-                                  <button
+                                  <Button
                                     type="button"
+                                    variant="primary"
+                                    size="sm"
                                     onClick={() => setArOpen(c)}
-                                    className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                                    className="!bg-indigo-600 hover:!bg-indigo-700 active:!bg-indigo-800 text-xs shadow-none"
                                   >
                                     Ver
-                                  </button>
+                                  </Button>
                                 </td>
                               </tr>
                             ))}
@@ -3537,10 +3547,9 @@ export default function DataCenterCandies({
                             <div className="font-semibold truncate">
                               {g.label}
                             </div>
-                            <button
-                              type="button"
-                              className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50"
+                            <ActionMenuTrigger
                               aria-label="Opciones"
+                              iconClassName="h-5 w-5 text-gray-800"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setGroupRowMenu({
@@ -3550,9 +3559,7 @@ export default function DataCenterCandies({
                                   ).getBoundingClientRect(),
                                 });
                               }}
-                            >
-                              <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                            </button>
+                            />
                           </div>
 
                           <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
@@ -3654,10 +3661,10 @@ export default function DataCenterCandies({
                               C${money(g.commCredit)}
                             </td>
                             <td className="border p-2">
-                              <button
-                                type="button"
-                                className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 inline-flex"
+                              <ActionMenuTrigger
+                                className="inline-flex"
                                 aria-label="Opciones"
+                                iconClassName="h-5 w-5 text-gray-800"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setGroupRowMenu({
@@ -3667,9 +3674,7 @@ export default function DataCenterCandies({
                                     ).getBoundingClientRect(),
                                   });
                                 }}
-                              >
-                                <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                              </button>
+                              />
                             </td>
                           </tr>
                         ))}
@@ -3699,12 +3704,15 @@ export default function DataCenterCandies({
                         detailKey}
                     </h2>
 
-                    <button
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
                       onClick={() => setDetailKey("")}
-                      className="w-full sm:w-auto text-sm px-3 py-2 border rounded-lg hover:bg-gray-50"
+                      className="w-full sm:w-auto !rounded-lg shadow-none"
                     >
                       Cerrar
-                    </button>
+                    </Button>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm mb-4">
@@ -4008,13 +4016,15 @@ export default function DataCenterCandies({
                   Saldo pendiente: <b>C${money(arOpen.balance)}</b>
                 </div>
               </div>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => setArOpen(null)}
-                className="text-sm text-gray-500 hover:text-gray-700"
+                className="!rounded-full px-2 py-1 text-sm text-gray-500 hover:!text-gray-700 shadow-none font-normal"
               >
                 ✕
-              </button>
+              </Button>
             </div>
 
             <div className="overflow-x-auto">
@@ -4098,9 +4108,10 @@ export default function DataCenterCandies({
       >
         {groupRowMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-slate-100"
               onClick={() => {
                 const k = groupRowMenu.key;
                 setGroupRowMenu(null);
@@ -4108,7 +4119,7 @@ export default function DataCenterCandies({
               }}
             >
               Ver detalle
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>
@@ -4121,9 +4132,10 @@ export default function DataCenterCandies({
       >
         {vendorOrderRowMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-slate-100"
               onClick={() => {
                 const k = vendorOrderRowMenu.orderKey;
                 setVendorOrderRowMenu(null);
@@ -4131,7 +4143,7 @@ export default function DataCenterCandies({
               }}
             >
               Ver detalle de la orden
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>
@@ -4144,9 +4156,10 @@ export default function DataCenterCandies({
       >
         {arRowMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-slate-100"
               onClick={() => {
                 const row = arRowMenu.row;
                 setArRowMenu(null);
@@ -4154,7 +4167,7 @@ export default function DataCenterCandies({
               }}
             >
               Ver detalle
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>

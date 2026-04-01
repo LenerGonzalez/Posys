@@ -16,6 +16,7 @@ import {
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 
 type RoleProp =
   | ""
@@ -1192,12 +1193,13 @@ export default function CandyStockPedidosPage({
             return (
               <div key={c} className="space-y-1.5">
                 <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     onClick={() =>
                       setCategoryOpenMap((s) => ({ ...s, [c]: !s[c] }))
                     }
-                    className={`w-full px-3 py-2.5 flex items-start justify-between gap-2 text-left ${
+                    className={`w-full !h-auto !rounded-none !px-3 !py-2.5 flex items-start justify-between gap-2 text-left !font-normal ${
                       categoryOpenMap[c]
                         ? "bg-amber-50/90 border-b border-amber-100"
                         : ""
@@ -1226,7 +1228,7 @@ export default function CandyStockPedidosPage({
                     <div className="text-xs font-semibold text-slate-600 shrink-0 pt-0.5">
                       {categoryOpenMap[c] ? "Cerrar" : "Abrir"}
                     </div>
-                  </button>
+                  </Button>
 
                   <div
                     className={`${categoryOpenMap[c] ? "" : "hidden"} px-2 pb-2 pt-1`}
@@ -1313,28 +1315,34 @@ export default function CandyStockPedidosPage({
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2 flex-wrap">
-                      <button
+                      <Button
                         type="button"
-                        className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800"
+                        variant="secondary"
+                        size="sm"
+                        className="!rounded-lg"
                         onClick={() => editOrder(o)}
                       >
                         Editar
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700"
+                        variant="danger"
+                        size="sm"
+                        className="!rounded-lg"
                         onClick={() => deleteOrder(o)}
                       >
                         Eliminar
-                      </button>
+                      </Button>
                       {o.status !== "FINALIZADO" ? (
-                        <button
+                        <Button
                           type="button"
-                          className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700"
+                          variant="primary"
+                          size="sm"
+                          className="!rounded-lg !bg-emerald-600 hover:!bg-emerald-700"
                           onClick={() => finalizeOrder(o)}
                         >
                           Finalizar
-                        </button>
+                        </Button>
                       ) : null}
                     </div>
                   </td>
@@ -1400,28 +1408,31 @@ export default function CandyStockPedidosPage({
             </div>
 
             <div className="flex gap-2 flex-wrap mt-4">
-              <button
+              <Button
                 type="button"
-                className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800"
+                variant="secondary"
+                className="!rounded-lg"
                 onClick={() => editOrder(o)}
               >
                 Editar
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="px-3 py-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-700"
+                variant="danger"
+                className="!rounded-lg"
                 onClick={() => deleteOrder(o)}
               >
                 Eliminar
-              </button>
+              </Button>
               {o.status !== "FINALIZADO" ? (
-                <button
+                <Button
                   type="button"
-                  className="px-3 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700"
+                  variant="primary"
+                  className="!rounded-lg !bg-emerald-600 hover:!bg-emerald-700"
                   onClick={() => finalizeOrder(o)}
                 >
                   Finalizar
-                </button>
+                </Button>
               ) : null}
             </div>
           </div>
@@ -1442,48 +1453,52 @@ export default function CandyStockPedidosPage({
         </div>
 
         <div className="flex gap-2 flex-wrap">
-          <button
+          <Button
             type="button"
+            variant={tab === "STOCK" ? "primary" : "outline"}
             onClick={() => setTab("STOCK")}
-            className={`px-4 py-2 rounded-full border text-sm font-semibold ${
+            className={`!rounded-full text-sm ${
               tab === "STOCK"
-                ? "bg-slate-900 text-white border-slate-900"
-                : "bg-white text-slate-700 border-slate-300"
+                ? "!bg-slate-900 hover:!bg-slate-800 !border-slate-900"
+                : ""
             }`}
           >
             Stock
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant={tab === "PEDIDOS" ? "primary" : "outline"}
             onClick={() => setTab("PEDIDOS")}
-            className={`px-4 py-2 rounded-full border text-sm font-semibold ${
+            className={`!rounded-full text-sm ${
               tab === "PEDIDOS"
-                ? "bg-slate-900 text-white border-slate-900"
-                : "bg-white text-slate-700 border-slate-300"
+                ? "!bg-slate-900 hover:!bg-slate-800 !border-slate-900"
+                : ""
             }`}
           >
             Pedidos
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="secondary"
             onClick={refreshAll}
-            className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-semibold"
+            className="!rounded-xl text-sm"
           >
             Refrescar
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* filtros globales (visible en móvil para PEDIDOS y STOCK) */}
       {tab === "PEDIDOS" || tab === "STOCK" ? (
         <div className="md:hidden mb-3">
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => setGlobalFiltersOpenMobile((v) => !v)}
-            className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+            className={`w-full !h-auto !rounded-2xl border shadow-sm flex items-center justify-between !px-4 !py-3 text-left !font-normal ${
               globalFiltersOpenMobile
-                ? "bg-yellow-50 border-yellow-200"
-                : "bg-white border-slate-200"
+                ? "bg-yellow-50 border-yellow-200 hover:!bg-yellow-50/90"
+                : "bg-white border-slate-200 hover:!bg-slate-50"
             }`}
           >
             <div className="text-left">
@@ -1497,7 +1512,7 @@ export default function CandyStockPedidosPage({
             <div className="text-sm font-semibold">
               {globalFiltersOpenMobile ? "Cerrar" : "Abrir"}
             </div>
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -1616,13 +1631,14 @@ export default function CandyStockPedidosPage({
           {/* Filtros de stock justo debajo del bloque global (fechas / vendedor) */}
           {/* filtros stock mobile: categoría y disponibilidad (producto arriba del listado) */}
           <div className="md:hidden mb-3">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => setFiltersOpenMobile((v) => !v)}
-              className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+              className={`w-full !h-auto !rounded-2xl border shadow-sm flex items-center justify-between !px-4 !py-3 text-left !font-normal ${
                 stockProductFilter || stockCategoryFilter || onlyAvailable
-                  ? "bg-yellow-50 border-yellow-200"
-                  : "bg-white border-slate-200"
+                  ? "bg-yellow-50 border-yellow-200 hover:!bg-yellow-50/90"
+                  : "bg-white border-slate-200 hover:!bg-slate-50"
               }`}
             >
               <div className="text-left">
@@ -1634,7 +1650,7 @@ export default function CandyStockPedidosPage({
               <div className="text-sm font-semibold">
                 {filtersOpenMobile ? "Cerrar" : "Abrir"}
               </div>
-            </button>
+            </Button>
 
             {filtersOpenMobile ? (
               <div className="mt-2 bg-white border border-slate-200 rounded-2xl shadow-sm p-3 space-y-3">
@@ -1670,9 +1686,10 @@ export default function CandyStockPedidosPage({
                   />
                 </label>
 
-                <button
+                <Button
                   type="button"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold"
+                  variant="secondary"
+                  className="w-full !rounded-xl"
                   onClick={() => {
                     setStockProductFilter("");
                     setStockCategoryFilter("");
@@ -1680,7 +1697,7 @@ export default function CandyStockPedidosPage({
                   }}
                 >
                   Limpiar filtros
-                </button>
+                </Button>
               </div>
             ) : null}
           </div>
@@ -1738,9 +1755,10 @@ export default function CandyStockPedidosPage({
               </div>
 
               <div className="text-right">
-                <button
+                <Button
                   type="button"
-                  className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold"
+                  variant="secondary"
+                  className="!rounded-xl"
                   onClick={() => {
                     setStockProductFilter("");
                     setStockCategoryFilter("");
@@ -1748,7 +1766,7 @@ export default function CandyStockPedidosPage({
                   }}
                 >
                   Limpiar filtros
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -1809,29 +1827,33 @@ export default function CandyStockPedidosPage({
             </div>
 
             <div className="flex items-center gap-2">
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => setStockPage((s) => Math.max(1, s - 1))}
                 disabled={stockPage <= 1}
-                className={`px-3 py-2 rounded-lg text-sm border ${stockPage <= 1 ? "text-slate-400 border-slate-200 bg-white" : "bg-white hover:bg-slate-50 text-slate-700"}`}
+                className={`!rounded-lg text-sm ${stockPage <= 1 ? "text-slate-400" : ""}`}
               >
                 Anterior
-              </button>
+              </Button>
 
               <div className="text-sm text-slate-700">
                 Página {stockPage} / {totalStockPages}
               </div>
 
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 onClick={() =>
                   setStockPage((s) => Math.min(totalStockPages, s + 1))
                 }
                 disabled={stockPage >= totalStockPages}
-                className={`px-3 py-2 rounded-lg text-sm border ${stockPage >= totalStockPages ? "text-slate-400 border-slate-200 bg-white" : "bg-white hover:bg-slate-50 text-slate-700"}`}
+                className={`!rounded-lg text-sm ${stockPage >= totalStockPages ? "text-slate-400" : ""}`}
               >
                 Siguiente
-              </button>
+              </Button>
             </div>
           </div>
         </>
@@ -1861,18 +1883,19 @@ export default function CandyStockPedidosPage({
               {/* vendedor */}
               <div className="space-y-4">
                 <div className="md:hidden mb-3">
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     onClick={() =>
                       setMobileOpenSections((s) => ({
                         ...s,
                         vendedor: !s.vendedor,
                       }))
                     }
-                    className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+                    className={`w-full !h-auto !rounded-2xl border shadow-sm flex items-center justify-between !px-4 !py-3 text-left !font-normal ${
                       mobileOpenSections.vendedor
-                        ? "bg-yellow-50 border-yellow-200"
-                        : "bg-white border-slate-200"
+                        ? "bg-yellow-50 border-yellow-200 hover:!bg-yellow-50/90"
+                        : "bg-white border-slate-200 hover:!bg-slate-50"
                     }`}
                   >
                     <div className="text-left">
@@ -1884,7 +1907,7 @@ export default function CandyStockPedidosPage({
                     <div className="text-sm font-semibold">
                       {mobileOpenSections.vendedor ? "Cerrar" : "Abrir"}
                     </div>
-                  </button>
+                  </Button>
                 </div>
 
                 <div
@@ -1937,18 +1960,19 @@ export default function CandyStockPedidosPage({
               </div>
 
               <div className="md:hidden mb-3">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() =>
                     setMobileOpenSections((s) => ({
                       ...s,
                       cliente: !s.cliente,
                     }))
                   }
-                  className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+                  className={`w-full !h-auto !rounded-2xl border shadow-sm flex items-center justify-between !px-4 !py-3 text-left !font-normal ${
                     mobileOpenSections.cliente
-                      ? "bg-yellow-50 border-yellow-200"
-                      : "bg-white border-slate-200"
+                      ? "bg-yellow-50 border-yellow-200 hover:!bg-yellow-50/90"
+                      : "bg-white border-slate-200 hover:!bg-slate-50"
                   }`}
                 >
                   <div className="text-left">
@@ -1960,7 +1984,7 @@ export default function CandyStockPedidosPage({
                   <div className="text-sm font-semibold">
                     {mobileOpenSections.cliente ? "Cerrar" : "Abrir"}
                   </div>
-                </button>
+                </Button>
               </div>
 
               <div
@@ -2011,15 +2035,16 @@ export default function CandyStockPedidosPage({
             {/* productos */}
             <div className="xl:col-span-2 space-y-4">
               <div className="md:hidden mb-3">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() =>
                     setMobileOpenSections((s) => ({ ...s, pedido: !s.pedido }))
                   }
-                  className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+                  className={`w-full !h-auto !rounded-2xl border shadow-sm flex items-center justify-between !px-4 !py-3 text-left !font-normal ${
                     mobileOpenSections.pedido
-                      ? "bg-yellow-50 border-yellow-200"
-                      : "bg-white border-slate-200"
+                      ? "bg-yellow-50 border-yellow-200 hover:!bg-yellow-50/90"
+                      : "bg-white border-slate-200 hover:!bg-slate-50"
                   }`}
                 >
                   <div className="text-left">
@@ -2031,7 +2056,7 @@ export default function CandyStockPedidosPage({
                   <div className="text-sm font-semibold">
                     {mobileOpenSections.pedido ? "Cerrar" : "Abrir"}
                   </div>
-                </button>
+                </Button>
               </div>
 
               <div
@@ -2071,9 +2096,10 @@ export default function CandyStockPedidosPage({
                     </div>
 
                     <div>
-                      <button
+                      <Button
                         type="button"
-                        className="w-full px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold"
+                        variant="primary"
+                        className="w-full !rounded-xl !bg-slate-900 hover:!bg-slate-800"
                         onClick={() => {
                           if (!selectedCatalogProductId) return;
                           addCatalogProductToOrder(selectedCatalogProductId);
@@ -2081,7 +2107,7 @@ export default function CandyStockPedidosPage({
                         }}
                       >
                         Agregar
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
@@ -2171,15 +2197,17 @@ export default function CandyStockPedidosPage({
                                   {money(it.subtotal)}
                                 </td>
                                 <td className="px-3 py-2">
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700"
+                                    variant="danger"
+                                    size="sm"
+                                    className="!rounded-lg"
                                     onClick={() =>
                                       removeOrderItem(it.productId)
                                     }
                                   >
                                     Quitar
-                                  </button>
+                                  </Button>
                                 </td>
                               </tr>
                             ))
@@ -2208,13 +2236,15 @@ export default function CandyStockPedidosPage({
                                   {it.category || "—"}
                                 </div>
                               </div>
-                              <button
+                              <Button
                                 type="button"
-                                className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700"
+                                variant="danger"
+                                size="sm"
+                                className="!rounded-lg"
                                 onClick={() => removeOrderItem(it.productId)}
                               >
                                 Quitar
-                              </button>
+                              </Button>
                             </div>
 
                             <div className="grid grid-cols-2 gap-3 mt-3">
@@ -2299,9 +2329,10 @@ export default function CandyStockPedidosPage({
                   </div>
 
                   <div className="mt-4 flex flex-col md:flex-row gap-3">
-                    <button
+                    <Button
                       type="button"
-                      className="px-4 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold"
+                      variant="primary"
+                      className="!rounded-xl !bg-slate-900 hover:!bg-slate-800"
                       onClick={savePossibleOrder}
                       disabled={saving}
                     >
@@ -2310,15 +2341,16 @@ export default function CandyStockPedidosPage({
                         : editingOrderId
                           ? "Guardar cambios"
                           : "Crear pedido"}
-                    </button>
+                    </Button>
 
-                    <button
+                    <Button
                       type="button"
-                      className="px-4 py-3 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold"
+                      variant="secondary"
+                      className="!rounded-xl"
                       onClick={clearOrderForm}
                     >
                       Limpiar formulario
-                    </button>
+                    </Button>
                   </div>
                 </SectionCard>
               </div>
@@ -2326,15 +2358,16 @@ export default function CandyStockPedidosPage({
           </SectionCard>
 
           <div className="md:hidden mb-3">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={() =>
                 setMobileOpenSections((s) => ({ ...s, listado: !s.listado }))
               }
-              className={`w-full px-4 py-3 rounded-2xl border shadow-sm flex items-center justify-between ${
+              className={`w-full !h-auto !rounded-2xl border shadow-sm flex items-center justify-between !px-4 !py-3 text-left !font-normal ${
                 mobileOpenSections.listado
-                  ? "bg-yellow-50 border-yellow-200"
-                  : "bg-white border-slate-200"
+                  ? "bg-yellow-50 border-yellow-200 hover:!bg-yellow-50/90"
+                  : "bg-white border-slate-200 hover:!bg-slate-50"
               }`}
             >
               <div className="text-left">
@@ -2346,7 +2379,7 @@ export default function CandyStockPedidosPage({
               <div className="text-sm font-semibold">
                 {mobileOpenSections.listado ? "Cerrar" : "Abrir"}
               </div>
-            </button>
+            </Button>
           </div>
 
           <div
@@ -2386,16 +2419,17 @@ export default function CandyStockPedidosPage({
                 </div>
 
                 <div className="md:col-span-2 flex items-end">
-                  <button
+                  <Button
                     type="button"
-                    className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold"
+                    variant="secondary"
+                    className="!rounded-xl"
                     onClick={() => {
                       setOrdersSearch("");
                       setOrdersStatusFilter("");
                     }}
                   >
                     Limpiar filtros
-                  </button>
+                  </Button>
                 </div>
               </div>
 

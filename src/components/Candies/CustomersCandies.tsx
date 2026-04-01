@@ -25,8 +25,7 @@ import {
   commissionFromSaleDoc,
   saleTotalFromDoc,
 } from "../../Services/commissionAbonoCandies";
-import { FiMoreVertical } from "react-icons/fi";
-import ActionMenu from "../common/ActionMenu";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import RefreshButton from "../common/RefreshButton";
 import CommissionAbonoHelpButton from "../common/CommissionAbonoHelpModal";
 import SlideOverDrawer from "../common/SlideOverDrawer";
@@ -493,7 +492,8 @@ export default function CustomersCandy({
 
   // ===== Filtros (colapsables) =====
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [fClient, setFClient] = useState("");
+  /** Id de cliente o "" = todos (lista de clientes de la tabla). */
+  const [fCustomerId, setFCustomerId] = useState("");
   const [fStatus, setFStatus] = useState<"" | Status>(""); // "" = todos
   const [fMin, setFMin] = useState<string>(""); // saldo mínimo
   const [fMax, setFMax] = useState<string>(""); // saldo máximo
@@ -520,11 +520,16 @@ export default function CustomersCandy({
     commissionTotal: number;
     saleDate?: string;
   } | null>(null);
+  /** Drawer detalle venta: pestaña líneas vs abonos (igual que Pollo). */
+  const [drawerSaleTab, setDrawerSaleTab] = useState<"ventas" | "abonos">(
+    "ventas",
+  );
 
   const [statementHeaderMenuRect, setStatementHeaderMenuRect] =
     useState<DOMRect | null>(null);
 
   const openItemsDrawer = async (saleId: string) => {
+    setDrawerSaleTab("ventas");
     setItemsDrawerOpen(true);
     setItemsModalLoading(true);
     setItemsModalSaleId(saleId);
@@ -1229,6 +1234,8 @@ export default function CustomersCandy({
     setMovementRowMenu(null);
     setLedgerMovementMenu(null);
     setItemsDrawerOpen(false);
+    setItemsModalSaleId(null);
+    setDrawerSaleTab("ventas");
     setStatementHeaderMenuRect(null);
 
     setStLoading(true);
@@ -1301,6 +1308,13 @@ export default function CustomersCandy({
         return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
       });
   }, [stRows]);
+
+  /** Abonos de la venta en el drawer, del más antiguo al más reciente. */
+  const drawerAbonosChronological = useMemo(() => {
+    if (!itemsModalSaleId) return [];
+    const ledger = buildSaleAbonoLedger(stRows, itemsModalSaleId);
+    return ledger.slice().reverse();
+  }, [stRows, itemsModalSaleId]);
 
   const saleIdsForCommissionKey = useMemo(
     () =>
@@ -2215,17 +2229,26 @@ export default function CustomersCandy({
   const badgeStatus = (st: Status) =>
     st === "ACTIVO" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700";
 
+  const clientFilterOptions = useMemo(() => {
+    const sorted = [...rows].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), "es"),
+    );
+    return [
+      { value: "", label: "Todos los clientes" },
+      ...sorted.map((c) => ({
+        value: c.id,
+        label: String(c.name || "").trim() || "Sin nombre",
+      })),
+    ];
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
-    const q = fClient.trim().toLowerCase();
     const min = fMin.trim() === "" ? null : Number(fMin);
     const max = fMax.trim() === "" ? null : Number(fMax);
+    const idFilter = fCustomerId.trim();
 
     return orderedRows.filter((c) => {
-      const nameOk =
-        !q ||
-        String(c.name || "")
-          .toLowerCase()
-          .includes(q);
+      const clientOk = !idFilter || c.id === idFilter;
 
       const statusOk = !fStatus || c.status === fStatus;
 
@@ -2233,9 +2256,9 @@ export default function CustomersCandy({
       const minOk = min === null || (!Number.isNaN(min) && bal >= min);
       const maxOk = max === null || (!Number.isNaN(max) && bal <= max);
 
-      return nameOk && statusOk && minOk && maxOk;
+      return clientOk && statusOk && minOk && maxOk;
     });
-  }, [orderedRows, fClient, fStatus, fMin, fMax]);
+  }, [orderedRows, fCustomerId, fStatus, fMin, fMax]);
 
   const totalPendingBalance = useMemo(() => {
     return filteredRows.reduce((acc, row) => acc + Number(row.balance || 0), 0);
@@ -2248,7 +2271,7 @@ export default function CustomersCandy({
   const totalCustomersCount = filteredRows.length;
 
   const handleResetFilters = () => {
-    setFClient("");
+    setFCustomerId("");
     setFStatus("");
     setFMin("");
     setFMax("");
@@ -2262,7 +2285,13 @@ export default function CustomersCandy({
 
   useEffect(() => {
     setPage(1);
-  }, [fClient, fStatus, fMin, fMax]);
+  }, [fCustomerId, fStatus, fMin, fMax]);
+
+  /** Si el cliente elegido ya no está en la lista (p. ej. borrado), quitar filtro. */
+  useEffect(() => {
+    if (!fCustomerId.trim()) return;
+    if (!rows.some((r) => r.id === fCustomerId)) setFCustomerId("");
+  }, [rows, fCustomerId]);
 
   const goFirst = () => setPage(1);
   const goPrev = () => setPage((p) => Math.max(1, p - 1));
@@ -2374,15 +2403,16 @@ export default function CustomersCandy({
 
       <div className="bg-white border rounded shadow-sm p-4 mb-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end">
-          <div className="flex-1">
-            <label className="block text-sm font-semibold">
-              Filtrar cliente
-            </label>
-            <input
-              className="w-full border rounded px-3 py-2"
-              placeholder="Nombre, telefono o nota"
-              value={fClient}
-              onChange={(e) => setFClient(e.target.value)}
+          <div className="w-full max-w-[min(100%,16rem)] shrink-0">
+            <MobileHtmlSelect
+              label="Cliente"
+              value={fCustomerId}
+              onChange={setFCustomerId}
+              options={clientFilterOptions}
+              disabled={loading}
+              sheetTitle="Filtrar por cliente"
+              selectClassName="w-full max-w-full border rounded px-3 py-2 text-sm bg-white"
+              buttonClassName="w-full max-w-full border rounded px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
             />
           </div>
           <div className="flex gap-2">
@@ -2604,10 +2634,10 @@ export default function CustomersCandy({
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                type="button"
-                                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 inline-flex"
+                              <ActionMenuTrigger
+                                className="inline-flex"
                                 aria-label="Acciones del cliente"
+                                iconClassName="h-5 w-5 text-slate-700"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setCustomerRowMenu({
@@ -2617,9 +2647,7 @@ export default function CustomersCandy({
                                     ).getBoundingClientRect(),
                                   });
                                 }}
-                              >
-                                <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                              </button>
+                              />
                             )}
                           </td>
                         </tr>
@@ -2781,9 +2809,7 @@ export default function CustomersCandy({
                 ) : null}
 
                 <div className="mt-3 flex justify-end">
-                  <button
-                    type="button"
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                  <ActionMenuTrigger
                     aria-label="Acciones del cliente"
                     onClick={(e) =>
                       setCustomerRowMenu({
@@ -2793,9 +2819,7 @@ export default function CustomersCandy({
                         ).getBoundingClientRect(),
                       })
                     }
-                  >
-                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                  </button>
+                  />
                 </div>
               </div>
             ))
@@ -3184,18 +3208,15 @@ export default function CustomersCandy({
                   className="shrink-0"
                   title="Sincronizar comisiones y recargar movimientos"
                 />
-                <button
-                  type="button"
-                  className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 inline-flex shrink-0"
+                <ActionMenuTrigger
+                  className="shrink-0 inline-flex"
                   aria-label="Más acciones del estado de cuenta"
                   onClick={(e) =>
                     setStatementHeaderMenuRect(
                       (e.currentTarget as HTMLElement).getBoundingClientRect(),
                     )
                   }
-                >
-                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                </button>
+                />
               </div>
             </div>
 
@@ -3296,6 +3317,7 @@ export default function CustomersCandy({
                     <tr>
                       <th className="p-2 border">Fecha</th>
                       <th className="p-2 border">Total venta</th>
+                      <th className="p-2 border">Abono</th>
                       <th className="p-2 border">Pendiente</th>
                       <th className="p-2 border">Estado</th>
                       <th className="p-2 border w-12"> </th>
@@ -3304,13 +3326,13 @@ export default function CustomersCandy({
                   <tbody>
                     {stLoading ? (
                       <tr>
-                        <td colSpan={5} className="p-4 text-center">
+                        <td colSpan={6} className="p-4 text-center">
                           Cargando…
                         </td>
                       </tr>
                     ) : saleVentasRows.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="p-4 text-center">
+                        <td colSpan={6} className="p-4 text-center">
                           Sin ventas a crédito registradas
                         </td>
                       </tr>
@@ -3318,6 +3340,10 @@ export default function CustomersCandy({
                       saleVentasRows.map((m) => {
                         const saleId = m.ref!.saleId!;
                         const pending = getPendingForSale(stRows, saleId);
+                        const totalAbonado = getTotalAbonadoForSale(
+                          stRows,
+                          saleId,
+                        );
                         const normalizedDebt = normalizeDebtStatus(
                           m.debtStatus,
                         );
@@ -3330,6 +3356,9 @@ export default function CustomersCandy({
                             <td className="p-2 border">{m.date || "—"}</td>
                             <td className="p-2 border font-semibold">
                               {money(m.amount)}
+                            </td>
+                            <td className="p-2 border font-medium text-emerald-800 tabular-nums">
+                              {money(totalAbonado)}
                             </td>
                             <td className="p-2 border font-medium text-orange-800">
                               {money(pending)}
@@ -3344,9 +3373,8 @@ export default function CustomersCandy({
                               </span>
                             </td>
                             <td className="p-2 border">
-                              <button
-                                type="button"
-                                className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                              <ActionMenuTrigger
+                                className="inline-flex !h-8 !w-8"
                                 aria-label="Acciones de venta"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -3357,9 +3385,7 @@ export default function CustomersCandy({
                                     ).getBoundingClientRect(),
                                   });
                                 }}
-                              >
-                                <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                              </button>
+                              />
                             </td>
                           </tr>
                         );
@@ -3481,6 +3507,10 @@ export default function CustomersCandy({
                     saleVentasRows.map((m) => {
                       const saleId = m.ref!.saleId!;
                       const pending = getPendingForSale(stRows, saleId);
+                      const totalAbonado = getTotalAbonadoForSale(
+                        stRows,
+                        saleId,
+                      );
                       const normalizedDebt = normalizeDebtStatus(m.debtStatus);
                       return (
                         <div
@@ -3507,6 +3537,9 @@ export default function CustomersCandy({
                                   {money(m.amount)}
                                 </span>
                               </div>
+                              <div className="text-xs text-emerald-800 mt-0.5">
+                                Abono: {money(totalAbonado)}
+                              </div>
                               <div className="text-xs text-orange-800 mt-0.5">
                                 Pendiente: {money(pending)}
                               </div>
@@ -3523,9 +3556,8 @@ export default function CustomersCandy({
                                 Toca la tarjeta para ver el detalle de compra
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              className="p-2 rounded-lg border border-gray-200 shrink-0 bg-white"
+                            <ActionMenuTrigger
+                              className="shrink-0 inline-flex"
                               aria-label="Acciones de venta"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -3536,9 +3568,7 @@ export default function CustomersCandy({
                                   ).getBoundingClientRect(),
                                 });
                               }}
-                            >
-                              <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                            </button>
+                            />
                           </div>
                         </div>
                       );
@@ -3821,9 +3851,8 @@ export default function CustomersCandy({
                                   </div>
                                 ) : (
                                   <div className="flex justify-end pt-1">
-                                    <button
-                                      type="button"
-                                      className="p-2 rounded-xl border border-gray-200 bg-white inline-flex"
+                                    <ActionMenuTrigger
+                                      className="inline-flex"
                                       aria-label="Acciones de movimiento"
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -3834,9 +3863,7 @@ export default function CustomersCandy({
                                           ).getBoundingClientRect(),
                                         });
                                       }}
-                                    >
-                                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                                    </button>
+                                    />
                                   </div>
                                 )}
                               </div>
@@ -4337,9 +4364,8 @@ export default function CustomersCandy({
                           {isAdmin && (
                             <td className="p-2 border">
                               <div className="flex justify-center">
-                                <button
-                                  type="button"
-                                  className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                                <ActionMenuTrigger
+                                  className="inline-flex !h-8 !w-8"
                                   aria-label="Acciones de abono"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -4350,9 +4376,7 @@ export default function CustomersCandy({
                                       ).getBoundingClientRect(),
                                     });
                                   }}
-                                >
-                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                                </button>
+                                />
                               </div>
                             </td>
                           )}
@@ -4402,9 +4426,8 @@ export default function CustomersCandy({
                       </div>
                       {isAdmin && (
                         <div className="mt-2 flex justify-end">
-                          <button
-                            type="button"
-                            className="p-2 rounded-lg border border-gray-200 bg-white inline-flex"
+                          <ActionMenuTrigger
+                            className="inline-flex"
                             aria-label="Acciones de abono"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -4415,9 +4438,7 @@ export default function CustomersCandy({
                                 ).getBoundingClientRect(),
                               });
                             }}
-                          >
-                            <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                          </button>
+                          />
                         </div>
                       )}
                     </div>
@@ -4435,11 +4456,13 @@ export default function CustomersCandy({
         onClose={() => {
           setItemsDrawerOpen(false);
           setItemsDrawerMeta(null);
+          setItemsModalSaleId(null);
+          setDrawerSaleTab("ventas");
         }}
         titleId="candies-items-drawer-title"
         title={
           <>
-            Dulces vendidos
+            Venta a crédito (dulces)
             {itemsModalSaleId ? (
               <span className="text-gray-500 font-normal">
                 {" "}
@@ -4453,16 +4476,50 @@ export default function CustomersCandy({
             ? `Fecha de compra: ${itemsDrawerMeta.saleDate}`
             : "Detalle de la compra"
         }
+        badge={
+          itemsModalSaleId ? (
+            <div
+              className="flex gap-2 mt-1"
+              role="tablist"
+              aria-label="Sección del detalle"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={drawerSaleTab === "ventas"}
+                className={`rounded-full px-3 py-1 text-xs font-semibold border transition-colors ${
+                  drawerSaleTab === "ventas"
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                }`}
+                onClick={() => setDrawerSaleTab("ventas")}
+              >
+                Venta
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={drawerSaleTab === "abonos"}
+                className={`rounded-full px-3 py-1 text-xs font-semibold border transition-colors ${
+                  drawerSaleTab === "abonos"
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                }`}
+                onClick={() => setDrawerSaleTab("abonos")}
+              >
+                Abonos
+              </button>
+            </div>
+          ) : null
+        }
         zIndexClassName="z-[78]"
         panelMaxWidthClassName="max-w-2xl"
       >
         {itemsModalLoading ? (
           <p className="text-sm text-gray-600 px-1">Cargando…</p>
-        ) : itemsModalRows.length === 0 ? (
-          <p className="text-sm text-gray-600 px-1">Sin ítems en esta venta.</p>
         ) : (
           <>
-            {itemsDrawerMeta && (
+            {itemsDrawerMeta && itemsModalSaleId && (
               <DrawerMoneyStrip
                 items={[
                   {
@@ -4471,51 +4528,119 @@ export default function CustomersCandy({
                     tone: "blue",
                   },
                   {
-                    label: "Monto",
+                    label: "Monto venta",
                     value: money(itemsDrawerMeta.saleAmount),
                     tone: "slate",
                   },
                   {
+                    label: "Abonos",
+                    value: money(
+                      getTotalAbonadoForSale(stRows, itemsModalSaleId),
+                    ),
+                    tone: "emerald",
+                  },
+                  {
                     label: "Comisión",
                     value: money(itemsDrawerMeta.commissionTotal),
-                    tone: "emerald",
+                    tone: "slate",
                   },
                 ]}
               />
             )}
-            <div className="space-y-3 px-1 pb-4">
-              <DrawerSectionTitle
-                className={itemsDrawerMeta ? "mt-4" : "mt-0"}
-              >
-                Líneas de venta
-              </DrawerSectionTitle>
-              {itemsModalRows.map((it, idx) => (
-                <DrawerDetailDlCard
-                  key={idx}
-                  title={it.productName || `Producto ${idx + 1}`}
-                  rows={[
-                    { label: "Paquetes", value: String(it.qty) },
-                    { label: "Precio unit.", value: money(it.unitPrice) },
-                    {
-                      label: "Descuento",
-                      value: it.discount ? money(it.discount) : "—",
-                    },
-                    { label: "Monto", value: money(it.total) },
-                    {
-                      label: "Comisión línea",
-                      value: money(it.lineCommission),
-                    },
-                    {
-                      label: "Comisión / paquete",
-                      value:
-                        it.qty > 0
-                          ? money(it.commissionPerPackage)
-                          : "—",
-                    },
-                  ]}
-                />
-              ))}
-            </div>
+            {drawerSaleTab === "ventas" ? (
+              itemsModalRows.length === 0 ? (
+                <p className="text-sm text-gray-600 px-1 mt-2">
+                  Sin ítems en esta venta.
+                </p>
+              ) : (
+                <div className="space-y-3 px-1 pb-4">
+                  <DrawerSectionTitle
+                    className={itemsDrawerMeta ? "mt-4" : "mt-0"}
+                  >
+                    Líneas de venta
+                  </DrawerSectionTitle>
+                  {itemsModalRows.map((it, idx) => (
+                    <DrawerDetailDlCard
+                      key={idx}
+                      title={it.productName || `Producto ${idx + 1}`}
+                      rows={[
+                        { label: "Paquetes", value: String(it.qty) },
+                        { label: "Precio unit.", value: money(it.unitPrice) },
+                        {
+                          label: "Descuento",
+                          value: it.discount ? money(it.discount) : "—",
+                        },
+                        { label: "Monto", value: money(it.total) },
+                        {
+                          label: "Comisión línea",
+                          value: money(it.lineCommission),
+                        },
+                        {
+                          label: "Comisión / paquete",
+                          value:
+                            it.qty > 0
+                              ? money(it.commissionPerPackage)
+                              : "—",
+                        },
+                      ]}
+                    />
+                  ))}
+                </div>
+              )
+            ) : (
+              <div className="px-1 pb-4 mt-4 space-y-3">
+                <DrawerSectionTitle className="mt-0">
+                  Abonos a esta venta
+                </DrawerSectionTitle>
+                {drawerAbonosChronological.length === 0 ? (
+                  <p className="text-sm text-gray-600">
+                    No hay abonos registrados contra esta venta.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {drawerAbonosChronological.map((row) => (
+                      <div
+                        key={row.id}
+                        className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm"
+                      >
+                        <div className="flex justify-between gap-2 font-semibold text-slate-900">
+                          <span>{row.date || "—"}</span>
+                          <span className="tabular-nums text-emerald-800">
+                            {money(row.montoAbs)}
+                          </span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                          <div>
+                            <div className="text-[11px]">Saldo antes</div>
+                            <div className="font-medium text-slate-900 tabular-nums">
+                              {money(row.saldoInicial)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px]">Saldo después</div>
+                            <div className="font-medium text-slate-900 tabular-nums">
+                              {money(row.saldoFinal)}
+                            </div>
+                          </div>
+                        </div>
+                        {row.commissionOnPayment != null &&
+                        Number(row.commissionOnPayment) > 0 ? (
+                          <div className="mt-2 text-xs text-emerald-800 font-semibold">
+                            Comisión:{" "}
+                            {money(Number(row.commissionOnPayment || 0))}
+                          </div>
+                        ) : null}
+                        {row.comment ? (
+                          <p className="mt-2 text-xs text-slate-600">
+                            {row.comment}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </SlideOverDrawer>

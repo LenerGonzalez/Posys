@@ -19,6 +19,7 @@ import RefreshButton from "../../components/common/RefreshButton";
 import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
 import Toast from "../../components/common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import Button from "../common/Button";
 
 const money = (n: unknown) => `C$${Number(n ?? 0).toFixed(2)}`;
 const todayStr = () => format(new Date(), "yyyy-MM-dd");
@@ -1318,21 +1319,25 @@ export default function FinancialDashboard(): React.ReactElement {
       <div className="flex items-center justify-between mb-3 gap-2">
         <h2 className="text-xl sm:text-2xl font-bold">Dashboard Financiero</h2>
         <div className="flex items-center gap-2">
-          <button
+          <Button
             type="button"
             onClick={handleExportPdf}
-            className="px-3 py-2 rounded-lg text-sm bg-gray-900 text-white hover:bg-black"
+            variant="primary"
+            size="sm"
+            className="!bg-gray-900 !text-white hover:!bg-black !rounded-lg !shadow-none"
           >
             Exportar PDF
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={() => handleSaveSnapshot()}
             disabled={savingSnapshot}
-            className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+            variant="primary"
+            size="sm"
+            className="!rounded-lg disabled:!opacity-60"
           >
             {savingSnapshot ? "Guardando…" : "Guardar KPIs"}
-          </button>
+          </Button>
           <RefreshButton onClick={refresh} loading={loading} />
         </div>
       </div>
@@ -1364,10 +1369,11 @@ export default function FinancialDashboard(): React.ReactElement {
       ) : (
         <>
           <div className="mb-3">
-            <button
+            <Button
               type="button"
               onClick={toggleKpiSection}
-              className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+              variant="outline"
+              className="w-full text-left px-3 py-3 flex items-center justify-between !rounded-2xl bg-white !justify-between"
             >
               <div>
                 <div className="font-semibold">Kpi Financiero</div>
@@ -1379,7 +1385,7 @@ export default function FinancialDashboard(): React.ReactElement {
               <div className="text-gray-500">
                 {kpiSectionOpen ? "Cerrar" : "Ver"}
               </div>
-            </button>
+            </Button>
 
             {kpiSectionOpen && (
               <div className="mt-3">
@@ -1397,9 +1403,10 @@ export default function FinancialDashboard(): React.ReactElement {
 
                 <div className="md:hidden space-y-3">
                   <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
-                    <button
+                    <Button
                       type="button"
-                      className="w-full flex items-center justify-between text-left"
+                      variant="ghost"
+                      className="w-full flex items-center justify-between text-left !rounded-xl !shadow-none !px-0 !py-0 !min-h-0 h-auto font-normal"
                       onClick={toggleSalesKpiCard}
                     >
                       <div>
@@ -1411,7 +1418,7 @@ export default function FinancialDashboard(): React.ReactElement {
                       <span className="text-xs text-gray-500">
                         {salesKpiCardOpen ? "Cerrar" : "Ver"}
                       </span>
-                    </button>
+                    </Button>
                     {salesKpiCardOpen && (
                       <div className="space-y-2">
                         <div className="text-sm text-gray-600">Ventas Cash</div>
@@ -1452,9 +1459,10 @@ export default function FinancialDashboard(): React.ReactElement {
                   </div>
 
                   <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
-                    <button
+                    <Button
                       type="button"
-                      className="w-full flex items-center justify-between text-left"
+                      variant="ghost"
+                      className="w-full flex items-center justify-between text-left !rounded-xl !shadow-none !px-0 !py-0 !min-h-0 h-auto font-normal"
                       onClick={toggleFundsKpiCard}
                     >
                       <div>
@@ -1466,7 +1474,7 @@ export default function FinancialDashboard(): React.ReactElement {
                       <span className="text-xs text-gray-500">
                         {fundsKpiCardOpen ? "Cerrar" : "Ver"}
                       </span>
-                    </button>
+                    </Button>
                     {fundsKpiCardOpen && (
                       <div className="space-y-2">
                         <div className="text-sm text-gray-600">CxC</div>
@@ -1551,9 +1559,10 @@ export default function FinancialDashboard(): React.ReactElement {
                   </div>
 
                   <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
-                    <button
+                    <Button
                       type="button"
-                      className="w-full flex items-center justify-between text-left"
+                      variant="ghost"
+                      className="w-full flex items-center justify-between text-left !rounded-xl !shadow-none !px-0 !py-0 !min-h-0 h-auto font-normal"
                       onClick={toggleDetailsKpiCard}
                     >
                       <div>
@@ -1567,7 +1576,7 @@ export default function FinancialDashboard(): React.ReactElement {
                       <span className="text-xs text-gray-500">
                         {detailsKpiCardOpen ? "Cerrar" : "Ver"}
                       </span>
-                    </button>
+                    </Button>
                     {detailsKpiCardOpen && (
                       <div className="space-y-2">
                         <div className="text-sm text-gray-500">Ventas Cash</div>
@@ -1842,16 +1851,17 @@ export default function FinancialDashboard(): React.ReactElement {
           </div>
 
           <div className="mb-3">
-            <button
+            <Button
               type="button"
               onClick={togglePendingSection}
-              className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+              variant="outline"
+              className="w-full text-left px-3 py-3 flex items-center justify-between !rounded-2xl bg-white !justify-between"
             >
               <div className="font-semibold">Saldos pendientes</div>
               <div className="text-gray-500">
                 {pendingSectionOpen ? "Cerrar" : "Ver"}
               </div>
-            </button>
+            </Button>
 
             {pendingSectionOpen && (
               <div className="border rounded-2xl p-3 sm:p-4 bg-gray-50 mt-3">
@@ -1893,13 +1903,15 @@ export default function FinancialDashboard(): React.ReactElement {
                               {c.lastPaymentDate || "—"}
                             </td>
                             <td className="border p-1">
-                              <button
+                              <Button
                                 type="button"
                                 onClick={() => setPendingOpen(c)}
-                                className="px-3 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                                variant="primary"
+                                size="sm"
+                                className="!bg-indigo-600 hover:!bg-indigo-700 !text-white !rounded-md !px-3 !py-1 text-xs"
                               >
                                 Ver
-                              </button>
+                              </Button>
                             </td>
                           </tr>
                         ))}
@@ -1912,16 +1924,17 @@ export default function FinancialDashboard(): React.ReactElement {
           </div>
 
           <div className="mb-3">
-            <button
+            <Button
               type="button"
               onClick={toggleConsolidatedSection}
-              className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+              variant="outline"
+              className="w-full text-left px-3 py-3 flex items-center justify-between !rounded-2xl bg-white !justify-between"
             >
               <div className="font-semibold">Ventas y Gastos</div>
               <div className="text-gray-500">
                 {consolidatedSectionOpen ? "Cerrar" : "Ver"}
               </div>
-            </button>
+            </Button>
 
             {consolidatedSectionOpen && (
               <div className="mt-3">
@@ -1993,10 +2006,11 @@ export default function FinancialDashboard(): React.ReactElement {
 
                 {/* Mobile: consolidated accordion (collapsed by default) */}
                 <div className="md:hidden mb-6">
-                  <button
+                  <Button
                     type="button"
                     onClick={toggleConsolidated}
-                    className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+                    variant="outline"
+                    className="w-full text-left px-3 py-3 flex items-center justify-between !rounded-2xl bg-white !justify-between"
                   >
                     <div>
                       <div className="font-semibold">Ventas por producto</div>
@@ -2007,7 +2021,7 @@ export default function FinancialDashboard(): React.ReactElement {
                     <div className="text-gray-500">
                       {consolidatedOpen ? "Cerrar" : "Ver"}
                     </div>
-                  </button>
+                  </Button>
 
                   {consolidatedOpen && (
                     <div className="space-y-2 mt-3">
@@ -2030,10 +2044,11 @@ export default function FinancialDashboard(): React.ReactElement {
                               key={r.productName}
                               className="border rounded-2xl bg-white shadow-sm overflow-hidden"
                             >
-                              <button
+                              <Button
                                 type="button"
                                 onClick={() => toggleProduct(r.productName)}
-                                className="w-full text-left px-3 py-3 flex items-start gap-3"
+                                variant="ghost"
+                                className="w-full text-left px-3 py-3 flex items-start gap-3 !rounded-none !shadow-none !justify-start font-normal"
                               >
                                 <div className="flex-1 min-w-0">
                                   <div className="font-semibold truncate">
@@ -2063,7 +2078,7 @@ export default function FinancialDashboard(): React.ReactElement {
                                 <div className="text-gray-500 text-xs pt-0.10">
                                   {open ? "Cerrar" : "Ver"}
                                 </div>
-                              </button>
+                              </Button>
 
                               {open && (
                                 <div className="px-3 pb-3 text-sm">
@@ -2167,10 +2182,11 @@ export default function FinancialDashboard(): React.ReactElement {
 
                 {/* Mobile: gastos accordion (collapsed by default) */}
                 <div className="md:hidden mb-6">
-                  <button
+                  <Button
                     type="button"
                     onClick={toggleConsolidatedExpenses}
-                    className="w-full text-left px-3 py-3 flex items-center justify-between border rounded-2xl bg-white"
+                    variant="outline"
+                    className="w-full text-left px-3 py-3 flex items-center justify-between !rounded-2xl bg-white !justify-between"
                   >
                     <div>
                       <div className="font-semibold">Gastos del periodo</div>
@@ -2181,7 +2197,7 @@ export default function FinancialDashboard(): React.ReactElement {
                     <div className="text-gray-500">
                       {consolidatedExpensesOpen ? "Cerrar" : "Abrir"}
                     </div>
-                  </button>
+                  </Button>
 
                   {consolidatedExpensesOpen && (
                     <div className="space-y-2 mt-3">
@@ -2202,10 +2218,11 @@ export default function FinancialDashboard(): React.ReactElement {
                               key={g.id}
                               className="border rounded-2xl bg-white shadow-sm overflow-hidden"
                             >
-                              <button
+                              <Button
                                 type="button"
                                 onClick={() => toggleExpense(g.id)}
-                                className="w-full text-left px-3 py-3 flex items-start gap-3"
+                                variant="ghost"
+                                className="w-full text-left px-3 py-3 flex items-start gap-3 !rounded-none !shadow-none !justify-start font-normal"
                               >
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2">
@@ -2225,7 +2242,7 @@ export default function FinancialDashboard(): React.ReactElement {
                                 <div className="text-gray-500 text-sm pt-0.5">
                                   {open ? "Cerrar" : "Ver"}
                                 </div>
-                              </button>
+                              </Button>
 
                               {open && (
                                 <div className="px-3 pb-3 text-sm">
@@ -2268,13 +2285,15 @@ export default function FinancialDashboard(): React.ReactElement {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-4">
             <div className="flex items-center justify-between mb-3">
               <h4 className="font-semibold text-lg">{pendingOpen.name}</h4>
-              <button
+              <Button
                 type="button"
                 onClick={() => setPendingOpen(null)}
-                className="text-sm text-gray-500 hover:text-gray-700"
+                variant="ghost"
+                size="sm"
+                className="text-sm !text-gray-500 hover:!text-gray-700 !min-h-0 !shadow-none"
               >
                 ✕
-              </button>
+              </Button>
             </div>
 
             <div className="overflow-x-auto">

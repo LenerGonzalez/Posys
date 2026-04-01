@@ -16,14 +16,15 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
-import { FiEdit2, FiInfo, FiMoreVertical, FiTrash2 } from "react-icons/fi";
-import ActionMenu from "../common/ActionMenu";
+import { FiEdit2, FiInfo, FiTrash2 } from "react-icons/fi";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import { auth, db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import ImportModal from "../common/ImportModal";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 import * as XLSX from "xlsx";
 
 const EMPAQUE_TYPE_OPTIONS: { value: string; label: string }[] = [
@@ -384,13 +385,15 @@ function BarcodeScanModal({
       <div className="bg-white w-full max-w-md rounded-2xl shadow-lg border overflow-hidden">
         <div className="flex items-center justify-between p-3 border-b">
           <div className="font-bold">Escanear código</div>
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-            onClick={onClose}
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
+            className="!rounded-lg px-3 py-1"
+            onClick={onClose}
           >
             Cerrar
-          </button>
+          </Button>
         </div>
 
         <div className="p-3">
@@ -1325,37 +1328,49 @@ export default function PrecioVentas({
   const renderPager = () => (
     <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
       <div className="flex items-center gap-1 flex-wrap">
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={goFirst}
           disabled={page === 1}
         >
           « Primero
-        </button>
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={goPrev}
           disabled={page === 1}
         >
           ‹ Anterior
-        </button>
+        </Button>
         <span className="px-2 text-sm">
           Página {page} de {totalPages}
         </span>
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={goNext}
           disabled={page === totalPages}
         >
           Siguiente ›
-        </button>
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={goLast}
           disabled={page === totalPages}
         >
           Último »
-        </button>
+        </Button>
       </div>
       <div className="text-sm text-gray-600">
         {filteredByCategory.length} categoría(s)
@@ -1395,37 +1410,49 @@ export default function PrecioVentas({
   const renderWebPager = () => (
     <div className="flex items-center justify-between mt-3">
       <div className="flex items-center gap-1 flex-wrap">
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={webGoFirst}
           disabled={webPage === 1}
         >
           « Primero
-        </button>
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={webGoPrev}
           disabled={webPage === 1}
         >
           ‹ Anterior
-        </button>
+        </Button>
         <span className="px-2 text-sm">
           Página {webPage} de {totalWebPages}
         </span>
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={webGoNext}
           disabled={webPage === totalWebPages}
         >
           Siguiente ›
-        </button>
-        <button
-          className="px-1 py-0.5 text-sm border rounded disabled:opacity-50 md:px-2 md:py-1 md:text-base"
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="px-1 py-0.5 text-sm !rounded-lg md:px-2 md:py-1 md:text-base"
           onClick={webGoLast}
           disabled={webPage === totalWebPages}
         >
           Último »
-        </button>
+        </Button>
       </div>
       <div className="text-sm text-gray-600">{filtered.length} producto(s)</div>
     </div>
@@ -1811,15 +1838,17 @@ export default function PrecioVentas({
         <div className="flex flex-col gap-2 w-full md:w-auto md:flex-row md:flex-wrap md:justify-end md:gap-2">
           <div className="flex flex-row gap-2 w-full md:contents">
             {isAdminEditable && (
-              <button
+              <Button
                 type="button"
-                className="md:hidden flex-1 min-w-0 px-3 py-2 rounded-md text-sm font-semibold border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+                variant="outline"
+                size="sm"
+                className="md:hidden flex-1 min-w-0 !rounded-md px-3 py-2 text-sm whitespace-nowrap"
                 onClick={(e) =>
                   setAdminToolsMenuRect(e.currentTarget.getBoundingClientRect())
                 }
               >
                 Más acciones ▾
-              </button>
+              </Button>
             )}
             <RefreshButton
               onClick={refresh}
@@ -1832,11 +1861,15 @@ export default function PrecioVentas({
 
       {/* ===== MOBILE: filtros colapsables ===== */}
       <div className="md:hidden mb-3">
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="md"
           onClick={() => setFiltersOpenMobile((v) => !v)}
-          className={`w-full px-3 py-3 rounded-xl border shadow-sm flex items-center justify-between ${
-            hasActiveFilters ? "bg-yellow-50 border-yellow-200" : "bg-white"
+          className={`w-full !justify-between !rounded-xl px-3 py-3 shadow-sm ${
+            hasActiveFilters
+              ? "!bg-yellow-50 border-yellow-200"
+              : "!bg-white border-slate-200"
           }`}
         >
           <div className="text-left">
@@ -1850,7 +1883,7 @@ export default function PrecioVentas({
           <div className="text-sm font-semibold">
             {filtersOpenMobile ? "Cerrar" : "Abrir"}
           </div>
-        </button>
+        </Button>
 
         {filtersOpenMobile && (
           <div className="mt-2 bg-white border rounded-xl shadow-sm p-3 text-sm">
@@ -1875,37 +1908,43 @@ export default function PrecioVentas({
                     onChange={(e) => setSearchCode(e.target.value)}
                     placeholder="Código EAN"
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                    variant="secondary"
+                    size="sm"
+                    className="!rounded-lg px-3 py-2"
                     onClick={() => {
                       setScanTarget("search");
                       setScanOpen(true);
                     }}
                   >
                     Escanear
-                  </button>
+                  </Button>
                 </div>
               </div>
 
               <div className="flex gap-2">
-                <button
+                <Button
                   type="button"
-                  className="flex-1 px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                  variant="secondary"
+                  size="sm"
+                  className="flex-1 !rounded-lg px-3 py-2"
                   onClick={() => {
                     clearFilters();
                     setSearchCode("");
                   }}
                 >
                   Limpiar filtros
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="flex-1 px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                  variant="primary"
+                  size="sm"
+                  className="flex-1 !rounded-lg px-3 py-2 !bg-indigo-600 hover:!bg-indigo-700 shadow-indigo-600/15"
                   onClick={() => setFiltersOpenMobile(false)}
                 >
                   Aplicar
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2003,26 +2042,30 @@ export default function PrecioVentas({
           </div>
 
           <div className="text-right">
-            <button
-              className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+            <Button
               type="button"
+              variant="secondary"
+              size="sm"
+              className="!rounded-md px-3 py-2 text-xs"
               onClick={clearFilters}
             >
               Limpiar
-            </button>
+            </Button>
           </div>
         </div>
         {isAdminEditable && (
           <div className="shrink-0">
-            <button
+            <Button
               type="button"
-              className="px-3 py-2 rounded-md text-xs font-semibold border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+              variant="outline"
+              size="sm"
+              className="!rounded-md px-3 py-2 text-xs whitespace-nowrap"
               onClick={(e) =>
                 setAdminToolsMenuRect(e.currentTarget.getBoundingClientRect())
               }
             >
               Más acciones ▾
-            </button>
+            </Button>
           </div>
         )}
         </div>
@@ -2068,9 +2111,11 @@ export default function PrecioVentas({
                   key={cat}
                   className={`rounded-2xl border shadow-sm overflow-hidden ${catCardClass}`}
                 >
-                  <button
+                  <Button
                     type="button"
-                    className="w-full px-3 py-3 flex items-center justify-between text-left active:bg-white/40"
+                    variant="ghost"
+                    size="md"
+                    className="w-full !justify-between !rounded-none px-3 py-3 text-left active:!bg-white/40 shadow-none border-0 !font-normal"
                     onClick={() => toggleCategory(cat)}
                   >
                     <div className="min-w-0">
@@ -2085,7 +2130,7 @@ export default function PrecioVentas({
                     <div className="text-sm font-semibold text-slate-800">
                       {expandedCategory ? "Cerrar" : "Ver"}
                     </div>
-                  </button>
+                  </Button>
 
                   {expandedCategory && (
                     <div className="px-3 pb-3 border-t border-white/50 bg-white/60 space-y-2">
@@ -2126,9 +2171,11 @@ export default function PrecioVentas({
                             key={r.productId}
                             className="bg-white border rounded-xl overflow-hidden mt-2"
                           >
-                            <button
+                            <Button
                               type="button"
-                              className="w-full px-3 py-3 flex items-center justify-between text-left"
+                              variant="ghost"
+                              size="md"
+                              className="w-full !justify-between !rounded-none px-3 py-3 text-left shadow-none border-0 !font-normal"
                               onClick={() => {
                                 setOpenCardId((cur) =>
                                   cur === r.productId ? null : r.productId,
@@ -2151,7 +2198,7 @@ export default function PrecioVentas({
                                   {money(r.priceIsla)}
                                 </div>
                               </div>
-                            </button>
+                            </Button>
 
                             {expanded && (
                               <div className="px-3 pb-3 border-t">
@@ -2242,8 +2289,11 @@ export default function PrecioVentas({
                                               }
                                               placeholder="EAN"
                                             />
-                                            <button
-                                              className="px-3 py-2 rounded-md text-sm font-semibold bg-blue-600 text-white"
+                                            <Button
+                                              type="button"
+                                              variant="primary"
+                                              size="sm"
+                                              className="!rounded-md px-3 py-2 text-sm"
                                               onClick={() => {
                                                 setScanTarget("edit");
                                                 setScanBarcodeProductId(
@@ -2251,10 +2301,9 @@ export default function PrecioVentas({
                                                 );
                                                 setScanOpen(true);
                                               }}
-                                              type="button"
                                             >
                                               Escanear
-                                            </button>
+                                            </Button>
                                           </div>
                                         ) : (
                                           <div>
@@ -2288,59 +2337,71 @@ export default function PrecioVentas({
                                   <div className="flex flex-wrap gap-2">
                                     {isEditingCatalog ? (
                                       <>
-                                        <button
-                                          className="px-3 py-2 rounded-md text-sm font-semibold bg-green-600 text-white"
+                                        <Button
+                                          type="button"
+                                          variant="primary"
+                                          size="sm"
+                                          className="!rounded-md px-3 py-2 text-sm !bg-green-600 hover:!bg-green-700 shadow-green-600/15"
                                           onClick={() => {
                                             saveEditedPrices(r.productId);
                                             setOpenCardId(null);
                                           }}
-                                          type="button"
                                         >
                                           Guardar
-                                        </button>
-                                        <button
-                                          className="px-3 py-2 rounded-md text-sm font-semibold bg-gray-800 text-white"
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="primary"
+                                          size="sm"
+                                          className="!rounded-md px-3 py-2 text-sm !bg-gray-800 hover:!bg-gray-900 shadow-none"
                                           onClick={() => {
                                             setScanTarget("edit");
                                             setScanOpen(true);
                                           }}
-                                          type="button"
                                         >
                                           Escanear
-                                        </button>
-                                        <button
-                                          className="px-3 py-2 rounded-md text-sm font-semibold bg-gray-200"
-                                          onClick={() => setEditingId(null)}
+                                        </Button>
+                                        <Button
                                           type="button"
+                                          variant="secondary"
+                                          size="sm"
+                                          className="!rounded-md px-3 py-2 text-sm"
+                                          onClick={() => setEditingId(null)}
                                         >
                                           Cancelar
-                                        </button>
+                                        </Button>
                                       </>
                                     ) : (
                                       isAdminEditable && (
                                         <>
-                                          <button
+                                          <Button
                                             type="button"
-                                            className="px-3 py-2 rounded-md text-sm font-semibold bg-slate-600 text-white shrink-0 inline-flex items-center justify-center"
+                                            variant="primary"
+                                            size="sm"
+                                            className="!rounded-md px-3 py-2 text-sm shrink-0 !bg-slate-600 hover:!bg-slate-700 shadow-none"
                                             aria-label="Información de precio"
                                             onClick={() =>
                                               setPriceInfoProductId(r.productId)
                                             }
                                           >
                                             <FiInfo className="w-4 h-4" />
-                                          </button>
-                                          <button
+                                          </Button>
+                                          <Button
                                             type="button"
-                                            className="inline-flex items-center justify-center w-10 h-10 rounded-md bg-green-600 text-white shrink-0 hover:bg-green-700"
+                                            variant="primary"
+                                            size="sm"
+                                            className="inline-flex items-center justify-center w-10 h-10 !rounded-md !bg-green-600 hover:!bg-green-700 shrink-0 shadow-green-600/15 !p-0"
                                             aria-label="Editar precio y empaque"
                                             title="Editar precio, empaque y EAN"
                                             onClick={() => openPriceModalEdit(r)}
                                           >
                                             <FiEdit2 className="w-5 h-5" />
-                                          </button>
-                                          <button
+                                          </Button>
+                                          <Button
                                             type="button"
-                                            className="inline-flex items-center justify-center w-10 h-10 rounded-md bg-red-600 text-white shrink-0 hover:bg-red-700"
+                                            variant="danger"
+                                            size="sm"
+                                            className="inline-flex items-center justify-center w-10 h-10 !rounded-md shrink-0 !p-0"
                                             aria-label="Eliminar precio"
                                             title="Eliminar precio"
                                             onClick={() =>
@@ -2348,7 +2409,7 @@ export default function PrecioVentas({
                                             }
                                           >
                                             <FiTrash2 className="w-5 h-5" />
-                                          </button>
+                                          </Button>
                                         </>
                                       )
                                     )}
@@ -2385,8 +2446,11 @@ export default function PrecioVentas({
                   ? "Editar precio"
                   : "Nuevo precio manual"}
               </h3>
-              <button
-                className="px-2 py-1 rounded bg-gray-200"
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="!rounded-lg px-2 py-1"
                 onClick={() => {
                   setNewPriceOpen(false);
                   setSearchNewProduct("");
@@ -2395,10 +2459,9 @@ export default function PrecioVentas({
                   setNewPriceBarcode("");
                   setNewPricePackaging("");
                 }}
-                type="button"
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <div className="space-y-3 text-sm">
@@ -2494,9 +2557,11 @@ export default function PrecioVentas({
                     autoComplete="off"
                     disabled={!newPriceProductId}
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="shrink-0 px-3 py-2 rounded-md bg-blue-600 text-white text-sm disabled:opacity-50"
+                    variant="primary"
+                    size="sm"
+                    className="shrink-0 !rounded-md px-3 py-2 text-sm"
                     disabled={!newPriceProductId}
                     onClick={() => {
                       if (!newPriceProductId) return;
@@ -2506,7 +2571,7 @@ export default function PrecioVentas({
                     }}
                   >
                     Escanear
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -2558,8 +2623,11 @@ export default function PrecioVentas({
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2 sm:justify-end">
-                <button
-                  className="px-3 py-2 rounded-lg bg-gray-200 w-full sm:w-auto"
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  className="!rounded-lg px-3 py-2 w-full sm:w-auto"
                   onClick={() => {
                     setNewPriceOpen(false);
                     setSearchNewProduct("");
@@ -2568,18 +2636,19 @@ export default function PrecioVentas({
                     setNewPriceBarcode("");
                     setNewPricePackaging("");
                   }}
-                  type="button"
                 >
                   Cancelar
-                </button>
-                <button
-                  className={`px-3 py-2 rounded-lg text-white w-full sm:w-auto ${canCreateManualPrice ? "bg-green-600 hover:bg-green-700" : "bg-gray-300 opacity-60 cursor-not-allowed"}`}
-                  onClick={() => canCreateManualPrice && createManualPrice()}
+                </Button>
+                <Button
                   type="button"
+                  variant="primary"
+                  size="md"
+                  className={`!rounded-lg px-3 py-2 w-full sm:w-auto ${canCreateManualPrice ? "!bg-green-600 hover:!bg-green-700 shadow-green-600/15" : "!bg-gray-300 !opacity-60 cursor-not-allowed hover:!bg-gray-300"}`}
+                  onClick={() => canCreateManualPrice && createManualPrice()}
                   disabled={!canCreateManualPrice}
                 >
                   {priceModalMode === "edit" ? "Guardar cambios" : "Crear precio"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2618,13 +2687,15 @@ export default function PrecioVentas({
                 {money(successPriceOverlay.rivas)}
               </li>
             </ul>
-            <button
+            <Button
               type="button"
-              className="mt-4 w-full py-3 rounded-xl font-semibold bg-slate-800 text-white md:py-2 md:rounded-lg"
+              variant="primary"
+              size="md"
+              className="mt-4 w-full py-3 !rounded-xl md:py-2 md:!rounded-lg !bg-slate-800 hover:!bg-slate-900 shadow-none"
               onClick={() => setSuccessPriceOverlay(null)}
             >
               Aceptar
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -2642,13 +2713,15 @@ export default function PrecioVentas({
           >
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Información de precio</h3>
-              <button
+              <Button
                 type="button"
-                className="px-2 py-1 rounded bg-gray-200 text-sm"
+                variant="secondary"
+                size="sm"
+                className="!rounded-lg px-2 py-1 text-sm"
                 onClick={() => setPriceInfoProductId(null)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
             {(() => {
               const pid = priceInfoProductId;
@@ -2762,19 +2835,23 @@ export default function PrecioVentas({
         width={240}
       >
         <div className="py-1">
-          <button
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             onClick={() => {
               setAdminToolsMenuRect(null);
               openPriceModalCreate();
             }}
           >
             Crear precio
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             onClick={async () => {
               setAdminToolsMenuRect(null);
               try {
@@ -2786,37 +2863,43 @@ export default function PrecioVentas({
             }}
           >
             Descargar template
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             onClick={() => {
               setAdminToolsMenuRect(null);
               downloadPricesListXlsx();
             }}
           >
             Descargar listado
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             onClick={() => {
               setAdminToolsMenuRect(null);
               setImportOpen(true);
             }}
           >
             Importar
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             onClick={() => {
               setAdminToolsMenuRect(null);
               saveAllCurrentPrices();
             }}
           >
             Guardar precios actuales
-          </button>
+          </Button>
         </div>
       </ActionMenu>
 
@@ -2838,29 +2921,35 @@ export default function PrecioVentas({
             }
             return (
               <div className="py-1">
-                <button
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   onClick={() => {
                     setRowActionMenu(null);
                     setPriceInfoProductId(r.productId);
                   }}
                 >
                   Información
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   onClick={() => {
                     setRowActionMenu(null);
                     openPriceModalEdit(r);
                   }}
                 >
                   Editar precio
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   onClick={() => {
                     setRowActionMenu(null);
                     setScanBarcodeProductId(r.productId);
@@ -2869,17 +2958,19 @@ export default function PrecioVentas({
                   }}
                 >
                   Escanear código
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700"
                   onClick={() => {
                     setRowActionMenu(null);
                     void deleteCurrentPrice(r.productId);
                   }}
                 >
                   Borrar precio
-                </button>
+                </Button>
               </div>
             );
           })()}
@@ -2974,10 +3065,10 @@ export default function PrecioVentas({
                   </td>
                   <td className="p-3 border-b text-right">
                     {isAdminEditable && (
-                      <button
-                        type="button"
-                        className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-2 py-1.5 text-slate-700 hover:bg-slate-50"
+                      <ActionMenuTrigger
+                        className="!h-8 !w-8"
                         aria-label="Acciones"
+                        iconClassName="h-4 w-4 text-gray-700"
                         onClick={(e) => {
                           e.stopPropagation();
                           setRowActionMenu({
@@ -2985,9 +3076,7 @@ export default function PrecioVentas({
                             rect: e.currentTarget.getBoundingClientRect(),
                           });
                         }}
-                      >
-                        <FiMoreVertical className="w-4 h-4" />
-                      </button>
+                      />
                     )}
                   </td>
                 </tr>

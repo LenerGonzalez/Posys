@@ -1,5 +1,7 @@
 // src/components/Candies/ExpensesCandies.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import Button from "../common/Button";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import {
   addDoc,
   collection,
@@ -39,6 +41,11 @@ interface ExpenseRow {
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
+const STATUS_OPTIONS = [
+  { value: "PENDIENTE", label: "Pendiente" },
+  { value: "PAGADO", label: "Pagado" },
+] as const;
+
 export default function ExpensesCandies() {
   // ====== Filtros por fecha ======
   const [fromDate, setFromDate] = useState<string>(
@@ -62,6 +69,14 @@ export default function ExpensesCandies() {
   const [rows, setRows] = useState<ExpenseRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+
+  const categorySelectOptions = useMemo(
+    () => [
+      { value: "", label: "Selecciona" },
+      ...CATEGORIES.map((c) => ({ value: c, label: c })),
+    ],
+    [],
+  );
 
   // ====== Edición inline ======
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -309,19 +324,15 @@ export default function ExpensesCandies() {
         </div>
 
         <div>
-          <label className="block text-sm font-semibold">Categoría</label>
-          <select
-            className="w-full border p-2 rounded"
+          <MobileHtmlSelect
+            label="Categoría"
             value={category}
-            onChange={(e) => setCategory(e.target.value as Category)}
-          >
-            <option value="">Selecciona</option>
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setCategory(v as Category | "")}
+            options={categorySelectOptions}
+            selectClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm"
+            buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+            sheetTitle="Categoría"
+          />
         </div>
 
         <div className="md:col-span-2">
@@ -350,15 +361,15 @@ export default function ExpensesCandies() {
         </div>
 
         <div>
-          <label className="block text-sm font-semibold">Estado</label>
-          <select
-            className="w-full border p-2 rounded"
+          <MobileHtmlSelect
+            label="Estado"
             value={status}
-            onChange={(e) => setStatus(e.target.value as Status)}
-          >
-            <option value="PENDIENTE">Pendiente</option>
-            <option value="PAGADO">Pagado</option>
-          </select>
+            onChange={(v) => setStatus(v as Status)}
+            options={[...STATUS_OPTIONS]}
+            selectClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm"
+            buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+            sheetTitle="Estado"
+          />
         </div>
 
         <div className="md:col-span-2">
@@ -376,9 +387,9 @@ export default function ExpensesCandies() {
         </div>
 
         <div className="md:col-span-2">
-          <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+          <Button type="submit" variant="primary" className="!rounded-xl">
             Guardar gasto
-          </button>
+          </Button>
         </div>
       </form>
 
@@ -431,20 +442,14 @@ export default function ExpensesCandies() {
                       </td>
                       <td className="p-2 border">
                         {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded"
+                          <MobileHtmlSelect
                             value={eCategory}
-                            onChange={(e) =>
-                              setECategory(e.target.value as Category)
-                            }
-                          >
-                            <option value="">Selecciona</option>
-                            {CATEGORIES.map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(v) => setECategory(v as Category | "")}
+                            options={categorySelectOptions}
+                            selectClassName="w-full min-w-[8rem] border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                            buttonClassName="w-full min-w-[8rem] border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-left flex items-center justify-between gap-1 bg-white"
+                            sheetTitle="Categoría"
+                          />
                         ) : (
                           r.category || "—"
                         )}
@@ -484,16 +489,14 @@ export default function ExpensesCandies() {
                       </td>
                       <td className="p-2 border">
                         {isEditing ? (
-                          <select
-                            className="w-full border p-1 rounded"
+                          <MobileHtmlSelect
                             value={eStatus}
-                            onChange={(e) =>
-                              setEStatus(e.target.value as Status)
-                            }
-                          >
-                            <option value="PENDIENTE">Pendiente</option>
-                            <option value="PAGADO">Pagado</option>
-                          </select>
+                            onChange={(v) => setEStatus(v as Status)}
+                            options={[...STATUS_OPTIONS]}
+                            selectClassName="w-full min-w-[7rem] border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                            buttonClassName="w-full min-w-[7rem] border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-left flex items-center justify-between gap-1 bg-white"
+                            sheetTitle="Estado"
+                          />
                         ) : (
                           <span
                             className={`px-2 py-0.5 rounded text-xs ${
@@ -526,33 +529,45 @@ export default function ExpensesCandies() {
                         <div className="flex gap-2 justify-center">
                           {isEditing ? (
                             <>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="sm"
+                                className="!rounded-lg"
                                 onClick={saveEdit}
                               >
                                 Guardar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                className="!rounded-lg"
                                 onClick={cancelEdit}
                               >
                                 Cancelar
-                              </button>
+                              </Button>
                             </>
                           ) : (
                             <>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="sm"
+                                className="!rounded-lg !bg-amber-600 hover:!bg-amber-700"
                                 onClick={() => startEdit(r)}
                               >
                                 Editar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="danger"
+                                size="sm"
+                                className="!rounded-lg"
                                 onClick={() => handleDelete(r)}
                               >
                                 Borrar
-                              </button>
+                              </Button>
                             </>
                           )}
                         </div>

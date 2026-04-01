@@ -20,10 +20,10 @@ import { db } from "../../firebase";
 import { syncCatalogProductDependents } from "../../Services/syncCatalogProductDependents";
 import RefreshButton from "../common/RefreshButton";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 import Toast from "../common/Toast";
-import ActionMenu from "../common/ActionMenu";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import useManualRefresh from "../../hooks/useManualRefresh";
-import { FiMoreVertical } from "react-icons/fi";
 
 type CandyProduct = {
   id: string;
@@ -114,13 +114,15 @@ function CodeModal({
       <div className="bg-white w-full max-w-sm rounded-2xl shadow-lg border p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="font-bold text-lg">Código de barras</div>
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-            onClick={onClose}
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
+            className="!rounded-lg px-3 py-1"
+            onClick={onClose}
           >
             Cerrar
-          </button>
+          </Button>
         </div>
         <div className="bg-gray-50 border rounded-xl p-3">
           <div className="text-xs text-gray-600 mb-1">Valor</div>
@@ -129,9 +131,11 @@ function CodeModal({
           </div>
         </div>
         <div className="mt-3 flex gap-2 justify-end">
-          <button
-            className="px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+          <Button
             type="button"
+            variant="primary"
+            size="md"
+            className="!rounded-lg px-3 py-2 !bg-indigo-600 hover:!bg-indigo-700 active:!bg-indigo-800 shadow-indigo-600/15"
             onClick={() => {
               try {
                 navigator.clipboard?.writeText(code);
@@ -139,7 +143,7 @@ function CodeModal({
             }}
           >
             Copiar
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -275,13 +279,15 @@ function BarcodeScanModal({
       <div className="bg-white w-full max-w-md rounded-2xl shadow-lg border overflow-hidden">
         <div className="flex items-center justify-between p-3 border-b">
           <div className="font-bold">Escanear código</div>
-          <button
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-            onClick={onClose}
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
+            className="!rounded-lg px-3 py-1"
+            onClick={onClose}
           >
             Cerrar
-          </button>
+          </Button>
         </div>
 
         <div className="p-3">
@@ -568,37 +574,49 @@ export default function ProductsCandies() {
   const renderPager = () => (
     <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
       <div className="flex items-center gap-1 flex-wrap">
-        <button
-          className="px-2 py-1 border rounded disabled:opacity-50"
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="!rounded-lg px-2 py-1"
           onClick={goFirst}
           disabled={page === 1}
         >
           « Primero
-        </button>
-        <button
-          className="px-2 py-1 border rounded disabled:opacity-50"
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="!rounded-lg px-2 py-1"
           onClick={goPrev}
           disabled={page === 1}
         >
           ‹ Anterior
-        </button>
+        </Button>
         <span className="px-2 text-sm">
           Página {page} de {totalPages}
         </span>
-        <button
-          className="px-2 py-1 border rounded disabled:opacity-50"
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="!rounded-lg px-2 py-1"
           onClick={goNext}
           disabled={page === totalPages}
         >
           Siguiente ›
-        </button>
-        <button
-          className="px-2 py-1 border rounded disabled:opacity-50"
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="!rounded-lg px-2 py-1"
           onClick={goLast}
           disabled={page === totalPages}
         >
           Último »
-        </button>
+        </Button>
       </div>
       <div className="text-sm text-gray-600">{filtered.length} producto(s)</div>
     </div>
@@ -1223,9 +1241,8 @@ export default function ProductsCandies() {
             loading={loading || importLoading}
           />
           {isMobile ? (
-            <button
-              type="button"
-              className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 active:bg-slate-100 touch-manipulation"
+            <ActionMenuTrigger
+              className="touch-manipulation"
               aria-label="Más acciones: crear, importar, filtros"
               onClick={(e) => {
                 setCatalogRowMenu(null);
@@ -1233,24 +1250,26 @@ export default function ProductsCandies() {
                   (e.currentTarget as HTMLElement).getBoundingClientRect(),
                 );
               }}
-            >
-              <FiMoreVertical className="w-5 h-5 text-slate-700" />
-            </button>
+            />
           ) : (
             <>
-              <button
+              <Button
                 type="button"
-                className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
+                variant="primary"
+                size="sm"
+                className="!rounded-md px-3 py-2 text-xs !bg-slate-900 hover:!bg-black active:!bg-black shadow-none"
                 onClick={() => {
                   setMsg("");
                   setCreateOpen(true);
                 }}
               >
                 Crear Producto
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="px-3 py-2 rounded-md text-xs font-semibold bg-white border border-slate-200 shadow-sm hover:bg-slate-50"
+                variant="outline"
+                size="sm"
+                className="!rounded-md px-3 py-2 text-xs shadow-sm"
                 onClick={() => {
                   setImportOpen(true);
                   setImportRows([]);
@@ -1259,7 +1278,7 @@ export default function ProductsCandies() {
                 }}
               >
                 Importar
-              </button>
+              </Button>
             </>
           )}
         </div>
@@ -1277,13 +1296,15 @@ export default function ProductsCandies() {
               <h3 className="text-lg font-bold text-slate-900">
                 Crear producto
               </h3>
-              <button
-                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
-                onClick={() => setCreateOpen(false)}
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
+                className="!rounded-md px-3 py-1 text-xs"
+                onClick={() => setCreateOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <form
@@ -1405,34 +1426,40 @@ export default function ProductsCandies() {
                     onChange={(e) => setBarcode(e.target.value)}
                     placeholder="EAN/UPC"
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black whitespace-nowrap"
+                    variant="primary"
+                    size="sm"
+                    className="!rounded-md px-3 py-2 text-xs whitespace-nowrap !bg-slate-900 hover:!bg-black shadow-none"
                     onClick={() => {
                       setScanTarget("create");
                       setScanOpen(true);
                     }}
                   >
                     Escanear
-                  </button>
+                  </Button>
                 </div>
               </div>
 
               <div className="md:col-span-6 flex justify-end gap-2">
-                <button
+                <Button
                   type="button"
-                  className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  variant="secondary"
+                  size="sm"
+                  className="!rounded-md px-3 py-2 text-xs"
                   onClick={resetForm}
                 >
                   Limpiar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                  variant="primary"
+                  size="sm"
+                  className="!rounded-md px-3 py-2 text-xs !bg-emerald-600 hover:!bg-emerald-700 active:!bg-emerald-800 shadow-emerald-600/15"
                   disabled={loading}
                 >
                   Crear producto
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -1476,9 +1503,11 @@ export default function ProductsCandies() {
               placeholder="Ej: 7445074183182"
             />
             <div className="mt-2 md:mt-0">
-              <button
+              <Button
                 type="button"
-                className="w-full md:w-auto px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white"
+                variant="primary"
+                size="sm"
+                className="w-full md:w-auto !rounded-md px-3 py-2 text-xs !bg-slate-900 shadow-none"
                 onClick={() => {
                   setScanTarget("search");
                   setScanOpen(true);
@@ -1486,19 +1515,21 @@ export default function ProductsCandies() {
                 }}
               >
                 Escanear producto
-              </button>
+              </Button>
             </div>
             <div className="mt-2 md:ml-2">
-              <button
+              <Button
                 type="button"
-                className="w-full md:w-auto px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+                variant="secondary"
+                size="sm"
+                className="w-full md:w-auto !rounded-md px-3 py-2 text-xs"
                 onClick={() => {
                   setSearch("");
                   setSearchCode("");
                 }}
               >
                 Limpiar filtros
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -1523,16 +1554,9 @@ export default function ProductsCandies() {
           ) : (
             <div className="space-y-3">
               {/* <p className="text-xs text-slate-500 px-1">
-                Arriba, junto a Actualizar, el menú
-                <span className="inline-flex align-middle mx-0.5 text-slate-700">
-                  <FiMoreVertical className="w-3.5 h-3.5" aria-hidden />
-                </span>
-                ofrece Crear producto, Importar y filtros. Abrí una categoría para
-                listar productos; en cada fila, el
-                <span className="inline-flex align-middle mx-0.5 text-slate-700">
-                  <FiMoreVertical className="w-3.5 h-3.5" aria-hidden />
-                </span>
-                a la derecha es Editar / Borrar.
+                Arriba, junto a Actualizar, el menú (⋮) ofrece Crear producto,
+                Importar y filtros. Abrí una categoría para listar productos; en
+                cada fila, el menú a la derecha es Editar / Borrar.
               </p> */}
               {pagedByCategory.map((group) => {
                 const isOpen = !!categoryOpenMap[group.category];
@@ -1541,9 +1565,11 @@ export default function ProductsCandies() {
                     key={group.category}
                     className="bg-white border rounded-2xl shadow-sm overflow-hidden"
                   >
-                    <button
+                    <Button
                       type="button"
-                      className="w-full px-3 py-3 flex items-center justify-between text-left"
+                      variant="ghost"
+                      size="md"
+                      className="w-full !justify-between !rounded-none px-3 py-3 text-left !font-normal shadow-none border-0"
                       onClick={() => toggleCategory(group.category)}
                       aria-expanded={isOpen}
                     >
@@ -1560,7 +1586,7 @@ export default function ProductsCandies() {
                       >
                         ▼
                       </span>
-                    </button>
+                    </Button>
 
                     {isOpen && (
                       <div className="border-t p-2 space-y-2">
@@ -1576,9 +1602,11 @@ export default function ProductsCandies() {
                             >
                               {/* header card (colapsada): nombre + precio + menú acciones (mismo ActionMenu que web) */}
                               <div className="flex items-stretch border-b border-transparent">
-                                <button
+                                <Button
                                   type="button"
-                                  className="flex-1 min-w-0 px-3 py-3 flex items-center justify-between text-left"
+                                  variant="ghost"
+                                  size="md"
+                                  className="flex-1 min-w-0 !justify-between !rounded-none px-3 py-3 text-left !font-normal shadow-none border-0"
                                   onClick={() =>
                                     setOpenCardId((cur) =>
                                       cur === p.id ? null : p.id,
@@ -1601,10 +1629,9 @@ export default function ProductsCandies() {
                                       {money(p.providerPrice)}
                                     </div>
                                   </div>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="shrink-0 px-2 py-3 border-l border-slate-100 hover:bg-slate-50 active:bg-slate-100 touch-manipulation"
+                                </Button>
+                                <ActionMenuTrigger
+                                  className="shrink-0 touch-manipulation"
                                   aria-label="Acciones del producto"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -1616,9 +1643,7 @@ export default function ProductsCandies() {
                                       ).getBoundingClientRect(),
                                     });
                                   }}
-                                >
-                                  <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                                </button>
+                                />
                               </div>
 
                               {expanded && (
@@ -1775,21 +1800,25 @@ export default function ProductsCandies() {
                                               }
                                               placeholder="EAN/UPC"
                                             />
-                                            <button
+                                            <Button
                                               type="button"
-                                              className="px-3 py-2 rounded bg-gray-800 text-white"
+                                              variant="primary"
+                                              size="sm"
+                                              className="!rounded-lg px-3 py-2 !bg-gray-800 hover:!bg-gray-900 shadow-none"
                                               onClick={() => {
                                                 setScanTarget("edit");
                                                 setScanOpen(true);
                                               }}
                                             >
                                               Escanear
-                                            </button>
+                                            </Button>
                                           </div>
                                         ) : hasCode ? (
-                                          <button
+                                          <Button
                                             type="button"
-                                            className="px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
+                                            variant="outline"
+                                            size="sm"
+                                            className="!rounded-lg px-2 py-1 !bg-green-100 !text-green-700 border-green-200/80 hover:!bg-green-200"
                                             onClick={() => {
                                               setCodeModalValue(
                                                 String(p.barcode || "").trim(),
@@ -1798,7 +1827,7 @@ export default function ProductsCandies() {
                                             }}
                                           >
                                             Ver código
-                                          </button>
+                                          </Button>
                                         ) : (
                                           <div className="text-gray-600">
                                             No
@@ -1810,30 +1839,36 @@ export default function ProductsCandies() {
                                     {/* acciones inline solo en modo edición; Editar/Borrar vía ⋮ en el header */}
                                     {isEd && (
                                       <div className="pt-2 flex flex-wrap gap-2 items-center">
-                                        <button
-                                          className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-blue-600 text-white"
-                                          onClick={saveEdit}
+                                        <Button
                                           type="button"
+                                          variant="primary"
+                                          size="sm"
+                                          className="flex-1 min-w-[6rem] !rounded-lg px-3 py-2"
+                                          onClick={saveEdit}
                                         >
                                           Guardar
-                                        </button>
-                                        <button
-                                          className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-800 text-white"
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="primary"
+                                          size="sm"
+                                          className="flex-1 min-w-[6rem] !rounded-lg px-3 py-2 !bg-gray-800 hover:!bg-gray-900 shadow-none"
                                           onClick={() => {
                                             setScanTarget("edit");
                                             setScanOpen(true);
                                           }}
-                                          type="button"
                                         >
                                           Escanear
-                                        </button>
-                                        <button
-                                          className="flex-1 min-w-[6rem] px-3 py-2 rounded bg-gray-200"
-                                          onClick={cancelEdit}
+                                        </Button>
+                                        <Button
                                           type="button"
+                                          variant="secondary"
+                                          size="sm"
+                                          className="flex-1 min-w-[6rem] !rounded-lg px-3 py-2"
+                                          onClick={cancelEdit}
                                         >
                                           Cancelar
-                                        </button>
+                                        </Button>
                                       </div>
                                     )}
                                   </div>
@@ -2015,28 +2050,32 @@ export default function ProductsCandies() {
                               onChange={(e) => setEditBarcode(e.target.value)}
                               placeholder="EAN/UPC"
                             />
-                            <button
+                            <Button
                               type="button"
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black"
+                              variant="primary"
+                              size="sm"
+                              className="!rounded-md px-3 py-1.5 text-xs !bg-slate-900 hover:!bg-black shadow-none"
                               onClick={() => {
                                 setScanTarget("edit");
                                 setScanOpen(true);
                               }}
                             >
                               Escanear
-                            </button>
+                            </Button>
                           </div>
                         ) : hasCode ? (
-                          <button
+                          <Button
                             type="button"
-                            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                            variant="outline"
+                            size="sm"
+                            className="!rounded-md px-3 py-1.5 text-xs !bg-emerald-100 !text-emerald-700 border-emerald-200/80 hover:!bg-emerald-200"
                             onClick={() => {
                               setCodeModalValue(String(p.barcode || "").trim());
                               setCodeModalOpen(true);
                             }}
                           >
                             Sí
-                          </button>
+                          </Button>
                         ) : (
                           <span className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-100 text-slate-600">
                             No
@@ -2047,37 +2086,45 @@ export default function ProductsCandies() {
                       <td className="p-3 border-b">
                         {isEd ? (
                           <div className="flex gap-2 justify-center">
-                            <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
-                              onClick={saveEdit}
+                            <Button
                               type="button"
+                              variant="primary"
+                              size="sm"
+                              className="!rounded-md px-3 py-1.5 text-xs"
+                              onClick={saveEdit}
                             >
                               Guardar
-                            </button>
-                            <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
-                              onClick={cancelEdit}
+                            </Button>
+                            <Button
                               type="button"
+                              variant="secondary"
+                              size="sm"
+                              className="!rounded-md px-3 py-1.5 text-xs"
+                              onClick={cancelEdit}
                             >
                               Cancelar
-                            </button>
+                            </Button>
                           </div>
                         ) : (
                           <div className="flex gap-2 justify-center flex-wrap">
-                            <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-amber-500 text-white hover:bg-amber-600"
-                              onClick={() => startEdit(p)}
+                            <Button
                               type="button"
+                              variant="primary"
+                              size="sm"
+                              className="!rounded-md px-3 py-1.5 text-xs !bg-amber-500 hover:!bg-amber-600 active:!bg-amber-700 shadow-amber-500/15"
+                              onClick={() => startEdit(p)}
                             >
                               Editar
-                            </button>
-                            <button
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700"
-                              onClick={() => removeProduct(p)}
+                            </Button>
+                            <Button
                               type="button"
+                              variant="danger"
+                              size="sm"
+                              className="!rounded-md px-3 py-1.5 text-xs"
+                              onClick={() => removeProduct(p)}
                             >
                               Borrar
-                            </button>
+                            </Button>
                           </div>
                         )}
                       </td>
@@ -2107,26 +2154,30 @@ export default function ProductsCandies() {
             }
             return (
               <div className="py-1">
-                <button
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   onClick={() => {
                     setCatalogRowMenu(null);
                     startEdit(p);
                   }}
                 >
                   Editar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700"
                   onClick={() => {
                     setCatalogRowMenu(null);
                     void removeProduct(p);
                   }}
                 >
                   Borrar
-                </button>
+                </Button>
               </div>
             );
           })()}
@@ -2139,9 +2190,11 @@ export default function ProductsCandies() {
         width={220}
       >
         <div className="py-1">
-          <button
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 font-medium"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-semibold"
             onClick={() => {
               setMobileToolbarMenuRect(null);
               setMsg("");
@@ -2149,10 +2202,12 @@ export default function ProductsCandies() {
             }}
           >
             Crear producto
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             onClick={() => {
               setMobileToolbarMenuRect(null);
               setImportOpen(true);
@@ -2162,17 +2217,19 @@ export default function ProductsCandies() {
             }}
           >
             Importar
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 border-t border-slate-100"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal border-t border-slate-100 !rounded-t-none"
             onClick={() => {
               setMobileToolbarMenuRect(null);
               setFiltersOpen((v) => !v);
             }}
           >
             {filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
-          </button>
+          </Button>
         </div>
       </ActionMenu>
 
@@ -2181,9 +2238,11 @@ export default function ProductsCandies() {
           <>
             <Toast message={msg} onClose={() => setMsg("")} />
             <div className="mt-2 md:hidden">
-              <button
-                className="w-full px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold"
+              <Button
                 type="button"
+                variant="primary"
+                size="md"
+                className="w-full !rounded-lg px-3 py-2 text-sm"
                 onClick={() => {
                   setMsg("");
                   cancelEdit();
@@ -2191,7 +2250,7 @@ export default function ProductsCandies() {
                 }}
               >
                 Aceptar y cerrar edición
-              </button>
+              </Button>
             </div>
           </>
         ) : (
@@ -2218,13 +2277,15 @@ export default function ProductsCandies() {
               <h3 className="text-lg font-bold text-slate-900">
                 Editar producto
               </h3>
-              <button
-                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
-                onClick={() => setEditModalOpen(false)}
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
+                className="!rounded-md px-3 py-1 text-xs"
+                onClick={() => setEditModalOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <form
@@ -2352,33 +2413,39 @@ export default function ProductsCandies() {
                     onChange={(e) => setEditBarcode(e.target.value)}
                     placeholder="EAN/UPC"
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-black whitespace-nowrap"
+                    variant="primary"
+                    size="sm"
+                    className="!rounded-md px-3 py-2 text-xs whitespace-nowrap !bg-slate-900 hover:!bg-black shadow-none"
                     onClick={() => {
                       setScanTarget("edit");
                       setScanOpen(true);
                     }}
                   >
                     Escanear
-                  </button>
+                  </Button>
                 </div>
               </div>
 
               <div className="md:col-span-6 flex justify-end gap-2">
-                <button
+                <Button
                   type="button"
-                  className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  variant="secondary"
+                  size="sm"
+                  className="!rounded-md px-3 py-2 text-xs"
                   onClick={cancelEdit}
                 >
                   Cancelar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                  variant="primary"
+                  size="sm"
+                  className="!rounded-md px-3 py-2 text-xs !bg-emerald-600 hover:!bg-emerald-700 active:!bg-emerald-800 shadow-emerald-600/15"
                 >
                   Guardar
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -2446,12 +2513,15 @@ export default function ProductsCandies() {
               <h3 className="text-xl font-bold">
                 Importar productos (.xlsx / .csv)
               </h3>
-              <button
-                className="px-3 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="!rounded-md px-3 py-1 text-xs"
                 onClick={() => setImportOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-3">
@@ -2464,13 +2534,15 @@ export default function ProductsCandies() {
                     Empaque (opcional), Codigo (opcional).
                   </div>
                 </div>
-                <button
-                  className="px-3 py-2 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
-                  onClick={downloadTemplateXlsx}
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="!rounded-md px-3 py-2 text-xs"
+                  onClick={downloadTemplateXlsx}
                 >
                   Descargar template .xlsx
-                </button>
+                </Button>
               </div>
 
               <div className="mt-3 flex flex-col md:flex-row gap-3 md:items-center">
@@ -2514,18 +2586,20 @@ export default function ProductsCandies() {
                   </div>
                 </div>
 
-                <button
-                  className="px-3 py-2 rounded-md text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  className="!rounded-md px-3 py-2 text-xs !bg-indigo-600 hover:!bg-indigo-700 active:!bg-indigo-800 shadow-indigo-600/15"
                   onClick={importToFirestore}
                   disabled={
                     importLoading ||
                     importRows.length === 0 ||
                     importErrors.length > 0
                   }
-                  type="button"
                 >
                   Importar a Firestore
-                </button>
+                </Button>
               </div>
 
               <div className="overflow-x-auto border border-slate-200 rounded-xl">

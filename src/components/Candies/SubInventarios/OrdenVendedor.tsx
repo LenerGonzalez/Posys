@@ -30,8 +30,8 @@ import {
 } from "../../../Services/Candies_vendor_orders";
 import { backfillCandyInventoryFromMainOrder } from "../../../Services/inventory_candies";
 import TrasladosModal from "./TrasladosModal";
-import ActionMenu from "../../common/ActionMenu";
-import { FiMoreVertical } from "react-icons/fi";
+import ActionMenu, { ActionMenuTrigger } from "../../common/ActionMenu";
+import Button from "../../common/Button";
 
 // Helper: redondeo a 2 decimales (consistente con otros componentes)
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
@@ -4012,12 +4012,15 @@ export default function VendorCandyOrders({
         <div className="flex flex-wrap gap-2">
           <RefreshButton onClick={refresh} />
           {isAdmin && (
-            <button
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className="rounded bg-amber-600 shadow-none hover:bg-amber-700 active:bg-amber-800"
               onClick={() => setOpenTransferModal(true)}
-              className="px-3 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-700"
             >
               Traslados
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -4058,11 +4061,11 @@ export default function VendorCandyOrders({
               </div>
 
               {isAdmin ? (
-                <button
-                  type="button"
-                  className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+                <ActionMenuTrigger
+                  className="shrink-0 !h-10 !w-10"
                   aria-label="Acciones del listado"
                   title="Nuevo pedido, sincronizar, actualizar Firestore"
+                  iconClassName="h-[22px] w-[22px] text-gray-700"
                   onClick={(e) =>
                     setVendorListToolbarMenu({
                       rect: (
@@ -4070,9 +4073,7 @@ export default function VendorCandyOrders({
                       ).getBoundingClientRect(),
                     })
                   }
-                >
-                  <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                </button>
+                />
               ) : null}
             </div>
 
@@ -4167,10 +4168,10 @@ export default function VendorCandyOrders({
                           </span>
                         </td>
                         <td className="p-3 border-b">
-                          <button
-                            type="button"
-                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                          <ActionMenuTrigger
+                            className="!h-8 !w-8"
                             aria-label="Acciones del pedido"
+                            iconClassName="h-5 w-5 text-gray-700"
                             onClick={(e) =>
                               setOrderRowMenu({
                                 orderKey: o.orderKey,
@@ -4179,9 +4180,7 @@ export default function VendorCandyOrders({
                                 ).getBoundingClientRect(),
                               })
                             }
-                          >
-                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                          </button>
+                          />
                         </td>
                       </tr>
                     );
@@ -4207,20 +4206,26 @@ export default function VendorCandyOrders({
                 Página {page} / {totalPages}
               </div>
               <div className="flex gap-2">
-                <button
-                  className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded shadow-none"
                   onClick={goPrevPage}
                   disabled={page <= 1}
                 >
                   ←
-                </button>
-                <button
-                  className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded shadow-none"
                   onClick={goNextPage}
                   disabled={page >= totalPages}
                 >
                   →
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -4246,10 +4251,10 @@ export default function VendorCandyOrders({
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+                  <ActionMenuTrigger
+                    className="shrink-0 !h-8 !w-8"
                     aria-label="Acciones del pedido"
+                    iconClassName="h-5 w-5 text-gray-700"
                     onClick={(e) => {
                       e.stopPropagation();
                       setOrderRowMenu({
@@ -4259,9 +4264,7 @@ export default function VendorCandyOrders({
                         ).getBoundingClientRect(),
                       });
                     }}
-                  >
-                    <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                  </button>
+                  />
                 </div>
 
                 <div className="px-2 pb-2">
@@ -4309,20 +4312,26 @@ export default function VendorCandyOrders({
             )}
 
             <div className="flex gap-2">
-              <button
-                className="flex-1 px-3 py-2 rounded border text-sm"
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="flex-1 rounded shadow-none"
                 onClick={goPrevPage}
                 disabled={page <= 1}
               >
                 ←
-              </button>
-              <button
-                className="flex-1 px-3 py-2 rounded border text-sm"
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="flex-1 rounded shadow-none"
                 onClick={goNextPage}
                 disabled={page >= totalPages}
               >
                 →
-              </button>
+              </Button>
             </div>
           </div>
         </>
@@ -4353,10 +4362,10 @@ export default function VendorCandyOrders({
               </div>
 
               <div className="shrink-0">
-                <button
-                  type="button"
-                  className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                <ActionMenuTrigger
+                  className="!h-10 !w-10"
                   aria-label="Acciones del pedido"
+                  iconClassName="h-[22px] w-[22px] text-gray-700"
                   onClick={(e) =>
                     setModalHeaderMenu({
                       rect: (
@@ -4364,9 +4373,7 @@ export default function VendorCandyOrders({
                       ).getBoundingClientRect(),
                     })
                   }
-                >
-                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                </button>
+                />
               </div>
             </div>
 
@@ -4374,18 +4381,20 @@ export default function VendorCandyOrders({
             <div className="p-3 md:p-5 space-y-3">
               {/* Mobile: filtros + menú plantilla/importar */}
               <div className="md:hidden flex gap-2">
-                <button
+                <Button
                   type="button"
-                  className="flex-1 min-w-0 px-3 py-2 rounded border text-sm flex items-center justify-between"
+                  variant="outline"
+                  size="sm"
+                  className="flex min-w-0 flex-1 justify-between rounded shadow-none"
                   onClick={() => setMobileMetaOpen((v) => !v)}
                 >
                   <span>Filtros y KPIs</span>
                   <span>{mobileMetaOpen ? "−" : "+"}</span>
-                </button>
-                <button
-                  type="button"
-                  className="shrink-0 p-2 rounded border border-gray-200 hover:bg-gray-50"
+                </Button>
+                <ActionMenuTrigger
+                  className="shrink-0 !h-10 !w-10"
                   aria-label="Plantilla e importar"
+                  iconClassName="h-[22px] w-[22px] text-gray-700"
                   onClick={(e) =>
                     setModalImportMenu({
                       rect: (
@@ -4393,9 +4402,7 @@ export default function VendorCandyOrders({
                       ).getBoundingClientRect(),
                     })
                   }
-                >
-                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                </button>
+                />
               </div>
 
               <div
@@ -4437,10 +4444,10 @@ export default function VendorCandyOrders({
                   </div>
 
                   <div className="hidden md:flex items-end justify-end">
-                    <button
-                      type="button"
-                      className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                    <ActionMenuTrigger
+                      className="!h-10 !w-10"
                       aria-label="Plantilla e importar"
+                      iconClassName="h-[22px] w-[22px] text-gray-700"
                       onClick={(e) =>
                         setModalImportMenu({
                           rect: (
@@ -4448,9 +4455,7 @@ export default function VendorCandyOrders({
                           ).getBoundingClientRect(),
                         })
                       }
-                    >
-                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                    </button>
+                    />
                     <input
                       ref={importInputRef}
                       type="file"
@@ -4535,14 +4540,16 @@ export default function VendorCandyOrders({
 
               {/* Add product row */}
               <div className="border rounded p-3 space-y-2">
-                <button
+                <Button
                   type="button"
-                  className="md:hidden w-full px-3 py-2 rounded border text-sm flex items-center justify-between"
+                  variant="outline"
+                  size="sm"
+                  className="flex w-full justify-between rounded shadow-none md:hidden"
                   onClick={() => setMobileAddOpen((v) => !v)}
                 >
                   <span>Agregar producto</span>
                   <span>{mobileAddOpen ? "−" : "+"}</span>
-                </button>
+                </Button>
 
                 <div
                   className={`${mobileAddOpen ? "block" : "hidden"} md:block space-y-2`}
@@ -4589,17 +4596,16 @@ export default function VendorCandyOrders({
                     </div>
 
                     <div className="flex items-end">
-                      <button
-                        className={`w-full px-3 py-2 rounded text-sm ${
-                          !selectedProduct
-                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                            : "bg-indigo-600 text-white hover:bg-indigo-700"
-                        }`}
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500"
                         onClick={addItemToOrder}
                         disabled={!selectedProduct}
                       >
                         Agregar Paquetes
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -4624,10 +4630,10 @@ export default function VendorCandyOrders({
                           setItemsPage(1);
                         }}
                       />
-                      <button
-                        type="button"
-                        className="shrink-0 p-2 rounded border border-gray-200 hover:bg-gray-50"
+                      <ActionMenuTrigger
+                        className="shrink-0 !h-10 !w-10"
                         aria-label="Acciones de productos"
+                        iconClassName="h-[22px] w-[22px] text-gray-700"
                         onClick={(e) =>
                           setModalItemsToolbarMenu({
                             rect: (
@@ -4635,9 +4641,7 @@ export default function VendorCandyOrders({
                             ).getBoundingClientRect(),
                           })
                         }
-                      >
-                        <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                      </button>
+                      />
                     </div>
                     <input
                       className="border rounded px-2 py-1 text-sm w-full"
@@ -4665,10 +4669,10 @@ export default function VendorCandyOrders({
                       onChange={(e) => setBulkMarginPercent(e.target.value)}
                       inputMode="decimal"
                     />
-                    <button
-                      type="button"
-                      className="shrink-0 p-2 rounded border border-gray-200 hover:bg-gray-50"
+                    <ActionMenuTrigger
+                      className="shrink-0 !h-10 !w-10"
                       aria-label="Aplicar margen o exportar"
+                      iconClassName="h-[22px] w-[22px] text-gray-700"
                       onClick={(e) =>
                         setModalItemsToolbarMenu({
                           rect: (
@@ -4676,9 +4680,7 @@ export default function VendorCandyOrders({
                           ).getBoundingClientRect(),
                         })
                       }
-                    >
-                      <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                    </button>
+                    />
                   </div>
                 </div>
 
@@ -4807,27 +4809,31 @@ export default function VendorCandyOrders({
                                     <span className={zeroClass(it.packages)}>
                                       {it.packages}
                                     </span>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
+                                      variant="primary"
+                                      size="sm"
+                                      className="h-7 w-7 rounded p-0 shadow-none !text-base"
                                       onClick={() => openPackageEdit(it.id)}
                                       aria-label="Editar paquetes"
                                       title="Editar paquetes"
                                     >
                                       <svg
                                         xmlns="http://www.w3.org/2000/svg"
-                                        className="w-4 h-4"
+                                        className="shrink-0"
+                                        width={18}
+                                        height={18}
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
-                                        strokeWidth={1.5}
+                                        strokeWidth={2}
                                         strokeLinecap="round"
                                         strokeLinejoin="round"
                                       >
                                         <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
                                         <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
                                       </svg>
-                                    </button>
+                                    </Button>
                                   </div>
                                 )
                               ) : (
@@ -4883,27 +4889,31 @@ export default function VendorCandyOrders({
                                     >
                                       {it.remainingPackages}
                                     </span>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
+                                      variant="primary"
+                                      size="sm"
+                                      className="h-7 w-7 rounded p-0 shadow-none !text-base"
                                       onClick={() => openRemainingEdit(it.id)}
                                       aria-label="Editar restantes"
                                       title="Editar restantes"
                                     >
                                       <svg
                                         xmlns="http://www.w3.org/2000/svg"
-                                        className="w-4 h-4"
+                                        className="shrink-0"
+                                        width={18}
+                                        height={18}
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
-                                        strokeWidth={1.5}
+                                        strokeWidth={2}
                                         strokeLinecap="round"
                                         strokeLinejoin="round"
                                       >
                                         <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
                                         <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
                                       </svg>
-                                    </button>
+                                    </Button>
                                   </div>
                                 )
                               ) : (
@@ -4943,14 +4953,16 @@ export default function VendorCandyOrders({
                                   {money(totalExpected)}
                                 </span>
                                 {isAdmin && (
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
                                     onClick={async () => recalcItem(it.id)}
                                     aria-label="Recalcular total esperado"
                                   >
                                     🔁
-                                  </button>
+                                  </Button>
                                 )}
                                 {savingCalcMap[it.id] && (
                                   <div className="text-xs text-gray-500">
@@ -4970,16 +4982,18 @@ export default function VendorCandyOrders({
                                       {money(grossProfitBase)}
                                     </span>
                                     {isAdmin && (
-                                      <button
+                                      <Button
                                         type="button"
-                                        className="text-xs text-gray-600 hover:text-gray-900"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
                                         onClick={async () =>
                                           await recalcItem(it.id)
                                         }
                                         aria-label="Recalcular U. Bruta"
                                       >
                                         🔁
-                                      </button>
+                                      </Button>
                                     )}
                                     {savingCalcMap[it.id] && (
                                       <div className="text-xs text-gray-500">
@@ -5084,27 +5098,31 @@ export default function VendorCandyOrders({
                                       ).toFixed(3)}
                                       %
                                     </span>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="hidden md:inline-flex items-center justify-center w-7 h-7 rounded bg-blue-600 text-white hover:bg-blue-700"
+                                      variant="primary"
+                                      size="sm"
+                                      className="hidden h-7 w-7 rounded p-0 shadow-none !text-base md:inline-flex"
                                       onClick={() => openMarginEdit(it.id)}
                                       aria-label="Editar margen"
                                       title="Editar margen"
                                     >
                                       <svg
                                         xmlns="http://www.w3.org/2000/svg"
-                                        className="w-4 h-4"
+                                        className="shrink-0"
+                                        width={18}
+                                        height={18}
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
-                                        strokeWidth={1.5}
+                                        strokeWidth={2}
                                         strokeLinecap="round"
                                         strokeLinejoin="round"
                                       >
                                         <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
                                         <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
                                       </svg>
-                                    </button>
+                                    </Button>
                                   </div>
                                 )
                               ) : (
@@ -5127,10 +5145,10 @@ export default function VendorCandyOrders({
 
                             <td className="p-2 border-b">
                               {!isReadOnly && (
-                                <button
-                                  type="button"
-                                  className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                                <ActionMenuTrigger
+                                  className="!h-8 !w-8"
                                   aria-label="Acciones"
+                                  iconClassName="h-5 w-5 text-gray-700"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setModalLineMenu({
@@ -5140,9 +5158,7 @@ export default function VendorCandyOrders({
                                       ).getBoundingClientRect(),
                                     });
                                   }}
-                                >
-                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                                </button>
+                                />
                               )}
                             </td>
                           </tr>
@@ -5169,9 +5185,11 @@ export default function VendorCandyOrders({
                     const expanded = !!openCategoryMap[cat];
                     return (
                       <div key={cat} className="border rounded">
-                        <button
+                        <Button
                           type="button"
-                          className="w-full px-3 py-2 flex items-center justify-between text-sm"
+                          variant="ghost"
+                          size="sm"
+                          className="w-full justify-between px-3 py-2 text-sm font-normal shadow-none ring-offset-0"
                           onClick={() => toggleCategory(cat)}
                         >
                           <span className="font-semibold">{cat}</span>
@@ -5179,7 +5197,7 @@ export default function VendorCandyOrders({
                             {items.length}{" "}
                             {items.length === 1 ? "producto" : "productos"}
                           </span>
-                        </button>
+                        </Button>
 
                         {expanded && (
                           <div className="px-3 pb-3 space-y-2">
@@ -5377,9 +5395,11 @@ export default function VendorCandyOrders({
                                           {money(totalExpected)}
                                         </div>
                                         {isAdmin && (
-                                          <button
+                                          <Button
                                             type="button"
-                                            className="text-xs text-gray-600 hover:text-gray-900"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
                                             onClick={async (e) => {
                                               e.stopPropagation();
                                               await recalcItem(it.id);
@@ -5387,7 +5407,7 @@ export default function VendorCandyOrders({
                                             aria-label="Recalcular total esperado"
                                           >
                                             🔁
-                                          </button>
+                                          </Button>
                                         )}
                                         {savingCalcMap[it.id] && (
                                           <div className="text-xs text-gray-500">
@@ -5413,9 +5433,11 @@ export default function VendorCandyOrders({
                                               )}
                                             </div>
                                             {isAdmin && (
-                                              <button
+                                              <Button
                                                 type="button"
-                                                className="text-xs text-gray-600 hover:text-gray-900"
+                                                variant="ghost"
+                                                size="sm"
+                                                className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
                                                 onClick={async (e) => {
                                                   e.stopPropagation();
                                                   await recalcItem(it.id);
@@ -5423,7 +5445,7 @@ export default function VendorCandyOrders({
                                                 aria-label="Recalcular U. Bruta"
                                               >
                                                 🔁
-                                              </button>
+                                              </Button>
                                             )}
                                             {savingCalcMap[it.id] && (
                                               <div className="text-xs text-gray-500">
@@ -5593,10 +5615,10 @@ export default function VendorCandyOrders({
                                     </div>
 
                                     {!isReadOnly && (
-                                      <button
-                                        type="button"
-                                        className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                                      <ActionMenuTrigger
+                                        className="!h-8 !w-8"
                                         aria-label="Acciones"
+                                        iconClassName="h-5 w-5 text-gray-700"
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           setModalLineMenu({
@@ -5606,9 +5628,7 @@ export default function VendorCandyOrders({
                                             ).getBoundingClientRect(),
                                           });
                                         }}
-                                      >
-                                        <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                                      </button>
+                                      />
                                     )}
                                   </div>
                                 </div>
@@ -5632,20 +5652,26 @@ export default function VendorCandyOrders({
                     Página items {itemsPage} / {itemsTotalPages}
                   </div>
                   <div className="flex gap-2">
-                    <button
-                      className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded shadow-none"
                       onClick={itemsPrev}
                       disabled={itemsPage <= 1}
                     >
                       ←
-                    </button>
-                    <button
-                      className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded shadow-none"
                       onClick={itemsNext}
                       disabled={itemsPage >= itemsTotalPages}
                     >
                       →
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -5663,10 +5689,10 @@ export default function VendorCandyOrders({
                 </div>
 
                 <div className="flex justify-end">
-                  <button
-                    type="button"
-                    className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                  <ActionMenuTrigger
+                    className="!h-10 !w-10"
                     aria-label="Cancelar o guardar"
+                    iconClassName="h-[22px] w-[22px] text-gray-700"
                     onClick={(e) =>
                       setModalFooterMenu({
                         rect: (
@@ -5674,9 +5700,7 @@ export default function VendorCandyOrders({
                         ).getBoundingClientRect(),
                       })
                     }
-                  >
-                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                  </button>
+                  />
                 </div>
               </div>
 
@@ -5699,10 +5723,12 @@ export default function VendorCandyOrders({
         {modalHeaderMenu && (
           <div className="py-1">
             {isAdmin && editingOrderKey && (
-              <button
+              <Button
                 type="button"
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
-                  isSyncingMaster ? "text-gray-400 cursor-not-allowed" : ""
+                variant="ghost"
+                size="sm"
+                className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
+                  isSyncingMaster ? "cursor-not-allowed text-gray-400" : ""
                 }`}
                 disabled={isSyncingMaster}
                 onClick={() => {
@@ -5713,30 +5739,34 @@ export default function VendorCandyOrders({
                 {isSyncingMaster
                   ? "Sincronizando…"
                   : "Sincronizar con Orden Maestra"}
-              </button>
+              </Button>
             )}
             {!isReadOnly && (
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                 onClick={() => {
                   setModalHeaderMenu(null);
                   saveOrder();
                 }}
               >
                 Guardar
-              </button>
+              </Button>
             )}
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
               onClick={() => {
                 setModalHeaderMenu(null);
                 closeForm();
               }}
             >
               Cerrar
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>
@@ -5749,26 +5779,30 @@ export default function VendorCandyOrders({
       >
         {modalImportMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
               onClick={() => {
                 setModalImportMenu(null);
                 downloadTemplateFromMainOrders();
               }}
             >
               Descargar plantilla
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
               onClick={() => {
                 setModalImportMenu(null);
                 triggerImport();
               }}
             >
               Importar Excel
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>
@@ -5781,11 +5815,13 @@ export default function VendorCandyOrders({
       >
         {modalItemsToolbarMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+              variant="ghost"
+              size="sm"
+              className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
                 !orderItems.length || !String(bulkMarginPercent).trim()
-                  ? "text-gray-400 cursor-not-allowed"
+                  ? "cursor-not-allowed text-gray-400"
                   : ""
               }`}
               disabled={
@@ -5799,12 +5835,14 @@ export default function VendorCandyOrders({
               }}
             >
               Aplicar margen a todos
-            </button>
+            </Button>
             {isAdmin && (
-              <button
+              <Button
                 type="button"
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
-                  !orderItems.length ? "text-gray-400 cursor-not-allowed" : ""
+                variant="ghost"
+                size="sm"
+                className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
+                  !orderItems.length ? "cursor-not-allowed text-gray-400" : ""
                 }`}
                 disabled={!orderItems.length}
                 onClick={() => {
@@ -5813,7 +5851,7 @@ export default function VendorCandyOrders({
                 }}
               >
                 Exportar Excel
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -5827,27 +5865,31 @@ export default function VendorCandyOrders({
       >
         {modalFooterMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
               onClick={() => {
                 setModalFooterMenu(null);
                 closeForm();
               }}
             >
               Cancelar
-            </button>
+            </Button>
             {!isReadOnly && (
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                 onClick={() => {
                   setModalFooterMenu(null);
                   saveOrder();
                 }}
               >
                 Guardar pedido
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -5861,20 +5903,24 @@ export default function VendorCandyOrders({
       >
         {vendorListToolbarMenu && isAdmin && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
               onClick={() => {
                 setVendorListToolbarMenu(null);
                 openNewOrder();
               }}
             >
               Nuevo pedido
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
-                isSyncingAll ? "text-gray-400 cursor-not-allowed" : ""
+              variant="ghost"
+              size="sm"
+              className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
+                isSyncingAll ? "cursor-not-allowed text-gray-400" : ""
               }`}
               disabled={isSyncingAll}
               onClick={() => {
@@ -5889,11 +5935,13 @@ export default function VendorCandyOrders({
               }}
             >
               {isSyncingAll ? "Sincronizando..." : "Sincronizar todo"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
-                isBackfilling ? "text-gray-400 cursor-not-allowed" : ""
+              variant="ghost"
+              size="sm"
+              className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
+                isBackfilling ? "cursor-not-allowed text-gray-400" : ""
               }`}
               disabled={isBackfilling}
               onClick={() => {
@@ -5904,7 +5952,7 @@ export default function VendorCandyOrders({
               {isBackfilling
                 ? "Actualizando Firestore..."
                 : "Update Firestore"}
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>
@@ -5917,9 +5965,11 @@ export default function VendorCandyOrders({
       >
         {orderRowMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
               onClick={() => {
                 const k = orderRowMenu.orderKey;
                 setOrderRowMenu(null);
@@ -5927,11 +5977,13 @@ export default function VendorCandyOrders({
               }}
             >
               Editar pedido
-            </button>
+            </Button>
             {isAdmin && (
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
                 onClick={() => {
                   const k = orderRowMenu.orderKey;
                   setOrderRowMenu(null);
@@ -5941,7 +5993,7 @@ export default function VendorCandyOrders({
                 }}
               >
                 Eliminar pedido
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -5956,9 +6008,11 @@ export default function VendorCandyOrders({
         {modalLineMenu && (
           <div className="py-1">
             {!isReadOnly && (
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                 onClick={() => {
                   const id = modalLineMenu.id;
                   setModalLineMenu(null);
@@ -5966,12 +6020,14 @@ export default function VendorCandyOrders({
                 }}
               >
                 Editar paquetes
-              </button>
+              </Button>
             )}
             {isAdmin && !isReadOnly && (
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                 onClick={() => {
                   const id = modalLineMenu.id;
                   setModalLineMenu(null);
@@ -5979,12 +6035,14 @@ export default function VendorCandyOrders({
                 }}
               >
                 Editar restantes
-              </button>
+              </Button>
             )}
             {!isReadOnly && (
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                 onClick={() => {
                   const id = modalLineMenu.id;
                   setModalLineMenu(null);
@@ -5992,12 +6050,14 @@ export default function VendorCandyOrders({
                 }}
               >
                 Editar margen
-              </button>
+              </Button>
             )}
             {!isReadOnly && (
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                variant="ghost"
+                size="sm"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
                 onClick={() => {
                   const id = modalLineMenu.id;
                   setModalLineMenu(null);
@@ -6007,7 +6067,7 @@ export default function VendorCandyOrders({
                 }}
               >
                 Eliminar producto
-              </button>
+              </Button>
             )}
           </div>
         )}

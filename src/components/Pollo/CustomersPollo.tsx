@@ -20,14 +20,12 @@ import { hasRole } from "../../utils/roles";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import {
-  FiClock,
-  FiShoppingCart,
-  FiMoreVertical,
-} from "react-icons/fi";
-import ActionMenu from "../common/ActionMenu";
+import { FiClock, FiShoppingCart } from "react-icons/fi";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 import SlideOverDrawer from "../common/SlideOverDrawer";
+import RefreshButton from "../common/RefreshButton";
 import {
   DrawerDetailDlCard,
   DrawerMoneyStrip,
@@ -495,6 +493,116 @@ function getTotalAbonadoForSale(rows: MovementRow[], saleId: string): number {
   );
 }
 
+/** Primer y último día del mes (yyyy-MM-dd) en hora local. */
+function getMonthBounds(d = new Date()) {
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const from = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+  const last = new Date(y, m + 1, 0);
+  const to = `${y}-${String(m + 1).padStart(2, "0")}-${String(last.getDate()).padStart(2, "0")}`;
+  return { from, to };
+}
+
+function compareMovementRowsChrono(a: MovementRow, b: MovementRow) {
+  if (a.date !== b.date) return a.date.localeCompare(b.date);
+  return (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0);
+}
+
+/** Saldo del cliente después de todos los movimientos con fecha ≤ endDate. */
+function balanceUpToDateInclusive(
+  rows: MovementRow[],
+  initialDebt: number,
+  endDate: string,
+): number {
+  const end = String(endDate || "").slice(0, 10);
+  if (!end) return roundCurrency(Number(initialDebt || 0));
+  const sorted = [...rows].sort(compareMovementRowsChrono);
+  let bal = Number(initialDebt || 0);
+  for (const mov of sorted) {
+    const d = String(mov.date || "").slice(0, 10);
+    if (d <= end) {
+      bal = roundCurrency(bal + Number(mov.amount || 0));
+    }
+  }
+  return bal;
+}
+
+async function fetchArMovementsPolloForCustomer(
+  customerId: string,
+): Promise<MovementRow[]> {
+  const qMov = query(
+    collection(db, "ar_movements_pollo"),
+    where("customerId", "==", customerId),
+  );
+  const snap = await getDocs(qMov);
+  const list: MovementRow[] = [];
+  snap.forEach((d) => {
+    const x = d.data() as any;
+    const date =
+      x.date ?? (x.createdAt?.toDate?.() ? formatLocalDate(x.createdAt) : "");
+    const amount = Number(x.amount || 0);
+    list.push({
+      id: d.id,
+      date,
+      type:
+        (x.type as "CARGO" | "ABONO") ?? (amount < 0 ? "ABONO" : "CARGO"),
+      amount,
+      ref: x.ref || {},
+      comment: x.comment || "",
+      createdAt: x.createdAt,
+      debtStatus: normalizeDebtStatus(
+        x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
+      ),
+    });
+  });
+  list.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    const as = a.createdAt?.seconds || 0;
+    const bs = b.createdAt?.seconds || 0;
+    return as - bs;
+  });
+  return list;
+}
+
+type MovementRowWithCustomer = MovementRow & { customerId: string };
+
+/** Todos los movimientos CxC pollo con customerId (para agregados globales). */
+async function fetchAllMovementsPolloWithCustomer(): Promise<
+  MovementRowWithCustomer[]
+> {
+  const snap = await getDocs(collection(db, "ar_movements_pollo"));
+  const list: MovementRowWithCustomer[] = [];
+  snap.forEach((d) => {
+    const x = d.data() as any;
+    const cid = String(x.customerId || "").trim();
+    if (!cid) return;
+    const date =
+      x.date ?? (x.createdAt?.toDate?.() ? formatLocalDate(x.createdAt) : "");
+    const amount = Number(x.amount || 0);
+    list.push({
+      id: d.id,
+      customerId: cid,
+      date,
+      type:
+        (x.type as "CARGO" | "ABONO") ?? (amount < 0 ? "ABONO" : "CARGO"),
+      amount,
+      ref: x.ref || {},
+      comment: x.comment || "",
+      createdAt: x.createdAt,
+      debtStatus: normalizeDebtStatus(
+        x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
+      ),
+    });
+  });
+  list.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    const as = a.createdAt?.seconds || 0;
+    const bs = b.createdAt?.seconds || 0;
+    return as - bs;
+  });
+  return list;
+}
+
 function buildSaleAbonoLedger(
   rows: MovementRow[],
   saleId: string,
@@ -634,10 +742,23 @@ export default function CustomersPollo({
 
   // filtros
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [fClient, setFClient] = useState("");
+  /** Filtro por cliente: id vacío = todos. */
+  const [fClientId, setFClientId] = useState("");
   const [fStatus, setFStatus] = useState<"" | Status>("");
   const [fMin, setFMin] = useState<string>("");
   const [fMax, setFMax] = useState<string>("");
+  /** Listado: rango para KPI abonos / saldo al cierre (clientes filtrados). */
+  const [globalPeriodFrom, setGlobalPeriodFrom] = useState(
+    () => getMonthBounds().from,
+  );
+  const [globalPeriodTo, setGlobalPeriodTo] = useState(
+    () => getMonthBounds().to,
+  );
+  const [globalListPeriodStats, setGlobalListPeriodStats] = useState({
+    abonosEnPeriodo: 0,
+    saldoAlCierre: 0,
+  });
+  const [globalListPeriodLoading, setGlobalListPeriodLoading] = useState(false);
 
   // drawer detalle ítems (venta)
   const [itemsDrawerOpen, setItemsDrawerOpen] = useState(false);
@@ -650,8 +771,13 @@ export default function CustomersPollo({
     lineCount: number;
     saleDate?: string;
   } | null>(null);
+  /** Drawer detalle venta: pestaña Ventas (productos) vs Abonos. */
+  const [drawerSaleTab, setDrawerSaleTab] = useState<"ventas" | "abonos">(
+    "ventas",
+  );
 
   const openItemsDrawer = async (saleId: string) => {
+    setDrawerSaleTab("ventas");
     setItemsDrawerOpen(true);
     setItemsModalLoading(true);
     setItemsModalSaleId(saleId);
@@ -672,6 +798,14 @@ export default function CustomersPollo({
           saleAmount: roundCurrency(saleAmount),
           lineCount: res.rows.length,
           saleDate: res.saleDateLabel,
+        });
+      } else {
+        setItemsModalRows([]);
+        setItemsDrawerMeta({
+          totalQty: 0,
+          saleAmount: 0,
+          lineCount: 0,
+          saleDate: undefined,
         });
       }
     } catch (e) {
@@ -719,6 +853,9 @@ export default function CustomersPollo({
   });
   const [exportingAllXlsx, setExportingAllXlsx] = useState(false);
   const [exportingPdfId, setExportingPdfId] = useState<string | null>(null);
+  /** Estado de cuenta: rango para KPIs de periodo (abonos / saldo al cierre). */
+  const [stPeriodFrom, setStPeriodFrom] = useState("");
+  const [stPeriodTo, setStPeriodTo] = useState("");
 
   // abonos
   const [showAbono, setShowAbono] = useState(false);
@@ -758,8 +895,10 @@ export default function CustomersPollo({
     null,
   );
 
-  // sort mode for customer list: '' | 'lastAbono' | 'lastSale'
-  const [sortMode, setSortMode] = useState<"" | "lastAbono" | "lastSale">("");
+  // sort mode for customer list: '' | 'lastAbono' | 'lastSale' (default: últimos abonos)
+  const [sortMode, setSortMode] = useState<"" | "lastAbono" | "lastSale">(
+    "lastAbono",
+  );
 
   useEffect(() => {
     (async () => {
@@ -1341,6 +1480,8 @@ export default function CustomersPollo({
     setShowAbono(false);
     setItemsDrawerOpen(false);
     setItemsDrawerMeta(null);
+    setItemsModalSaleId(null);
+    setDrawerSaleTab("ventas");
     setEditMovId(null);
     setEMovDate("");
     setEMovComment("");
@@ -1371,47 +1512,34 @@ export default function CustomersPollo({
     setSaleLedgerSaleId(null);
     setEditMovId(null);
 
+    const { from: pFrom, to: pTo } = getMonthBounds();
+    setStPeriodFrom(pFrom);
+    setStPeriodTo(pTo);
+
     setStLoading(true);
     try {
-      const qMov = query(
-        collection(db, "ar_movements_pollo"),
-        where("customerId", "==", customer.id),
-      );
-      const snap = await getDocs(qMov);
-      const list: MovementRow[] = [];
-      snap.forEach((d) => {
-        const x = d.data() as any;
-        const date =
-          x.date ??
-          (x.createdAt?.toDate?.() ? formatLocalDate(x.createdAt) : "");
-        const amount = Number(x.amount || 0);
-        list.push({
-          id: d.id,
-          date,
-          type:
-            (x.type as "CARGO" | "ABONO") ?? (amount < 0 ? "ABONO" : "CARGO"),
-          amount,
-          ref: x.ref || {},
-          comment: x.comment || "",
-          createdAt: x.createdAt,
-          debtStatus: normalizeDebtStatus(
-            x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
-          ),
-        });
-      });
-
-      list.sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        const as = a.createdAt?.seconds || 0;
-        const bs = b.createdAt?.seconds || 0;
-        return as - bs;
-      });
-
+      const list = await fetchArMovementsPolloForCustomer(customer.id);
       setStRows(list);
       recomputeKpis(list, Number(customer.initialDebt || 0));
     } catch (e) {
       console.error(e);
       setMsg("❌ No se pudo cargar el estado de cuenta");
+    } finally {
+      setStLoading(false);
+    }
+  };
+
+  const refreshStatement = async () => {
+    if (!stCustomer) return;
+    setStLoading(true);
+    setMsg("");
+    try {
+      const list = await fetchArMovementsPolloForCustomer(stCustomer.id);
+      setStRows(list);
+      recomputeKpis(list, Number(stCustomer.initialDebt || 0));
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ No se pudo actualizar el estado de cuenta");
     } finally {
       setStLoading(false);
     }
@@ -1457,6 +1585,39 @@ export default function CustomersPollo({
         return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
       });
   }, [stRows]);
+
+  /** Abonos en [stPeriodFrom, stPeriodTo] y saldo del cliente al cierre del periodo (fecha fin). */
+  const statementPeriodStats = useMemo(() => {
+    if (!stCustomer || !stPeriodFrom || !stPeriodTo) {
+      return { abonosEnPeriodo: 0, saldoAlCierre: 0 };
+    }
+    const from = stPeriodFrom.slice(0, 10);
+    const to = stPeriodTo.slice(0, 10);
+    let abonos = 0;
+    for (const m of stRows) {
+      if (Number(m.amount) >= 0) continue;
+      const d = String(m.date || "").slice(0, 10);
+      if (d >= from && d <= to) {
+        abonos += Math.abs(Number(m.amount) || 0);
+      }
+    }
+    const saldoAlCierre = balanceUpToDateInclusive(
+      stRows,
+      Number(stCustomer.initialDebt || 0),
+      to,
+    );
+    return {
+      abonosEnPeriodo: roundCurrency(abonos),
+      saldoAlCierre: roundCurrency(saldoAlCierre),
+    };
+  }, [stCustomer, stRows, stPeriodFrom, stPeriodTo]);
+
+  /** Abonos de la venta en el drawer, del más antiguo al más reciente. */
+  const drawerAbonosChronological = useMemo(() => {
+    if (!itemsModalSaleId) return [];
+    const ledger = buildSaleAbonoLedger(stRows, itemsModalSaleId);
+    return ledger.slice().reverse();
+  }, [stRows, itemsModalSaleId]);
 
   const saleLedgerComputed = useMemo(() => {
     if (!saleLedgerSaleId) return [];
@@ -2255,17 +2416,29 @@ export default function CustomersPollo({
   const badgeStatus = (st: Status) =>
     st === "ACTIVO" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700";
 
+  const customerFilterOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [
+      { value: "", label: "Todos los clientes" },
+    ];
+    const sorted = [...rows].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), "es"),
+    );
+    for (const c of sorted) {
+      opts.push({
+        value: c.id,
+        label: String(c.name || "").trim() || "(sin nombre)",
+      });
+    }
+    return opts;
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
-    const q = fClient.trim().toLowerCase();
     const min = fMin.trim() === "" ? null : Number(fMin);
     const max = fMax.trim() === "" ? null : Number(fMax);
 
     let out = orderedRows.filter((c) => {
-      const nameOk =
-        !q ||
-        String(c.name || "")
-          .toLowerCase()
-          .includes(q);
+      const clientOk =
+        !String(fClientId || "").trim() || c.id === fClientId;
 
       const statusOk = !fStatus || c.status === fStatus;
 
@@ -2273,7 +2446,7 @@ export default function CustomersPollo({
       const minOk = min === null || (!Number.isNaN(min) && bal >= min);
       const maxOk = max === null || (!Number.isNaN(max) && bal <= max);
 
-      return nameOk && statusOk && minOk && maxOk;
+      return clientOk && statusOk && minOk && maxOk;
     });
 
     // Apply sorting by selected mode
@@ -2298,20 +2471,79 @@ export default function CustomersPollo({
     }
 
     return out;
-  }, [orderedRows, fClient, fStatus, fMin, fMax, sortMode]);
+  }, [orderedRows, fClientId, fStatus, fMin, fMax, sortMode]);
 
   const totalPendingBalance = useMemo(() => {
     return filteredRows.reduce((acc, row) => acc + Number(row.balance || 0), 0);
   }, [filteredRows]);
 
-  const activeCustomersCount = useMemo(() => {
-    return filteredRows.filter((row) => row.status === "ACTIVO").length;
-  }, [filteredRows]);
+  useEffect(() => {
+    let cancelled = false;
+    const from = String(globalPeriodFrom || "").slice(0, 10);
+    const to = String(globalPeriodTo || "").slice(0, 10);
+    if (!from || !to) return;
 
-  const totalCustomersCount = filteredRows.length;
+    (async () => {
+      setGlobalListPeriodLoading(true);
+      try {
+        const all = await fetchAllMovementsPolloWithCustomer();
+        if (cancelled) return;
+        const ids = new Set(filteredRows.map((c) => c.id));
+        if (ids.size === 0) {
+          setGlobalListPeriodStats({ abonosEnPeriodo: 0, saldoAlCierre: 0 });
+          return;
+        }
+
+        const byCustomer = new Map<string, MovementRow[]>();
+        let abonos = 0;
+        for (const m of all) {
+          if (!ids.has(m.customerId)) continue;
+          const { customerId, ...rest } = m;
+          if (!byCustomer.has(customerId)) {
+            byCustomer.set(customerId, []);
+          }
+          byCustomer.get(customerId)!.push(rest as MovementRow);
+
+          if (Number(m.amount) >= 0) continue;
+          const d = String(m.date || "").slice(0, 10);
+          if (d >= from && d <= to) {
+            abonos += Math.abs(Number(m.amount) || 0);
+          }
+        }
+
+        let saldoSum = 0;
+        for (const c of filteredRows) {
+          const movs = byCustomer.get(c.id) ?? [];
+          saldoSum += balanceUpToDateInclusive(
+            movs,
+            Number(c.initialDebt || 0),
+            to,
+          );
+        }
+
+        if (!cancelled) {
+          setGlobalListPeriodStats({
+            abonosEnPeriodo: roundCurrency(abonos),
+            saldoAlCierre: roundCurrency(saldoSum),
+          });
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          setGlobalListPeriodStats({ abonosEnPeriodo: 0, saldoAlCierre: 0 });
+        }
+      } finally {
+        if (!cancelled) setGlobalListPeriodLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredRows, globalPeriodFrom, globalPeriodTo]);
 
   const handleResetFilters = () => {
-    setFClient("");
+    setFClientId("");
     setFStatus("");
     setFMin("");
     setFMax("");
@@ -2372,20 +2604,24 @@ export default function CustomersPollo({
           aquí.
         </p>
         <div className="mt-3 flex gap-2 justify-end">
-          <button
+          <Button
             type="button"
-            className="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
+            variant="secondary"
+            size="sm"
+            className="!rounded-lg px-3 py-1.5"
             onClick={cancelEditMovement}
           >
             Cancelar
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+            variant="primary"
+            size="sm"
+            className="!rounded-lg px-3 py-1.5"
             onClick={saveEditMovement}
           >
             Guardar
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -2395,20 +2631,22 @@ export default function CustomersPollo({
     <div className="max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Clientes (Pollo)</h2>
-        <button
-          className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+        <Button
+          type="button"
+          variant="primary"
+          size="md"
+          className="!rounded-lg px-3 py-2"
           onClick={() => {
             setShowCreateModal(true);
             if (isVendor) setVendorId(sellerIdSafe);
           }}
-          type="button"
         >
           Crear Cliente
-        </button>
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-        <div className="p-4 border border-amber-200 rounded-xl bg-gradient-to-br from-amber-50 to-white shadow-sm">
+        <div className="p-4 border border-amber-200 rounded-xl bg-gradient-to-br from-amber-50 to-white shadow-sm min-w-0">
           <div className="text-[11px] uppercase tracking-wider text-amber-700">
             Saldo pendiente
           </div>
@@ -2419,26 +2657,77 @@ export default function CustomersPollo({
             Calculado sobre los clientes filtrados
           </p>
         </div>
-        <div className="p-4 border border-emerald-200 rounded-xl bg-gradient-to-br from-emerald-50 to-white shadow-sm">
-          <div className="text-[11px] uppercase tracking-wider text-emerald-700">
-            Clientes activos
+        <div className="p-4 border border-cyan-200 rounded-xl bg-gradient-to-br from-cyan-50/90 to-white shadow-sm min-w-0">
+          <div className="text-[11px] uppercase tracking-wider text-cyan-800">
+            Periodo (global — listado)
           </div>
-          <div className="text-2xl font-semibold text-emerald-900">
-            {activeCustomersCount}
+          <div className="mt-2 flex flex-wrap gap-2 items-center">
+            <label className="text-[10px] text-slate-600 shrink-0">
+              Desde
+              <input
+                type="date"
+                className="ml-1 border rounded px-1.5 py-0.5 text-xs w-[118px] bg-white"
+                value={globalPeriodFrom}
+                onChange={(e) => setGlobalPeriodFrom(e.target.value)}
+              />
+            </label>
+            <label className="text-[10px] text-slate-600 shrink-0">
+              Hasta
+              <input
+                type="date"
+                className="ml-1 border rounded px-1.5 py-0.5 text-xs w-[118px] bg-white"
+                value={globalPeriodTo}
+                onChange={(e) => setGlobalPeriodTo(e.target.value)}
+              />
+            </label>
           </div>
-          <p className="text-[11px] text-emerald-700/80 mt-1">
-            De un total de {totalCustomersCount}
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+            <div className="flex justify-between gap-2">
+              <span className="text-slate-600">Abonos al periodo</span>
+              <span className="font-bold tabular-nums text-slate-900">
+                {globalListPeriodLoading
+                  ? "…"
+                  : money(globalListPeriodStats.abonosEnPeriodo)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2 border-t border-cyan-100/80 sm:border-t-0 sm:border-l sm:pl-2 sm:pt-0 pt-2">
+              <span className="text-cyan-900 font-medium">Saldo al cierre</span>
+              <span className="font-bold tabular-nums text-cyan-950">
+                {globalListPeriodLoading
+                  ? "…"
+                  : money(globalListPeriodStats.saldoAlCierre)}
+              </span>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-2 leading-snug">
+            Sobre los mismos clientes que ves en la tabla (filtros aplicados).
+            Abonos: suma en el rango. Saldo al cierre: suma de saldos por cliente
+            al día final.
           </p>
         </div>
       </div>
 
       <div className="bg-white border rounded shadow-sm p-4 mb-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end">
-          <div className="flex items-center gap-2">
-            <button
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:flex-wrap">
+          <div className="w-full md:w-auto md:min-w-[220px] md:max-w-md">
+            <MobileHtmlSelect
+              label="Cliente"
+              value={fClientId}
+              onChange={setFClientId}
+              options={customerFilterOptions}
+              sheetTitle="Cliente"
+              selectClassName="w-full border rounded px-3 py-2"
+            />
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
               type="button"
-              className={`px-2 py-1 rounded border text-sm ${
-                sortMode === "lastAbono" ? "bg-blue-600 text-white" : ""
+              variant="outline"
+              size="sm"
+              className={`!rounded-lg px-2 py-1 text-sm ${
+                sortMode === "lastAbono"
+                  ? "!bg-blue-600 !text-white border-blue-600"
+                  : ""
               }`}
               onClick={() =>
                 setSortMode((s) => (s === "lastAbono" ? "" : "lastAbono"))
@@ -2447,11 +2736,15 @@ export default function CustomersPollo({
             >
               <span className="hidden sm:inline">Último abono</span>
               <FiClock className="inline sm:hidden" />
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className={`px-2 py-1 rounded border text-sm ${
-                sortMode === "lastSale" ? "bg-blue-600 text-white" : ""
+              variant="outline"
+              size="sm"
+              className={`!rounded-lg px-2 py-1 text-sm ${
+                sortMode === "lastSale"
+                  ? "!bg-blue-600 !text-white border-blue-600"
+                  : ""
               }`}
               onClick={() =>
                 setSortMode((s) => (s === "lastSale" ? "" : "lastSale"))
@@ -2460,43 +2753,38 @@ export default function CustomersPollo({
             >
               <span className="hidden sm:inline">Última compra</span>
               <FiShoppingCart className="inline sm:hidden" />
-            </button>
+            </Button>
           </div>
-          <div className="flex-1">
-            <label className="block text-sm font-semibold">
-              Filtrar cliente
-            </label>
-            <input
-              className="w-full border rounded px-3 py-2"
-              placeholder="Nombre, teléfono o nota"
-              value={fClient}
-              onChange={(e) => setFClient(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2">
-            <button
+          <div className="flex gap-2 md:ml-auto shrink-0">
+            <Button
               type="button"
-              className="px-3 py-2 text-sm rounded border bg-gray-50 hover:bg-gray-100"
+              variant="secondary"
+              size="sm"
+              className="!rounded-lg px-3 py-2 text-sm border border-slate-200/90"
               onClick={() => setFiltersOpen((prev) => !prev)}
             >
               {filtersOpen ? "Ocultar" : "Filtros"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="px-3 py-2 text-sm rounded border bg-white hover:bg-gray-50"
+              variant="outline"
+              size="sm"
+              className="!rounded-lg px-3 py-2 text-sm"
               onClick={handleResetFilters}
             >
               Limpiar
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="px-3 py-2 text-sm rounded border bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 text-sm"
+              variant="outline"
+              size="sm"
+              className="!rounded-lg px-3 py-2 text-sm !bg-emerald-50 !text-emerald-900 border-emerald-200/80 hover:!bg-emerald-100"
               disabled={exportingAllXlsx}
               onClick={() => void downloadAllMovementsXlsx()}
               title="Exportar todos los movimientos de todos los clientes"
             >
               {exportingAllXlsx ? "Exportando…" : "Excel (todos)"}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -2571,7 +2859,7 @@ export default function CustomersPollo({
                   <th className="p-3 border-b text-left">Nombre</th>
                   {/* <th className="p-3 border-b text-left">Teléfono</th> */}
                   <th className="p-3 border-b text-left">Vendedor</th>
-                  {/* <th className="p-3 border-b text-left">Lugar</th> */}
+                  <th className="p-3 border-b text-left">Lugar</th>
                   {/* <th className="p-3 border-b text-right">Límite</th> */}
                   <th className="p-3 border-b text-right">Saldo</th>
                   <th className="p-3 border-b text-left">Comentario</th>
@@ -2685,26 +2973,26 @@ export default function CustomersPollo({
                             c.vendorName || "—"
                           )}
                         </td>
-                        {/* <td className="p-3 border-b text-left">
+                        <td className="p-3 border-b text-left">
                           {isEditing ? (
-                            <select
-                              className="w-full border p-1 rounded"
+                            <MobileHtmlSelect
                               value={ePlace}
-                              onChange={(e) =>
-                                setEPlace(e.target.value as Place)
-                              }
-                            >
-                              <option value="">—</option>
-                              {PLACES.map((p) => (
-                                <option key={p} value={p}>
-                                  {p}
-                                </option>
-                              ))}
-                            </select>
+                              onChange={(v) => setEPlace(v as Place | "")}
+                              options={[
+                                { value: "", label: "—" },
+                                ...PLACES.map((p) => ({
+                                  value: p,
+                                  label: p,
+                                })),
+                              ]}
+                              selectClassName="w-full border p-1 rounded text-xs"
+                              buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
+                              sheetTitle="Lugar"
+                            />
                           ) : (
                             c.place || "—"
                           )}
-                        </td> */}
+                        </td>
 
                         {/* <td className="p-3 border-b text-right">
                           {isEditing ? (
@@ -2748,23 +3036,27 @@ export default function CustomersPollo({
                         <td className="p-3 border-b text-right">
                           {isEditing ? (
                             <div className="flex gap-2 justify-end">
-                              <button
-                                className="px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700"
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="sm"
+                                className="!rounded-lg px-2 py-1"
                                 onClick={saveEdit}
                               >
                                 Guardar
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                className="!rounded-lg px-2 py-1"
                                 onClick={cancelEdit}
                               >
                                 Cancelar
-                              </button>
+                              </Button>
                             </div>
                           ) : (
-                            <button
-                              type="button"
-                              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 inline-flex"
+                            <ActionMenuTrigger
                               aria-label="Acciones del cliente"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -2775,9 +3067,7 @@ export default function CustomersPollo({
                                   ).getBoundingClientRect(),
                                 });
                               }}
-                            >
-                              <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                            </button>
+                            />
                           )}
                         </td>
                       </tr>
@@ -2864,9 +3154,7 @@ export default function CustomersPollo({
                 ) : null}
 
                 <div className="mt-3 flex justify-end">
-                  <button
-                    type="button"
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                  <ActionMenuTrigger
                     aria-label="Acciones del cliente"
                     onClick={(e) =>
                       setCustomerRowMenu({
@@ -2876,9 +3164,7 @@ export default function CustomersPollo({
                         ).getBoundingClientRect(),
                       })
                     }
-                  >
-                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                  </button>
+                  />
                 </div>
               </div>
             ))
@@ -2904,19 +3190,23 @@ export default function CustomersPollo({
             }
             return (
               <div className="py-1">
-                <button
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   onClick={() => {
                     setCustomerRowMenu(null);
                     void openStatement(c);
                   }}
                 >
                   Ver consignaciones
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   disabled={exportingPdfId === c.id}
                   onClick={() => {
                     setCustomerRowMenu(null);
@@ -2924,10 +3214,12 @@ export default function CustomersPollo({
                   }}
                 >
                   {exportingPdfId === c.id ? "Generando PDF…" : "PDF movimientos"}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   disabled={isVendor}
                   onClick={() => {
                     setCustomerRowMenu(null);
@@ -2935,18 +3227,20 @@ export default function CustomersPollo({
                   }}
                 >
                   Editar cliente
-                </button>
+                </Button>
                 {isAdmin && (
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700"
                     onClick={() => {
                       setCustomerRowMenu(null);
                       void handleDelete(c);
                     }}
                   >
                     Borrar cliente
-                  </button>
+                  </Button>
                 )}
               </div>
             );
@@ -2966,13 +3260,15 @@ export default function CustomersPollo({
             <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-3xl max-h-[92vh] overflow-auto p-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-lg font-bold">Crear Cliente</h3>
-                <button
-                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                  onClick={() => setShowCreateModal(false)}
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="!rounded-lg px-3 py-1"
+                  onClick={() => setShowCreateModal(false)}
                 >
                   Cerrar
-                </button>
+                </Button>
               </div>
 
               <form
@@ -3094,16 +3390,23 @@ export default function CustomersPollo({
                   </div>
                 </div>
                 <div className="md:col-span-2 flex justify-end gap-2">
-                  <button
+                  <Button
                     type="button"
-                    className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                    variant="secondary"
+                    size="md"
+                    className="!rounded-lg px-4 py-2"
                     onClick={() => setShowCreateModal(false)}
                   >
                     Cancelar
-                  </button>
-                  <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="md"
+                    className="!rounded-lg px-4 py-2"
+                  >
                     Guardar cliente
-                  </button>
+                  </Button>
                 </div>
               </form>
             </div>
@@ -3139,11 +3442,18 @@ export default function CustomersPollo({
                     </h3>
                   </div>
 
-                  <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+                  <div className="flex gap-2 shrink-0 flex-wrap justify-end items-center">
+                    <RefreshButton
+                      onClick={() => void refreshStatement()}
+                      loading={stLoading}
+                      className="rounded-lg py-1.5 text-xs shadow-none"
+                    />
                     {stCustomer && (
-                      <button
+                      <Button
                         type="button"
-                        className="px-3 py-1 rounded bg-rose-50 border border-rose-200 text-rose-900 text-sm hover:bg-rose-100 disabled:opacity-50"
+                        variant="outline"
+                        size="sm"
+                        className="!rounded-lg px-3 py-1 !bg-rose-50 !text-rose-900 border-rose-200 hover:!bg-rose-100 text-sm"
                         disabled={exportingPdfId === stCustomer.id}
                         onClick={() =>
                           void downloadCustomerMovementsPdf(stCustomer)
@@ -3152,26 +3462,28 @@ export default function CustomersPollo({
                         {exportingPdfId === stCustomer.id
                           ? "PDF…"
                           : "PDF"}
-                      </button>
+                      </Button>
                     )}
-                    <button
+                    <Button
                       type="button"
-                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                      variant="secondary"
+                      size="sm"
+                      className="!rounded-lg px-3 py-1"
                       onClick={closeStatement}
                     >
                       Cerrar
-                    </button>
+                    </Button>
                   </div>
                 </div>
 
                 {/* ================= WEB KPI (misma UI que Dulces) ================= */}
                 <div className="hidden md:block">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
                     <div className="rounded-2xl border border-slate-200/90 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         Saldo y cobros
                       </div>
-                      <div className="mt-3 grid grid-cols-2 gap-3">
+                      <div className="mt-3 grid grid-cols-1 gap-3">
                         <div>
                           <div className="text-xs text-slate-600">
                             Saldo actual
@@ -3189,6 +3501,52 @@ export default function CustomersPollo({
                           </div>
                         </div>
                       </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-cyan-200/90 bg-gradient-to-b from-cyan-50/90 to-white p-4 shadow-sm">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-cyan-900/85">
+                        Periodo (abonos y saldo)
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 items-center">
+                        <label className="text-[10px] text-slate-600 shrink-0">
+                          Desde
+                          <input
+                            type="date"
+                            className="ml-1 border rounded px-1.5 py-0.5 text-xs w-[118px]"
+                            value={stPeriodFrom}
+                            onChange={(e) => setStPeriodFrom(e.target.value)}
+                          />
+                        </label>
+                        <label className="text-[10px] text-slate-600 shrink-0">
+                          Hasta
+                          <input
+                            type="date"
+                            className="ml-1 border rounded px-1.5 py-0.5 text-xs w-[118px]"
+                            value={stPeriodTo}
+                            onChange={(e) => setStPeriodTo(e.target.value)}
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-3 grid grid-cols-1 gap-2">
+                        <div className="flex justify-between gap-2 text-sm">
+                          <span className="text-slate-600">Abonos</span>
+                          <span className="font-bold tabular-nums text-slate-900">
+                            {money(statementPeriodStats.abonosEnPeriodo)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-2 text-sm border-t border-cyan-100/80 pt-2">
+                          <span className="text-cyan-900 font-medium">
+                            Saldo al cierre
+                          </span>
+                          <span className="font-bold tabular-nums text-cyan-950">
+                            {money(statementPeriodStats.saldoAlCierre)}
+                          </span>
+                        </div>
+                      </div>
+                      {/* <p className="mt-2 text-[10px] text-slate-500 leading-snug">
+                        Abonos: suma en el rango. Saldo al cierre: saldo del
+                        cliente tras movimientos con fecha ≤ fin del periodo.
+                      </p> */}
                     </div>
 
                     <div className="relative overflow-hidden rounded-2xl p-4 shadow-lg ring-1 ring-white/20 bg-gradient-to-br from-violet-600 via-indigo-600 to-fuchsia-700 text-white">
@@ -3223,9 +3581,11 @@ export default function CustomersPollo({
                   </div>
 
                   <div className="mb-3 text-sm text-gray-600">
-                    <button
+                    <Button
                       type="button"
-                      className="text-blue-600 underline hover:text-blue-800"
+                      variant="ghost"
+                      size="sm"
+                      className="!rounded-lg !p-0 h-auto !font-normal !text-blue-600 underline hover:!text-blue-800 shadow-none"
                       onClick={() => {
                         setAbonoTargetSaleId(null);
                         setAbonoAmount(0);
@@ -3235,15 +3595,22 @@ export default function CustomersPollo({
                       }}
                     >
                       Registrar abono general (no ligado a una venta)
-                    </button>
+                    </Button>
                   </div>
 
-                  <div className="bg-white rounded border overflow-x-auto mb-3">
+                  <div
+                    className={`bg-white rounded border overflow-x-auto mb-3 ${
+                      saleVentasRows.length >= 10
+                        ? "max-h-[min(420px,70vh)] overflow-y-auto"
+                        : ""
+                    }`}
+                  >
                     <table className="min-w-full text-sm">
-                      <thead className="bg-gray-100">
+                      <thead className="bg-gray-100 sticky top-0 z-10 shadow-[0_1px_0_0_rgb(229,231,235)]">
                         <tr>
                           <th className="p-2 border">Fecha</th>
                           <th className="p-2 border">Total venta</th>
+                          <th className="p-2 border">Abono</th>
                           <th className="p-2 border">Pendiente</th>
                           <th className="p-2 border">Estado</th>
                           <th className="p-2 border w-12"> </th>
@@ -3253,13 +3620,13 @@ export default function CustomersPollo({
                       <tbody>
                         {stLoading ? (
                           <tr>
-                            <td colSpan={5} className="p-4 text-center">
+                            <td colSpan={6} className="p-4 text-center">
                               Cargando…
                             </td>
                           </tr>
                         ) : saleVentasRows.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="p-4 text-center">
+                            <td colSpan={6} className="p-4 text-center">
                               Sin ventas a crédito registradas
                             </td>
                           </tr>
@@ -3267,6 +3634,10 @@ export default function CustomersPollo({
                           saleVentasRows.map((m) => {
                             const saleId = m.ref!.saleId!;
                             const pending = getPendingForSale(stRows, saleId);
+                            const abonoVenta = getTotalAbonadoForSale(
+                              stRows,
+                              saleId,
+                            );
                             const normalizedDebt = normalizeDebtStatus(
                               m.debtStatus,
                             );
@@ -3279,6 +3650,9 @@ export default function CustomersPollo({
                                 <td className="p-2 border">{m.date || "—"}</td>
                                 <td className="p-2 border font-semibold">
                                   {money(m.amount)}
+                                </td>
+                                <td className="p-2 border font-medium text-emerald-800 tabular-nums">
+                                  {money(abonoVenta)}
                                 </td>
                                 <td className="p-2 border font-medium text-orange-800">
                                   {money(pending)}
@@ -3293,9 +3667,7 @@ export default function CustomersPollo({
                                   </span>
                                 </td>
                                 <td className="p-2 border">
-                                  <button
-                                    type="button"
-                                    className="p-1.5 rounded hover:bg-gray-100 inline-flex"
+                                  <ActionMenuTrigger
                                     aria-label="Acciones de venta"
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -3306,9 +3678,7 @@ export default function CustomersPollo({
                                         ).getBoundingClientRect(),
                                       });
                                     }}
-                                  >
-                                    <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                                  </button>
+                                  />
                                 </td>
                               </tr>
                             );
@@ -3322,16 +3692,18 @@ export default function CustomersPollo({
                 {/* ================= MOBILE (KPI colapsable + ventas) ================= */}
                 <div className="md:hidden space-y-3">
                   <div className="border rounded-2xl overflow-hidden">
-                    <button
+                    <Button
                       type="button"
-                      className="w-full px-3 py-3 flex items-center justify-between text-left"
+                      variant="ghost"
+                      size="md"
+                      className="w-full !justify-between !rounded-none px-3 py-3 text-left !font-normal shadow-none border-0"
                       onClick={() => setStOpenAccount((v) => !v)}
                     >
                       <div className="font-semibold">Estado de cuenta</div>
                       <div className="text-sm text-gray-500">
                         {stOpenAccount ? "Ocultar" : "Ver"}
                       </div>
-                    </button>
+                    </Button>
 
                     {stOpenAccount && (
                       <div className="px-3 pb-3 space-y-2">
@@ -3356,6 +3728,50 @@ export default function CustomersPollo({
                                 {money(stKpis.totalAbonado)}
                               </div>
                             </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-cyan-200 bg-cyan-50/80 p-3">
+                          <div className="text-[11px] font-semibold uppercase text-cyan-900/90">
+                            Periodo (abonos y saldo)
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] text-slate-600">
+                                Desde
+                              </label>
+                              <input
+                                type="date"
+                                className="w-full border rounded px-2 py-1 text-xs mt-0.5"
+                                value={stPeriodFrom}
+                                onChange={(e) => setStPeriodFrom(e.target.value)}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-600">
+                                Hasta
+                              </label>
+                              <input
+                                type="date"
+                                className="w-full border rounded px-2 py-1 text-xs mt-0.5"
+                                value={stPeriodTo}
+                                onChange={(e) => setStPeriodTo(e.target.value)}
+                              />
+                            </div>
+                          </div>
+                          <div className="mt-2 flex justify-between text-sm gap-2">
+                            <span className="text-slate-600">Abonos periodo</span>
+                            <span className="font-bold tabular-nums">
+                              {money(statementPeriodStats.abonosEnPeriodo)}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex justify-between text-sm gap-2 border-t border-cyan-200/60 pt-2">
+                            <span className="text-cyan-900 font-medium">
+                              Saldo al cierre
+                            </span>
+                            <span className="font-bold tabular-nums text-cyan-950">
+                              {money(statementPeriodStats.saldoAlCierre)}
+                            </span>
                           </div>
                         </div>
 
@@ -3404,6 +3820,10 @@ export default function CustomersPollo({
                         saleVentasRows.map((m) => {
                           const saleId = m.ref!.saleId!;
                           const pending = getPendingForSale(stRows, saleId);
+                          const abonoVenta = getTotalAbonadoForSale(
+                            stRows,
+                            saleId,
+                          );
                           const normalizedDebt = normalizeDebtStatus(
                             m.debtStatus,
                           );
@@ -3432,6 +3852,9 @@ export default function CustomersPollo({
                                       {money(m.amount)}
                                     </span>
                                   </div>
+                                  <div className="text-xs text-emerald-800 mt-0.5">
+                                    Abono: {money(abonoVenta)}
+                                  </div>
                                   <div className="text-xs text-orange-800 mt-0.5">
                                     Pendiente: {money(pending)}
                                   </div>
@@ -3447,20 +3870,21 @@ export default function CustomersPollo({
                                   <p className="text-[11px] text-sky-700/90 mt-2">
                                     Toca la tarjeta para ver el detalle de compra
                                   </p>
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="text-xs text-amber-800 font-semibold underline mt-1"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="!rounded-lg !p-0 h-auto mt-1 !text-xs !text-amber-800 !font-semibold underline shadow-none !justify-start"
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       void openItemsDrawer(saleId);
                                     }}
                                   >
                                     Ver detalle de compra
-                                  </button>
+                                  </Button>
                                 </div>
-                                <button
-                                  type="button"
-                                  className="p-2 rounded-lg border border-gray-200 shrink-0 bg-white"
+                                <ActionMenuTrigger
+                                  className="shrink-0"
                                   aria-label="Acciones de venta"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -3471,9 +3895,7 @@ export default function CustomersPollo({
                                       ).getBoundingClientRect(),
                                     });
                                   }}
-                                >
-                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                                </button>
+                                />
                               </div>
                             </div>
                           );
@@ -3512,9 +3934,11 @@ export default function CustomersPollo({
                   const pend = getPendingForSale(stRows, sid);
                   return (
                     <div className="py-1">
-                      <button
+                      <Button
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                         disabled={savingAbono || !(pend > 0.005)}
                         onClick={() => {
                           setSaleMenuAnchor(null);
@@ -3522,10 +3946,12 @@ export default function CustomersPollo({
                         }}
                       >
                         Pagar
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                         disabled={savingAbono || !(pend > 0.005)}
                         onClick={() => {
                           setSaleMenuAnchor(null);
@@ -3537,26 +3963,30 @@ export default function CustomersPollo({
                         }}
                       >
                         Abonar
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                         onClick={() => {
                           setSaleMenuAnchor(null);
                           setSaleLedgerSaleId(sid);
                         }}
                       >
                         Movimientos
-                      </button>
+                      </Button>
                       {stRows.some(
                         (m) =>
                           m.type === "ABONO" &&
                           m.ref?.saleId === sid &&
                           isFullPaymentAbonoComment(m.comment),
                       ) && (
-                        <button
+                        <Button
                           type="button"
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-amber-800 disabled:opacity-50"
+                          variant="ghost"
+                          size="sm"
+                          className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-amber-800"
                           disabled={savingAbono}
                           onClick={() => {
                             setSaleMenuAnchor(null);
@@ -3564,30 +3994,34 @@ export default function CustomersPollo({
                           }}
                         >
                           Revertir pago total
-                        </button>
+                        </Button>
                       )}
                       {isAdmin && (
                         <>
-                          <button
+                          <Button
                             type="button"
-                            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                            variant="ghost"
+                            size="sm"
+                            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                             onClick={() => {
                               setSaleMenuAnchor(null);
                               startEditMovement(cargoM);
                             }}
                           >
                             Editar movimiento
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                            variant="ghost"
+                            size="sm"
+                            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700"
                             onClick={() => {
                               setSaleMenuAnchor(null);
                               void deleteMovement(cargoM);
                             }}
                           >
                             Eliminar venta
-                          </button>
+                          </Button>
                         </>
                       )}
                     </div>
@@ -3617,16 +4051,18 @@ export default function CustomersPollo({
                         Cliente: {stCustomer?.name || "—"}
                       </p>
                     </div>
-                    <button
+                    <Button
                       type="button"
-                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 shrink-0"
+                      variant="secondary"
+                      size="sm"
+                      className="!rounded-lg px-3 py-1 shrink-0"
                       onClick={() => {
                         setSaleLedgerSaleId(null);
                         cancelEditMovement();
                       }}
                     >
                       Cerrar
-                    </button>
+                    </Button>
                   </div>
 
                   <div className="rounded-2xl border-2 border-slate-200/90 bg-gradient-to-br from-white via-slate-50/40 to-white p-4 shadow-md mb-4">
@@ -3663,20 +4099,28 @@ export default function CustomersPollo({
                   {ledgerInlineEdit && renderEditMovementPanel()}
 
                   <div className="hidden md:block border rounded overflow-x-auto">
-                    <table className="min-w-full text-sm">
+                    <table className="min-w-full text-sm whitespace-nowrap">
                       <thead className="bg-gray-100">
                         <tr>
-                          <th className="p-2 border text-left">Fecha</th>
-                          <th className="p-2 border text-right">Monto</th>
-                          <th className="p-2 border text-right">
+                          <th className="p-2 border text-left align-middle">
+                            Fecha
+                          </th>
+                          <th className="p-2 border text-right align-middle">
+                            Monto
+                          </th>
+                          <th className="p-2 border text-right align-middle">
                             Saldo inicial
                           </th>
-                          <th className="p-2 border text-right">
+                          <th className="p-2 border text-right align-middle">
                             Saldo final
                           </th>
-                          <th className="p-2 border text-left">Comentario</th>
+                          <th className="p-2 border text-left align-middle min-w-[140px] max-w-[220px] whitespace-normal">
+                            Comentario
+                          </th>
                           {isAdmin && (
-                            <th className="p-2 border text-center">Acciones</th>
+                            <th className="p-2 border text-center align-middle">
+                              Acciones
+                            </th>
                           )}
                         </tr>
                       </thead>
@@ -3685,7 +4129,7 @@ export default function CustomersPollo({
                           <tr>
                             <td
                               colSpan={isAdmin ? 6 : 5}
-                              className="p-4 text-center text-gray-500"
+                              className="p-4 text-center text-gray-500 whitespace-normal"
                             >
                               No hay abonos con referencia a esta venta. Los
                               abonos generales del cliente siguen reflejados en
@@ -3695,40 +4139,46 @@ export default function CustomersPollo({
                         ) : (
                           saleLedgerComputed.map((row) => (
                             <tr key={row.id} className="text-center">
-                              <td className="p-2 border">{row.date || "—"}</td>
-                              <td className="p-2 border text-right font-medium">
+                              <td className="p-2 border tabular-nums">
+                                {row.date || "—"}
+                              </td>
+                              <td className="p-2 border text-right font-medium tabular-nums">
                                 {money(-row.montoAbs)}
                               </td>
-                              <td className="p-2 border text-right">
+                              <td className="p-2 border text-right tabular-nums">
                                 {money(row.saldoInicial)}
                               </td>
-                              <td className="p-2 border text-right">
+                              <td className="p-2 border text-right tabular-nums">
                                 {money(row.saldoFinal)}
                               </td>
-                              <td className="p-2 border text-left text-xs">
+                              <td className="p-2 border text-left text-xs max-w-[220px] whitespace-normal break-words align-top">
                                 {row.comment || "—"}
                               </td>
                               {isAdmin && (
-                                <td className="p-2 border">
+                                <td className="p-2 border whitespace-nowrap">
                                   <div className="flex gap-1 justify-center flex-wrap">
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="text-xs text-blue-600 underline"
+                                      variant="ghost"
+                                      size="sm"
+                                      className="!rounded-lg !p-0 h-auto !text-xs !text-blue-600 underline shadow-none !font-normal"
                                       onClick={() => {
                                         startEditMovement(row);
                                       }}
                                     >
                                       Editar
-                                    </button>
-                                    <button
+                                    </Button>
+                                    <Button
                                       type="button"
-                                      className="text-xs text-red-600 underline"
+                                      variant="ghost"
+                                      size="sm"
+                                      className="!rounded-lg !p-0 h-auto !text-xs !text-red-600 underline shadow-none !font-normal"
                                       onClick={() => {
                                         void deleteMovement(row);
                                       }}
                                     >
                                       Borrar
-                                    </button>
+                                    </Button>
                                   </div>
                                 </td>
                               )}
@@ -3775,24 +4225,28 @@ export default function CustomersPollo({
                           </div>
                           {isAdmin && (
                             <div className="mt-2 flex gap-3 justify-end text-sm">
-                              <button
+                              <Button
                                 type="button"
-                                className="text-blue-600"
+                                variant="ghost"
+                                size="sm"
+                                className="!rounded-lg !p-0 h-auto !text-blue-600 shadow-none !font-normal"
                                 onClick={() => {
                                   startEditMovement(row);
                                 }}
                               >
                                 Editar
-                              </button>
-                              <button
+                              </Button>
+                              <Button
                                 type="button"
-                                className="text-red-600"
+                                variant="ghost"
+                                size="sm"
+                                className="!rounded-lg !p-0 h-auto !text-red-600 shadow-none !font-normal"
                                 onClick={() => {
                                   void deleteMovement(row);
                                 }}
                               >
                                 Borrar
-                              </button>
+                              </Button>
                             </div>
                           )}
                         </div>
@@ -3813,11 +4267,12 @@ export default function CustomersPollo({
           setItemsDrawerOpen(false);
           setItemsDrawerMeta(null);
           setItemsModalSaleId(null);
+          setDrawerSaleTab("ventas");
         }}
         titleId="pollo-items-drawer-title"
         title={
           <>
-            Productos vendidos
+            Venta a crédito
             {itemsModalSaleId ? (
               <span className="text-gray-500 font-normal">
                 {" "}
@@ -3829,18 +4284,56 @@ export default function CustomersPollo({
         subtitle={
           itemsDrawerMeta?.saleDate
             ? `Compra: ${itemsDrawerMeta.saleDate}`
-            : "Detalle de la compra"
+            : "Detalle de la venta"
+        }
+        badge={
+          itemsModalSaleId ? (
+            <div
+              className="flex gap-2 mt-1"
+              role="tablist"
+              aria-label="Sección del detalle"
+            >
+              <Button
+                type="button"
+                role="tab"
+                aria-selected={drawerSaleTab === "ventas"}
+                variant="outline"
+                size="sm"
+                className={`!rounded-full px-3 py-1 text-xs border transition-colors ${
+                  drawerSaleTab === "ventas"
+                    ? "!bg-blue-600 !text-white border-blue-600"
+                    : "!bg-white !text-slate-700 border-slate-200 hover:!bg-slate-50"
+                }`}
+                onClick={() => setDrawerSaleTab("ventas")}
+              >
+                Ventas
+              </Button>
+              <Button
+                type="button"
+                role="tab"
+                aria-selected={drawerSaleTab === "abonos"}
+                variant="outline"
+                size="sm"
+                className={`!rounded-full px-3 py-1 text-xs border transition-colors ${
+                  drawerSaleTab === "abonos"
+                    ? "!bg-blue-600 !text-white border-blue-600"
+                    : "!bg-white !text-slate-700 border-slate-200 hover:!bg-slate-50"
+                }`}
+                onClick={() => setDrawerSaleTab("abonos")}
+              >
+                Abonos
+              </Button>
+            </div>
+          ) : null
         }
         zIndexClassName="z-[78]"
         panelMaxWidthClassName="max-w-2xl"
       >
         {itemsModalLoading ? (
           <p className="text-sm text-gray-600 px-1">Cargando…</p>
-        ) : itemsModalRows.length === 0 ? (
-          <p className="text-sm text-gray-600 px-1">Sin ítems en esta venta.</p>
         ) : (
           <>
-            {itemsDrawerMeta && (
+            {itemsDrawerMeta && itemsModalSaleId && (
               <DrawerMoneyStrip
                 items={[
                   {
@@ -3849,40 +4342,108 @@ export default function CustomersPollo({
                     tone: "blue",
                   },
                   {
-                    label: "Monto",
+                    label: "Monto venta",
                     value: money(itemsDrawerMeta.saleAmount),
                     tone: "slate",
                   },
                   {
-                    label: "Líneas",
-                    value: String(itemsDrawerMeta.lineCount),
+                    label: "Abonos",
+                    value: money(
+                      getTotalAbonadoForSale(stRows, itemsModalSaleId),
+                    ),
                     tone: "emerald",
+                  },
+                  {
+                    label: "Productos",
+                    value: String(itemsDrawerMeta.lineCount),
+                    tone: "slate",
                   },
                 ]}
               />
             )}
-            <div className="space-y-3 px-1 pb-4">
-              <DrawerSectionTitle
-                className={itemsDrawerMeta ? "mt-4" : "mt-0"}
-              >
-                Líneas de venta
-              </DrawerSectionTitle>
-              {itemsModalRows.map((it, idx) => (
-                <DrawerDetailDlCard
-                  key={idx}
-                  title={it.productName || `Producto ${idx + 1}`}
-                  rows={[
-                    { label: "Cantidad", value: String(it.qty) },
-                    { label: "Precio unit.", value: money(it.unitPrice) },
-                    {
-                      label: "Descuento",
-                      value: it.discount ? money(it.discount) : "—",
-                    },
-                    { label: "Monto", value: money(it.total) },
-                  ]}
-                />
-              ))}
-            </div>
+            {itemsDrawerMeta && drawerSaleTab === "ventas" && (
+              <p className="text-[11px] text-slate-500 px-1 mt-2 leading-snug">
+                <strong>Productos</strong>: cantidad de líneas de producto en la
+                factura (filas), no libras ni unidades totales.
+              </p>
+            )}
+
+            {drawerSaleTab === "ventas" ? (
+              <div className="space-y-3 px-1 pb-4">
+                <DrawerSectionTitle
+                  className={itemsDrawerMeta ? "mt-4" : "mt-0"}
+                >
+                  Líneas de venta
+                </DrawerSectionTitle>
+                {itemsModalRows.length === 0 ? (
+                  <p className="text-sm text-gray-600">
+                    Sin productos en esta venta.
+                  </p>
+                ) : (
+                  itemsModalRows.map((it, idx) => (
+                    <DrawerDetailDlCard
+                      key={idx}
+                      title={it.productName || `Producto ${idx + 1}`}
+                      rows={[
+                        { label: "Cantidad", value: String(it.qty) },
+                        { label: "Precio unit.", value: money(it.unitPrice) },
+                        {
+                          label: "Descuento",
+                          value: it.discount ? money(it.discount) : "—",
+                        },
+                        { label: "Monto", value: money(it.total) },
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+            ) : (
+              <div className="px-1 pb-4 mt-4 space-y-3">
+                <DrawerSectionTitle className="mt-0">
+                  Abonos a esta venta
+                </DrawerSectionTitle>
+                {drawerAbonosChronological.length === 0 ? (
+                  <p className="text-sm text-gray-600">
+                    No hay abonos registrados contra esta venta.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {drawerAbonosChronological.map((row) => (
+                      <div
+                        key={row.id}
+                        className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm"
+                      >
+                        <div className="flex justify-between gap-2 font-semibold text-slate-900">
+                          <span>{row.date || "—"}</span>
+                          <span className="tabular-nums text-emerald-800">
+                            {money(row.montoAbs)}
+                          </span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                          <div>
+                            <div className="text-[11px]">Saldo antes</div>
+                            <div className="font-medium text-slate-900 tabular-nums">
+                              {money(row.saldoInicial)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px]">Saldo después</div>
+                            <div className="font-medium text-slate-900 tabular-nums">
+                              {money(row.saldoFinal)}
+                            </div>
+                          </div>
+                        </div>
+                        {row.comment ? (
+                          <p className="mt-2 text-xs text-slate-600">
+                            {row.comment}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </SlideOverDrawer>
@@ -3969,8 +4530,11 @@ export default function CustomersPollo({
             </div>
 
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                className="!rounded-lg px-3 py-2"
                 onClick={() => {
                   setShowAbono(false);
                   setAbonoTargetSaleId(null);
@@ -3978,14 +4542,17 @@ export default function CustomersPollo({
                 disabled={savingAbono}
               >
                 Cancelar
-              </button>
-              <button
-                className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="md"
+                className="!rounded-lg px-3 py-2 !bg-green-600 hover:!bg-green-700 active:!bg-green-800 shadow-green-600/15"
                 onClick={saveAbono}
                 disabled={savingAbono}
               >
                 {savingAbono ? "Guardando..." : "Guardar abono"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

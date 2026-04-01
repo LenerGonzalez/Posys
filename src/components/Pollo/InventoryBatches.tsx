@@ -24,8 +24,15 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { FiChevronDown, FiInfo, FiMenu } from "react-icons/fi";
-import ActionMenu from "../common/ActionMenu";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import {
+  POLLO_SELECT_COMPACT_DESKTOP_CLASS,
+  POLLO_SELECT_COMPACT_MOBILE_CLASS,
+  POLLO_SELECT_DESKTOP_CLASS,
+  POLLO_SELECT_MOBILE_BUTTON_CLASS,
+} from "../common/polloSelectStyles";
+import Button from "../common/Button";
 import Toast from "../common/Toast";
 import SlideOverDrawer from "../common/SlideOverDrawer";
 import {
@@ -36,6 +43,8 @@ import {
 } from "../common/DrawerContentCards";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+const fmtExistRemQty = (n: number) => Number(n || 0).toFixed(3);
 
 /** Mismo criterio que ventas FIFO: lote más antiguo primero. */
 function sortBatchesFifoOrder(loots: Batch[]): Batch[] {
@@ -396,6 +405,39 @@ export default function InventoryBatches({
     return /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(s) || s === "lb";
   };
 
+  /** Suma de existencias (`remaining`) por producto: lotes con fecha en el periodo (from–to). Incluye resumen lb/un/caj para "Todos". */
+  const existenciasPeriodoPorProducto = useMemo(() => {
+    const map = new Map<string, number>();
+    let lbsRem = 0;
+    let udsRem = 0;
+    let cajRem = 0;
+    const isCajilla = (u: string) =>
+      String(u || "")
+        .toLowerCase()
+        .trim() === "cajilla";
+    for (const b of batches) {
+      if (fromDate && b.date < fromDate) continue;
+      if (toDate && b.date > toDate) continue;
+      const r = Number(b.remaining || 0);
+      map.set(b.productId, (map.get(b.productId) || 0) + r);
+      if (isPounds(b.unit)) lbsRem += r;
+      else if (isCajilla(b.unit)) cajRem += r;
+      else udsRem += r;
+    }
+    const todosExistLine = formatGroupQtyLine(lbsRem, udsRem, cajRem);
+    return { map, todosExistLine };
+  }, [batches, fromDate, toDate]);
+
+  const productFilterLabel = useMemo(() => {
+    if (!productFilterId) {
+      return `Todos (exist. ${existenciasPeriodoPorProducto.todosExistLine})`;
+    }
+    const prod = products.find((p) => p.id === productFilterId);
+    if (!prod) return "Filtro activo";
+    const ex = existenciasPeriodoPorProducto.map.get(productFilterId) ?? 0;
+    return `${prod.name} — ${prod.category} (existencia: ${fmtExistRemQty(ex)})`;
+  }, [productFilterId, products, existenciasPeriodoPorProducto]);
+
   // ===== Load =====
   useEffect(() => {
     (async () => {
@@ -481,13 +523,6 @@ export default function InventoryBatches({
       return true;
     });
   }, [batches, fromDate, toDate, productFilterId]);
-
-  const productFilterLabel = useMemo(() => {
-    if (!productFilterId) return "Todos";
-    const prod = products.find((p) => p.id === productFilterId);
-    if (!prod) return "Filtro activo";
-    return `${prod.name} — ${prod.category}`;
-  }, [productFilterId, products]);
 
   // ===== Totales arriba =====
   const totals = useMemo(() => {
@@ -897,16 +932,16 @@ export default function InventoryBatches({
     return list.sort((a, b) => a.name.localeCompare(b.name, "es"));
   }, [products, unitFilter]);
 
-  const productFilterSelectOptions = useMemo(
-    () => [
-      { value: "", label: "Todos" },
+  const productFilterSelectOptions = useMemo(() => {
+    const { map, todosExistLine } = existenciasPeriodoPorProducto;
+    return [
+      { value: "", label: `Todos (exist. ${todosExistLine})` },
       ...products.map((p) => ({
         value: p.id,
-        label: `${p.name} — ${p.category}`,
+        label: `${p.name} ${p.price ? `(${money(p.price)})` : ""} — existencia: ${fmtExistRemQty(map.get(p.id) ?? 0)}`,
       })),
-    ],
-    [products],
-  );
+    ];
+  }, [products, existenciasPeriodoPorProducto]);
 
   const unitFilterOptions = useMemo(
     () => [
@@ -1753,20 +1788,10 @@ export default function InventoryBatches({
           />
         </div>
 
-        <div className="flex flex-col min-w-[240px] w-full md:w-auto">
-          <MobileHtmlSelect
-            label="Producto"
-            value={productFilterId}
-            onChange={setProductFilterId}
-            options={productFilterSelectOptions}
-            sheetTitle="Filtrar por producto"
-            selectClassName="border rounded px-2 py-1 w-full"
-            buttonClassName="border rounded px-2 py-1 w-full text-left flex items-center justify-between gap-2 bg-white"
-          />
-        </div>
-
-        <button
-          className="px-3 rounded-2xl shadow-2xl py-1 bg-gray-200 hover:bg-gray-300"
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
           onClick={() => {
             setFromDate("");
             setToDate("");
@@ -1774,12 +1799,14 @@ export default function InventoryBatches({
           }}
         >
           Quitar filtro
-        </button>
+        </Button>
 
         <div className="ml-auto flex items-center gap-2">
-          <button
+          <Button
             type="button"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+            variant="outline"
+            size="sm"
+            className="h-10 w-10 shrink-0 rounded-xl p-0 shadow-none !text-base"
             title="¿Qué es el costo ponderado?"
             aria-label="Información sobre costo ponderado"
             onClick={() => {
@@ -1788,21 +1815,19 @@ export default function InventoryBatches({
               setPonderadoInfoOpen(true);
             }}
           >
-            <FiInfo className="w-5 h-5" />
-          </button>
+            <FiInfo size={22} className="shrink-0" aria-hidden />
+          </Button>
           <RefreshButton onClick={() => refresh()} loading={loading} />
-          <button
-            type="button"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+          <ActionMenuTrigger
+            className="!h-10 !w-10 shrink-0"
             title="Más acciones"
             aria-label="Menú de acciones"
+            iconClassName="h-[22px] w-[22px] text-gray-700"
             onClick={(e) => {
               setRowActionMenu(null);
               setMainToolsMenuRect(e.currentTarget.getBoundingClientRect());
             }}
-          >
-            <FiMenu className="w-5 h-5" />
-          </button>
+          />
         </div>
       </div>
 
@@ -1813,9 +1838,11 @@ export default function InventoryBatches({
         width={240}
       >
         <div className="py-1">
-          <button
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             disabled={loading}
             onClick={() => {
               setMainToolsMenuRect(null);
@@ -1823,10 +1850,12 @@ export default function InventoryBatches({
             }}
           >
             Exportar productos (CSV)
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
+            variant="ghost"
+            size="sm"
+            className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
             disabled={loading}
             onClick={() => {
               setMainToolsMenuRect(null);
@@ -1834,11 +1863,13 @@ export default function InventoryBatches({
             }}
           >
             Exportar lotes (Excel)
-          </button>
+          </Button>
           {canCreateBatch && (
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 resetOrderModal();
@@ -1846,7 +1877,7 @@ export default function InventoryBatches({
               }}
             >
               Crear lote
-            </button>
+            </Button>
           )}
         </div>
       </ActionMenu>
@@ -1872,50 +1903,58 @@ export default function InventoryBatches({
               }
               return (
                 <>
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                     onClick={() => {
                       openDetail(g);
                       setRowActionMenu(null);
                     }}
                   >
                     Ver detalle
-                  </button>
+                  </Button>
                   {isAdmin && g.status === "PENDIENTE" && (
-                    <button
+                    <Button
                       type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 text-green-800 font-medium"
+                      variant="ghost"
+                      size="sm"
+                      className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-medium text-green-800"
                       onClick={() => {
                         payGroup(g);
                         setRowActionMenu(null);
                       }}
                     >
                       Pagar inventario
-                    </button>
+                    </Button>
                   )}
                   {isAdmin && (
                     <>
-                      <button
+                      <Button
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                         onClick={() => {
                           openForEdit(g);
                           setRowActionMenu(null);
                         }}
                       >
                         Editar pedido
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 text-red-700"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700"
                         onClick={() => {
                           deleteGroup(g);
                           setRowActionMenu(null);
                         }}
                       >
                         Borrar pedido
-                      </button>
+                      </Button>
                     </>
                   )}
                 </>
@@ -1926,9 +1965,11 @@ export default function InventoryBatches({
 
       {/* KPIs: 3 tarjetas dentro de panel colapsable */}
       <div className="mb-4 border border-slate-200 rounded-2xl bg-slate-50 p-4 shadow-sm">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between gap-3 text-left rounded-xl -m-1 p-1 hover:bg-slate-100/80 transition-colors"
+          variant="ghost"
+          size="sm"
+          className="w-full justify-between gap-3 rounded-xl -m-1 p-1 text-left font-normal shadow-none ring-offset-0 transition-colors hover:bg-slate-100/80"
           aria-expanded={kpisExpanded}
           onClick={() => setKpisExpanded((v) => !v)}
         >
@@ -1941,7 +1982,7 @@ export default function InventoryBatches({
             }`}
             aria-hidden
           />
-        </button>
+        </Button>
         {kpisExpanded && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
         <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl p-4 shadow-md">
@@ -2122,9 +2163,11 @@ export default function InventoryBatches({
           className="mb-4 border border-slate-200 rounded-2xl bg-slate-50 p-4 shadow-sm"
           data-weighted-cost-root
         >
-          <button
+          <Button
             type="button"
-            className="w-full flex items-center justify-between gap-3 text-left rounded-xl -m-1 p-1 hover:bg-slate-100/80 transition-colors"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-between gap-3 rounded-xl -m-1 p-1 text-left font-normal shadow-none ring-offset-0 transition-colors hover:bg-slate-100/80"
             aria-expanded={weightedCostPanelExpanded}
             onClick={() => {
               setWeightedCostPanelExpanded((v) => {
@@ -2143,7 +2186,7 @@ export default function InventoryBatches({
               }`}
               aria-hidden
             />
-          </button>
+          </Button>
           {weightedCostPanelExpanded && (
             <>
           <p className="text-xs text-slate-600 mb-3 leading-relaxed mt-2">
@@ -2171,9 +2214,11 @@ export default function InventoryBatches({
                     <tr className="border-b border-slate-100">
                       <td className="p-2">
                         <div className="flex items-start gap-2">
-                          <button
+                          <Button
                             type="button"
-                            className={`mt-0.5 shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
+                            variant="outline"
+                            size="sm"
+                            className={`mt-0.5 h-7 w-7 shrink-0 rounded-full border p-0 shadow-none !text-base transition-colors ${
                               weightedCostDetailKey === r.key
                                 ? "border-blue-600 bg-blue-50 text-blue-700"
                                 : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
@@ -2187,8 +2232,8 @@ export default function InventoryBatches({
                               )
                             }
                           >
-                            <FiInfo className="w-4 h-4" aria-hidden />
-                          </button>
+                            <FiInfo size={18} className="shrink-0" aria-hidden />
+                          </Button>
                           <span className="min-w-0 leading-snug">
                             {r.productName}
                           </span>
@@ -2287,9 +2332,11 @@ export default function InventoryBatches({
       {/* ===== PANEL: Precio de venta ponderado + margen (con lotes) ===== */}
       {weightedCostInventoryRows.length > 0 && (
         <div className="mb-4 border border-indigo-200 rounded-2xl bg-indigo-50/50 p-4 shadow-sm">
-          <button
+          <Button
             type="button"
-            className="w-full flex items-center justify-between gap-3 text-left rounded-xl -m-1 p-1 hover:bg-indigo-100/60 transition-colors"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-between gap-3 rounded-xl -m-1 p-1 text-left font-normal shadow-none ring-offset-0 transition-colors hover:bg-indigo-100/60"
             aria-expanded={saleVsCostPanelExpanded}
             onClick={() => {
               setSaleVsCostPanelExpanded((v) => {
@@ -2308,7 +2355,7 @@ export default function InventoryBatches({
               }`}
               aria-hidden
             />
-          </button>
+          </Button>
           {saleVsCostPanelExpanded && (
             <>
           <p className="text-xs text-indigo-700/70 mb-3 leading-relaxed mt-2">
@@ -2344,9 +2391,11 @@ export default function InventoryBatches({
                       <tr className="border-b border-slate-100">
                         <td className="p-2">
                           <div className="flex items-start gap-2">
-                            <button
+                            <Button
                               type="button"
-                              className={`mt-0.5 shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
+                              variant="outline"
+                              size="sm"
+                              className={`mt-0.5 h-7 w-7 shrink-0 rounded-full border p-0 shadow-none !text-base transition-colors ${
                                 isExpanded
                                   ? "border-indigo-600 bg-indigo-50 text-indigo-700"
                                   : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
@@ -2359,8 +2408,8 @@ export default function InventoryBatches({
                                 )
                               }
                             >
-                              <FiInfo className="w-4 h-4" aria-hidden />
-                            </button>
+                              <FiInfo size={18} className="shrink-0" aria-hidden />
+                            </Button>
                             <span className="min-w-0 leading-snug font-medium">
                               {r.productName}
                               {r.lotCount > 1 && (
@@ -2565,6 +2614,18 @@ export default function InventoryBatches({
       {/* ✅ MOBILE FIRST: CARDS */}
       {/* ===================== */}
       <div className="md:hidden space-y-3">
+        <div className="bg-white p-3 rounded-xl border shadow-sm">
+          <MobileHtmlSelect
+            label="Filtrar por producto"
+            value={productFilterId}
+            onChange={setProductFilterId}
+            options={productFilterSelectOptions}
+            sheetTitle="Filtrar por producto"
+            triggerIcon="menu"
+            selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+            buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+          />
+        </div>
         <div className="flex gap-2">
           {(
             [
@@ -2575,18 +2636,16 @@ export default function InventoryBatches({
           ).map((opt) => {
             const active = availabilityFilter === opt.key;
             return (
-              <button
+              <Button
                 key={opt.key}
                 type="button"
+                variant={active ? "primary" : "secondary"}
+                size="sm"
+                className="flex-1 !rounded-[25px]"
                 onClick={() => setAvailabilityFilter(opt.key)}
-                className={`flex-1 px-3 py-2 rounded-xl text-sm font-semibold shadow ${
-                  active
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700"
-                }`}
               >
                 {opt.label}
-              </button>
+              </Button>
             );
           })}
         </div>
@@ -2608,10 +2667,12 @@ export default function InventoryBatches({
             const openType = mobileTypeOpen[type] ?? false;
             return (
               <div key={type} className="bg-white border rounded-2xl">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => toggleMobileType(type)}
-                  className="w-full px-4 py-3 flex items-center justify-between text-left"
+                  className="w-full justify-between px-4 py-3 text-left font-normal shadow-none ring-offset-0"
                 >
                   <div>
                     <div className="font-semibold">{type}</div>
@@ -2622,7 +2683,7 @@ export default function InventoryBatches({
                   <span className="text-xs text-gray-500">
                     {openType ? "Cerrar" : "Ver"}
                   </span>
-                </button>
+                </Button>
 
                 {openType && (
                   <div className="space-y-3 px-2 pb-4">
@@ -2774,9 +2835,11 @@ export default function InventoryBatches({
                               </div>
 
                               <div className="mt-3 flex justify-end">
-                                <button
+                                <Button
                                   type="button"
-                                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-medium text-gray-800 hover:bg-gray-50"
+                                  variant="outline"
+                                  size="sm"
+                                  className="rounded-xl shadow-none !text-base"
                                   onClick={(e) => {
                                     setMainToolsMenuRect(null);
                                     setRowActionMenu({
@@ -2785,9 +2848,9 @@ export default function InventoryBatches({
                                     });
                                   }}
                                 >
-                                  <FiMenu className="w-5 h-5" />
+                                  <FiMenu size={20} className="shrink-0" aria-hidden />
                                   Acciones
-                                </button>
+                                </Button>
                               </div>
                             </div>
                           )}
@@ -2806,10 +2869,6 @@ export default function InventoryBatches({
       {/* DESKTOP (md+): lista compacta + drawer lateral */}
       {/* ===================== */}
       <div className="hidden md:block bg-white p-4 rounded-lg shadow-lg border w-full">
-        <p className="text-xs text-gray-500 mb-3">
-          Tocá una fila para abrir el detalle completo en el panel derecho (sin
-          scroll horizontal).
-        </p>
         <table className="w-full table-fixed text-sm border-collapse">
           <colgroup>
             <col className="w-[5.25rem]" />
@@ -2820,6 +2879,21 @@ export default function InventoryBatches({
             <col className="w-10" />
           </colgroup>
           <thead>
+            <tr className="border-b border-gray-200 bg-white">
+              <td colSpan={2} className="px-2 py-2 align-bottom min-w-0">
+                <MobileHtmlSelect
+                  label="Filtrar por producto"
+                  value={productFilterId}
+                  onChange={setProductFilterId}
+                  options={productFilterSelectOptions}
+                  sheetTitle="Filtrar por producto"
+                  triggerIcon="menu"
+                  selectClassName={`${POLLO_SELECT_COMPACT_DESKTOP_CLASS} w-full min-w-0`}
+                  buttonClassName={`${POLLO_SELECT_COMPACT_MOBILE_CLASS} w-full min-w-0`}
+                />
+              </td>
+              <td colSpan={4} className="p-0" aria-hidden />
+            </tr>
             <tr className="text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200">
               <th className="px-2 py-2.5">Fecha</th>
               <th className="px-3 py-2.5 min-w-0">Pedido</th>
@@ -2930,11 +3004,11 @@ export default function InventoryBatches({
                     {money(g.totalEsperado)}
                   </td>
                   <td className="px-1 py-2 align-middle text-center">
-                    <button
-                      type="button"
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                    <ActionMenuTrigger
+                      className="!h-8 !w-8"
                       title="Acciones del pedido"
                       aria-label={`Acciones: ${g.orderName}`}
+                      iconClassName="h-5 w-5 text-gray-700"
                       onClick={(e) => {
                         e.stopPropagation();
                         setMainToolsMenuRect(null);
@@ -2943,9 +3017,7 @@ export default function InventoryBatches({
                           rect: e.currentTarget.getBoundingClientRect(),
                         });
                       }}
-                    >
-                      <FiMenu className="w-5 h-5" />
-                    </button>
+                    />
                   </td>
                 </tr>
                 );
@@ -2977,9 +3049,11 @@ export default function InventoryBatches({
         footer={
           desktopDrawerGroup ? (
             <>
-              <button
+              <Button
                 type="button"
-                className="px-3 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                variant="outline"
+                size="sm"
+                className="rounded-lg shadow-none"
                 onClick={() => {
                   const g = desktopDrawerGroup;
                   setDetailGroup(g);
@@ -2988,32 +3062,38 @@ export default function InventoryBatches({
                 }}
               >
                 Ver en modal
-              </button>
+              </Button>
               {isAdmin && desktopDrawerGroup.status === "PENDIENTE" && (
-                <button
+                <Button
                   type="button"
-                  className="px-3 py-2 text-sm rounded-lg bg-green-600 text-white hover:bg-green-700"
+                  variant="primary"
+                  size="sm"
+                  className="rounded-lg bg-green-600 shadow-none hover:bg-green-700 active:bg-green-800"
                   onClick={() => payGroup(desktopDrawerGroup)}
                 >
                   Pagar inventario
-                </button>
+                </Button>
               )}
               {isAdmin && (
                 <>
-                  <button
+                  <Button
                     type="button"
-                    className="px-3 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg shadow-none"
                     onClick={() => openForEdit(desktopDrawerGroup)}
                   >
                     Editar pedido
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="px-3 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700"
+                    variant="danger"
+                    size="sm"
+                    className="rounded-lg shadow-none"
                     onClick={() => deleteGroup(desktopDrawerGroup)}
                   >
                     Borrar pedido
-                  </button>
+                  </Button>
                 </>
               )}
             </>
@@ -3139,10 +3219,11 @@ export default function InventoryBatches({
       {ponderadoInfoOpen &&
         createPortal(
           <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
-            <button
+            <Button
               type="button"
-              className="absolute inset-0 bg-black/45 border-0 cursor-default"
+              variant="ghost"
               aria-label="Cerrar"
+              className="absolute inset-0 z-0 min-h-full w-full cursor-default rounded-none border-0 bg-black/45 p-0 shadow-none ring-0 hover:bg-black/50 focus-visible:ring-0"
               onClick={() => setPonderadoInfoOpen(false)}
             />
             <div
@@ -3189,13 +3270,15 @@ export default function InventoryBatches({
                   sistema hace el resto.
                 </p>
               </div>
-              <button
+              <Button
                 type="button"
-                className="mt-5 w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
+                variant="primary"
+                size="sm"
+                className="mt-5 w-full rounded-xl py-2.5 shadow-none"
                 onClick={() => setPonderadoInfoOpen(false)}
               >
                 Entendido
-              </button>
+              </Button>
             </div>
           </div>,
           document.body,
@@ -3217,30 +3300,36 @@ export default function InventoryBatches({
                   {editingGroupId ? "Editar pedido" : "Crear pedido"}
                 </h3>
                 <div className="flex items-center gap-2">
-                  <button
+                  <Button
                     type="button"
-                    className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                    variant="secondary"
+                    size="sm"
+                    className="rounded shadow-none"
                     onClick={() => setShowCreateModal(false)}
                   >
                     Cancelar
-                  </button>
+                  </Button>
 
-                  <button
+                  <Button
                     type="button"
-                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                    variant="primary"
+                    size="sm"
+                    className="rounded shadow-none"
                     onClick={saveOrder}
                     disabled={orderItems.length === 0}
                   >
                     {editingGroupId ? "Editar pedido" : "Crear pedido"}
-                  </button>
+                  </Button>
 
-                  <button
-                    className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                    onClick={() => setShowCreateModal(false)}
+                  <Button
                     type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="rounded shadow-none"
+                    onClick={() => setShowCreateModal(false)}
                   >
                     Cerrar
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -3284,8 +3373,9 @@ export default function InventoryBatches({
                       }}
                       options={unitFilterOptions}
                       sheetTitle="Unidad"
-                      selectClassName="w-full border p-2 rounded"
-                      buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                      triggerIcon="menu"
+                      selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                      buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
                     />
                   </div>
 
@@ -3296,8 +3386,9 @@ export default function InventoryBatches({
                       onChange={setProductId}
                       options={productByUnitSelectOptions}
                       sheetTitle="Producto"
-                      selectClassName="w-full border p-2 rounded"
-                      buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                      triggerIcon="menu"
+                      selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                      buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
                     />
                   </div>
 
@@ -3405,8 +3496,10 @@ export default function InventoryBatches({
                 </div>
 
                 <div className="flex justify-end mt-3">
-                  <button
+                  <Button
                     type="button"
+                    variant="primary"
+                    size="sm"
                     onClick={addItemToOrder}
                     disabled={
                       !(
@@ -3416,17 +3509,10 @@ export default function InventoryBatches({
                         Number(purchasePrice) > 0
                       )
                     }
-                    className={`px-3 py-2 rounded ${
-                      productId &&
-                      Number(quantity) > 0 &&
-                      Number.isFinite(Number(purchasePrice)) &&
-                      Number(purchasePrice) > 0
-                        ? "bg-blue-600 text-white hover:bg-blue-700"
-                        : "bg-gray-300 text-gray-600 cursor-not-allowed"
-                    }`}
+                    className="rounded shadow-none disabled:cursor-not-allowed"
                   >
                     Agregar producto al pedido
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -3550,13 +3636,15 @@ export default function InventoryBatches({
                           </td>
 
                           <td className="p-2 border">
-                            <button
+                            <Button
                               type="button"
-                              className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs"
+                              variant="danger"
+                              size="sm"
+                              className="rounded px-2 py-1 text-xs shadow-none"
                               onClick={() => removeOrderItem(it.tempId)}
                             >
                               Quitar
-                            </button>
+                            </Button>
                           </td>
                         </tr>
                       ))
@@ -3620,9 +3708,11 @@ export default function InventoryBatches({
                             >
                               {label}
                             </span>
-                            <button
+                            <Button
                               type="button"
-                              className="p-1 rounded hover:bg-white/60"
+                              variant="ghost"
+                              size="sm"
+                              className="rounded p-1 shadow-none !text-base ring-offset-0 hover:bg-white/60"
                               aria-label="Ver detalle de lotes"
                               title="Ver detalle de lotes"
                               onClick={() => {
@@ -3630,8 +3720,12 @@ export default function InventoryBatches({
                                 setShowPriceInfoModal(true);
                               }}
                             >
-                              <FiInfo className="w-4 h-4 text-gray-700" />
-                            </button>
+                              <FiInfo
+                                size={18}
+                                className="shrink-0 text-gray-700"
+                                aria-hidden
+                              />
+                            </Button>
                           </div>
                         </div>
 
@@ -3824,13 +3918,15 @@ export default function InventoryBatches({
                       <h3 className="text-base font-bold">
                         Lotes con stock: {pName}
                       </h3>
-                      <button
+                      <Button
                         type="button"
-                        className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm"
+                        variant="secondary"
+                        size="sm"
+                        className="rounded text-sm shadow-none"
                         onClick={() => setShowPriceInfoModal(false)}
                       >
                         Cerrar
-                      </button>
+                      </Button>
                     </div>
                     <div className="text-xs text-gray-600 mb-3">
                       Estos son los lotes con existencias pendientes de vender.
@@ -3940,16 +4036,18 @@ export default function InventoryBatches({
                     {detailGroup.date}
                   </div>
                 </div>
-                <button
-                  className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="rounded shadow-none"
                   onClick={() => {
                     setShowDetailModal(false);
                     setDetailGroup(null);
                   }}
-                  type="button"
                 >
                   Cerrar
-                </button>
+                </Button>
               </div>
 
               <div className="bg-white rounded border overflow-x-auto">
@@ -4053,18 +4151,24 @@ export default function InventoryBatches({
                 Ya no habrán libras disponibles al pagar este inventario.
               </p>
               <div className="flex justify-center gap-4">
-                <button
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  className="rounded-lg bg-green-600 shadow-none hover:bg-green-700 active:bg-green-800"
                   onClick={confirmPayGroupNow}
-                  className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700"
                 >
                   Confirmar
-                </button>
-                <button
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="rounded-lg shadow-none hover:bg-slate-300"
                   onClick={cancelPayDialog}
-                  className="px-4 py-2 rounded-lg bg-gray-300 hover:bg-gray-400"
                 >
                   Cancelar
-                </button>
+                </Button>
               </div>
             </div>
           </div>,

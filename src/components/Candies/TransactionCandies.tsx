@@ -18,15 +18,18 @@ import { hasRole } from "../../utils/roles";
 import { format } from "date-fns";
 import { restoreSaleAndDeleteCandy } from "../../Services/inventory_candies";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 import SlideOverDrawer from "../common/SlideOverDrawer";
 import {
   DrawerDetailDlCard,
   DrawerMoneyStrip,
   DrawerSectionTitle,
 } from "../common/DrawerContentCards";
-import ActionMenu from "../common/ActionMenu";
+import ActionMenu, {
+  ActionMenuTrigger,
+  actionMenuItemClassDestructive,
+} from "../common/ActionMenu";
 import Toast from "../common/Toast";
-import { FiMoreVertical } from "react-icons/fi";
 
 type SaleType = "CONTADO" | "CREDITO";
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -336,9 +339,6 @@ export default function TransactionsReportCandies({
   const [filterCustomerId, setFilterCustomerId] = useState<string>("");
   const [filterType, setFilterType] = useState<"" | SaleType>("");
   const [filterSellerId, setFilterSellerId] = useState<string>("");
-
-  // kebab menú
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   // paginación
   const PAGE_SIZE = 15;
@@ -847,7 +847,7 @@ export default function TransactionsReportCandies({
   const confirmDelete = async (s: SaleDoc) => {
     if (!canDelete) return;
 
-    setOpenMenuId(null);
+    setSaleActionMenu(null);
     if (
       !window.confirm(
         "¿Eliminar esta venta de dulces? Se restaurará el inventario asociado.",
@@ -956,51 +956,61 @@ export default function TransactionsReportCandies({
     return (
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 justify-between mt-3">
         <div className="flex items-center gap-1 flex-wrap">
-          <button
-            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
+          <Button
+            variant="outline"
+            size="sm"
+            className="!rounded-md px-2 py-1 text-xs font-semibold"
             onClick={goFirst}
             disabled={page === 1}
           >
             « Primero
-          </button>
-          <button
-            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="!rounded-md px-2 py-1 text-xs font-semibold"
             onClick={goPrev}
             disabled={page === 1}
           >
             ‹ Anterior
-          </button>
+          </Button>
           {pages.map((p, idx) =>
             typeof p === "number" ? (
-              <button
+              <Button
                 key={idx}
-                className={`px-3 py-1 rounded-md text-xs font-semibold border border-slate-200 ${
-                  p === page ? "bg-blue-600 text-white border-blue-600" : ""
+                variant={p === page ? "primary" : "outline"}
+                size="sm"
+                className={`!rounded-md px-3 py-1 text-xs font-semibold ${
+                  p === page ? "" : ""
                 }`}
                 onClick={() => setPage(p)}
               >
                 {p}
-              </button>
+              </Button>
             ) : (
               <span key={idx} className="px-2">
                 …
               </span>
             ),
           )}
-          <button
-            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
+          <Button
+            variant="outline"
+            size="sm"
+            className="!rounded-md px-2 py-1 text-xs font-semibold"
             onClick={goNext}
             disabled={page === totalPages}
           >
             Siguiente ›
-          </button>
-          <button
-            className="px-2 py-1 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="!rounded-md px-2 py-1 text-xs font-semibold"
             onClick={goLast}
             disabled={page === totalPages}
           >
             Último »
-          </button>
+          </Button>
         </div>
         <div className="text-sm text-slate-600">
           Página {page} de {totalPages} • {filteredSales.length} transacción(es)
@@ -1016,9 +1026,10 @@ export default function TransactionsReportCandies({
 
       {/* Filtros (colapsables) */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          variant="ghost"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold rounded-none rounded-t-xl h-auto min-h-0"
           onClick={() => setFiltersCardOpen((prev) => !prev)}
           aria-expanded={filtersCardOpen}
         >
@@ -1028,7 +1039,7 @@ export default function TransactionsReportCandies({
           >
             ▼
           </span>
-        </button>
+        </Button>
         {filtersCardOpen && (
           <div className="p-4 border-t">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end text-sm">
@@ -1143,25 +1154,31 @@ export default function TransactionsReportCandies({
 
               {isAdmin && (
                 <>
-                  <button
-                    className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 w-full"
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="sm:col-span-2 lg:col-span-1 !rounded-md w-full"
                     onClick={handleExportPDF}
                   >
                     Exportar PDF
-                  </button>
-                  <button
-                    className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 w-full"
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="sm:col-span-2 lg:col-span-1 !rounded-md w-full !bg-emerald-600 hover:!bg-emerald-700 active:!bg-emerald-800"
                     onClick={handleExportXLSXAllProducts}
                   >
                     Exportar Excel (Sábana)
-                  </button>
-                  <button
-                    className="sm:col-span-2 lg:col-span-1 px-3 py-2 rounded-md text-xs font-semibold bg-yellow-500 text-white hover:bg-yellow-600 w-full"
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="sm:col-span-2 lg:col-span-1 !rounded-md w-full !bg-yellow-500 hover:!bg-yellow-600 active:!bg-yellow-700 !text-white"
                     onClick={() => handleBackfillMonth()}
                     title="Rellenar uvXpaq/upaquete en ventas del rango"
                   >
                     Backfill mes
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
@@ -1171,9 +1188,10 @@ export default function TransactionsReportCandies({
 
       {/* KPIs (colapsables) */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          variant="ghost"
+          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold rounded-none rounded-t-xl h-auto min-h-0"
           onClick={() => setKpisCardOpen((prev) => !prev)}
           aria-expanded={kpisCardOpen}
         >
@@ -1183,7 +1201,7 @@ export default function TransactionsReportCandies({
           >
             ▼
           </span>
-        </button>
+        </Button>
         {kpisCardOpen && (
           <div className="p-4 border-t">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1246,9 +1264,10 @@ export default function TransactionsReportCandies({
         ) : (
           <>
             <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-              <button
+              <Button
                 type="button"
-                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                variant="ghost"
+                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold rounded-none rounded-t-xl h-auto min-h-0"
                 onClick={() => setCashCardOpen((prev) => !prev)}
                 aria-expanded={cashCardOpen}
               >
@@ -1258,7 +1277,7 @@ export default function TransactionsReportCandies({
                 >
                   ▼
                 </span>
-              </button>
+              </Button>
               {cashCardOpen && (
                 <div className="p-3 border-t space-y-3">
                   {cashPaged.length === 0 ? (
@@ -1297,9 +1316,10 @@ export default function TransactionsReportCandies({
 
                                   <span className="text-slate-700">
                                     <b>Paquetes:</b>{" "}
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="underline text-blue-600"
+                                      variant="ghost"
+                                      className="inline-flex min-h-0 h-auto p-0 px-0.5 rounded shadow-none bg-transparent hover:bg-transparent underline text-blue-600 font-normal"
                                       onClick={(e) => {
                                         e.preventDefault();
                                         openItemsModal(s.id);
@@ -1307,7 +1327,7 @@ export default function TransactionsReportCandies({
                                       title="Ver detalle"
                                     >
                                       {s.quantity}
-                                    </button>
+                                    </Button>
                                   </span>
 
                                   <span className="text-slate-700">
@@ -1349,14 +1369,15 @@ export default function TransactionsReportCandies({
                                     Paquetes
                                   </span>
                                   <span className="font-medium">
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="underline text-blue-600"
+                                      variant="ghost"
+                                      className="inline-flex min-h-0 h-auto p-0 px-0.5 rounded shadow-none bg-transparent hover:bg-transparent underline text-blue-600 font-normal"
                                       onClick={() => openItemsModal(s.id)}
                                       title="Ver detalle"
                                     >
                                       {s.quantity}
-                                    </button>
+                                    </Button>
                                   </span>
                                 </div>
 
@@ -1389,9 +1410,9 @@ export default function TransactionsReportCandies({
 
                                 {canDelete && (
                                   <div className="pt-2 flex justify-end md:hidden">
-                                    <button
-                                      type="button"
-                                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                                    <ActionMenuTrigger
+                                      className="!h-8 !w-8"
+                                      iconClassName="h-5 w-5 text-gray-700"
                                       aria-label="Acciones"
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -1402,9 +1423,7 @@ export default function TransactionsReportCandies({
                                           ).getBoundingClientRect(),
                                         });
                                       }}
-                                    >
-                                      <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                                    </button>
+                                    />
                                   </div>
                                 )}
                               </div>
@@ -1419,9 +1438,10 @@ export default function TransactionsReportCandies({
             </div>
 
             <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-              <button
+              <Button
                 type="button"
-                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+                variant="ghost"
+                className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold rounded-none rounded-t-xl h-auto min-h-0"
                 onClick={() => setCreditCardOpen((prev) => !prev)}
                 aria-expanded={creditCardOpen}
               >
@@ -1431,7 +1451,7 @@ export default function TransactionsReportCandies({
                 >
                   ▼
                 </span>
-              </button>
+              </Button>
               {creditCardOpen && (
                 <div className="p-3 border-t space-y-3">
                   {creditPaged.length === 0 ? (
@@ -1470,9 +1490,10 @@ export default function TransactionsReportCandies({
 
                                   <span className="text-slate-700">
                                     <b>Paquetes:</b>{" "}
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="underline text-blue-600"
+                                      variant="ghost"
+                                      className="inline-flex min-h-0 h-auto p-0 px-0.5 rounded shadow-none bg-transparent hover:bg-transparent underline text-blue-600 font-normal"
                                       onClick={(e) => {
                                         e.preventDefault();
                                         openItemsModal(s.id);
@@ -1480,7 +1501,7 @@ export default function TransactionsReportCandies({
                                       title="Ver detalle"
                                     >
                                       {s.quantity}
-                                    </button>
+                                    </Button>
                                   </span>
 
                                   <span className="text-slate-700">
@@ -1522,14 +1543,15 @@ export default function TransactionsReportCandies({
                                     Paquetes
                                   </span>
                                   <span className="font-medium">
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="underline text-blue-600"
+                                      variant="ghost"
+                                      className="inline-flex min-h-0 h-auto p-0 px-0.5 rounded shadow-none bg-transparent hover:bg-transparent underline text-blue-600 font-normal"
                                       onClick={() => openItemsModal(s.id)}
                                       title="Ver detalle"
                                     >
                                       {s.quantity}
-                                    </button>
+                                    </Button>
                                   </span>
                                 </div>
 
@@ -1562,9 +1584,9 @@ export default function TransactionsReportCandies({
 
                                 {canDelete && (
                                   <div className="pt-2 flex justify-end md:hidden">
-                                    <button
-                                      type="button"
-                                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                                    <ActionMenuTrigger
+                                      className="!h-8 !w-8"
+                                      iconClassName="h-5 w-5 text-gray-700"
                                       aria-label="Acciones"
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -1575,9 +1597,7 @@ export default function TransactionsReportCandies({
                                           ).getBoundingClientRect(),
                                         });
                                       }}
-                                    >
-                                      <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                                    </button>
+                                    />
                                   </div>
                                 )}
                               </div>
@@ -1602,13 +1622,15 @@ export default function TransactionsReportCandies({
         anchorRect={saleActionMenu?.rect ?? null}
         isOpen={!!saleActionMenu}
         onClose={() => setSaleActionMenu(null)}
-        width={200}
+        width={220}
       >
         {saleActionMenu && (
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClassDestructive}
               onClick={() => {
                 const s = filteredSales.find(
                   (x) => x.id === saleActionMenu.saleId,
@@ -1618,7 +1640,7 @@ export default function TransactionsReportCandies({
               }}
             >
               Eliminar venta
-            </button>
+            </Button>
           </div>
         )}
       </ActionMenu>
@@ -1636,7 +1658,7 @@ export default function TransactionsReportCandies({
               <th className="p-3 border-b text-right">Comision</th>
               <th className="p-3 border-b text-left">Vendedor</th>
               {canDelete && (
-                <th className="p-3 border-b text-right">Acciones</th>
+                <th className="p-3 border-b text-center">Acciones</th>
               )}
             </tr>
           </thead>
@@ -1669,14 +1691,15 @@ export default function TransactionsReportCandies({
                       {s.type === "CREDITO" ? "Crédito" : "Cash"}
                     </td>
                     <td className="p-3 border-b text-right">
-                      <button
+                      <Button
                         type="button"
-                        className="underline text-blue-600 hover:text-blue-800"
+                        variant="ghost"
+                        className="inline-flex min-h-0 h-auto p-0 px-0.5 rounded shadow-none bg-transparent hover:bg-transparent underline text-blue-600 hover:text-blue-800 font-normal"
                         title="Ver detalle de productos de esta venta"
                         onClick={() => openItemsModal(s.id)}
                       >
                         {s.quantity}
-                      </button>
+                      </Button>
                     </td>
                     <td className="p-3 border-b text-right">
                       {money(s.total)}
@@ -1689,28 +1712,20 @@ export default function TransactionsReportCandies({
                     </td>
 
                     {canDelete && (
-                      <td className="p-3 border-b relative text-right">
-                        <button
-                          className="px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 hover:bg-slate-50"
-                          onClick={() =>
-                            setOpenMenuId((prev) =>
-                              prev === s.id ? null : s.id,
-                            )
-                          }
+                      <td className="p-3 border-b text-center align-middle">
+                        <ActionMenuTrigger
+                          className="!h-8 !w-8"
+                          iconClassName="h-5 w-5 text-gray-700"
+                          aria-label="Acciones"
                           title="Acciones"
-                        >
-                          ⋮
-                        </button>
-                        {openMenuId === s.id && (
-                          <div className="absolute right-2 mt-1 w-32 bg-white border border-slate-200 rounded-md shadow z-10 text-left">
-                            <button
-                              className="block w-full text-left px-3 py-2 hover:bg-slate-50 text-red-600 text-xs font-semibold"
-                              onClick={() => confirmDelete(s)}
-                            >
-                              Eliminar
-                            </button>
-                          </div>
-                        )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSaleActionMenu({
+                              saleId: s.id,
+                              rect: e.currentTarget.getBoundingClientRect(),
+                            });
+                          }}
+                        />
                       </td>
                     )}
                   </tr>

@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "../../firebase";
+import Button from "../common/Button";
 
 type Branch = "RIVAS" | "SAN_JORGE" | "ISLA";
 
@@ -654,23 +655,25 @@ export default function ConsolidadoVendedoresDulces() {
           />
         </div>
         <div className="flex items-end">
-          <button
+          <Button
             type="button"
+            variant="primary"
             onClick={loadData}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full"
+            className="w-full !rounded-xl"
             disabled={loading}
           >
             {loading ? "Cargando..." : "Aplicar filtros"}
-          </button>
+          </Button>
         </div>
         <div className="flex items-end">
-          <button
+          <Button
             type="button"
+            variant="primary"
             onClick={handleExportCSV}
-            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 w-full"
+            className="w-full !rounded-xl !bg-emerald-600 hover:!bg-emerald-700"
           >
             Exportar CSV
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -718,40 +721,48 @@ export default function ConsolidadoVendedoresDulces() {
                 <td className="border p-1">{v.vendorName}</td>
                 <td className="border p-1">{v.branchLabel}</td>
                 <td className="border p-1">
-                  <button
+                  <Button
                     type="button"
-                    className="text-blue-600 underline"
+                    variant="ghost"
+                    size="sm"
+                    className="!inline-flex !min-h-0 !px-1 !py-0 !rounded-lg !text-blue-600 !font-semibold underline"
                     onClick={() => openDrilldown(v.vendorId, "ordered")}
                   >
                     {v.orderedPackages}
-                  </button>
+                  </Button>
                 </td>
                 <td className="border p-1">
-                  <button
+                  <Button
                     type="button"
-                    className="text-blue-600 underline"
+                    variant="ghost"
+                    size="sm"
+                    className="!inline-flex !min-h-0 !px-1 !py-0 !rounded-lg !text-blue-600 !font-semibold underline"
                     onClick={() => openDrilldown(v.vendorId, "remaining")}
                   >
                     {v.remainingPackages}
-                  </button>
+                  </Button>
                 </td>
                 <td className="border p-1">
-                  <button
+                  <Button
                     type="button"
-                    className="text-blue-600 underline"
+                    variant="ghost"
+                    size="sm"
+                    className="!inline-flex !min-h-0 !px-1 !py-0 !rounded-lg !text-blue-600 !font-semibold underline"
                     onClick={() => openDrilldown(v.vendorId, "sold")}
                   >
                     {v.soldPackages}
-                  </button>
+                  </Button>
                 </td>
                 <td className="border p-1">
-                  <button
+                  <Button
                     type="button"
-                    className="text-blue-600 underline"
+                    variant="ghost"
+                    size="sm"
+                    className="!inline-flex !min-h-0 !px-1 !py-0 !rounded-lg !text-blue-600 !font-semibold underline"
                     onClick={() => openDrilldown(v.vendorId, "credit")}
                   >
                     {v.creditPackages}
-                  </button>
+                  </Button>
                 </td>
                 <td className="border p-1">{money(v.totalSoldMoney)}</td>
                 <td className="border p-1">{money(v.commissionCash)}</td>
@@ -829,12 +840,15 @@ export default function ConsolidadoVendedoresDulces() {
                   {selectedVendor?.vendorName} — {selectedVendor?.branchLabel}
                 </p>
               </div>
-              <button
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
                 onClick={closeModal}
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm"
+                className="!rounded-xl"
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <div className="flex-1 overflow-auto p-4">

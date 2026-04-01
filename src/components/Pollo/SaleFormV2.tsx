@@ -19,6 +19,7 @@ import { hasRole } from "../../utils/roles";
 import allocateFIFOAndUpdateBatches from "../../Services/allocateFIFO";
 import { roundQty, addQty, gteQty } from "../../Services/decimal";
 import RefreshButton from "../../components/common/RefreshButton";
+import Button from "../../components/common/Button";
 import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
 import Toast from "../../components/common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
@@ -775,6 +776,7 @@ export default function SaleForm({
         const line = Number(unitApplied || 0) * Number(qty || 0);
         const discount = Math.max(0, Number(it.discount || 0));
         const net = Math.max(0, line - discount);
+        const lineGross = round2(net - Number(cogsAmount ?? 0));
 
         enriched.push({
           productId: it.productId,
@@ -794,6 +796,9 @@ export default function SaleForm({
           lineTotal: round2(line),
           lineFinal: round2(net),
 
+          /** Venta − costo (FIFO) por línea; mismo criterio que cierre de ventas. */
+          grossProfit: lineGross,
+
           allocations,
           avgUnitCost,
           cogsAmount,
@@ -802,6 +807,9 @@ export default function SaleForm({
 
       // 2) Totales
       const itemsTotal = enriched.reduce((a, x) => a + x.lineFinal, 0);
+      const grossProfitTotal = round2(
+        enriched.reduce((a, x) => a + Number(x.grossProfit ?? 0), 0),
+      );
       const qtyTotal = enriched.reduce((a, x) => a + Number(x.qty || 0), 0);
 
       const received =
@@ -830,6 +838,7 @@ export default function SaleForm({
 
         items: enriched,
         itemsTotal: itemsTotal,
+        grossProfitTotal,
 
         // ✅ crédito/contado
         type: clientType,
@@ -1009,17 +1018,23 @@ export default function SaleForm({
     [],
   );
 
+  const inpBase =
+    "w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 transition-colors";
+
   if (isMobile) {
     return (
       <div className="w-full max-w-lg mx-auto p-3 overflow-x-hidden min-w-0">
-        <div className="bg-white rounded-2xl shadow p-3 space-y-3 min-w-0 max-w-full">
-          <div className="flex items-center justify-between">
-            <h2 className="font-bold text-lg text-blue-700">
-              Registrar venta (Pollo)
-            </h2>
+        <div className="bg-white rounded-xl border border-slate-200/90 shadow-sm p-4 space-y-4 min-w-0 max-w-full">
+          <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <h2 className="font-semibold text-lg text-slate-900 tracking-tight">
+                Registrar venta
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">Pollo — venta en mostrador</p>
+            </div>
             <input
               type="date"
-              className="text-sm text-gray-700 border rounded px-2 py-1"
+              className={`${inpBase} w-auto shrink-0 max-w-[11rem] text-slate-700`}
               value={saleDate}
               onChange={(e) => setSaleDate(e.target.value)}
               max={todayStr}
@@ -1031,46 +1046,53 @@ export default function SaleForm({
             value={clientType}
             onChange={(v) => handleClientTypeChange(v as ClientType)}
             options={clientTypeOptions}
-            selectClassName="w-full border rounded px-2 py-2"
-            buttonClassName="w-full border rounded px-2 py-2 text-left flex items-center justify-between gap-2 bg-white"
+            selectClassName={`${inpBase} py-2`}
+            buttonClassName="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
             sheetTitle="Tipo de cliente"
           />
 
           {clientType === "CONTADO" ? (
-            <div className="space-y-2">
-              <label className="text-sm font-semibold">Cliente (Contado)</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Cliente (Contado)
+              </label>
               <input
-                className="w-full border rounded px-2 py-2"
+                className={inpBase}
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
                 placeholder="Ej: Cliente Mostrador"
               />
             </div>
           ) : (
-            <div className="space-y-2 w-full min-w-0">
-              <label className="text-sm font-semibold">Cliente (Crédito)</label>
-              <div className="flex gap-1 items-center min-w-0">
+            <div className="space-y-3 w-full min-w-0 rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Cliente (Crédito)
+              </label>
+              <div className="flex gap-2 items-center min-w-0">
                 <input
                   type="search"
                   enterKeyHint="search"
-                  className="flex-1 min-w-0 border rounded px-2 py-2 box-border"
+                  className={`${inpBase} flex-1 min-w-0 box-border`}
                   placeholder="Buscar cliente por nombre..."
                   value={customerQuery}
                   onChange={(e) => setCustomerQuery(e.target.value)}
                 />
                 {customerQuery ? (
-                  <button
+                  <Button
                     type="button"
-                    className="shrink-0 px-2 py-2 text-xs border rounded text-slate-600 bg-white active:bg-slate-50"
+                    variant="outline"
+                    size="sm"
+                    className="!rounded-xl shrink-0 !text-xs"
                     onClick={() => setCustomerQuery("")}
                   >
                     Limpiar
-                  </button>
+                  </Button>
                 ) : null}
               </div>
-              <button
+              <Button
                 type="button"
-                className="w-full min-w-0 border rounded px-3 py-2.5 text-sm flex items-center justify-between gap-2 text-left bg-white active:bg-slate-50"
+                variant="outline"
+                className="w-full min-w-0 !rounded-xl !px-3 !py-2.5 text-sm flex items-center justify-between gap-2 text-left !font-normal transition-colors"
                 onClick={() => setMobileSheet("customer")}
               >
                 <span className="truncate min-w-0 text-gray-700">
@@ -1080,39 +1102,45 @@ export default function SaleForm({
                     : "Elegir cliente (lista)"}
                 </span>
                 <span className="text-slate-400 shrink-0 text-xs">▼</span>
-              </button>
+              </Button>
 
               <div className="grid grid-cols-2 gap-2">
                 <div
-                  className={`p-2 rounded border ${
+                  className={`p-3 rounded-lg border ${
                     clientType === "CREDITO"
-                      ? "bg-blue-50 border-blue-200"
-                      : "bg-gray-50"
+                      ? "bg-white border-slate-200 shadow-sm"
+                      : "bg-slate-100/80 border-slate-200"
                   }`}
                 >
-                  <div className="text-xs text-gray-600">Saldo actual</div>
-                  <div className="text-base font-semibold">
+                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
+                    Saldo actual
+                  </div>
+                  <div className="text-base font-semibold tabular-nums text-slate-900 mt-0.5">
                     {money(currentBalance)}
                   </div>
                 </div>
                 <div
-                  className={`p-2 rounded border ${
+                  className={`p-3 rounded-lg border ${
                     clientType === "CREDITO"
-                      ? "bg-blue-50 border-blue-200"
-                      : "bg-gray-50"
+                      ? "bg-white border-slate-200 shadow-sm"
+                      : "bg-slate-100/80 border-slate-200"
                   }`}
                 >
-                  <div className="text-xs text-gray-600">Saldo proyectado</div>
-                  <div className="text-base font-semibold">
+                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
+                    Saldo proyectado
+                  </div>
+                  <div className="text-base font-semibold tabular-nums text-slate-900 mt-0.5">
                     {money(projectedBalance)}
                   </div>
                 </div>
               </div>
 
               <div>
-                <label className="text-sm font-semibold">Pago inicial</label>
+                <label className="text-xs font-semibold text-slate-600">
+                  Pago inicial
+                </label>
                 <input
-                  className="w-full border rounded px-2 py-2"
+                  className={`${inpBase} mt-1`}
                   type="number"
                   step="0.01"
                   inputMode="decimal"
@@ -1125,44 +1153,49 @@ export default function SaleForm({
                   }}
                   placeholder="0.00"
                 />
-                <div className="text-xs text-gray-500 mt-1">
+                <div className="text-[11px] text-slate-500 mt-1">
                   Máximo: {money(maxDownPayment)}
                 </div>
               </div>
             </div>
           )}
 
-          <div className="space-y-2 w-full min-w-0">
-            <label className="text-sm font-semibold">Producto</label>
-            <div className="flex gap-1 items-center min-w-0 mb-2">
+          <div className="space-y-2 w-full min-w-0 rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Producto
+            </label>
+            <div className="flex gap-2 items-center min-w-0 mb-2">
               <input
                 type="search"
                 enterKeyHint="search"
-                className="flex-1 min-w-0 border rounded px-2 py-2 box-border"
+                className={`${inpBase} flex-1 min-w-0 box-border`}
                 placeholder="Buscar producto por nombre..."
                 value={productQuery}
                 onChange={(e) => setProductQuery(e.target.value)}
               />
               {productQuery ? (
-                <button
+                <Button
                   type="button"
-                  className="shrink-0 px-2 py-2 text-xs border rounded text-slate-600 bg-white active:bg-slate-50"
+                  variant="outline"
+                  size="sm"
+                  className="!rounded-xl shrink-0 !text-xs"
                   onClick={() => setProductQuery("")}
                 >
                   Limpiar
-                </button>
+                </Button>
               ) : null}
             </div>
-            <button
+            <Button
               type="button"
-              className="w-full min-w-0 border rounded px-3 py-2.5 text-sm flex items-center justify-between gap-2 text-left bg-white active:bg-slate-50"
+              variant="outline"
+              className="w-full min-w-0 border-dashed !border-slate-300 !rounded-xl !px-3 !py-2.5 text-sm flex items-center justify-between gap-2 text-left !font-normal bg-slate-50/80 hover:!bg-slate-100/80 active:!bg-slate-100 transition-colors"
               onClick={() => setMobileSheet("product")}
             >
               <span className="truncate min-w-0 text-gray-700">
                 Elegir producto (lista)
               </span>
               <span className="text-slate-400 shrink-0 text-xs">▼</span>
-            </button>
+            </Button>
           </div>
 
           {mobileSheet &&
@@ -1177,31 +1210,34 @@ export default function SaleForm({
                     : "Lista de clientes"
                 }
               >
-                <button
+                <Button
                   type="button"
-                  className="absolute inset-0 bg-black/45 border-0 cursor-default"
+                  variant="ghost"
+                  className="absolute inset-0 bg-black/45 !rounded-none border-0 cursor-default !h-full !min-h-0 !p-0 hover:!bg-black/45"
                   aria-label="Cerrar"
                   onClick={() => setMobileSheet(null)}
                 />
                 <div
-                  className="relative z-10 bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full max-h-[min(78vh,520px)] flex flex-col mx-auto md:max-w-md md:my-auto"
+                  className="relative z-10 bg-white rounded-t-2xl md:rounded-xl border border-slate-200/90 shadow-2xl w-full max-h-[min(78vh,520px)] flex flex-col mx-auto md:max-w-md md:my-auto"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 shrink-0">
-                    <span className="font-semibold text-slate-800">
+                  <div className="flex items-center justify-between gap-2 px-4 py-3.5 border-b border-slate-100 bg-slate-50/80 shrink-0 rounded-t-2xl md:rounded-t-xl">
+                    <span className="font-semibold text-slate-900 text-sm">
                       {mobileSheet === "product"
                         ? "Productos con stock"
                         : "Clientes"}
                     </span>
-                    <button
+                    <Button
                       type="button"
-                      className="text-sm text-blue-600 font-medium px-2 py-1"
+                      variant="ghost"
+                      size="sm"
+                      className="!rounded-xl !text-blue-600 hover:!text-blue-800 hover:!bg-blue-50 !font-medium"
                       onClick={() => setMobileSheet(null)}
                     >
                       Cerrar
-                    </button>
+                    </Button>
                   </div>
-                  <div className="overflow-y-auto overscroll-contain px-2 pb-4 flex-1 min-h-0">
+                  <div className="overflow-y-auto overscroll-contain px-1 pb-4 flex-1 min-h-0">
                     {mobileSheet === "product" ? (
                       filteredProductsForPicker.length === 0 ? (
                         <div className="text-center text-gray-500 text-sm py-8 px-4">
@@ -1213,11 +1249,12 @@ export default function SaleForm({
                           const price = latestPriceById[p.id] ?? p.price;
                           const stock = stockById[p.id] || 0;
                           return (
-                            <button
+                            <Button
                               key={p.id}
                               type="button"
+                              variant="ghost"
                               disabled={disabled}
-                              className="w-full text-left px-3 py-3 border-b border-slate-100 last:border-b-0 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                              className="w-full !justify-start text-left !px-3 !py-3.5 border-b border-slate-100 last:border-b-0 !rounded-xl mx-1 active:!bg-blue-50/80 disabled:opacity-40 !font-normal"
                               onClick={async () => {
                                 if (disabled) return;
                                 await addProductById(p.id);
@@ -1231,7 +1268,7 @@ export default function SaleForm({
                                 Precio: C$ {price} · Existencia: {qty3(stock)} Lbs/Un
                                 {disabled ? " · Ya en carrito" : ""}
                               </div>
-                            </button>
+                            </Button>
                           );
                         })
                       )
@@ -1243,11 +1280,12 @@ export default function SaleForm({
                       filteredCustomersForPicker.map((c) => {
                         const blocked = c.status === "BLOQUEADO";
                         return (
-                          <button
+                          <Button
                             key={c.id}
                             type="button"
+                            variant="ghost"
                             disabled={blocked}
-                            className="w-full text-left px-3 py-3 border-b border-slate-100 last:border-b-0 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="w-full !justify-start text-left !px-3 !py-3.5 border-b border-slate-100 last:border-b-0 !rounded-xl mx-1 active:!bg-blue-50/80 disabled:opacity-40 !font-normal"
                             onClick={() => {
                               if (blocked) return;
                               setCustomerId(c.id);
@@ -1261,7 +1299,7 @@ export default function SaleForm({
                               Saldo: {money(c.balance || 0)}
                               {blocked ? " · Bloqueado" : ""}
                             </div>
-                          </button>
+                          </Button>
                         );
                       })
                     )}
@@ -1272,9 +1310,13 @@ export default function SaleForm({
             )}
 
           <div className="space-y-2">
-            <div className="text-sm font-semibold">Items</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Carrito
+            </div>
             {items.length === 0 ? (
-              <div className="text-gray-500">Agrega productos al carrito.</div>
+              <div className="text-sm text-slate-500 border border-dashed border-slate-200 rounded-lg py-6 px-3 text-center bg-slate-50/50">
+                Agrega productos al carrito.
+              </div>
             ) : (
               <div className="space-y-2">
                 {items.map((it) => {
@@ -1286,16 +1328,21 @@ export default function SaleForm({
                   );
                   const isUnit = (it.measurement || "").toLowerCase() !== "lb";
                   return (
-                    <div key={it.productId} className="border rounded p-2">
-                      <div className="flex justify-between items-center">
-                        <div className="font-semibold">{it.productName}</div>
-                        <div className="text-sm">
+                    <div
+                      key={it.productId}
+                      className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                    >
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="font-medium text-slate-900 text-sm leading-snug min-w-0">
+                          {it.productName}
+                        </div>
+                        <div className="text-xs font-medium text-slate-500 tabular-nums shrink-0">
                           C$ {round2(unitApplied).toFixed(2)}
                         </div>
                       </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 items-center">
                         <input
-                          className="border rounded px-2 py-1 text-right"
+                          className={`${inpBase} py-2 text-right text-sm`}
                           inputMode={isUnit ? "numeric" : "decimal"}
                           step={isUnit ? 1 : 0.01}
                           value={it.qtyInput ?? (it.qty === 0 ? "" : it.qty)}
@@ -1307,7 +1354,7 @@ export default function SaleForm({
                           title={isUnit ? "Unidades" : "Libras"}
                         />
                         <input
-                          className="border rounded px-1 py-1 text-right"
+                          className={`${inpBase} py-2 text-right text-sm px-2`}
                           inputMode="numeric"
                           value={
                             it.discountInput ??
@@ -1316,11 +1363,11 @@ export default function SaleForm({
                           onChange={(e) =>
                             setItemDiscount(it.productId, e.target.value)
                           }
-                          placeholder="Descuento"
+                          placeholder="Desc."
                           title="Descuento (C$)"
                         />
                         <input
-                          className="border rounded px-2 py-1 text-right"
+                          className={`${inpBase} py-2 text-right text-sm`}
                           inputMode="decimal"
                           value={
                             it.specialPriceInput ??
@@ -1333,25 +1380,29 @@ export default function SaleForm({
                           title="Precio sugerido (opcional)"
                         />
                       </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <div className="text-sm text-gray-600">
-                          Exist:{" "}
-                          {roundQty(
-                            Number(it.stock) - Number(it.qty || 0),
-                          ).toFixed(3)}
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <div className="text-xs text-slate-500">
+                          Exist. restante:{" "}
+                          <span className="tabular-nums font-medium text-slate-700">
+                            {roundQty(
+                              Number(it.stock) - Number(it.qty || 0),
+                            ).toFixed(3)}
+                          </span>
                         </div>
-                        <div className="font-semibold">
+                        <div className="font-semibold tabular-nums text-slate-900">
                           C$ {round2(net).toFixed(2)}
                         </div>
                       </div>
-                      <div className="mt-2 text-right">
-                        <button
+                      <div className="mt-2 flex justify-end">
+                        <Button
                           type="button"
-                          className="px-2 py-1 rounded bg-red-100 text-red-600"
+                          variant="outline"
+                          size="sm"
+                          className="!rounded-xl !text-xs !font-medium !text-red-700 !border-red-100 !bg-red-50 hover:!bg-red-100/80"
                           onClick={() => removeItem(it.productId)}
                         >
                           Quitar
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   );
@@ -1360,39 +1411,63 @@ export default function SaleForm({
             )}
           </div>
 
-          <div className="space-y-2">
-            <div className="text-sm font-semibold">Monto total</div>
-            <div className="text-xl font-bold">
+          <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Monto total
+            </div>
+            <div className="text-2xl font-semibold tabular-nums text-slate-900 tracking-tight mt-1">
               C$ {amountCharged.toFixed(2)}
             </div>
           </div>
 
           {clientType === "CONTADO" && (
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                className="border rounded px-2 py-2"
-                inputMode="decimal"
-                value={amountReceived === 0 ? "" : amountReceived}
-                onChange={(e) => setAmountReceived(Number(e.target.value || 0))}
-                placeholder="Monto recibido"
-              />
-              <div className="border rounded px-2 py-2 bg-gray-100">
-                Cambio: C$ {amountChange}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-slate-500">
+                  Monto recibido
+                </label>
+                <input
+                  className={inpBase}
+                  inputMode="decimal"
+                  value={amountReceived === 0 ? "" : amountReceived}
+                  onChange={(e) =>
+                    setAmountReceived(Number(e.target.value || 0))
+                  }
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-slate-500">
+                  Cambio
+                </label>
+                <div
+                  className={`${inpBase} bg-slate-100 text-slate-800 font-medium tabular-nums`}
+                >
+                  C$ {amountChange}
+                </div>
               </div>
             </div>
           )}
 
-          <button
+          <Button
+            type="button"
+            variant="primary"
             onClick={handleSubmit as any}
             disabled={items.length === 0 || saving || missingContadoClient}
-            className="w-full bg-blue-600 text-white px-4 py-2 rounded"
+            className="w-full !py-3.5 !rounded-xl text-sm shadow-md shadow-blue-600/20 hover:!shadow-lg active:scale-[0.99] disabled:active:scale-100"
           >
             {saving ? "Guardando..." : "Guardar venta"}
-          </button>
+          </Button>
 
           {missingContadoClient && (
-            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-              ⚠️ Debe ingresar un cliente contado para registrar venta.
+            <div
+              role="alert"
+              className="text-sm text-amber-900 bg-amber-50 border border-amber-200/80 rounded-lg p-3 flex gap-2 items-start"
+            >
+              <span className="shrink-0" aria-hidden>
+                ⚠️
+              </span>
+              <span>Debe ingresar un cliente contado para registrar venta.</span>
             </div>
           )}
 
@@ -1408,117 +1483,122 @@ export default function SaleForm({
     <div className="relative">
       <form
         onSubmit={handleSubmit}
-        className="w-full mx-auto bg-white rounded-2xl shadow-2xl
-                 p-4 sm:p-6 md:p-8
-                 max-w-5xl space-y-4"
+        className="w-full mx-auto max-w-5xl space-y-6 bg-white rounded-xl border border-slate-200/90 shadow-sm p-4 sm:p-6 md:p-8"
       >
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl sm:text-2xl font-bold text-blue-700 whitespace-nowrap">
-            Registrar venta (Pollo)
-          </h2>
-          <div className="ml-3">
+        <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-slate-100">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 tracking-tight">
+              Registrar venta
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Pollo — precio por libra o unidad según producto
+            </p>
+          </div>
+          <div className="shrink-0">
             <RefreshButton onClick={handleRefresh} loading={isRefreshing} />
           </div>
         </div>
 
         {/* Selector de producto */}
-        <div className="space-y-1">
-          <label className="block text-sm font-semibold text-gray-700">
-            Producto | Precio por Libra/Unidad
+        <section className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 space-y-3">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Agregar al carrito
           </label>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-stretch">
             <div className="flex-1 min-w-0">
               <MobileHtmlSelect
                 value={selectedProductId}
                 onChange={setSelectedProductId}
                 options={productHtmlSelectOptions}
                 sheetTitle="Producto"
-                selectClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-400"
-                buttonClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl text-left flex items-center justify-between gap-2 bg-white"
+                selectClassName={`${inpBase} py-2.5`}
+                buttonClassName="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
               />
             </div>
-            <button
+            <Button
               type="button"
+              variant="primary"
               onClick={addSelectedProduct}
               disabled={!selectedProductId || chosenIds.has(selectedProductId)}
-              className="px-3 py-2 rounded-2xl shadow-2xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              className="shrink-0 !px-5 !py-2.5 !rounded-xl text-sm shadow-md shadow-blue-600/15"
             >
               Agregar
-            </button>
+            </Button>
           </div>
-        </div>
+        </section>
 
         {/* Fecha / Cliente */}
-        {/* Fecha / Cliente */}
-        <div className="grid md:grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <label className="block text-sm font-semibold text-gray-700">
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
               Fecha de la venta
             </label>
             <input
               type="date"
-              className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-400"
+              className={inpBase}
               value={saleDate}
               onChange={(e) => setSaleDate(e.target.value)}
               max={todayStr}
             />
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <MobileHtmlSelect
               label="Tipo de cliente"
               value={clientType}
               onChange={(v) => handleClientTypeChange(v as ClientType)}
               options={clientTypeOptions}
-              selectClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
-              buttonClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl text-left flex items-center justify-between gap-2 bg-white"
+              selectClassName={`${inpBase} py-2.5`}
+              buttonClassName="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
               sheetTitle="Tipo de cliente"
             />
           </div>
 
           {clientType === "CONTADO" ? (
-            <div className="md:col-span-2 space-y-1">
-              <label className="block text-sm font-semibold text-gray-700">
+            <div className="md:col-span-2 space-y-1.5">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Cliente (Contado)
               </label>
               <input
-                className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+                className={inpBase}
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
                 placeholder="Ej: Cliente Mostrador"
               />
             </div>
           ) : (
-            <div className="md:col-span-2 space-y-2">
+            <div className="md:col-span-2 space-y-4 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
               <MobileHtmlSelect
                 label="Cliente (Crédito)"
                 value={customerId}
                 onChange={setCustomerId}
                 options={creditCustomerSelectOptions}
-                selectClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
-                buttonClassName="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl text-left flex items-center justify-between gap-2 bg-white"
+                selectClassName={`${inpBase} py-2.5`}
+                buttonClassName="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
                 sheetTitle="Cliente (crédito)"
               />
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div
-                  className={`p-2 rounded border ${
+                  className={`p-3 rounded-lg border ${
                     clientType === "CREDITO"
-                      ? "bg-blue-50 border-blue-200"
-                      : "bg-gray-50"
+                      ? "bg-white border-slate-200 shadow-sm"
+                      : "bg-slate-100/80 border-slate-200"
                   }`}
                 >
-                  <div className="text-xs text-gray-600">Saldo actual</div>
-                  <div className="text-lg font-semibold">
+                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
+                    Saldo actual
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-slate-900 mt-0.5">
                     {money(currentBalance)}
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700">
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-slate-600">
                     Pago inicial
                   </label>
-                  <div className="text-xs text-gray-500 mt-1">
+                  <div className="text-[11px] text-slate-500">
                     Máximo: {money(maxDownPayment)}
                   </div>
                   <input
@@ -1526,7 +1606,7 @@ export default function SaleForm({
                     step="0.01"
                     inputMode="decimal"
                     max={maxDownPayment}
-                    className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
+                    className={inpBase}
                     value={downPayment === 0 ? "" : downPayment}
                     onChange={(e) => {
                       const v = Math.max(0, Number(e.target.value || 0));
@@ -1538,14 +1618,16 @@ export default function SaleForm({
                 </div>
 
                 <div
-                  className={`p-2 rounded border ${
+                  className={`p-3 rounded-lg border ${
                     clientType === "CREDITO"
-                      ? "bg-blue-50 border-blue-200"
-                      : "bg-gray-50"
+                      ? "bg-white border-slate-200 shadow-sm"
+                      : "bg-slate-100/80 border-slate-200"
                   }`}
                 >
-                  <div className="text-xs text-gray-600">Saldo proyectado</div>
-                  <div className="text-lg font-semibold">
+                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
+                    Saldo proyectado
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-slate-900 mt-0.5">
                     {money(projectedBalance)}
                   </div>
                 </div>
@@ -1555,23 +1637,40 @@ export default function SaleForm({
         </div>
 
         {/* Lista de ítems */}
-        <div className="rounded border overflow-x-auto shadow-2xl">
-          <table className="min-w-full text-sm r">
-            <thead className="bg-gray-100">
-              <tr className="text-center">
-                <th className="p-2 border whitespace-nowrap">Producto</th>
-                <th className="p-2 border whitespace-nowrap">Precio</th>
+        <section className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Líneas del carrito
+          </h3>
+          <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white shadow-sm">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-100/90 text-slate-700">
+              <tr className="text-center text-xs uppercase tracking-wide">
+                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
+                  Producto
+                </th>
+                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
+                  Precio
+                </th>
 
-                {/* ✅ NUEVO */}
-                <th className="p-2 border whitespace-nowrap">
+                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
                   Precio especial
                 </th>
 
-                <th className="p-2 border whitespace-nowrap">Existencias</th>
-                <th className="p-2 border whitespace-nowrap">Cantidad</th>
-                <th className="p-2 border whitespace-nowrap">Descuento</th>
-                <th className="p-2 border whitespace-nowrap">Monto</th>
-                <th className="p-2 border">—</th>
+                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
+                  Existencias
+                </th>
+                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
+                  Cantidad
+                </th>
+                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
+                  Descuento
+                </th>
+                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
+                  Monto
+                </th>
+                <th className="p-2.5 border-b border-slate-200 w-12 font-semibold">
+                  —
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1595,23 +1694,26 @@ export default function SaleForm({
                   );
 
                   return (
-                    <tr key={it.productId} className="text-center">
-                      <td className="p-2 border whitespace-nowrap">
+                    <tr
+                      key={it.productId}
+                      className="text-center border-b border-slate-100 last:border-0 hover:bg-slate-50/60 transition-colors"
+                    >
+                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap text-left text-slate-800">
                         {it.productName} — {it.measurement}
                       </td>
 
                       {/* Precio normal */}
-                      <td className="p-2 border whitespace-nowrap">
+                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap tabular-nums text-slate-700">
                         C$ {round2(it.price).toFixed(2)}
                       </td>
 
                       {/* ✅ NUEVO: Precio especial */}
-                      <td className="p-2 border">
+                      <td className="p-2 border-r border-slate-100">
                         <input
                           type="number"
                           step="0.01"
                           inputMode="decimal"
-                          className="w-28 border p-1 rounded text-right"
+                          className="w-28 max-w-full border border-slate-200 rounded-md px-2 py-1.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
                           value={it.specialPrice === 0 ? "" : it.specialPrice}
                           onKeyDown={numberKeyGuard}
                           onChange={(e) =>
@@ -1621,21 +1723,21 @@ export default function SaleForm({
                           title="Precio especial (si se deja vacío, se usa el precio normal)"
                         />
                         {/* opcional: mini hint del aplicado */}
-                        <div className="text-[11px] text-gray-500 mt-1">
+                        <div className="text-[11px] text-slate-500 mt-1">
                           Aplicado: C$ {round2(unitApplied).toFixed(2)}
                         </div>
                       </td>
 
-                      <td className="p-2 border whitespace-nowrap">
+                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap tabular-nums text-slate-700">
                         {shownExist.toFixed(3)}
                       </td>
 
-                      <td className="p-2 border">
+                      <td className="p-2 border-r border-slate-100">
                         <input
                           type="number"
                           step={isUnit ? 1 : 0.01}
                           inputMode={isUnit ? "numeric" : "decimal"}
-                          className="w-28 border p-1 rounded text-right"
+                          className="w-28 max-w-full border border-slate-200 rounded-md px-2 py-1.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
                           value={it.qtyInput ?? (it.qty === 0 ? "" : it.qty)}
                           onKeyDown={numberKeyGuard}
                           onChange={(e) =>
@@ -1646,12 +1748,12 @@ export default function SaleForm({
                         />
                       </td>
 
-                      <td className="p-2 border">
+                      <td className="p-2 border-r border-slate-100">
                         <input
                           type="number"
                           step={1}
                           min={0}
-                          className="w-24 border p-1 rounded text-right"
+                          className="w-24 max-w-full border border-slate-200 rounded-md px-2 py-1.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
                           value={it.discount === 0 ? "" : it.discount}
                           onChange={(e) =>
                             setItemDiscount(it.productId, e.target.value)
@@ -1662,19 +1764,22 @@ export default function SaleForm({
                         />
                       </td>
 
-                      <td className="p-2 border whitespace-nowrap">
+                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap font-medium tabular-nums text-slate-900">
                         C$ {round2(net).toFixed(2)}
                       </td>
 
-                      <td className="p-2 border">
-                        <button
+                      <td className="p-2">
+                        <Button
                           type="button"
-                          className="px-2 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
+                          variant="outline"
+                          size="sm"
+                          className="!h-8 !w-8 !min-h-0 !rounded-lg !p-0 !text-red-700 !border-red-100 !bg-red-50 hover:!bg-red-100"
                           onClick={() => removeItem(it.productId)}
                           title="Quitar"
+                          aria-label="Quitar"
                         >
                           ✕
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   );
@@ -1683,15 +1788,16 @@ export default function SaleForm({
             </tbody>
           </table>
         </div>
+        </section>
 
         {/* Total de la venta (readOnly) */}
-        <div className="space-y-1 ">
-          <label className="block text-sm font-semibold text-gray-700 ">
-            💵 Monto total
+        <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm space-y-1">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Monto total
           </label>
           <input
             type="text"
-            className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl bg-gray-100"
+            className="w-full border-0 bg-transparent p-0 text-2xl font-semibold tabular-nums text-slate-900 focus:ring-0 cursor-default"
             value={`C$ ${amountCharged.toFixed(2)}`}
             readOnly
             title="Suma de (precio aplicado × cantidad − descuento) de cada producto."
@@ -1700,51 +1806,55 @@ export default function SaleForm({
 
         {/* Pago recibido / Cambio */}
         {clientType === "CONTADO" && (
-          <>
-            {/* Pago recibido / Cambio */}
-            <div className="grid grid-cols-2 gap-x-3">
-              <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
-                  Monto recibido
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  inputMode="decimal"
-                  className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl"
-                  value={amountReceived === 0 ? "" : amountReceived}
-                  onChange={(e) =>
-                    setAmountReceived(Number(e.target.value || 0))
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
-                  Cambio
-                </label>
-                <input
-                  type="text"
-                  className="w-full border border-gray-300 p-2 rounded-2xl shadow-2xl bg-gray-100"
-                  value={`C$ ${amountChange}`}
-                  readOnly
-                />
-              </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Monto recibido
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                className={inpBase}
+                value={amountReceived === 0 ? "" : amountReceived}
+                onChange={(e) =>
+                  setAmountReceived(Number(e.target.value || 0))
+                }
+              />
             </div>
-          </>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Cambio
+              </label>
+              <input
+                type="text"
+                className={`${inpBase} bg-slate-100 font-medium tabular-nums cursor-default`}
+                value={`C$ ${amountChange}`}
+                readOnly
+              />
+            </div>
+          </div>
         )}
 
         {/* Guardar */}
-        <button
+        <Button
           type="submit"
-          className="w-full bg-blue-600 text-white px-4 py-3 sm:py-2 rounded-2xl shadow-2xl font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50"
+          variant="primary"
+          className="w-full !py-3.5 !rounded-xl text-sm shadow-md shadow-blue-600/20 hover:!shadow-lg active:scale-[0.99] disabled:active:scale-100"
           disabled={items.length === 0 || saving || missingContadoClient}
         >
           {saving ? "Guardando..." : "Guardar venta"}
-        </button>
+        </Button>
 
         {missingContadoClient && (
-          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-            ⚠️ Debe ingresar un cliente contado para registrar venta.
+          <p
+            role="alert"
+            className="text-sm text-amber-900 bg-amber-50 border border-amber-200/80 rounded-lg p-3 flex gap-2 items-start"
+          >
+            <span className="shrink-0" aria-hidden>
+              ⚠️
+            </span>
+            <span>Debe ingresar un cliente contado para registrar venta.</span>
           </p>
         )}
 
@@ -1755,9 +1865,9 @@ export default function SaleForm({
 
       {/* Overlay de guardado */}
       {saving && (
-        <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center">
-          <div className="bg-white rounded-lg shadow-xl border px-6 py-5">
-            <div className="flex items-center gap-3">
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[1px] z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 px-8 py-6 max-w-sm w-full">
+            <div className="flex items-center gap-4">
               <svg
                 className="animate-spin h-5 w-5"
                 viewBox="0 0 24 24"

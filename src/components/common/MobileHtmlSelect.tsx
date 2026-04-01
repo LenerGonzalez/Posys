@@ -1,12 +1,12 @@
-import React, { useId, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+import { FiChevronDown, FiMenu } from "react-icons/fi";
 import BottomSheet from "./BottomSheet";
+import SelectOptionList, {
+  type SelectListOption,
+  selectDropdownPanelClassName,
+} from "./SelectOptionList";
 
-export type MobileHtmlSelectOption = {
-  value: string;
-  label: string;
-  /** Deshabilita la opción en nativo y en el bottom sheet. */
-  disabled?: boolean;
-};
+export type MobileHtmlSelectOption = SelectListOption;
 
 type Props = {
   /** Si se omite, no se muestra etiqueta (útil en celdas de tabla). */
@@ -20,10 +20,19 @@ type Props = {
   id?: string;
   /** Título del bottom sheet en móvil (por defecto el label en string) */
   sheetTitle?: string;
+  /**
+   * Icono del disparador: chevron (por defecto) o menú/lista (FiMenu, usado en Pollo).
+   */
+  triggerIcon?: "chevron" | "menu";
 };
 
+/** Mismo lenguaje que filtros/tablas junto a ActionMenu (borde gris, sin “pill pro”). */
+const desktopTriggerBase =
+  "group w-full flex items-center justify-between gap-2 text-left rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 transition-colors hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 focus-visible:border-gray-300 disabled:cursor-not-allowed disabled:opacity-60";
+
 /**
- * Select nativo en md+; en móvil botón + BottomSheet con la misma lista de opciones.
+ * Escritorio (md+): listbox con panel tipo ActionMenu.
+ * Móvil: botón + BottomSheet.
  */
 export default function MobileHtmlSelect({
   label,
@@ -31,13 +40,16 @@ export default function MobileHtmlSelect({
   onChange,
   options,
   disabled,
-  selectClassName = "w-full border rounded-xl px-3 py-2 text-sm",
+  selectClassName = "w-full",
   buttonClassName =
-    "w-full border rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white",
+    "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white text-gray-900",
   id,
   sheetTitle,
+  triggerIcon = "chevron",
 }: Props) {
-  const [open, setOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [desktopOpen, setDesktopOpen] = useState(false);
+  const desktopRef = useRef<HTMLDivElement>(null);
   const autoId = useId();
   const lid = id ?? autoId;
 
@@ -50,13 +62,38 @@ export default function MobileHtmlSelect({
     sheetTitle ??
     (typeof label === "string" && label ? label : "Seleccionar");
 
+  useEffect(() => {
+    if (!desktopOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDesktopOpen(false);
+    };
+    const onDoc = (e: MouseEvent) => {
+      if (
+        desktopRef.current &&
+        !desktopRef.current.contains(e.target as Node)
+      ) {
+        setDesktopOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDoc);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDoc);
+    };
+  }, [desktopOpen]);
+
+  useEffect(() => {
+    if (disabled) setDesktopOpen(false);
+  }, [disabled]);
+
   return (
     <div className="w-full">
       {label ? (
         typeof label === "string" ? (
           <label
             htmlFor={lid}
-            className="block text-xs font-semibold text-slate-700 mb-1"
+            className="block text-xs font-semibold text-gray-700 mb-1"
           >
             {label}
           </label>
@@ -64,64 +101,83 @@ export default function MobileHtmlSelect({
           <div className="mb-1">{label}</div>
         )
       ) : null}
-      <select
-        id={lid}
-        className={`hidden md:block ${selectClassName} ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
+
+      {/* Escritorio: listbox personalizado */}
+      <div
+        ref={desktopRef}
+        className={`relative hidden md:block ${disabled ? "opacity-60" : ""}`}
       >
-        {options.map((o) => (
-          <option
-            key={o.value === "" ? "__empty" : String(o.value)}
-            value={o.value}
-            disabled={o.disabled}
-          >
-            {o.label}
-          </option>
-        ))}
-      </select>
+        <button
+          type="button"
+          id={lid}
+          disabled={disabled}
+          aria-expanded={desktopOpen}
+          aria-haspopup="listbox"
+          className={`${desktopTriggerBase} ${selectClassName} ${disabled ? "" : "cursor-pointer"} ${desktopOpen ? "ring-2 ring-blue-500/25 border-gray-300" : ""}`}
+          onClick={() => {
+            if (!disabled) setDesktopOpen((o) => !o);
+          }}
+        >
+          <span className="truncate min-w-0 text-gray-900">{currentLabel}</span>
+          {triggerIcon === "menu" ? (
+            <FiMenu
+              className={`h-4 w-4 shrink-0 text-gray-500 transition-transform duration-200 ${desktopOpen ? "scale-95 opacity-90" : ""}`}
+              aria-hidden
+            />
+          ) : (
+            <FiChevronDown
+              className={`h-4 w-4 shrink-0 text-gray-400 transition-transform duration-200 ${desktopOpen ? "rotate-180" : ""}`}
+              aria-hidden
+            />
+          )}
+        </button>
+        {desktopOpen && !disabled && (
+          <SelectOptionList
+            variant="dropdown"
+            options={options}
+            value={value}
+            ariaLabelledBy={lid}
+            className={selectDropdownPanelClassName}
+            onSelect={(v) => {
+              onChange(v);
+              setDesktopOpen(false);
+            }}
+          />
+        )}
+      </div>
+
+      {/* Móvil: botón + BottomSheet */}
       <button
         type="button"
         disabled={disabled}
         className={`md:hidden ${buttonClassName} ${disabled ? "opacity-60" : ""}`}
         onClick={() => {
-          if (!disabled) setOpen(true);
+          if (!disabled) setSheetOpen(true);
         }}
         aria-haspopup="listbox"
       >
         <span className="truncate min-w-0 flex-1 text-left">{currentLabel}</span>
-        <span className="text-slate-400 shrink-0" aria-hidden>
-          ▼
-        </span>
+        {triggerIcon === "menu" ? (
+          <FiMenu className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />
+        ) : (
+          <FiChevronDown className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+        )}
       </button>
       <BottomSheet
-        open={open}
-        onClose={() => setOpen(false)}
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
         title={title}
         closeText="Cerrar"
       >
-        <div className="px-1 pt-1">
-          {options.map((o) => (
-            <button
-              key={o.value === "" ? "__empty" : String(o.value)}
-              type="button"
-              disabled={o.disabled}
-              className={`w-full text-left px-4 py-3.5 text-sm border-b border-slate-100 last:border-b-0 ${
-                o.disabled
-                  ? "opacity-40 cursor-not-allowed text-slate-400"
-                  : "hover:bg-slate-50"
-              } ${o.value === value ? "bg-slate-100 font-semibold" : ""}`}
-              onClick={() => {
-                if (o.disabled) return;
-                onChange(o.value);
-                setOpen(false);
-              }}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
+        <SelectOptionList
+          variant="sheet"
+          options={options}
+          value={value}
+          onSelect={(v) => {
+            onChange(v);
+            setSheetOpen(false);
+          }}
+        />
       </BottomSheet>
     </div>
   );

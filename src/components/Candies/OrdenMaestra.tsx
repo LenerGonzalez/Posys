@@ -18,11 +18,11 @@ import {
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import RefreshButton from "../common/RefreshButton";
+import Button from "../common/Button";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
-import ActionMenu from "../common/ActionMenu";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import useManualRefresh from "../../hooks/useManualRefresh";
-import { FiMoreVertical } from "react-icons/fi";
 import { backfillCandyInventoryFromMainOrder } from "../../Services/inventory_candies";
 
 // Small helpers used in this file
@@ -2277,8 +2277,11 @@ export default function CandyMainOrders() {
             loading={loading || catalogLoading}
           />
 
-          <button
-            className="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            className="!rounded-md shadow-none"
             onClick={() => {
               resetOrderForm();
               setOpenOrderModal(true);
@@ -2287,7 +2290,7 @@ export default function CandyMainOrders() {
             title="Nueva orden"
           >
             +
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -2334,11 +2337,11 @@ export default function CandyMainOrders() {
                     : "Nueva Orden Maestra"}
                 </h3>
 
-                <button
-                  type="button"
-                  className="shrink-0 p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                <ActionMenuTrigger
+                  className="shrink-0 !h-10 !w-10"
                   aria-label="Acciones de la orden"
                   title="Actualizar precios, inventario, cerrar"
+                  iconClassName="h-[22px] w-[22px] text-gray-700"
                   onClick={(e) =>
                     setMasterModalHeaderMenu({
                       rect: (
@@ -2346,9 +2349,7 @@ export default function CandyMainOrders() {
                       ).getBoundingClientRect(),
                     })
                   }
-                >
-                  <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                </button>
+                />
               </div>
 
               {/* Config rápida (logística + % utilidades) */}
@@ -2371,53 +2372,61 @@ export default function CandyMainOrders() {
               {/* Tabs (solo móvil) */}
               <div className="md:hidden mt-3">
                 <div className="grid grid-cols-4 gap-2">
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() => setMobileTab("DATOS")}
-                    className={`px-2 py-2 rounded text-xs font-semibold border ${
+                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
                       mobileTab === "DATOS"
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-gray-700 border-gray-200"
+                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
+                        : "!bg-white !text-gray-700 !border-gray-200"
                     }`}
                   >
                     Datos
-                  </button>
+                  </Button>
 
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() => setMobileTab("AGREGAR")}
-                    className={`px-2 py-2 rounded text-xs font-semibold border ${
+                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
                       mobileTab === "AGREGAR"
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-gray-700 border-gray-200"
+                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
+                        : "!bg-white !text-gray-700 !border-gray-200"
                     }`}
                   >
                     Agregar
-                  </button>
+                  </Button>
 
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() => setMobileTab("ITEMS")}
-                    className={`px-2 py-2 rounded text-xs font-semibold border ${
+                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
                       mobileTab === "ITEMS"
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-gray-700 border-gray-200"
+                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
+                        : "!bg-white !text-gray-700 !border-gray-200"
                     }`}
                   >
                     Items ({orderItems.length})
-                  </button>
+                  </Button>
 
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() => setMobileTab("TOTALES")}
-                    className={`px-2 py-2 rounded text-xs font-semibold border ${
+                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
                       mobileTab === "TOTALES"
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-gray-700 border-gray-200"
+                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
+                        : "!bg-white !text-gray-700 !border-gray-200"
                     }`}
                   >
                     Totales
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -2591,25 +2600,27 @@ export default function CandyMainOrders() {
                   </div>
 
                   <div className="flex flex-col md:flex-row md:items-center md:justify-end gap-2 mt-3">
-                    <button
+                    <Button
                       type="button"
+                      variant="primary"
+                      size="sm"
                       onClick={() => void addItemToOrder()}
                       disabled={addingItemToOrder}
-                      className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+                      className="!rounded-md shadow-none disabled:opacity-60"
                     >
                       {addingItemToOrder ? "Cargando…" : "Agregar producto"}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
 
               {/* Plantilla / import / export — menú ⋮ (móvil y web) */}
               <div className="flex items-center justify-end">
-                <button
-                  type="button"
-                  className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                <ActionMenuTrigger
+                  className="!h-10 !w-10"
                   aria-label="Plantilla, importar y exportar Excel"
                   title="Descargar plantilla, importar o exportar"
+                  iconClassName="h-[22px] w-[22px] text-gray-700"
                   onClick={(e) =>
                     setMasterModalExcelMenu({
                       rect: (
@@ -2617,9 +2628,7 @@ export default function CandyMainOrders() {
                       ).getBoundingClientRect(),
                     })
                   }
-                >
-                  <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                </button>
+                />
               </div>
 
               {/* ===== ITEMS ===== */}
@@ -2659,16 +2668,18 @@ export default function CandyMainOrders() {
                       />
                       */}
 
-                      <button
+                      <Button
                         type="button"
-                        className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                        variant="primary"
+                        size="sm"
+                        className="!rounded-md !bg-emerald-600 hover:!bg-emerald-700 active:!bg-emerald-800 shadow-none disabled:opacity-60"
                         disabled={refreshingSalePrices || !orderItems.length}
                         onClick={() =>
                           void refreshSalePricesFromCurrentPrices(true)
                         }
                       >
                         Aplicar
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
@@ -2737,14 +2748,15 @@ export default function CandyMainOrders() {
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
                                     <span>{it.packages}</span>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      variant="ghost"
+                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                       onClick={() => openPackagesEdit(it.id)}
                                       aria-label="Editar paquetes"
                                     >
                                       ✏️
-                                    </button>
+                                    </Button>
                                   </div>
                                 )}
                               </td>
@@ -2783,14 +2795,15 @@ export default function CandyMainOrders() {
                                         it.remainingPackages ?? it.packages,
                                       )}
                                     </span>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      variant="ghost"
+                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                       onClick={() => openRemainingEdit(it.id)}
                                       aria-label="Editar paquetes restantes"
                                     >
                                       ✏️
-                                    </button>
+                                    </Button>
                                   </div>
                                 )}
                               </td>
@@ -2823,14 +2836,15 @@ export default function CandyMainOrders() {
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
                                     <span>{it.unitsPerPackage}</span>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      variant="ghost"
+                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                       onClick={() => openUnitsEdit(it.id)}
                                       aria-label="Editar unidades por paquete"
                                     >
                                       ✏️
-                                    </button>
+                                    </Button>
                                   </div>
                                 )}
                               </td>
@@ -2865,16 +2879,17 @@ export default function CandyMainOrders() {
                                     <span>
                                       {Number(it.providerPrice || 0).toFixed(2)}
                                     </span>
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="text-xs text-gray-600 hover:text-gray-900"
+                                      variant="ghost"
+                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                       onClick={() =>
                                         openProviderPriceEdit(it.id)
                                       }
                                       aria-label="Editar precio proveedor"
                                     >
                                       ✏️
-                                    </button>
+                                    </Button>
                                   </div>
                                 )}
                               </td>
@@ -2920,9 +2935,9 @@ export default function CandyMainOrders() {
                               </td>
 
                               <td className="p-2 text-center">
-                                <button
-                                  type="button"
-                                  className="p-2 rounded border border-gray-200 hover:bg-gray-50 inline-flex"
+                                <ActionMenuTrigger
+                                  className="!h-8 !w-8"
+                                  iconClassName="h-5 w-5 text-gray-700"
                                   aria-label="Acciones"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -2933,9 +2948,7 @@ export default function CandyMainOrders() {
                                       ).getBoundingClientRect(),
                                     });
                                   }}
-                                >
-                                  <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                                </button>
+                                />
                               </td>
                             </tr>
                           ))}
@@ -2969,29 +2982,33 @@ export default function CandyMainOrders() {
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <button
+                        <Button
                           type="button"
+                          variant="outline"
+                          size="sm"
                           disabled={itemPage <= 1}
                           onClick={() => setItemPage((p) => Math.max(1, p - 1))}
-                          className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+                          className="!rounded-md shadow-none disabled:opacity-50 text-sm"
                         >
                           Anterior
-                        </button>
+                        </Button>
 
                         <div className="px-3 py-1 border rounded text-sm">
                           {itemPage} / {totalItemPages}
                         </div>
 
-                        <button
+                        <Button
                           type="button"
+                          variant="outline"
+                          size="sm"
                           disabled={itemPage >= totalItemPages}
                           onClick={() =>
                             setItemPage((p) => Math.min(totalItemPages, p + 1))
                           }
-                          className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+                          className="!rounded-md shadow-none disabled:opacity-50 text-sm"
                         >
                           Siguiente
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -3018,9 +3035,9 @@ export default function CandyMainOrders() {
                               </div>
                             </div>
 
-                            <button
-                              type="button"
-                              className="p-2 rounded border border-gray-200 hover:bg-gray-50"
+                            <ActionMenuTrigger
+                              className="!h-8 !w-8 shrink-0"
+                              iconClassName="h-5 w-5 text-gray-700"
                               aria-label="Acciones"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -3031,9 +3048,7 @@ export default function CandyMainOrders() {
                                   ).getBoundingClientRect(),
                                 });
                               }}
-                            >
-                              <FiMoreVertical className="w-5 h-5 text-gray-700" />
-                            </button>
+                            />
                           </div>
 
                           <div className="grid grid-cols-2 gap-2 mt-3">
@@ -3071,14 +3086,15 @@ export default function CandyMainOrders() {
                                   <span className="font-semibold">
                                     {it.packages}
                                   </span>
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    variant="ghost"
+                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                     onClick={() => openPackagesEdit(it.id)}
                                     aria-label="Editar paquetes"
                                   >
                                     ✏️
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
@@ -3120,14 +3136,15 @@ export default function CandyMainOrders() {
                                       it.remainingPackages ?? it.packages,
                                     )}
                                   </span>
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    variant="ghost"
+                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                     onClick={() => openRemainingEdit(it.id)}
                                     aria-label="Editar paquetes restantes"
                                   >
                                     ✏️
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
@@ -3166,14 +3183,15 @@ export default function CandyMainOrders() {
                                   <span className="font-semibold">
                                     {it.unitsPerPackage}
                                   </span>
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    variant="ghost"
+                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                     onClick={() => openUnitsEdit(it.id)}
                                     aria-label="Editar unidades por paquete"
                                   >
                                     ✏️
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
@@ -3317,14 +3335,15 @@ export default function CandyMainOrders() {
                                   <span className="font-semibold">
                                     {Number(it.providerPrice || 0).toFixed(2)}
                                   </span>
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="text-xs text-gray-600 hover:text-gray-900"
+                                    variant="ghost"
+                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                     onClick={() => openProviderPriceEdit(it.id)}
                                     aria-label="Editar precio proveedor"
                                   >
                                     ✏️
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
@@ -3403,10 +3422,10 @@ export default function CandyMainOrders() {
                       <span className="text-xs text-gray-600">
                         Plantilla, importar o exportar: menú ⋮ arriba o aquí
                       </span>
-                      <button
-                        type="button"
-                        className="shrink-0 p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                      <ActionMenuTrigger
+                        className="shrink-0 !h-10 !w-10"
                         aria-label="Excel: plantilla, importar, exportar"
+                        iconClassName="h-[22px] w-[22px] text-gray-700"
                         onClick={(e) =>
                           setMasterModalExcelMenu({
                             rect: (
@@ -3414,9 +3433,7 @@ export default function CandyMainOrders() {
                             ).getBoundingClientRect(),
                           })
                         }
-                      >
-                        <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                      </button>
+                      />
                     </div>
                   </div>
                 </div>
@@ -3425,10 +3442,10 @@ export default function CandyMainOrders() {
               {/* ===== Botonera sticky ===== */}
               <div className="sticky bottom-0 bg-white pt-3 mt-4 border-t">
                 <div className="flex justify-end">
-                  <button
-                    type="button"
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                  <ActionMenuTrigger
+                    className="!h-10 !w-10"
                     aria-label="Limpiar, cerrar o guardar orden"
+                    iconClassName="h-[22px] w-[22px] text-gray-700"
                     onClick={(e) =>
                       setMasterModalFooterMenu({
                         rect: (
@@ -3436,16 +3453,16 @@ export default function CandyMainOrders() {
                         ).getBoundingClientRect(),
                       })
                     }
-                  >
-                    <FiMoreVertical className="w-5 h-5 text-gray-800" />
-                  </button>
+                  />
                 </div>
 
                 {/* Atajo móvil */}
                 <div className="md:hidden mt-2">
-                  <button
+                  <Button
                     type="button"
-                    className="w-full px-3 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+                    variant="secondary"
+                    size="sm"
+                    className="w-full !rounded-md shadow-none"
                     onClick={() => {
                       if (mobileTab === "DATOS" && !editingOrderId)
                         setMobileTab("AGREGAR");
@@ -3456,7 +3473,7 @@ export default function CandyMainOrders() {
                     }}
                   >
                     Siguiente
-                  </button>
+                  </Button>
                 </div>
               </div>
             </form>
@@ -3469,9 +3486,10 @@ export default function CandyMainOrders() {
             >
               {masterModalHeaderMenu && (
                 <div className="py-1">
-                  <button
+                  <Button
                     type="button"
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                    variant="ghost"
+                    className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
                       savingOrder ||
                       refreshingSalePrices ||
                       !orderItems.length
@@ -3491,11 +3509,12 @@ export default function CandyMainOrders() {
                     {refreshingSalePrices
                       ? "Actualizando…"
                       : "Actualizar precios"}
-                  </button>
+                  </Button>
                   {editingOrderId ? (
-                    <button
+                    <Button
                       type="button"
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                      variant="ghost"
+                      className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
                         savingOrder || backfillingInventory
                           ? "text-gray-400 cursor-not-allowed"
                           : ""
@@ -3509,11 +3528,12 @@ export default function CandyMainOrders() {
                       {backfillingInventory
                         ? "Creando inventario..."
                         : "Crear inventario faltante"}
-                    </button>
+                    </Button>
                   ) : null}
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    variant="ghost"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                     disabled={savingOrder}
                     onClick={() => {
                       setMasterModalHeaderMenu(null);
@@ -3522,7 +3542,7 @@ export default function CandyMainOrders() {
                     }}
                   >
                     Cerrar
-                  </button>
+                  </Button>
                 </div>
               )}
             </ActionMenu>
@@ -3535,19 +3555,21 @@ export default function CandyMainOrders() {
             >
               {masterModalExcelMenu && (
                 <div className="py-1">
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    variant="ghost"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                     onClick={() => {
                       setMasterModalExcelMenu(null);
                       handleDownloadTemplate();
                     }}
                   >
                     Descargar plantilla
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                    variant="ghost"
+                    className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
                       importing ? "text-gray-400 cursor-not-allowed" : ""
                     }`}
                     disabled={importing}
@@ -3557,17 +3579,18 @@ export default function CandyMainOrders() {
                     }}
                   >
                     {importing ? "Importando..." : "Importar Excel"}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    variant="ghost"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                     onClick={() => {
                       setMasterModalExcelMenu(null);
                       handleExportOrderToExcel();
                     }}
                   >
                     Exportar Excel
-                  </button>
+                  </Button>
                 </div>
               )}
             </ActionMenu>
@@ -3580,19 +3603,21 @@ export default function CandyMainOrders() {
             >
               {masterModalFooterMenu && (
                 <div className="py-1">
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    variant="ghost"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                     onClick={() => {
                       setMasterModalFooterMenu(null);
                       resetOrderForm();
                     }}
                   >
                     Limpiar orden
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    variant="ghost"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                     onClick={() => {
                       setMasterModalFooterMenu(null);
                       resetOrderForm();
@@ -3600,13 +3625,14 @@ export default function CandyMainOrders() {
                     }}
                   >
                     Cerrar
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                    variant="ghost"
+                    className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
                       savingOrder || orderItems.length === 0
-                        ? "text-gray-400 cursor-not-allowed"
-                        : "font-semibold text-blue-700"
+                        ? "text-gray-400 cursor-not-allowed font-normal"
+                        : "font-semibold !text-blue-700"
                     }`}
                     disabled={savingOrder || orderItems.length === 0}
                     onClick={() => {
@@ -3615,7 +3641,7 @@ export default function CandyMainOrders() {
                     }}
                   >
                     {savingOrder ? "Guardando..." : "Guardar orden"}
-                  </button>
+                  </Button>
                 </div>
               )}
             </ActionMenu>
@@ -3661,10 +3687,10 @@ export default function CandyMainOrders() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+                    <ActionMenuTrigger
+                      className="shrink-0 !h-8 !w-8"
                       aria-label="Acciones de la orden"
+                      iconClassName="h-5 w-5 text-gray-700"
                       onClick={(e) => {
                         e.stopPropagation();
                         setOrderListMenu({
@@ -3674,9 +3700,7 @@ export default function CandyMainOrders() {
                           ).getBoundingClientRect(),
                         });
                       }}
-                    >
-                      <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                    </button>
+                    />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
@@ -3742,9 +3766,10 @@ export default function CandyMainOrders() {
         >
           {mainOrdersListToolbarMenu && (
             <div className="py-1">
-              <button
+              <Button
                 type="button"
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 ${
+                variant="ghost"
+                className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
                   isBackfillingMain ? "text-gray-400 cursor-not-allowed" : ""
                 }`}
                 disabled={isBackfillingMain}
@@ -3756,7 +3781,7 @@ export default function CandyMainOrders() {
                 {isBackfillingMain
                   ? "Actualizando prorrateo..."
                   : "Actualizar prorrateo"}
-              </button>
+              </Button>
             </div>
           )}
         </ActionMenu>
@@ -3779,26 +3804,28 @@ export default function CandyMainOrders() {
               }
               return (
                 <div className="py-1">
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    variant="ghost"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
                     onClick={() => {
                       setOrderListMenu(null);
                       openOrderForEdit(o);
                     }}
                   >
                     Ver / Editar orden
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700"
+                    variant="ghost"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
                     onClick={() => {
                       setOrderListMenu(null);
                       void handleDeleteOrder(o);
                     }}
                   >
                     Eliminar orden
-                  </button>
+                  </Button>
                 </div>
               );
             })()}
@@ -3812,9 +3839,10 @@ export default function CandyMainOrders() {
         >
           {modalItemMenu && (
             <div className="py-1">
-              <button
+              <Button
                 type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                variant="ghost"
+                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
                 onClick={() => {
                   const id = modalItemMenu.id;
                   setModalItemMenu(null);
@@ -3822,7 +3850,7 @@ export default function CandyMainOrders() {
                 }}
               >
                 Quitar de la orden
-              </button>
+              </Button>
             </div>
           )}
         </ActionMenu>
@@ -3834,11 +3862,11 @@ export default function CandyMainOrders() {
               Total pedidos: <b>{orders.length}</b>
             </div>
 
-            <button
-              type="button"
-              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 shrink-0"
+            <ActionMenuTrigger
+              className="shrink-0 !h-10 !w-10"
               aria-label="Acciones del listado"
               title="Actualizar prorrateo de órdenes maestras"
+              iconClassName="h-[22px] w-[22px] text-gray-700"
               onClick={(e) =>
                 setMainOrdersListToolbarMenu({
                   rect: (
@@ -3846,9 +3874,7 @@ export default function CandyMainOrders() {
                   ).getBoundingClientRect(),
                 })
               }
-            >
-              <FiMoreVertical className="w-5 h-5 text-slate-700" />
-            </button>
+            />
           </div>
 
           <div className="overflow-x-auto">
@@ -3865,7 +3891,7 @@ export default function CandyMainOrders() {
                   <th className="text-right p-2 border-b">Esperado Isla</th>
                   <th className="text-right p-2 border-b">Gastos log.</th>
                   <th className="text-right p-2 border-b">U. Bruta (est)</th>
-                  <th className="text-left p-2 border-b">Acciones</th>
+                  <th className="text-center p-2 border-b">Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -3926,11 +3952,11 @@ export default function CandyMainOrders() {
                         <td className="p-2 border-b text-right">
                           {grossEst.toFixed(2)}
                         </td>
-                        <td className="p-2 border-b">
-                          <button
-                            type="button"
-                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 mx-auto flex"
+                        <td className="p-2 border-b text-center align-middle">
+                          <ActionMenuTrigger
+                            className="!h-8 !w-8"
                             aria-label="Acciones de la orden"
+                            iconClassName="h-5 w-5 text-gray-700"
                             onClick={(e) =>
                               setOrderListMenu({
                                 id: o.id,
@@ -3939,9 +3965,7 @@ export default function CandyMainOrders() {
                                 ).getBoundingClientRect(),
                               })
                             }
-                          >
-                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                          </button>
+                          />
                         </td>
                       </tr>
                     );
@@ -3958,27 +3982,31 @@ export default function CandyMainOrders() {
             </div>
 
             <div className="flex items-center gap-2">
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+                className="!rounded-md shadow-none disabled:opacity-50 text-sm"
               >
                 Anterior
-              </button>
+              </Button>
 
               <div className="px-3 py-1 border rounded text-sm">
                 {page} / {totalPages}
               </div>
 
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 disabled={page >= totalPages}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="px-2 py-1 rounded border disabled:opacity-50 text-sm"
+                className="!rounded-md shadow-none disabled:opacity-50 text-sm"
               >
                 Siguiente
-              </button>
+              </Button>
             </div>
           </div>
         </div>

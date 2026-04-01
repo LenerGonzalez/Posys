@@ -17,10 +17,10 @@ import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
+import Button from "../common/Button";
 import useManualRefresh from "../../hooks/useManualRefresh";
-import ActionMenu from "../common/ActionMenu";
-import BottomSheet from "../common/BottomSheet";
-import { FiMenu } from "react-icons/fi";
+import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
 
 type RecordType = "CUENTA_NUEVA" | "ABONO";
 
@@ -245,17 +245,6 @@ export default function SaldosPendientesExternos({
   const [editingClientRubro, setEditingClientRubro] = useState<RubroType | null>(
     null,
   );
-
-  /** Bottom sheets móvil para listas */
-  const [mobileListSheet, setMobileListSheet] = useState<
-    | null
-    | "rubroFilter"
-    | "summaryClient"
-    | "detailType"
-    | "recordClient"
-    | "recordTipo"
-    | "clientRubro"
-  >(null);
 
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -568,6 +557,68 @@ export default function SaldosPendientesExternos({
       setClientFilter("ALL");
     }
   }, [rubroFilter, clientFilter, clients]);
+
+  const rubroFilterSelectOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todos los rubros" },
+      ...RUBRO_ORDER.map((rt) => ({
+        value: rt,
+        label: RUBRO_LABEL[rt],
+      })),
+    ],
+    [],
+  );
+
+  const summaryClientSelectOptions = useMemo(() => {
+    return [
+      { value: "ALL", label: "Todos los clientes" },
+      ...clients
+        .filter(
+          (c) => rubroFilter === "ALL" || c.rubroType === rubroFilter,
+        )
+        .map((c) => ({
+          value: c.id,
+          label: `${c.name} (${RUBRO_LABEL[c.rubroType]})`,
+        })),
+    ];
+  }, [clients, rubroFilter]);
+
+  const detailTypeSelectOptions = useMemo(
+    () => [
+      { value: "ALL", label: "Todos los tipos" },
+      { value: "CUENTA_NUEVA", label: "Cuenta nueva" },
+      { value: "ABONO", label: "Abono" },
+    ],
+    [],
+  );
+
+  const clientRubroModalOptions = useMemo(
+    () =>
+      RUBRO_ORDER.map((rt) => ({
+        value: rt,
+        label: RUBRO_LABEL[rt],
+      })),
+    [],
+  );
+
+  const recordClientSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Seleccionar…" },
+      ...clients.map((c) => ({
+        value: c.id,
+        label: `${c.name} (${RUBRO_LABEL[c.rubroType]})`,
+      })),
+    ],
+    [clients],
+  );
+
+  const recordTipoSelectOptions = useMemo(
+    () => [
+      { value: "CUENTA_NUEVA", label: "Venta nueva" },
+      { value: "ABONO", label: "Abono" },
+    ],
+    [],
+  );
 
   const generalKpis = useMemo(() => {
     const totalClientes = filteredSummaries.length;
@@ -1099,9 +1150,6 @@ export default function SaldosPendientesExternos({
     const handleMouseDown = (ev: MouseEvent) => {
       const target = ev.target as HTMLElement;
       if (target?.closest?.("[data-action-menu-root]")) return;
-      /** BottomSheet va en portal (body); si no ignoramos, cerraría modales al tocar el overlay */
-      if (mobileListSheet) return;
-
       if (
         clientModalOpen &&
         clientModalRef.current &&
@@ -1137,7 +1185,6 @@ export default function SaldosPendientesExternos({
 
     const handleKeyDown = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
-        setMobileListSheet(null);
         setClientModalOpen(false);
         setRecordModalOpen(false);
         resetRecordForm();
@@ -1160,7 +1207,6 @@ export default function SaldosPendientesExternos({
     recordModalOpen,
     detailModalOpen,
     actionOpenId,
-    mobileListSheet,
   ]);
 
   return (
@@ -1179,17 +1225,13 @@ export default function SaldosPendientesExternos({
 
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
-          <button
-            type="button"
+          <ActionMenuTrigger
             aria-label="Menú de acciones"
             title="Menú de acciones"
-            className="inline-flex items-center justify-center px-3 py-2 border rounded bg-white hover:bg-gray-50"
             onClick={(e) =>
               setMainToolsMenuRect(e.currentTarget.getBoundingClientRect())
             }
-          >
-            <FiMenu className="w-5 h-5 text-slate-800" />
-          </button>
+          />
         </div>
       </div>
 
@@ -1201,26 +1243,28 @@ export default function SaldosPendientesExternos({
           width={260}
         >
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("CUENTA_NUEVA");
               }}
             >
               Nueva venta
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("ABONO");
               }}
             >
               Abono
-            </button>
+            </Button>
           </div>
         </ActionMenu>
       ) : (
@@ -1231,51 +1275,56 @@ export default function SaldosPendientesExternos({
           width={260}
         >
           <div className="py-1">
-            <button
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateClientModal();
               }}
             >
               Crear cliente
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("CUENTA_NUEVA");
               }}
             >
               Nueva venta
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("ABONO");
               }}
             >
               Abono
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+              variant="ghost"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 exportToExcel();
               }}
             >
               Excel
-            </button>
+            </Button>
             <div className="border-t border-gray-100 my-1" />
-            <button
+            <Button
               type="button"
+              variant="ghost"
               disabled={migrationBusy || loading}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => {
                 setMainToolsMenuRect(null);
                 void migrateLegacyClientRubroFields();
@@ -1284,7 +1333,7 @@ export default function SaldosPendientesExternos({
               {migrationBusy
                 ? "Actualizando Firestore…"
                 : "Completar rubroType (clientes viejos)"}
-            </button>
+            </Button>
           </div>
         </ActionMenu>
       )}
@@ -1323,9 +1372,10 @@ export default function SaldosPendientesExternos({
                 } as ExternalClient);
               return (
                 <>
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    variant="ghost"
+                    className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
                     onClick={() => {
                       setDetailClientKey(r.clientKey);
                       setDetailModalOpen(true);
@@ -1333,39 +1383,42 @@ export default function SaldosPendientesExternos({
                     }}
                   >
                     Ver
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    variant="ghost"
+                    className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
                     onClick={() => {
                       setSummaryRowMenu(null);
                       openMovementModal(r.clientKey);
                     }}
                   >
                     Movimiento
-                  </button>
+                  </Button>
                   {!readonly && (
                     <>
-                      <button
+                      <Button
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                        variant="ghost"
+                        className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
                         onClick={() => {
                           setSummaryRowMenu(null);
                           openEditClientModal(ext);
                         }}
                       >
                         Editar cliente
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm text-red-700 hover:bg-red-50"
+                        variant="ghost"
+                        className="w-full !rounded-none justify-start px-3 py-2 text-sm font-semibold !text-red-700 hover:!bg-red-50"
                         onClick={() => {
                           setSummaryRowMenu(null);
                           void deleteClientSafe(r.clientKey);
                         }}
                       >
                         Eliminar
-                      </button>
+                      </Button>
                     </>
                   )}
                 </>
@@ -1418,14 +1471,16 @@ export default function SaldosPendientesExternos({
         <div className="border rounded-2xl overflow-hidden">
           <div className="flex items-center justify-between p-3 bg-gray-50">
             <h3 className="font-semibold">Filtros</h3>
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={() => setFiltersCollapsed((s: boolean) => !s)}
-              className="px-2 py-1 rounded bg-white border text-sm hover:bg-gray-100"
+              className="!rounded-md shadow-none"
               aria-expanded={!filtersCollapsed}
             >
               {filtersCollapsed ? "Mostrar" : "Ocultar"}
-            </button>
+            </Button>
           </div>
 
           {!filtersCollapsed && <div className="p-4 bg-white"></div>}
@@ -1454,114 +1509,79 @@ export default function SaldosPendientesExternos({
           {!summaryCollapsed && (
             <div className="p-4 bg-white">
               {/* Mobile: cards */}
-              {/* Filtros rubro + cliente (web: selects / móvil: BottomSheet) */}
+              {/* Filtros rubro + cliente (MobileHtmlSelect web + móvil) */}
               <div className="mb-4 flex flex-col gap-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:items-end">
                   <div>
-                    <label className="block text-sm font-semibold text-blue-600 mb-1">
-                      Rubro
-                    </label>
-                    <select
-                      className="hidden md:block border rounded px-3 py-2 w-full bg-white"
-                      value={rubroFilter}
-                      onChange={(e) =>
-                        setRubroFilter(e.target.value as "ALL" | RubroType)
+                    <MobileHtmlSelect
+                      label={
+                        <span className="block text-sm font-semibold text-blue-600 mb-1">
+                          Rubro
+                        </span>
                       }
-                    >
-                      <option value="ALL">Todos los rubros</option>
-                      {RUBRO_ORDER.map((rt) => (
-                        <option key={rt} value={rt}>
-                          {RUBRO_LABEL[rt]}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2"
-                      onClick={() => setMobileListSheet("rubroFilter")}
-                    >
-                      <span className="truncate">
-                        {rubroFilter === "ALL"
-                          ? "Todos los rubros"
-                          : RUBRO_LABEL[rubroFilter]}
-                      </span>
-                      <span className="text-slate-400 shrink-0">▼</span>
-                    </button>
+                      value={rubroFilter}
+                      onChange={(v) =>
+                        setRubroFilter(v as "ALL" | RubroType)
+                      }
+                      options={rubroFilterSelectOptions}
+                      selectClassName="border rounded-xl px-3 py-2 w-full bg-white text-sm"
+                      buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                      sheetTitle="Filtrar por rubro"
+                    />
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-blue-600 mb-1">
-                      Cliente
-                    </label>
-                    <select
-                      className="hidden md:block border rounded px-3 py-2 w-full bg-white"
+                    <MobileHtmlSelect
+                      label={
+                        <span className="block text-sm font-semibold text-blue-600 mb-1">
+                          Cliente
+                        </span>
+                      }
                       value={clientFilter}
-                      onChange={(e) => setClientFilter(e.target.value)}
-                    >
-                      <option value="ALL">Todos</option>
-                      {clients
-                        .filter(
-                          (c) =>
-                            rubroFilter === "ALL" ||
-                            c.rubroType === rubroFilter,
-                        )
-                        .map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name} ({RUBRO_LABEL[c.rubroType]})
-                          </option>
-                        ))}
-                    </select>
-                    <button
-                      type="button"
-                      className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2"
-                      onClick={() => setMobileListSheet("summaryClient")}
-                    >
-                      <span className="truncate text-sm">
-                        {clientFilter === "ALL"
-                          ? "Todos los clientes"
-                          : (() => {
-                              const cl = clientsById[clientFilter];
-                              return cl
-                                ? `${cl.name} (${RUBRO_LABEL[cl.rubroType]})`
-                                : "—";
-                            })()}
-                      </span>
-                      <span className="text-slate-400 shrink-0">▼</span>
-                    </button>
+                      onChange={setClientFilter}
+                      options={summaryClientSelectOptions}
+                      selectClassName="border rounded-xl px-3 py-2 w-full bg-white text-sm"
+                      buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                      sheetTitle="Filtrar por cliente"
+                    />
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() =>
                       setOrderByMode((s: "none" | "lastAbono" | "lastVenta") =>
                         s === "lastAbono" ? "none" : "lastAbono",
                       )
                     }
-                    className={`px-2 py-1 rounded text-xs sm:text-sm border ${
+                    className={`!rounded-md text-xs sm:text-sm shadow-none ${
                       orderByMode === "lastAbono"
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
+                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
+                        : "!bg-white !text-blue-600 !border-blue-200 hover:!bg-blue-50"
                     }`}
                   >
                     Último abono
-                  </button>
+                  </Button>
 
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() =>
                       setOrderByMode((s: "none" | "lastAbono" | "lastVenta") =>
                         s === "lastVenta" ? "none" : "lastVenta",
                       )
                     }
-                    className={`px-2 py-1 rounded text-xs sm:text-sm border ${
+                    className={`!rounded-md text-xs sm:text-sm shadow-none ${
                       orderByMode === "lastVenta"
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
+                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
+                        : "!bg-white !text-blue-600 !border-blue-200 hover:!bg-blue-50"
                     }`}
                   >
                     Última venta
-                  </button>
+                  </Button>
                 </div>
               </div>
               <div className="md:hidden space-y-3 mb-3">
@@ -1618,8 +1638,8 @@ export default function SaldosPendientesExternos({
                           <div className="font-semibold">
                             {money(r.saldoActual)}
                           </div>
-                          <button
-                            type="button"
+                          <ActionMenuTrigger
+                            className="inline-flex"
                             aria-label="Acciones del cliente"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1628,10 +1648,7 @@ export default function SaldosPendientesExternos({
                                 rect: e.currentTarget.getBoundingClientRect(),
                               });
                             }}
-                            className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50"
-                          >
-                            <FiMenu className="w-5 h-5" />
-                          </button>
+                          />
                         </div>
                       </div>
                     </div>
@@ -1683,8 +1700,8 @@ export default function SaldosPendientesExternos({
                         <td className="border p-2">{r.registros}</td>
                         <td className="border p-2">
                           <div className="flex items-center justify-center">
-                            <button
-                              type="button"
+                            <ActionMenuTrigger
+                              className="inline-flex"
                               aria-label="Acciones del cliente"
                               onClick={(e) => {
                                 setSummaryRowMenu({
@@ -1692,10 +1709,7 @@ export default function SaldosPendientesExternos({
                                   rect: e.currentTarget.getBoundingClientRect(),
                                 });
                               }}
-                              className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50"
-                            >
-                              <FiMenu className="w-5 h-5" />
-                            </button>
+                            />
                           </div>
                         </td>
                       </tr>
@@ -1766,59 +1780,50 @@ export default function SaldosPendientesExternos({
                 </div>
 
                 <div>
-                  <label className="block text-xs md:text-sm text-gray-600 mb-1">
-                    Tipo movimiento
-                  </label>
-                  <select
-                    className="hidden md:block border rounded px-2 py-1 md:px-3 md:py-2 w-full bg-white text-xs md:text-sm"
-                    value={detailTypeFilter}
-                    onChange={(e) =>
-                      setDetailTypeFilter(e.target.value as "ALL" | RecordType)
+                  <MobileHtmlSelect
+                    label={
+                      <span className="block text-xs md:text-sm text-gray-600 mb-1">
+                        Tipo movimiento
+                      </span>
                     }
-                  >
-                    <option value="ALL">Todos</option>
-                    <option value="CUENTA_NUEVA">Cuenta nueva</option>
-                    <option value="ABONO">Abono</option>
-                  </select>
-                  <button
-                    type="button"
-                    className="md:hidden w-full border rounded px-2 py-2 text-left bg-white text-sm flex justify-between items-center gap-2"
-                    onClick={() => setMobileListSheet("detailType")}
-                  >
-                    <span>
-                      {detailTypeFilter === "ALL"
-                        ? "Todos los tipos"
-                        : detailTypeFilter === "CUENTA_NUEVA"
-                          ? "Cuenta nueva"
-                          : "Abono"}
-                    </span>
-                    <span className="text-slate-400">▼</span>
-                  </button>
+                    value={detailTypeFilter}
+                    onChange={(v) =>
+                      setDetailTypeFilter(v as "ALL" | RecordType)
+                    }
+                    options={detailTypeSelectOptions}
+                    selectClassName="border rounded-xl px-2 py-1 md:px-3 md:py-2 w-full bg-white text-xs md:text-sm"
+                    buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                    sheetTitle="Tipo de movimiento"
+                  />
                 </div>
               </div>
 
               <div className="flex gap-1 md:gap-2 mt-2 mb-3">
-                <button
+                <Button
                   type="button"
+                  variant="primary"
+                  size="sm"
                   onClick={() => {
                     resetDetailDates();
                     if (detailCollapsed) setDetailCollapsed(false);
                   }}
-                  className="px-2 py-0.5 md:py-1 rounded-2xl bg-blue-600 text-white text-xs hover:bg-blue-700"
+                  className="!rounded-2xl text-xs shadow-none"
                 >
                   Reiniciar fechas
-                </button>
+                </Button>
 
-                <button
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="sm"
                   onClick={() => {
                     clearDetailDates();
                     if (detailCollapsed) setDetailCollapsed(false);
                   }}
-                  className="px-2 py-0.5 md:py-1 rounded-2xl bg-gray-100 text-gray-700 text-xs hover:bg-gray-200"
+                  className="!rounded-2xl text-xs shadow-none"
                 >
                   Limpiar fechas
-                </button>
+                </Button>
               </div>
 
               <div className="overflow-x-auto">
@@ -1856,17 +1861,19 @@ export default function SaldosPendientesExternos({
                         <td className="border p-2 relative">
                           {!readonly ? (
                             <div className="inline-block">
-                              <button
+                              <Button
+                                type="button"
+                                variant="ghost"
                                 onClick={() =>
                                   setActionOpenId(
                                     actionOpenId === r.id ? null : r.id,
                                   )
                                 }
-                                className="px-2 py-1 rounded hover:bg-gray-100 md:px-1 md:py-0.5 md:text-[12px]"
+                                className="!rounded-md px-2 py-1 hover:bg-gray-100 md:px-1 md:py-0.5 md:text-[12px] shadow-none font-normal min-w-0"
                                 aria-label="Acciones"
                               >
                                 ⋯
-                              </button>
+                              </Button>
 
                               {actionOpenId === r.id && (
                                 <div
@@ -1876,24 +1883,28 @@ export default function SaldosPendientesExternos({
                                   }}
                                   className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm min-w-[140px]"
                                 >
-                                  <button
-                                    className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="!block w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
                                     onClick={() => {
                                       openEditRecordModal(r);
                                       setActionOpenId(null);
                                     }}
                                   >
                                     Editar
-                                  </button>
-                                  <button
-                                    className="block w-full text-left px-3 py-2 text-red-600 hover:bg-gray-100"
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="!block w-full !rounded-none justify-start px-3 py-2 text-sm font-semibold !text-red-600 hover:bg-gray-100"
                                     onClick={() => {
                                       setActionOpenId(null);
                                       deleteRecordSafe(r.id);
                                     }}
                                   >
                                     Eliminar
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
@@ -1929,31 +1940,35 @@ export default function SaldosPendientesExternos({
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() =>
                       setDetailPage((p: number) => Math.max(1, p - 1))
                     }
                     disabled={detailPage <= 1}
-                    className="px-2 py-1 text-xs rounded bg-white border disabled:opacity-50"
+                    className="!rounded-md text-xs shadow-none"
                   >
                     Prev
-                  </button>
+                  </Button>
                   <span className="text-xs">
                     Página {detailPage} / {totalDetailPages}
                   </span>
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() =>
                       setDetailPage((p: number) =>
                         Math.min(totalDetailPages, p + 1),
                       )
                     }
                     disabled={detailPage >= totalDetailPages}
-                    className="px-2 py-1 text-xs rounded bg-white border disabled:opacity-50"
+                    className="!rounded-md text-xs shadow-none"
                   >
                     Next
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -1978,47 +1993,28 @@ export default function SaldosPendientesExternos({
                 {editingClientId ? "Editar cliente" : "Crear cliente"}
               </h3>
 
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => setClientModalOpen(false)}
-                className="text-gray-500 hover:text-gray-700"
+                className="!rounded-full px-2 py-1 text-gray-500 hover:!text-gray-700 shadow-none font-normal"
               >
                 ✕
-              </button>
+              </Button>
             </div>
 
             <div className="grid grid-cols-1 gap-3">
               <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Rubro del cliente
-                </label>
-                <select
-                  className="hidden md:block border rounded px-3 py-2 w-full bg-white"
+                <MobileHtmlSelect
+                  label="Rubro del cliente"
                   value={clientRubroType}
-                  onChange={(e) =>
-                    setClientRubroType(e.target.value as RubroType)
-                  }
-                >
-                  {RUBRO_ORDER.map((rt) => (
-                    <option key={rt} value={rt}>
-                      {RUBRO_LABEL[rt]}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2"
-                  onClick={() => setMobileListSheet("clientRubro")}
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <span
-                      className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-semibold ${RUBRO_BADGE_CLASS[clientRubroType]}`}
-                    >
-                      {RUBRO_LABEL[clientRubroType]}
-                    </span>
-                  </span>
-                  <span className="text-slate-400 shrink-0">▼</span>
-                </button>
+                  onChange={(v) => setClientRubroType(v as RubroType)}
+                  options={clientRubroModalOptions}
+                  selectClassName="border rounded-xl px-3 py-2 w-full bg-white"
+                  buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white min-h-[2.75rem]"
+                  sheetTitle="Rubro del cliente"
+                />
               </div>
 
               <div>
@@ -2058,20 +2054,24 @@ export default function SaldosPendientesExternos({
               </div>
 
               <div className="flex justify-end gap-2 mt-2">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={() => setClientModalOpen(false)}
-                  className="px-2 py-1 md:px-4 mb-5 md:py-2 border rounded text-xs sm:text-sm"
+                  className="px-2 py-1 md:px-4 mb-5 md:py-2 !rounded-md text-xs sm:text-sm shadow-none"
                 >
                   Cancelar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="primary"
+                  size="sm"
                   onClick={saveClient}
-                  className="px-2 py-1 md:px-4 md:py-2 mb-5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
+                  className="px-2 py-1 md:px-4 md:py-2 mb-5 !rounded-md text-xs sm:text-sm shadow-none"
                 >
                   Guardar cliente
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2102,76 +2102,45 @@ export default function SaldosPendientesExternos({
                     : "Agregar Abono"}
               </h3>
 
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   setRecordModalOpen(false);
                   resetRecordForm();
                 }}
-                className="text-gray-500 hover:text-gray-700"
+                className="!rounded-full px-2 py-1 text-gray-500 hover:!text-gray-700 shadow-none font-normal"
               >
                 ✕
-              </button>
+              </Button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="md:col-span-2">
-                <label className="block text-sm text-gray-600 mb-1">
-                  Cliente
-                </label>
-                <select
-                  className="hidden md:block border rounded px-3 py-2 w-full disabled:bg-gray-100 disabled:cursor-not-allowed"
+                <MobileHtmlSelect
+                  label="Cliente"
                   value={recordClientKey}
+                  onChange={setRecordClientKey}
+                  options={recordClientSelectOptions}
                   disabled={recordClientLocked || !!editingRecordId}
-                  onChange={(e) => setRecordClientKey(e.target.value)}
-                >
-                  <option value="">Seleccionar...</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({RUBRO_LABEL[c.rubroType]})
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                  disabled={recordClientLocked || !!editingRecordId}
-                  onClick={() => setMobileListSheet("recordClient")}
-                >
-                  <span className="truncate text-sm">
-                    {(() => {
-                      const cl = clientsById[recordClientKey];
-                      if (!recordClientKey || !cl)
-                        return "Seleccionar cliente…";
-                      return `${cl.name} (${RUBRO_LABEL[cl.rubroType]})`;
-                    })()}
-                  </span>
-                  <span className="text-slate-400 shrink-0">▼</span>
-                </button>
+                  selectClassName="border rounded-xl px-3 py-2 w-full bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  sheetTitle="Cliente del registro"
+                />
               </div>
 
               <div>
-                <label className="block text-sm text-gray-600 mb-1">Tipo</label>
-                <select
-                  className="hidden md:block border rounded px-3 py-2 w-full"
+                <MobileHtmlSelect
+                  label="Tipo"
                   value={recordType}
-                  onChange={(e) => setRecordType(e.target.value as RecordType)}
+                  onChange={(v) => setRecordType(v as RecordType)}
+                  options={recordTipoSelectOptions}
                   disabled={!!editingRecordId}
-                >
-                  <option value="CUENTA_NUEVA">Venta nueva</option>
-                  <option value="ABONO">Abono</option>
-                </select>
-                <button
-                  type="button"
-                  className="md:hidden w-full border rounded px-3 py-2 text-left bg-white flex justify-between items-center gap-2 disabled:bg-gray-100"
-                  disabled={!!editingRecordId}
-                  onClick={() => setMobileListSheet("recordTipo")}
-                >
-                  <span>
-                    {recordType === "CUENTA_NUEVA" ? "Venta nueva" : "Abono"}
-                  </span>
-                  <span className="text-slate-400">▼</span>
-                </button>
+                  selectClassName="border rounded-xl px-3 py-2 w-full bg-white disabled:bg-gray-100"
+                  buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white disabled:bg-gray-100"
+                  sheetTitle="Tipo de registro"
+                />
               </div>
 
               <div>
@@ -2258,23 +2227,27 @@ export default function SaldosPendientesExternos({
               </div>
 
               <div className="md:col-span-2 flex justify-end gap-2 mt-2">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={() => {
                     setRecordModalOpen(false);
                     resetRecordForm();
                   }}
-                  className="px-2 py-1 md:px-4 mb-5 md:py-2 border rounded text-xs sm:text-sm"
+                  className="px-2 py-1 md:px-4 mb-5 md:py-2 !rounded-md text-xs sm:text-sm shadow-none"
                 >
                   Cancelar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="primary"
+                  size="sm"
                   onClick={saveRecord}
-                  className="px-2 py-1 md:px-4 md:py-2 mb-5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs sm:text-sm"
+                  className="px-2 py-1 md:px-4 md:py-2 mb-5 !rounded-md text-xs sm:text-sm shadow-none"
                 >
                   Guardar registro
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2298,13 +2271,15 @@ export default function SaldosPendientesExternos({
                 Detalle de {detailClientSummary.clientName}
               </h3>
 
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => setDetailModalOpen(false)}
-                className="text-gray-500 hover:text-gray-700"
+                className="!rounded-full px-2 py-1 text-gray-500 hover:!text-gray-700 shadow-none font-normal"
               >
                 ✕
-              </button>
+              </Button>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -2377,208 +2352,6 @@ export default function SaldosPendientesExternos({
         </div>
       )}
 
-      <BottomSheet
-        open={mobileListSheet !== null}
-        onClose={() => setMobileListSheet(null)}
-        title={
-          mobileListSheet === "rubroFilter"
-            ? "Filtrar por rubro"
-            : mobileListSheet === "summaryClient"
-              ? "Filtrar por cliente"
-              : mobileListSheet === "detailType"
-                ? "Tipo de movimiento"
-                : mobileListSheet === "recordClient"
-                  ? "Cliente del registro"
-                  : mobileListSheet === "recordTipo"
-                    ? "Tipo de registro"
-                    : mobileListSheet === "clientRubro"
-                      ? "Rubro del cliente"
-                      : ""
-        }
-        zIndexClassName="z-[200]"
-      >
-        {mobileListSheet === "rubroFilter" && (
-          <div className="flex flex-col">
-            <button
-              type="button"
-              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                rubroFilter === "ALL" ? "bg-blue-50 font-semibold" : ""
-              }`}
-              onClick={() => {
-                setRubroFilter("ALL");
-                setMobileListSheet(null);
-              }}
-            >
-              Todos los rubros
-            </button>
-            {RUBRO_ORDER.map((rt) => (
-              <button
-                key={rt}
-                type="button"
-                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                  rubroFilter === rt ? "bg-blue-50 font-semibold" : ""
-                }`}
-                onClick={() => {
-                  setRubroFilter(rt);
-                  setMobileListSheet(null);
-                }}
-              >
-                {RUBRO_LABEL[rt]}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {mobileListSheet === "summaryClient" && (
-          <div className="flex flex-col max-h-[min(60vh,420px)]">
-            <button
-              type="button"
-              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                clientFilter === "ALL" ? "bg-blue-50 font-semibold" : ""
-              }`}
-              onClick={() => {
-                setClientFilter("ALL");
-                setMobileListSheet(null);
-              }}
-            >
-              Todos los clientes
-            </button>
-            {clients
-              .filter(
-                (c) =>
-                  rubroFilter === "ALL" || c.rubroType === rubroFilter,
-              )
-              .map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                    clientFilter === c.id ? "bg-blue-50 font-semibold" : ""
-                  }`}
-                  onClick={() => {
-                    setClientFilter(c.id);
-                    setMobileListSheet(null);
-                  }}
-                >
-                  {c.name}{" "}
-                  <span className="text-slate-500">
-                    ({RUBRO_LABEL[c.rubroType]})
-                  </span>
-                </button>
-              ))}
-          </div>
-        )}
-
-        {mobileListSheet === "detailType" && (
-          <div className="flex flex-col">
-            {(
-              [
-                ["ALL", "Todos los tipos"],
-                ["CUENTA_NUEVA", "Cuenta nueva"],
-                ["ABONO", "Abono"],
-              ] as const
-            ).map(([val, label]) => (
-              <button
-                key={val}
-                type="button"
-                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                  detailTypeFilter === val ? "bg-blue-50 font-semibold" : ""
-                }`}
-                onClick={() => {
-                  setDetailTypeFilter(val);
-                  setMobileListSheet(null);
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {mobileListSheet === "recordClient" && (
-          <div className="flex flex-col">
-            <button
-              type="button"
-              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                !recordClientKey ? "bg-blue-50 font-semibold" : ""
-              }`}
-              onClick={() => {
-                setRecordClientKey("");
-                setMobileListSheet(null);
-              }}
-            >
-              Seleccionar…
-            </button>
-            {clients.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                  recordClientKey === c.id ? "bg-blue-50 font-semibold" : ""
-                }`}
-                onClick={() => {
-                  setRecordClientKey(c.id);
-                  setMobileListSheet(null);
-                }}
-              >
-                {c.name}{" "}
-                <span className="text-slate-500">
-                  ({RUBRO_LABEL[c.rubroType]})
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {mobileListSheet === "recordTipo" && (
-          <div className="flex flex-col">
-            <button
-              type="button"
-              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                recordType === "CUENTA_NUEVA" ? "bg-blue-50 font-semibold" : ""
-              }`}
-              onClick={() => {
-                setRecordType("CUENTA_NUEVA");
-                setMobileListSheet(null);
-              }}
-            >
-              Venta nueva
-            </button>
-            <button
-              type="button"
-              className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                recordType === "ABONO" ? "bg-blue-50 font-semibold" : ""
-              }`}
-              onClick={() => {
-                setRecordType("ABONO");
-                setMobileListSheet(null);
-              }}
-            >
-              Abono
-            </button>
-          </div>
-        )}
-
-        {mobileListSheet === "clientRubro" && (
-          <div className="flex flex-col">
-            {RUBRO_ORDER.map((rt) => (
-              <button
-                key={rt}
-                type="button"
-                className={`w-full text-left px-4 py-3 border-b border-slate-100 text-sm ${
-                  clientRubroType === rt ? "bg-blue-50 font-semibold" : ""
-                }`}
-                onClick={() => {
-                  setClientRubroType(rt);
-                  setMobileListSheet(null);
-                }}
-              >
-                {RUBRO_LABEL[rt]}
-              </button>
-            ))}
-          </div>
-        )}
-      </BottomSheet>
     </div>
   );
 }

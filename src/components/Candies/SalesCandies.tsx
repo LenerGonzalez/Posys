@@ -20,6 +20,8 @@ import { db } from "../../firebase";
 import { syncAbonoCommissionsForCustomer } from "../../Services/commissionAbonoCandies";
 import { hasRole } from "../../utils/roles";
 import LoadingOverlay from "../common/LoadingOverlay";
+import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 import jsPDF from "jspdf";
 import { set } from "date-fns";
 
@@ -764,13 +766,14 @@ export default function SalesCandiesPOS({
         <div className="bg-white w-full max-w-md rounded-2xl shadow-lg border overflow-hidden">
           <div className="flex items-center justify-between p-3 border-b">
             <div className="font-bold">Escanear código</div>
-            <button
-              className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+            <Button
+              variant="secondary"
+              className="rounded-lg"
               onClick={onClose}
               type="button"
             >
               Cerrar
-            </button>
+            </Button>
           </div>
           <div className="p-3">
             <div className="relative w-full aspect-[3/4] bg-black rounded-xl overflow-hidden">
@@ -1871,7 +1874,7 @@ export default function SalesCandiesPOS({
 
   /** Panel móvil tipo SalesV2: búsqueda + lista en sheet */
   const [mobileSheet, setMobileSheet] = useState<
-    null | "clientType" | "vendor" | "product" | "creditCustomer" | "abonoClient"
+    null | "vendor" | "product" | "creditCustomer" | "abonoClient"
   >(null);
   const [customerQuery, setCustomerQuery] = useState("");
   const [vendorQuery, setVendorQuery] = useState("");
@@ -1901,22 +1904,121 @@ export default function SalesCandiesPOS({
     );
   }, [customersWithBalance, abonoCustomerQuery]);
 
+  const inpBase =
+    "w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 transition-colors";
+
+  const selectButtonClass =
+    "w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500";
+
+  const clientTypeOptions = useMemo(
+    () => [
+      { value: "CONTADO", label: "Contado" },
+      { value: "CREDITO", label: "Crédito" },
+    ],
+    [],
+  );
+
+  const creditCustomerSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Selecciona un cliente" },
+      ...customersForCredit.map((c) => ({
+        value: c.id,
+        label: `${c.name} | ${c.phone} | Saldo: ${money(c.balance || 0)}`,
+        disabled: c.status === "BLOQUEADO",
+      })),
+    ],
+    [customersForCredit],
+  );
+
+  const vendorSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Selecciona un vendedor" },
+      ...activeVendors.map((v) => ({
+        value: v.id,
+        label: `${v.name} — ${v.branchLabel} — ${v.commissionPercent.toFixed(2)}% comisión`,
+      })),
+    ],
+    [activeVendors],
+  );
+
+  const productHtmlSelectOptions = useMemo(() => {
+    const emptyLabel = vendorId
+      ? "Selecciona un producto"
+      : "Selecciona un vendedor primero";
+    const opts: {
+      value: string;
+      label: string;
+      disabled?: boolean;
+    }[] = [{ value: "", label: emptyLabel }];
+    for (const p of filteredProductsForPicker) {
+      const already = items.some((it) => it.productId === p.id);
+      const units = stockByProduct[p.id] || 0;
+      const upp = Math.max(1, Number(p.unitsPerPackage || 1));
+      const stockPackages = Math.floor(units / upp);
+      if (stockPackages <= 0) continue;
+      opts.push({
+        value: p.id,
+        label: `${p.name} ${p.sku ? `— ${p.sku}` : ""} (disp: ${stockPackages} paq.)${already ? " ✓" : ""}`,
+        disabled: already,
+      });
+    }
+    return opts;
+  }, [filteredProductsForPicker, items, stockByProduct, vendorId]);
+
+  const abonoCustomerSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Selecciona un cliente" },
+      ...customersWithBalance.map((c) => ({
+        value: c.id,
+        label: `${c.name} | Saldo: ${money(c.balance || 0)}`,
+      })),
+    ],
+    [customersWithBalance],
+  );
+
+  const placeModalOptions = useMemo(
+    () => [
+      { value: "", label: "—" },
+      ...PLACES.map((p) => ({ value: p, label: p })),
+    ],
+    [],
+  );
+
+  const statusModalOptions = useMemo(
+    () => [
+      { value: "ACTIVO", label: "ACTIVO" },
+      { value: "BLOQUEADO", label: "BLOQUEADO" },
+    ],
+    [],
+  );
+
+  const modalVendorSelectOptions = useMemo(
+    () => [
+      { value: "", label: "Selecciona un vendedor" },
+      ...vendors
+        .filter((v) => (v.status ?? "ACTIVO") === "ACTIVO")
+        .map((v) => ({
+          value: v.id,
+          label: `${v.name} — ${v.branchLabel}`,
+        })),
+    ],
+    [vendors],
+  );
+
   /** Sucursal del vendedor actual (precio por paquete en listas / líneas). */
   const vendorBranchForPrice =
     vendors.find((v) => v.id === vendorId)?.branch ?? branch;
 
   const mobileSheetTitle =
-    mobileSheet === "clientType"
-      ? "Tipo de cliente"
-      : mobileSheet === "vendor"
-        ? "Vendedor"
-        : mobileSheet === "product"
-          ? "Productos"
-          : mobileSheet === "creditCustomer"
-            ? "Cliente (crédito)"
-            : mobileSheet === "abonoClient"
-              ? "Cliente para abono"
-              : "";
+    mobileSheet === "vendor"
+      ? "Vendedor"
+      : mobileSheet === "product"
+        ? "Productos"
+        : mobileSheet === "creditCustomer"
+          ? "Cliente (crédito)"
+          : mobileSheet === "abonoClient"
+            ? "Cliente para abono"
+            : "";
 
   const mobilePickerSheet = (
     <BottomSheet
@@ -1926,38 +2028,13 @@ export default function SalesCandiesPOS({
       ariaLabel={mobileSheetTitle || "Lista"}
       centerOnDesktop
     >
-            {mobileSheet === "clientType" && (
-              <>
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
-                  onClick={() => {
-                    setClientType("CONTADO");
-                    setCustomerId("");
-                    setCustomerQuery("");
-                    setMobileSheet(null);
-                  }}
-                >
-                  <div className="font-medium text-sm">Contado</div>
-                </button>
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
-                  onClick={() => {
-                    setClientType("CREDITO");
-                    setMobileSheet(null);
-                  }}
-                >
-                  <div className="font-medium text-sm">Crédito</div>
-                </button>
-              </>
-            )}
             {mobileSheet === "vendor" &&
               filteredVendorsMobile.map((v) => (
-                <button
+                <Button
                   key={v.id}
                   type="button"
-                  className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
+                  variant="ghost"
+                  className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 rounded-none justify-start font-normal h-auto min-h-0"
                   onClick={() => {
                     setVendorId(v.id);
                     setItems([]);
@@ -1968,7 +2045,7 @@ export default function SalesCandiesPOS({
                   <div className="text-xs text-slate-600 mt-1">
                     {v.branchLabel} · Comisión {v.commissionPercent.toFixed(2)}%
                   </div>
-                </button>
+                </Button>
               ))}
             {mobileSheet === "vendor" && filteredVendorsMobile.length === 0 && (
               <div className="text-center text-gray-500 text-sm py-8 px-4">
@@ -1997,11 +2074,12 @@ export default function SalesCandiesPOS({
                     const upp = Math.max(1, Number(p.unitsPerPackage || 1));
                     const stockPackages = Math.floor(units / upp);
                     return (
-                      <button
+                      <Button
                         key={p.id}
                         type="button"
+                        variant="ghost"
                         disabled={already}
-                        className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-none justify-start font-normal h-auto min-h-0"
                         onClick={async () => {
                           if (already) return;
                           setProductId(p.id);
@@ -2027,7 +2105,7 @@ export default function SalesCandiesPOS({
                           por paquete ({branchLabel(vendorBranchForPrice)})
                           {already ? " · Ya en lista" : ""}
                         </div>
-                      </button>
+                      </Button>
                     );
                   })
               ))}
@@ -2040,11 +2118,12 @@ export default function SalesCandiesPOS({
                 filteredCustomersCreditMobile.map((c) => {
                   const blocked = c.status === "BLOQUEADO";
                   return (
-                    <button
+                    <Button
                       key={c.id}
                       type="button"
+                      variant="ghost"
                       disabled={blocked}
-                      className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-none justify-start font-normal h-auto min-h-0"
                       onClick={() => {
                         if (blocked) return;
                         setCustomerId(c.id);
@@ -2058,7 +2137,7 @@ export default function SalesCandiesPOS({
                         Saldo: {money(c.balance || 0)}
                         {blocked ? " · Bloqueado" : ""}
                       </div>
-                    </button>
+                    </Button>
                   );
                 })
               ))}
@@ -2069,10 +2148,11 @@ export default function SalesCandiesPOS({
                 </div>
               ) : (
                 filteredAbonoCustomersMobile.map((c) => (
-                  <button
+                  <Button
                     key={c.id}
                     type="button"
-                    className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50"
+                    variant="ghost"
+                    className="w-full text-left px-3 py-3 border-b border-slate-100 active:bg-blue-50 rounded-none justify-start font-normal h-auto min-h-0"
                     onClick={() => {
                       setAbonoCustomerId(c.id);
                       setMobileSheet(null);
@@ -2084,7 +2164,7 @@ export default function SalesCandiesPOS({
                     <div className="text-xs text-slate-600 mt-1">
                       Saldo: {money(c.balance || 0)}
                     </div>
-                  </button>
+                  </Button>
                 ))
               ))}
     </BottomSheet>
@@ -2093,47 +2173,61 @@ export default function SalesCandiesPOS({
   // UI
   return (
     <div className="max-w-6xl mx-auto">
-      {/* ✅ Responsive header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-        <h2 className="text-xl font-bold">Ventas</h2>
-        <button
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4 pb-4 border-b border-slate-100">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 tracking-tight">
+            Ventas
+          </h2>
+          <p className="text-sm text-slate-500 mt-1">
+            Candies — registro de venta
+          </p>
+        </div>
+        <Button
           type="button"
-          className="hidden md:inline-flex px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+          variant="primary"
+          className="hidden md:inline-flex rounded-lg !bg-green-600 hover:!bg-green-700 active:!bg-green-800 shadow-md shadow-green-600/15"
           onClick={() => setShowModal(true)}
         >
           Crear Cliente
-        </button>
+        </Button>
       </div>
 
       <form
         onSubmit={saveSale}
-        className="bg-white p-3 sm:p-4 rounded shadow border mb-6"
+        className="mb-6 w-full bg-white rounded-xl border border-slate-200/90 shadow-sm p-4 sm:p-6 md:p-8"
       >
         {/* ===================== WEB (NO CAMBIAR) ===================== */}
         <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Tipo de cliente */}
           <div>
-            <label className="block text-sm font-semibold">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
               Tipo de cliente
             </label>
-            <select
-              className="w-full border p-2 rounded"
+            <MobileHtmlSelect
               value={clientType}
-              onChange={(e) => setClientType(e.target.value as ClientType)}
-            >
-              <option value="CONTADO">Contado</option>
-              <option value="CREDITO">Crédito</option>
-            </select>
+              onChange={(v) => {
+                const ct = v as ClientType;
+                setClientType(ct);
+                if (ct === "CONTADO") {
+                  setCustomerId("");
+                  setCustomerQuery("");
+                }
+              }}
+              options={clientTypeOptions}
+              selectClassName={`${inpBase} py-2.5 mt-1`}
+              buttonClassName={`${selectButtonClass} mt-1`}
+              sheetTitle="Tipo de cliente"
+            />
           </div>
 
           {/* Cliente contado o crédito */}
           {clientType === "CONTADO" ? (
             <div>
-              <label className="block text-sm font-semibold">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Nombre del cliente (contado)
               </label>
               <input
-                className="w-full border p-2 rounded"
+                className={`${inpBase} mt-1`}
                 placeholder="Ej: Cliente Mostrador"
                 value={customerNameCash}
                 onChange={(e) => setCustomerNameCash(e.target.value)}
@@ -2141,47 +2235,44 @@ export default function SalesCandiesPOS({
             </div>
           ) : (
             <div className="md:col-span-2">
-              <label className="block text-sm font-semibold">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Cliente (crédito)
               </label>
 
-              <div className="flex flex-col sm:flex-row gap-2">
-                <select
-                  className="w-full sm:flex-1 border p-2 rounded"
-                  value={customerId}
-                  onChange={(e) => setCustomerId(e.target.value)}
-                >
-                  <option value="">Selecciona un cliente</option>
-                  {customersForCredit.map((c) => (
-                    <option
-                      key={c.id}
-                      value={c.status === "ACTIVO" ? c.id : ""}
-                      disabled={c.status === "BLOQUEADO"}
-                    >
-                      {c.name} | {c.phone} | Saldo: {money(c.balance || 0)}
-                    </option>
-                  ))}
-                </select>
+              <div className="flex flex-col sm:flex-row gap-2 mt-1">
+                <div className="w-full sm:flex-1 min-w-0">
+                  <MobileHtmlSelect
+                    value={customerId}
+                    onChange={setCustomerId}
+                    options={creditCustomerSelectOptions}
+                    selectClassName={`${inpBase} py-2.5`}
+                    buttonClassName={selectButtonClass}
+                    sheetTitle="Cliente (crédito)"
+                  />
+                </div>
 
-                <button
+                <Button
                   type="button"
-                  className="w-full sm:w-auto px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+                  variant="primary"
+                  className="w-full sm:w-auto shrink-0 rounded-lg !bg-green-600 hover:!bg-green-700 active:!bg-green-800"
                   onClick={() => setShowModal(true)}
                 >
                   Crear Cliente
-                </button>
+                </Button>
               </div>
 
               <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="p-2 rounded bg-gray-50 border">
-                  <div className="text-xs text-gray-600">Saldo actual</div>
-                  <div className="text-lg font-semibold">
+                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/60">
+                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
+                    Saldo actual
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-slate-900 mt-0.5">
                     {money(currentBalance)}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Pago inicial (opcional)
                   </label>
                   <input
@@ -2189,7 +2280,7 @@ export default function SalesCandiesPOS({
                     step="0.01"
                     inputMode="decimal"
                     max={maxDownPaymentAllowed}
-                    className="w-full border p-2 rounded"
+                    className={`${inpBase} mt-1`}
                     value={downPayment === 0 ? "" : downPayment}
                     onChange={(e) => {
                       const v = clampDownPayment(e.target.value);
@@ -2199,9 +2290,11 @@ export default function SalesCandiesPOS({
                   />
                 </div>
 
-                <div className="p-2 rounded bg-gray-50 border">
-                  <div className="text-xs text-gray-600">Saldo proyectado</div>
-                  <div className="text-lg font-semibold">
+                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/60">
+                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
+                    Saldo proyectado
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-slate-900 mt-0.5">
                     {money(projectedBalance)}
                   </div>
                 </div>
@@ -2211,12 +2304,12 @@ export default function SalesCandiesPOS({
 
           {/* Fecha */}
           <div>
-            <label className="block text-sm font-semibold">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
               Fecha de venta
             </label>
             <input
               type="date"
-              className="w-full border p-2 rounded"
+              className={`${inpBase} mt-1`}
               value={saleDate}
               onChange={(e) => setSaleDate(e.target.value)}
             />
@@ -2224,26 +2317,23 @@ export default function SalesCandiesPOS({
 
           {/* Vendedor */}
           <div>
-            <label className="block text-sm font-semibold">Vendedor</label>
-            <select
-              className="w-full border p-2 rounded"
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Vendedor
+            </label>
+            <MobileHtmlSelect
               value={vendorId}
-              onChange={(e) => {
-                setVendorId(e.target.value);
+              onChange={(id) => {
+                setVendorId(id);
                 setItems([]);
               }}
+              options={vendorSelectOptions}
               disabled={lockVendor}
-            >
-              <option value="">Selecciona un vendedor</option>
-              {activeVendors.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name} — {v.branchLabel} — {v.commissionPercent.toFixed(2)}%
-                  {" comisión"}
-                </option>
-              ))}
-            </select>
+              selectClassName={`${inpBase} py-2.5 mt-1`}
+              buttonClassName={`${selectButtonClass} mt-1`}
+              sheetTitle="Vendedor"
+            />
             {lockVendor && (
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-slate-500 mt-1">
                 Vendedor fijado por el usuario logueado.
               </p>
             )}
@@ -2251,7 +2341,7 @@ export default function SalesCandiesPOS({
 
           {/* Lista de precios / sucursal */}
           <div className="md:col-span-1">
-            <label className="block text-sm font-semibold mb-1">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
               Lista de precios / Sucursal
             </label>
             <div className="flex flex-wrap gap-4 text-sm">
@@ -2296,10 +2386,12 @@ export default function SalesCandiesPOS({
 
           {/* Selector de producto */}
           <div className="md:col-span-2">
-            <label className="block text-sm font-semibold">Producto</label>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Producto
+            </label>
             <div className="mt-1 mb-2 flex gap-2">
               <input
-                className="flex-1 border rounded px-2 py-2"
+                className={`${inpBase} flex-1 min-w-0 py-2`}
                 placeholder={
                   vendorId
                     ? "Buscar producto por nombre o SKU"
@@ -2312,9 +2404,10 @@ export default function SalesCandiesPOS({
                 }}
                 disabled={!vendorId}
               />
-              <button
+              <Button
                 type="button"
-                className="px-3 py-2 rounded bg-gray-800 text-white"
+                variant="primary"
+                className="shrink-0 rounded-lg !bg-slate-800 hover:!bg-slate-900 active:!bg-slate-950"
                 onClick={() => setScanOpen(true)}
                 disabled={!vendorId}
               >
@@ -2330,48 +2423,22 @@ export default function SalesCandiesPOS({
                   <rect x="3" y="15" width="6" height="6" rx="1" />
                   <rect x="15" y="15" width="6" height="6" rx="1" />
                 </svg>
-              </button>
+              </Button>
             </div>
-            <select
-              className="w-full border p-2 rounded"
+            <MobileHtmlSelect
               value={productId}
-              onChange={async (e) => {
-                const pid = e.target.value;
+              onChange={async (pid) => {
                 setProductId(pid);
-                await addProductToList(pid);
+                if (pid) await addProductToList(pid);
               }}
+              options={productHtmlSelectOptions}
               disabled={!vendorId}
-            >
-              <option value="">
-                {vendorId
-                  ? "Selecciona un producto"
-                  : "Selecciona un vendedor primero"}
-              </option>
+              selectClassName={`${inpBase} py-2.5`}
+              buttonClassName={selectButtonClass}
+              sheetTitle="Producto"
+            />
 
-              {filteredProductsForPicker.map((p) => {
-                const already = items.some((it) => it.productId === p.id);
-
-                const units = stockByProduct[p.id] || 0;
-                const upp = Math.max(1, Number(p.unitsPerPackage || 1));
-                const stockPackages = Math.floor(units / upp);
-
-                if (stockPackages <= 0) return null;
-
-                return (
-                  <option
-                    key={p.id}
-                    value={already ? "" : p.id}
-                    disabled={already}
-                  >
-                    {p.name} {p.sku ? `— ${p.sku}` : ""} (disp: {stockPackages}{" "}
-                    paq.)
-                    {already ? " ✅" : ""}
-                  </option>
-                );
-              })}
-            </select>
-
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="text-xs text-slate-500 mt-1">
               El selector solo muestra productos disponibles del pedido del
               vendedor seleccionado (sin ceros).
             </div>
@@ -2480,14 +2547,16 @@ export default function SalesCandiesPOS({
                         </div>
 
                         <div className="col-span-1 text-center">
-                          <button
+                          <Button
                             type="button"
-                            className="px-2 py-1 rounded bg-red-100 hover:bg-red-200"
+                            variant="danger"
+                            size="sm"
+                            className="rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 active:!bg-red-300 shadow-none"
                             onClick={() => removeItem(it.productId)}
                             title="Quitar producto"
                           >
                             ✕
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     );
@@ -2531,10 +2600,11 @@ export default function SalesCandiesPOS({
             )}
 
             <div className="mt-4 border rounded-lg p-3 bg-gray-50">
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 onClick={() => setOpenAbonos((v) => !v)}
-                className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-left"
+                className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-left rounded-lg h-auto min-h-0 py-3 font-normal"
               >
                 <div className="font-semibold">
                   Abonos (se registran al guardar)
@@ -2543,30 +2613,26 @@ export default function SalesCandiesPOS({
                   Agregado: {money(abonoTotalPending)}
                   <span className="ml-2 text-sm">{openAbonos ? "−" : "+"}</span>
                 </div>
-              </button>
+              </Button>
 
               {openAbonos && (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mt-3">
                     <div className="md:col-span-2">
-                      <label className="block text-xs text-gray-600">
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Cliente
                       </label>
-                      <select
-                        className="w-full border p-2 rounded"
+                      <MobileHtmlSelect
                         value={abonoCustomerId}
-                        onChange={(e) => setAbonoCustomerId(e.target.value)}
-                      >
-                        <option value="">Selecciona un cliente</option>
-                        {customersWithBalance.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name} | Saldo: {money(c.balance || 0)}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setAbonoCustomerId}
+                        options={abonoCustomerSelectOptions}
+                        selectClassName={`${inpBase} py-2.5 mt-1`}
+                        buttonClassName={`${selectButtonClass} mt-1`}
+                        sheetTitle="Cliente para abono"
+                      />
                     </div>
                     <div className="md:col-span-2">
-                      <label className="block text-xs text-gray-600">
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Abono
                       </label>
                       <input
@@ -2574,7 +2640,7 @@ export default function SalesCandiesPOS({
                         step="0.01"
                         inputMode="decimal"
                         max={maxAbonoForCustomer}
-                        className="w-full border p-2 rounded"
+                        className={`${inpBase} mt-1`}
                         value={abonoAmount === 0 ? "" : abonoAmount}
                         onChange={(e) =>
                           setAbonoAmount(clampAbonoAmount(e.target.value))
@@ -2607,18 +2673,19 @@ export default function SalesCandiesPOS({
                   </div>
 
                   <div className="mt-3 flex justify-end">
-                    <button
+                    <Button
                       type="button"
-                      className={`px-3 py-2 rounded text-white ${
+                      variant="primary"
+                      className={`rounded-lg ${
                         abonoDisabled
-                          ? "bg-gray-300 cursor-not-allowed"
-                          : "bg-amber-600 hover:bg-amber-700"
+                          ? "!bg-gray-300 !text-gray-600"
+                          : "!bg-amber-600 hover:!bg-amber-700 active:!bg-amber-800"
                       }`}
                       onClick={addPendingAbono}
                       disabled={abonoDisabled}
                     >
                       Agregar abono
-                    </button>
+                    </Button>
                   </div>
 
                   <div className="mt-3">
@@ -2670,14 +2737,16 @@ export default function SalesCandiesPOS({
                                     {money(saldoPend)}
                                   </div>
                                   <div className="col-span-1 text-center">
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="px-2 py-1 rounded bg-red-100 hover:bg-red-200"
+                                      variant="danger"
+                                      size="sm"
+                                      className="rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 active:!bg-red-300 shadow-none"
                                       onClick={() => removePendingAbono(a.id)}
                                       title="Quitar abono"
                                     >
                                       ✕
-                                    </button>
+                                    </Button>
                                   </div>
                                 </div>
                               );
@@ -2694,13 +2763,14 @@ export default function SalesCandiesPOS({
 
           {/* Guardar WEB */}
           <div className="md:col-span-2">
-            <button
+            <Button
               type="submit"
-              className="w-full sm:w-auto bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+              variant="primary"
+              className="w-full sm:w-auto rounded-lg"
               disabled={saving}
             >
               {saving ? "Guardando..." : "Registrar venta"}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -2708,52 +2778,58 @@ export default function SalesCandiesPOS({
         <div className="md:hidden space-y-3">
           {/* CARD 1: Datos de venta */}
           <div className="bg-white rounded-xl border shadow">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => setOpenSaleInfo((v) => !v)}
-              className="w-full flex justify-between items-center p-3 font-semibold"
+              className="w-full flex justify-between items-center p-3 font-semibold rounded-none rounded-t-xl h-auto min-h-0"
             >
               Datos de venta
               <span className="text-lg">{openSaleInfo ? "−" : "+"}</span>
-            </button>
+            </Button>
 
             {openSaleInfo && (
               <div className="p-3 space-y-3">
                 <div>
-                  <label className="block text-sm font-semibold">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Fecha de venta
                   </label>
                   <input
                     type="date"
-                    className="w-full border p-2 rounded"
+                    className={`${inpBase} mt-1`}
                     value={saleDate}
                     onChange={(e) => setSaleDate(e.target.value)}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Tipo de cliente
                   </label>
-                  <button
-                    type="button"
-                    className="mt-1 w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
-                    onClick={() => setMobileSheet("clientType")}
-                  >
-                    <span className="truncate">
-                      {clientType === "CONTADO" ? "Contado" : "Crédito"}
-                    </span>
-                    <span className="text-slate-400 shrink-0">▼</span>
-                  </button>
+                  <MobileHtmlSelect
+                    value={clientType}
+                    onChange={(v) => {
+                      const ct = v as ClientType;
+                      setClientType(ct);
+                      if (ct === "CONTADO") {
+                        setCustomerId("");
+                        setCustomerQuery("");
+                      }
+                    }}
+                    options={clientTypeOptions}
+                    selectClassName={`${inpBase} py-2.5 mt-1`}
+                    buttonClassName={`${selectButtonClass} mt-1`}
+                    sheetTitle="Tipo de cliente"
+                  />
                 </div>
 
                 {clientType === "CONTADO" ? (
                   <div>
-                    <label className="block text-sm font-semibold">
-                      Cliente (Cash)
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Cliente (contado)
                     </label>
                     <input
-                      className="w-full border p-2 rounded"
+                      className={`${inpBase} mt-1`}
                       placeholder="Ej: Mario Bergoglio"
                       value={customerNameCash}
                       onChange={(e) => setCustomerNameCash(e.target.value)}
@@ -2761,14 +2837,14 @@ export default function SalesCandiesPOS({
                   </div>
                 ) : (
                   <div>
-                    <label className="block text-sm font-semibold">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Cliente (crédito)
                     </label>
 
-                    <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-2 mt-1">
                       <div className="flex gap-1 items-center min-w-0">
                         <input
-                          className="flex-1 border p-2 rounded min-w-0"
+                          className={`${inpBase} flex-1 min-w-0 py-2`}
                           placeholder="Buscar cliente..."
                           value={customerQuery}
                           onChange={(e) =>
@@ -2779,18 +2855,20 @@ export default function SalesCandiesPOS({
                           }}
                         />
                         {customerQuery ? (
-                          <button
+                          <Button
                             type="button"
-                            className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                            variant="ghost"
+                            className="shrink-0 px-2 py-2 text-sm font-medium text-blue-600 rounded-lg h-auto min-h-0 shadow-none"
                             onClick={() => setCustomerQuery("")}
                           >
                             Limpiar
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
-                      <button
+                      <Button
                         type="button"
-                        className="w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                        variant="outline"
+                        className={`${selectButtonClass} border-slate-200 rounded-xl justify-between font-normal h-auto min-h-0 py-2.5`}
                         onClick={() => setMobileSheet("creditCustomer")}
                       >
                         <span className="truncate text-sm">
@@ -2800,38 +2878,39 @@ export default function SalesCandiesPOS({
                             : "Elegir cliente"}
                         </span>
                         <span className="text-slate-400 shrink-0">▼</span>
-                      </button>
+                      </Button>
 
-                      <button
+                      <Button
                         type="button"
-                        className="w-full px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+                        variant="primary"
+                        className="w-full rounded-lg !bg-green-600 hover:!bg-green-700 active:!bg-green-800"
                         onClick={() => setShowModal(true)}
                       >
                         Crear Cliente
-                      </button>
+                      </Button>
                     </div>
 
                     <div className="mt-2 grid grid-cols-2 gap-2">
-                      <div className="p-2 rounded bg-gray-50 border">
-                        <div className="text-xs text-gray-600">
+                      <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/60">
+                        <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
                           Saldo actual
                         </div>
-                        <div className="text-base font-semibold">
+                        <div className="text-base font-semibold tabular-nums text-slate-900 mt-0.5">
                           {money(currentBalance)}
                         </div>
                       </div>
-                      <div className="p-2 rounded bg-gray-50 border">
-                        <div className="text-xs text-gray-600">
+                      <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/60">
+                        <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
                           Saldo proyectado
                         </div>
-                        <div className="text-base font-semibold">
+                        <div className="text-base font-semibold tabular-nums text-slate-900 mt-0.5">
                           {money(projectedBalance)}
                         </div>
                       </div>
                     </div>
 
                     <div className="mt-2">
-                      <label className="block text-sm font-semibold">
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Pago inicial (opcional)
                       </label>
                       <input
@@ -2839,7 +2918,7 @@ export default function SalesCandiesPOS({
                         step="0.01"
                         inputMode="decimal"
                         max={maxDownPaymentAllowed}
-                        className="w-full border p-2 rounded"
+                        className={`${inpBase} mt-1`}
                         value={downPayment === 0 ? "" : downPayment}
                         onChange={(e) => {
                           const v = clampDownPayment(e.target.value);
@@ -2852,12 +2931,12 @@ export default function SalesCandiesPOS({
                 )}
 
                 <div>
-                  <label className="block text-sm font-semibold">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Vendedor
                   </label>
                   {lockVendor ? (
                     <>
-                      <div className="mt-1 w-full border p-2 rounded bg-gray-50 text-sm">
+                      <div className={`${inpBase} mt-1 bg-slate-50 text-slate-800`}>
                         {(() => {
                           const v = activeVendors.find(
                             (x) => x.id === vendorId,
@@ -2867,7 +2946,7 @@ export default function SalesCandiesPOS({
                             : "—";
                         })()}
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">
+                      <p className="text-xs text-slate-500 mt-1">
                         Vendedor Logueado en esta app.
                       </p>
                     </>
@@ -2875,7 +2954,7 @@ export default function SalesCandiesPOS({
                     <>
                       <div className="mt-1 flex gap-1 items-center min-w-0">
                         <input
-                          className="flex-1 border p-2 rounded min-w-0"
+                          className={`${inpBase} flex-1 min-w-0 py-2`}
                           placeholder="Buscar vendedor..."
                           value={vendorQuery}
                           onChange={(e) =>
@@ -2886,18 +2965,20 @@ export default function SalesCandiesPOS({
                           }}
                         />
                         {vendorQuery ? (
-                          <button
+                          <Button
                             type="button"
-                            className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                            variant="ghost"
+                            className="shrink-0 px-2 py-2 text-sm font-medium text-blue-600 rounded-lg h-auto min-h-0 shadow-none"
                             onClick={() => setVendorQuery("")}
                           >
                             Limpiar
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
-                      <button
+                      <Button
                         type="button"
-                        className="mt-2 w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                        variant="outline"
+                        className={`${selectButtonClass} mt-2 border-slate-200 rounded-xl justify-between font-normal h-auto min-h-0 py-2.5`}
                         onClick={() => setMobileSheet("vendor")}
                       >
                         <span className="truncate text-sm">
@@ -2913,7 +2994,7 @@ export default function SalesCandiesPOS({
                             : "Elegir vendedor"}
                         </span>
                         <span className="text-slate-400 shrink-0">▼</span>
-                      </button>
+                      </Button>
                     </>
                   )}
                 </div>
@@ -2923,24 +3004,25 @@ export default function SalesCandiesPOS({
 
           {/* CARD 2: Productos */}
           <div className="bg-white rounded-xl border shadow">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => setOpenItems((v) => !v)}
-              className="w-full flex justify-between items-center p-3 font-semibold"
+              className="w-full flex justify-between items-center p-3 font-semibold rounded-none rounded-t-xl h-auto min-h-0"
             >
               Agrega Productos
               <span className="text-lg">{openItems ? "−" : "+"}</span>
-            </button>
+            </Button>
 
             {openItems && (
               <div className="p-3 space-y-3">
                 <div>
-                  <label className="block text-sm font-semibold">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Productos
                   </label>
                   <div className="mt-1 mb-2 flex gap-2 items-center min-w-0">
                     <input
-                      className="flex-1 border rounded px-2 py-2 min-w-0"
+                      className={`${inpBase} flex-1 min-w-0 py-2`}
                       placeholder={
                         vendorId
                           ? "Buscar producto por nombre o SKU"
@@ -2954,17 +3036,19 @@ export default function SalesCandiesPOS({
                       disabled={!vendorId}
                     />
                     {productQuery ? (
-                      <button
+                      <Button
                         type="button"
-                        className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                        variant="ghost"
+                        className="shrink-0 px-2 py-2 text-sm font-medium text-blue-600 rounded-lg h-auto min-h-0 shadow-none"
                         onClick={() => setProductQuery("")}
                       >
                         Limpiar
-                      </button>
+                      </Button>
                     ) : null}
-                    <button
+                    <Button
                       type="button"
-                      className="px-3 py-2 rounded bg-gray-800 text-white shrink-0"
+                      variant="primary"
+                      className="shrink-0 rounded-lg !bg-slate-800 hover:!bg-slate-900 active:!bg-slate-950"
                       onClick={() => setScanOpen(true)}
                       disabled={!vendorId}
                     >
@@ -2980,11 +3064,12 @@ export default function SalesCandiesPOS({
                         <rect x="3" y="15" width="6" height="6" rx="1" />
                         <rect x="15" y="15" width="6" height="6" rx="1" />
                       </svg>
-                    </button>
+                    </Button>
                   </div>
-                  <button
+                  <Button
                     type="button"
-                    className="w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                    variant="outline"
+                    className={`${selectButtonClass} border-slate-200 rounded-xl justify-between font-normal h-auto min-h-0 py-2.5`}
                     disabled={!vendorId}
                     onClick={() => setMobileSheet("product")}
                   >
@@ -2994,7 +3079,7 @@ export default function SalesCandiesPOS({
                         : "Selecciona un vendedor primero"}
                     </span>
                     <span className="text-slate-400 shrink-0">▼</span>
-                  </button>
+                  </Button>
                 </div>
 
                 {items.length === 0 ? (
@@ -3102,13 +3187,14 @@ export default function SalesCandiesPOS({
                           </div>
 
                           <div className="flex items-center justify-end">
-                            <button
+                            <Button
                               type="button"
-                              className="px-3 py-2 rounded-lg bg-red-100 hover:bg-red-200"
+                              variant="danger"
+                              className="rounded-lg !bg-red-100 !text-red-800 hover:!bg-red-200 active:!bg-red-300 shadow-none"
                               onClick={() => removeItem(it.productId)}
                             >
                               Quitar
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       );
@@ -3150,14 +3236,15 @@ export default function SalesCandiesPOS({
                 )}
 
                 <div className="mt-3 border rounded-xl p-3 bg-white">
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     onClick={() => setOpenAbonos((v) => !v)}
-                    className="w-full flex items-center justify-between font-semibold"
+                    className="w-full flex items-center justify-between font-semibold rounded-lg h-auto min-h-0 py-2"
                   >
                     <span>Abonos</span>
                     <span className="text-lg">{openAbonos ? "−" : "+"}</span>
-                  </button>
+                  </Button>
 
                   {openAbonos && (
                     <>
@@ -3180,18 +3267,20 @@ export default function SalesCandiesPOS({
                               }}
                             />
                             {abonoCustomerQuery ? (
-                              <button
+                              <Button
                                 type="button"
-                                className="shrink-0 px-2 py-2 text-sm text-blue-600"
+                                variant="ghost"
+                                className="shrink-0 px-2 py-2 text-sm text-blue-600 rounded-lg h-auto min-h-0 shadow-none"
                                 onClick={() => setAbonoCustomerQuery("")}
                               >
                                 Limpiar
-                              </button>
+                              </Button>
                             ) : null}
                           </div>
-                          <button
+                          <Button
                             type="button"
-                            className="mt-2 w-full border p-2 rounded text-left bg-white flex justify-between items-center gap-2 min-w-0"
+                            variant="outline"
+                            className="mt-2 w-full border p-2 rounded-xl text-left bg-white flex justify-between items-center gap-2 min-w-0 font-normal h-auto min-h-0"
                             onClick={() => setMobileSheet("abonoClient")}
                           >
                             <span className="truncate text-sm">
@@ -3201,7 +3290,7 @@ export default function SalesCandiesPOS({
                                 : "Elegir cliente"}
                             </span>
                             <span className="text-slate-400 shrink-0">▼</span>
-                          </button>
+                          </Button>
                         </div>
                         <div>
                           <label className="block text-xs text-gray-600">
@@ -3249,18 +3338,19 @@ export default function SalesCandiesPOS({
                       </div>
 
                       <div className="mt-2 flex justify-end">
-                        <button
+                        <Button
                           type="button"
-                          className={`px-3 py-2 rounded text-white ${
+                          variant="primary"
+                          className={`rounded-lg ${
                             abonoDisabled
-                              ? "bg-gray-300 cursor-not-allowed"
-                              : "bg-amber-600"
+                              ? "!bg-gray-300 !text-gray-600"
+                              : "!bg-amber-600 hover:!bg-amber-700 active:!bg-amber-800"
                           }`}
                           onClick={addPendingAbono}
                           disabled={abonoDisabled}
                         >
                           Agregar abono
-                        </button>
+                        </Button>
                       </div>
 
                       <div className="mt-3 space-y-2">
@@ -3329,13 +3419,15 @@ export default function SalesCandiesPOS({
                                     </div>
                                   </div>
                                   <div className="mt-2 text-right">
-                                    <button
+                                    <Button
                                       type="button"
-                                      className="px-2 py-1 rounded bg-red-100"
+                                      variant="danger"
+                                      size="sm"
+                                      className="rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 shadow-none"
                                       onClick={() => removePendingAbono(a.id)}
                                     >
                                       Quitar
-                                    </button>
+                                    </Button>
                                   </div>
                                 </div>
                               );
@@ -3351,13 +3443,14 @@ export default function SalesCandiesPOS({
           </div>
 
           {/* Guardar MOBILE */}
-          <button
+          <Button
             type="submit"
-            className="w-full bg-blue-600 text-white px-4 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-60"
+            variant="primary"
+            className="w-full rounded-xl py-3"
             disabled={saving}
           >
             {saving ? "Guardando..." : "Registrar venta"}
-          </button>
+          </Button>
         </div>
       </form>
 
@@ -3373,17 +3466,21 @@ export default function SalesCandiesPOS({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-semibold">Nombre</label>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Nombre
+                </label>
                 <input
-                  className="w-full border p-2 rounded"
+                  className={`${inpBase} mt-1`}
                   value={mName}
                   onChange={(e) => setMName(e.target.value)}
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold">Teléfono</label>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Teléfono
+                </label>
                 <input
-                  className="w-full border p-2 rounded"
+                  className={`${inpBase} mt-1`}
                   value={mPhone}
                   onChange={(e) => setMPhone(normalizePhone(e.target.value))}
                   placeholder="+505 88888888"
@@ -3391,50 +3488,44 @@ export default function SalesCandiesPOS({
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold">Lugar</label>
-                <select
-                  className="w-full border p-2 rounded"
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Lugar
+                </label>
+                <MobileHtmlSelect
                   value={mPlace}
-                  onChange={(e) => setMPlace(e.target.value as Place)}
-                >
-                  <option value="">—</option>
-                  {PLACES.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setMPlace(v as Place | "")}
+                  options={placeModalOptions}
+                  selectClassName={`${inpBase} py-2.5 mt-1`}
+                  buttonClassName={`${selectButtonClass} mt-1`}
+                  sheetTitle="Lugar"
+                />
               </div>
-              {/* <div>
-                <label className="block text-sm font-semibold">Estado</label>
-                <select
-                  className="w-full border p-2 rounded"
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Estado
+                </label>
+                <MobileHtmlSelect
                   value={mStatus}
-                  onChange={(e) => setMStatus(e.target.value as Status)}
-                >
-                  <option value="ACTIVO">ACTIVO</option>
-                  <option value="BLOQUEADO">BLOQUEADO</option>
-                </select>
-              </div> */}
+                  onChange={(v) => setMStatus(v as Status)}
+                  options={statusModalOptions}
+                  selectClassName={`${inpBase} py-2.5 mt-1`}
+                  buttonClassName={`${selectButtonClass} mt-1`}
+                  sheetTitle="Estado"
+                />
+              </div>
               {!lockVendor && (
                 <div>
-                  <label className="block text-sm font-semibold">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Vendedor
                   </label>
-                  <select
-                    className="w-full border p-2 rounded"
+                  <MobileHtmlSelect
                     value={mSellerId}
-                    onChange={(e) => setMSellerId(e.target.value)}
-                  >
-                    <option value="">Selecciona un vendedor</option>
-                    {vendors
-                      .filter((v) => (v.status ?? "ACTIVO") === "ACTIVO")
-                      .map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.name} — {v.branchLabel}
-                        </option>
-                      ))}
-                  </select>
+                    onChange={setMSellerId}
+                    options={modalVendorSelectOptions}
+                    selectClassName={`${inpBase} py-2.5 mt-1`}
+                    buttonClassName={`${selectButtonClass} mt-1`}
+                    sheetTitle="Vendedor"
+                  />
                 </div>
               )}
 
@@ -3455,11 +3546,11 @@ export default function SalesCandiesPOS({
                 />
               </div> */}
               <div className="md:col-span-2">
-                <label className="block text-sm font-semibold">
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Comentario
                 </label>
                 <textarea
-                  className="w-full border p-2 rounded resize-y min-h-20"
+                  className={`${inpBase} mt-1 resize-y min-h-20`}
                   value={mNotes}
                   onChange={(e) => setMNotes(e.target.value)}
                   maxLength={500}
@@ -3468,17 +3559,19 @@ export default function SalesCandiesPOS({
             </div>
 
             <div className="mt-4 flex flex-col sm:flex-row justify-end gap-2">
-              <button
-                className="w-full sm:w-auto px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                variant="secondary"
+                className="w-full sm:w-auto rounded-lg"
                 onClick={() => {
                   resetModal();
                   setShowModal(false);
                 }}
               >
                 Cancelar
-              </button>
-              <button
-                className="w-full sm:w-auto px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
+              </Button>
+              <Button
+                variant="primary"
+                className="w-full sm:w-auto rounded-lg !bg-green-600 hover:!bg-green-700 active:!bg-green-800"
                 onClick={async () => {
                   const sellerIdToSave = lockVendor
                     ? vendorId || sellerCandyId
@@ -3537,7 +3630,7 @@ export default function SalesCandiesPOS({
                 }}
               >
                 Guardar cliente
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -3565,14 +3658,15 @@ export default function SalesCandiesPOS({
               ))}
             </ul>
             <div className="flex justify-end gap-2">
-              <button
-                className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                variant="secondary"
+                className="rounded-lg"
                 onClick={() => {
                   setMissingFieldsModalOpen(false);
                 }}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
           </div>
         </div>

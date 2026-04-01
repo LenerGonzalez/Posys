@@ -21,10 +21,15 @@ import jsPDF from "jspdf";
 import * as XLSX from "xlsx";
 import { restoreCandySaleAndDelete } from "../../Services/inventory_candies";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 import Toast from "../common/Toast";
-import ActionMenu from "../common/ActionMenu";
+import ActionMenu, {
+  ActionMenuTrigger,
+  actionMenuItemClass,
+  actionMenuItemClassDestructive,
+  actionMenuItemClassWarning,
+} from "../common/ActionMenu";
 import RefreshButton from "../common/RefreshButton";
-import { FiMoreVertical } from "react-icons/fi";
 import CommissionAbonoHelpButton from "../common/CommissionAbonoHelpModal";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
@@ -1462,6 +1467,26 @@ export default function CierreVentasDulces({
     [visibleSales],
   );
 
+  /** Paquetes vendidos (suma de quantity) por tipo, mismo período que el resto de KPIs */
+  const kpiPaquetesCash = React.useMemo(
+    () =>
+      Math.round(
+        visibleSales
+          .filter((s) => s.type !== "CREDITO")
+          .reduce((sum, s) => sum + (s.quantity || 0), 0),
+      ),
+    [visibleSales],
+  );
+  const kpiPaquetesCredito = React.useMemo(
+    () =>
+      Math.round(
+        visibleSales
+          .filter((s) => s.type === "CREDITO")
+          .reduce((sum, s) => sum + (s.quantity || 0), 0),
+      ),
+    [visibleSales],
+  );
+
   const hasVisibleSales = visibleSales.length > 0;
 
   // ✅ Contadores para acciones masivas (usados en los botones)
@@ -2426,8 +2451,9 @@ export default function CierreVentasDulces({
       {/* Botones de acción arriba de filtros */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="relative">
-          <button
+          <Button
             type="button"
+            variant="primary"
             onClick={() => setActionsOpen((v) => !v)}
             disabled={!hasVisibleSales}
             title={
@@ -2435,10 +2461,11 @@ export default function CierreVentasDulces({
                 ? "Ver acciones disponibles para las ventas visibles"
                 : "No hay datos en pantalla para ejecutar acciones"
             }
-            className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+            size="sm"
+            className={`inline-flex items-center gap-1 !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
               hasVisibleSales
-                ? "bg-slate-800 text-white hover:bg-slate-900"
-                : "bg-slate-500 text-white opacity-60 cursor-not-allowed"
+                ? "!bg-slate-800 hover:!bg-slate-900"
+                : "!bg-slate-500 opacity-60 cursor-not-allowed"
             }`}
           >
             Acciones
@@ -2449,12 +2476,14 @@ export default function CierreVentasDulces({
             >
               ▼
             </span>
-          </button>
+          </Button>
 
           {actionsOpen && (
             <div className="absolute z-30 mt-2 w-64 rounded-xl bg-white shadow-lg border border-slate-200 p-2 space-y-2">
               {isAdmin && (
-                <button
+                <Button
+                  type="button"
+                  variant="primary"
                   onClick={handleSaveClosure}
                   disabled={!hasVisibleSales || !kpiFloCount || processing}
                   title={
@@ -2464,10 +2493,11 @@ export default function CierreVentasDulces({
                         ? `Procesar ${kpiFloCount} ventas flotantes visibles`
                         : "No hay ventas flotantes en este período para procesar"
                   }
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     !hasVisibleSales || !kpiFloCount || processing
-                      ? "bg-blue-400 text-white opacity-60 cursor-not-allowed"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
+                      ? "!bg-blue-400 opacity-60 cursor-not-allowed"
+                      : "!bg-blue-600 hover:!bg-blue-700"
                   }`}
                 >
                   <span>Procesar cierre</span>
@@ -2476,17 +2506,20 @@ export default function CierreVentasDulces({
                       {kpiFloCount}
                     </span>
                   ) : null}
-                </button>
+                </Button>
               )}
 
               {isAdmin && (
-                <button
+                <Button
+                  type="button"
+                  variant="primary"
                   onClick={backfillUvXpaqInSales}
                   disabled={!hasVisibleSales || isBackfillingUv}
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     !hasVisibleSales || isBackfillingUv
-                      ? "bg-emerald-400 text-white opacity-60 cursor-not-allowed"
-                      : "bg-emerald-600 text-white hover:bg-emerald-700"
+                      ? "!bg-emerald-400 opacity-60 cursor-not-allowed"
+                      : "!bg-emerald-600 hover:!bg-emerald-700"
                   }`}
                 >
                   <span>
@@ -2494,59 +2527,73 @@ export default function CierreVentasDulces({
                       ? "Actualizando UVxPaq..."
                       : "Actualizar UVxPaq"}
                   </span>
-                </button>
+                </Button>
               )}
 
               {isAdmin && (
-                <button
+                <Button
+                  type="button"
+                  variant="danger"
                   onClick={backfillLegacySales}
                   disabled={!hasVisibleSales}
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     hasVisibleSales
-                      ? "bg-rose-600 text-white hover:bg-rose-700"
-                      : "bg-rose-300 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-rose-600 hover:!bg-rose-700"
+                      : "!bg-rose-300 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>Backfill ventas (legacy)</span>
-                </button>
+                </Button>
               )}
 
-              <button
+              <Button
+                type="button"
+                variant="primary"
                 onClick={handleDownloadPDF}
                 disabled={!hasVisibleSales}
-                className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                size="sm"
+                className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                   hasVisibleSales
-                    ? "bg-green-600 text-white hover:bg-green-700"
-                    : "bg-green-400 text-white opacity-60 cursor-not-allowed"
+                    ? "!bg-green-600 hover:!bg-green-700"
+                    : "!bg-green-400 opacity-60 cursor-not-allowed"
                 }`}
               >
                 <span>PDF</span>
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
                 onClick={handleExportCSV}
                 disabled={!hasVisibleSales}
-                className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                size="sm"
+                className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                   hasVisibleSales
-                    ? "bg-slate-700 text-white hover:bg-slate-800"
-                    : "bg-slate-500 text-white opacity-60 cursor-not-allowed"
+                    ? "!bg-slate-700 hover:!bg-slate-800"
+                    : "!bg-slate-500 opacity-60 cursor-not-allowed"
                 }`}
               >
                 <span>CSV</span>
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
                 onClick={handleExportXLSX}
                 disabled={!hasVisibleSales}
-                className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                size="sm"
+                className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                   hasVisibleSales
-                    ? "bg-amber-600 text-white hover:bg-amber-700"
-                    : "bg-amber-400 text-white opacity-60 cursor-not-allowed"
+                    ? "!bg-amber-600 hover:!bg-amber-700"
+                    : "!bg-amber-400 opacity-60 cursor-not-allowed"
                 }`}
               >
                 <span>Excel</span>
-              </button>
+              </Button>
 
               {isAdmin && (
-                <button
+                <Button
+                  type="button"
+                  variant="danger"
                   onClick={() => handleBulkRevert(false)}
                   disabled={!bulkRevertCashCount}
                   title={
@@ -2554,10 +2601,11 @@ export default function CierreVentasDulces({
                       ? `Revertir ${bulkRevertCashCount} ventas Cash procesadas visibles`
                       : "No hay ventas Cash procesadas en la tabla para revertir"
                   }
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     bulkRevertCashCount
-                      ? "bg-rose-600 text-white hover:bg-rose-700"
-                      : "bg-rose-300 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-rose-600 hover:!bg-rose-700"
+                      : "!bg-rose-300 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>Revertir Cash (masivo)</span>
@@ -2566,11 +2614,13 @@ export default function CierreVentasDulces({
                       {bulkRevertCashCount}
                     </span>
                   ) : null}
-                </button>
+                </Button>
               )}
 
               {isAdmin && (
-                <button
+                <Button
+                  type="button"
+                  variant="danger"
                   onClick={() => handleBulkRevert(true)}
                   disabled={!bulkRevertCreditCount}
                   title={
@@ -2578,10 +2628,11 @@ export default function CierreVentasDulces({
                       ? `Revertir ${bulkRevertCreditCount} ventas Crédito procesadas visibles`
                       : "No hay ventas Crédito procesadas en la tabla para revertir"
                   }
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     bulkRevertCreditCount
-                      ? "bg-rose-700 text-white hover:bg-rose-800"
-                      : "bg-rose-300 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-rose-700 hover:!bg-rose-800"
+                      : "!bg-rose-300 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>Revertir Crédito (masivo)</span>
@@ -2590,11 +2641,13 @@ export default function CierreVentasDulces({
                       {bulkRevertCreditCount}
                     </span>
                   ) : null}
-                </button>
+                </Button>
               )}
 
               {isAdmin && (
-                <button
+                <Button
+                  type="button"
+                  variant="danger"
                   onClick={() => {
                     const forCredit = false;
                     const toDelete = (
@@ -2617,10 +2670,11 @@ export default function CierreVentasDulces({
                       ? `Eliminar ${bulkDeleteCashCount} ventas Cash flotantes visibles`
                       : "No hay ventas Cash flotantes en la tabla para eliminar"
                   }
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     bulkDeleteCashCount
-                      ? "bg-red-600 text-white hover:bg-red-700"
-                      : "bg-red-300 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-red-600 hover:!bg-red-700"
+                      : "!bg-red-300 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>Eliminar Cash (masivo)</span>
@@ -2629,11 +2683,13 @@ export default function CierreVentasDulces({
                       {bulkDeleteCashCount}
                     </span>
                   ) : null}
-                </button>
+                </Button>
               )}
 
               {isAdmin && (
-                <button
+                <Button
+                  type="button"
+                  variant="danger"
                   onClick={() => {
                     const forCredit = true;
                     const toDelete = (
@@ -2656,10 +2712,11 @@ export default function CierreVentasDulces({
                       ? `Eliminar ${bulkDeleteCreditCount} ventas Crédito flotantes visibles`
                       : "No hay ventas Crédito flotantes en la tabla para eliminar"
                   }
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     bulkDeleteCreditCount
-                      ? "bg-red-700 text-white hover:bg-red-800"
-                      : "bg-red-300 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-red-700 hover:!bg-red-800"
+                      : "!bg-red-300 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>Eliminar Crédito (masivo)</span>
@@ -2668,7 +2725,7 @@ export default function CierreVentasDulces({
                       {bulkDeleteCreditCount}
                     </span>
                   ) : null}
-                </button>
+                </Button>
               )}
             </div>
           )}
@@ -2677,9 +2734,10 @@ export default function CierreVentasDulces({
 
       {/* filtros por periodo + estado + vendedor */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          variant="ghost"
+          className="w-full justify-between !rounded-t-xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-slate-800 shadow-none hover:bg-slate-50/90"
           onClick={() => setFiltersCardOpen((v) => !v)}
           aria-expanded={filtersCardOpen}
         >
@@ -2689,41 +2747,20 @@ export default function CierreVentasDulces({
           >
             ▼
           </span>
-        </button>
+        </Button>
         <div
           className={`collapsible-content ${filtersCardOpen ? "block" : "hidden"} border-t p-4`}
         >
           {/* Botones de acción también dentro del card de filtros en mobile */}
           <div className="mb-4 md:hidden space-y-2">
-            {/* <button
-              type="button"
-              onClick={() => setMobileActionsOpen((v) => !v)}
-              disabled={!hasVisibleSales}
-              title={
-                hasVisibleSales
-                  ? "Ver acciones disponibles para las ventas visibles"
-                  : "No hay datos en pantalla para ejecutar acciones"
-              }
-              className={`w-full inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
-                hasVisibleSales
-                  ? "bg-slate-800 text-white hover:bg-slate-900"
-                  : "bg-slate-500 text-white opacity-60 cursor-not-allowed"
-              }`}
-            >
-              Opciones
-              <span
-                className={`text-[10px] transition-transform ${
-                  mobileActionsOpen ? "rotate-180" : ""
-                }`}
-              >
-                ▼
-              </span>
-            </button> */}
+            {/* Legacy: control móvil "Opciones" (deshabilitado) */}
 
             {mobileActionsOpen && (
               <div className="space-y-2">
                 {isAdmin && (
-                  <button
+                  <Button
+                    type="button"
+                    variant="primary"
                     onClick={handleSaveClosure}
                     disabled={!hasVisibleSales || !kpiFloCount || processing}
                     title={
@@ -2733,10 +2770,11 @@ export default function CierreVentasDulces({
                           ? `Procesar ${kpiFloCount} ventas flotantes visibles`
                           : "No hay ventas flotantes en este período para procesar"
                     }
-                    className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                    size="sm"
+                    className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                       !hasVisibleSales || !kpiFloCount || processing
-                        ? "bg-blue-400 text-white opacity-60 cursor-not-allowed"
-                        : "bg-blue-600 text-white hover:bg-blue-700"
+                        ? "!bg-blue-400 opacity-60 cursor-not-allowed"
+                        : "!bg-blue-600 hover:!bg-blue-700"
                     }`}
                   >
                     <span>Procesar cierre</span>
@@ -2745,45 +2783,56 @@ export default function CierreVentasDulces({
                         {kpiFloCount}
                       </span>
                     ) : null}
-                  </button>
+                  </Button>
                 )}
 
-                <button
+                <Button
+                  type="button"
+                  variant="primary"
                   onClick={handleDownloadPDF}
                   disabled={!hasVisibleSales}
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     hasVisibleSales
-                      ? "bg-green-600 text-white hover:bg-green-700"
-                      : "bg-green-400 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-green-600 hover:!bg-green-700"
+                      : "!bg-green-400 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>PDF</span>
-                </button>
-                <button
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
                   onClick={handleExportCSV}
                   disabled={!hasVisibleSales}
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     hasVisibleSales
-                      ? "bg-slate-700 text-white hover:bg-slate-800"
-                      : "bg-slate-500 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-slate-700 hover:!bg-slate-800"
+                      : "!bg-slate-500 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>CSV</span>
-                </button>
-                <button
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
                   onClick={handleExportXLSX}
                   disabled={!hasVisibleSales}
-                  className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                  size="sm"
+                  className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                     hasVisibleSales
-                      ? "bg-amber-600 text-white hover:bg-amber-700"
-                      : "bg-amber-400 text-white opacity-60 cursor-not-allowed"
+                      ? "!bg-amber-600 hover:!bg-amber-700"
+                      : "!bg-amber-400 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span>Excel</span>
-                </button>
+                </Button>
 
                 {isAdmin && (
-                  <button
+                  <Button
+                    type="button"
+                    variant="danger"
                     onClick={() => {
                       const forCredit = false;
                       const toDelete = (
@@ -2806,10 +2855,11 @@ export default function CierreVentasDulces({
                         ? `Eliminar ${bulkDeleteCashCount} ventas Cash flotantes visibles`
                         : "No hay ventas Cash flotantes en la tabla para eliminar"
                     }
-                    className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                    size="sm"
+                    className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                       bulkDeleteCashCount
-                        ? "bg-red-600 text-white hover:bg-red-700"
-                        : "bg-red-300 text-white opacity-60 cursor-not-allowed"
+                        ? "!bg-red-600 hover:!bg-red-700"
+                        : "!bg-red-300 opacity-60 cursor-not-allowed"
                     }`}
                   >
                     <span>Eliminar Cash (masivo)</span>
@@ -2818,11 +2868,13 @@ export default function CierreVentasDulces({
                         {bulkDeleteCashCount}
                       </span>
                     ) : null}
-                  </button>
+                  </Button>
                 )}
 
                 {isAdmin && (
-                  <button
+                  <Button
+                    type="button"
+                    variant="danger"
                     onClick={() => {
                       const forCredit = true;
                       const toDelete = (
@@ -2845,10 +2897,11 @@ export default function CierreVentasDulces({
                         ? `Eliminar ${bulkDeleteCreditCount} ventas Crédito flotantes visibles`
                         : "No hay ventas Crédito flotantes en la tabla para eliminar"
                     }
-                    className={`w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm transition-colors ${
+                    size="sm"
+                    className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
                       bulkDeleteCreditCount
-                        ? "bg-red-700 text-white hover:bg-red-800"
-                        : "bg-red-300 text-white opacity-60 cursor-not-allowed"
+                        ? "!bg-red-700 hover:!bg-red-800"
+                        : "!bg-red-300 opacity-60 cursor-not-allowed"
                     }`}
                   >
                     <span>Eliminar Crédito (masivo)</span>
@@ -2857,25 +2910,31 @@ export default function CierreVentasDulces({
                         {bulkDeleteCreditCount}
                       </span>
                     ) : null}
-                  </button>
+                  </Button>
                 )}
 
                 {isAdmin && (
-                  <button
+                  <Button
+                    type="button"
+                    variant="danger"
                     onClick={() => handleBulkRevert(false)}
-                    className="w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm bg-rose-600 text-white hover:bg-rose-700 transition-colors"
+                    size="sm"
+                    className="w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold !bg-rose-600 hover:!bg-rose-700"
                   >
                     <span>Revertir Cash (masivo)</span>
-                  </button>
+                  </Button>
                 )}
 
                 {isAdmin && (
-                  <button
+                  <Button
+                    type="button"
+                    variant="danger"
                     onClick={() => handleBulkRevert(true)}
-                    className="w-full inline-flex items-center justify-between px-3 py-1.5 text-xs font-semibold rounded-full shadow-sm bg-rose-700 text-white hover:bg-rose-800 transition-colors"
+                    size="sm"
+                    className="w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold !bg-rose-700 hover:!bg-rose-800"
                   >
                     <span>Revertir Crédito (masivo)</span>
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
@@ -2966,9 +3025,10 @@ export default function CierreVentasDulces({
 
       {/* KPIs arriba (con KPIs por vendedor adentro) */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-        <button
+        <Button
           type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold"
+          variant="ghost"
+          className="w-full justify-between !rounded-t-xl !rounded-b-none px-4 py-3 text-left text-sm font-semibold text-slate-800 shadow-none"
           onClick={() => setKpiCardOpen((v) => !v)}
           aria-expanded={kpiCardOpen}
         >
@@ -2978,7 +3038,7 @@ export default function CierreVentasDulces({
           >
             ▼
           </span>
-        </button>
+        </Button>
         <div
           className={`collapsible-content ${kpiCardOpen ? "block" : "hidden"} border-t p-4`}
         >
@@ -3067,6 +3127,22 @@ export default function CierreVentasDulces({
                   {kpiCreditoCount}
                 </span>
               </div>
+              <div className="flex items-center gap-2 pt-1 border-t border-emerald-200/80">
+                <span className="text-xs text-emerald-800 font-semibold">
+                  Paquetes cash
+                </span>
+                <span className="text-2xl font-bold ml-auto tabular-nums">
+                  {qty3(kpiPaquetesCash)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-emerald-800 font-semibold">
+                  Paquetes crédito
+                </span>
+                <span className="text-2xl font-bold ml-auto tabular-nums">
+                  {qty3(kpiPaquetesCredito)}
+                </span>
+              </div>
               <div className="text-xs text-emerald-700/70 mt-1">
                 Período: {startDate} → {endDate}
               </div>
@@ -3121,9 +3197,10 @@ export default function CierreVentasDulces({
           </div>
           {/* KPIs por vendedor ahora dentro del card de KPIs */}
           <div className="mt-6">
-            <button
+            <Button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+              variant="ghost"
+              className="w-full justify-between !rounded-[25px] px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50/90"
               onClick={() => setVendorKpiCardOpen((v) => !v)}
               aria-expanded={vendorKpiCardOpen}
             >
@@ -3133,7 +3210,7 @@ export default function CierreVentasDulces({
               >
                 ▼
               </span>
-            </button>
+            </Button>
             <div
               className={`collapsible-content ${vendorKpiCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
@@ -3291,9 +3368,10 @@ export default function CierreVentasDulces({
           </div>
 
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-            <button
+            <Button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+              variant="ghost"
+              className="w-full justify-between !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
               onClick={() => setCashCardOpen((v) => !v)}
               aria-expanded={cashCardOpen}
             >
@@ -3303,7 +3381,7 @@ export default function CierreVentasDulces({
               >
                 ▼
               </span>
-            </button>
+            </Button>
             <div
               className={`collapsible-content ${cashCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
@@ -3502,10 +3580,10 @@ export default function CierreVentasDulces({
                             <td className="px-3 py-2 text-left">
                               {getSellerDisplayName(s)}
                             </td>
-                            <td className="px-3 py-2">
-                              <button
-                                type="button"
-                                className="p-2 rounded border border-slate-200 hover:bg-slate-50 inline-flex mx-auto"
+                            <td className="px-3 py-2 text-center align-middle">
+                              <ActionMenuTrigger
+                                className="!h-8 !w-8"
+                                iconClassName="h-5 w-5 text-gray-700"
                                 aria-label="Acciones"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -3516,9 +3594,7 @@ export default function CierreVentasDulces({
                                     ).getBoundingClientRect(),
                                   });
                                 }}
-                              >
-                                <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                              </button>
+                              />
                             </td>
                           </tr>
                         );
@@ -3669,9 +3745,9 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="pt-2 flex justify-end">
-                          <button
-                            type="button"
-                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                          <ActionMenuTrigger
+                            className="!h-8 !w-8"
+                            iconClassName="h-5 w-5 text-gray-700"
                             aria-label="Acciones"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -3682,9 +3758,7 @@ export default function CierreVentasDulces({
                                 ).getBoundingClientRect(),
                               });
                             }}
-                          >
-                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                          </button>
+                          />
                         </div>
                       </div>
                     </details>
@@ -3701,9 +3775,10 @@ export default function CierreVentasDulces({
           </div>
 
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-            <button
+            <Button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+              variant="ghost"
+              className="w-full justify-between !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
               onClick={() => setCreditCardOpen((v) => !v)}
               aria-expanded={creditCardOpen}
             >
@@ -3713,7 +3788,7 @@ export default function CierreVentasDulces({
               >
                 ▼
               </span>
-            </button>
+            </Button>
             <div
               className={`collapsible-content ${creditCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
@@ -3908,10 +3983,10 @@ export default function CierreVentasDulces({
                             <td className="px-3 py-2 text-left">
                               {getSellerDisplayName(s)}
                             </td>
-                            <td className="px-3 py-2">
-                              <button
-                                type="button"
-                                className="p-2 rounded border border-slate-200 hover:bg-slate-50 inline-flex mx-auto"
+                            <td className="px-3 py-2 text-center align-middle">
+                              <ActionMenuTrigger
+                                className="!h-8 !w-8"
+                                iconClassName="h-5 w-5 text-gray-700"
                                 aria-label="Acciones"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -3922,9 +3997,7 @@ export default function CierreVentasDulces({
                                     ).getBoundingClientRect(),
                                   });
                                 }}
-                              >
-                                <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                              </button>
+                              />
                             </td>
                           </tr>
                         );
@@ -4055,9 +4128,9 @@ export default function CierreVentasDulces({
                         </div>
 
                         <div className="pt-2 flex justify-end">
-                          <button
-                            type="button"
-                            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50"
+                          <ActionMenuTrigger
+                            className="!h-8 !w-8"
+                            iconClassName="h-5 w-5 text-gray-700"
                             aria-label="Acciones"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -4068,9 +4141,7 @@ export default function CierreVentasDulces({
                                 ).getBoundingClientRect(),
                               });
                             }}
-                          >
-                            <FiMoreVertical className="w-5 h-5 text-slate-700" />
-                          </button>
+                          />
                         </div>
                       </div>
                     </details>
@@ -4087,9 +4158,10 @@ export default function CierreVentasDulces({
           </div>
 
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-            <button
+            <Button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+              variant="ghost"
+              className="w-full justify-between !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
               onClick={() => setAbonosCardOpen((v) => !v)}
               aria-expanded={abonosCardOpen}
             >
@@ -4099,7 +4171,7 @@ export default function CierreVentasDulces({
               >
                 ▼
               </span>
-            </button>
+            </Button>
             <div
               className={`collapsible-content ${abonosCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
@@ -4371,9 +4443,10 @@ export default function CierreVentasDulces({
           )}
 
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm mb-4">
-            <button
+            <Button
               type="button"
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+              variant="ghost"
+              className="w-full justify-between !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
               onClick={() => setProductCardOpen((v) => !v)}
               aria-expanded={productCardOpen}
             >
@@ -4383,7 +4456,7 @@ export default function CierreVentasDulces({
               >
                 ▼
               </span>
-            </button>
+            </Button>
             <div
               className={`collapsible-content ${productCardOpen ? "block" : "hidden"} border-t border-slate-100 p-4`}
             >
@@ -4395,9 +4468,10 @@ export default function CierreVentasDulces({
                       key={group.category}
                       className="border border-slate-200 rounded-xl bg-white shadow-sm"
                     >
-                      <button
+                      <Button
                         type="button"
-                        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+                        variant="ghost"
+                        className="w-full justify-between !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
                         onClick={() => toggleCategory(group.category)}
                         aria-expanded={isOpen}
                       >
@@ -4416,7 +4490,7 @@ export default function CierreVentasDulces({
                         >
                           ▼
                         </span>
-                      </button>
+                      </Button>
 
                       <div
                         className={`collapsible-content ${isOpen ? "block" : "hidden"} border-t border-slate-100 p-3`}
@@ -4632,22 +4706,26 @@ export default function CierreVentasDulces({
             )}
 
             <div className="flex justify-end gap-2 mt-4">
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setProcessPreviewOpen(false)}
                 disabled={processing}
-                className={`px-3 py-1 border rounded text-sm ${processing ? "opacity-60 cursor-not-allowed" : ""}`}
+                className={`!rounded-xl ${processing ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 Cancelar
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={performProcessClosure}
                 disabled={processing}
-                className={`px-3 py-1 bg-blue-600 text-white rounded text-sm ${processing ? "opacity-60 cursor-not-allowed" : ""}`}
+                className={`!rounded-xl ${processing ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 {processing
                   ? `Procesando ${processingProgress}/${processPreviewCount}`
                   : `Procesar ${processPreviewCount} ventas`}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4697,18 +4775,22 @@ export default function CierreVentasDulces({
             </div>
 
             <div className="flex justify-end gap-2 mt-4">
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setBulkPreviewOpen(false)}
-                className="px-3 py-1 border rounded text-sm"
+                className="!rounded-xl"
               >
                 Cancelar
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={performBulkRevert}
-                className="px-3 py-1 bg-rose-600 text-white rounded text-sm"
+                className="!rounded-xl"
               >
                 Revertir {bulkPreviewCount} ventas
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4770,22 +4852,26 @@ export default function CierreVentasDulces({
             )}
 
             <div className="flex justify-end gap-2 mt-4">
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setBulkDeleteOpen(false)}
                 disabled={bulkDeleting}
-                className={`px-3 py-1 border rounded text-sm ${bulkDeleting ? "opacity-60 cursor-not-allowed" : ""}`}
+                className={`!rounded-xl ${bulkDeleting ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 Cancelar
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={performBulkDelete}
                 disabled={bulkDeleting}
-                className={`px-3 py-1 bg-red-600 text-white rounded text-sm ${bulkDeleting ? "opacity-60 cursor-not-allowed" : ""}`}
+                className={`!rounded-xl ${bulkDeleting ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 {bulkDeleting
                   ? `Eliminando ${bulkDeleteProgress}/${bulkDeleteCount}`
                   : `Eliminar ${bulkDeleteCount} ventas`}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4856,18 +4942,22 @@ export default function CierreVentasDulces({
             />
 
             <div className="flex gap-2 justify-end pt-2">
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setEditing(null)}
-                className="px-3 py-1 border rounded"
+                className="!rounded-xl"
               >
                 Cancelar
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={saveEdit}
-                className="px-3 py-1 rounded text-white bg-indigo-600 hover:bg-indigo-700"
+                className="!rounded-xl !bg-indigo-600 hover:!bg-indigo-700"
               >
                 Guardar cambios
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -4898,39 +4988,45 @@ export default function CierreVentasDulces({
                 )}
                 {isAdmin && sale.status === "FLOTANTE" && (
                   <>
-                    <button
+                    <Button
                       type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                      variant="ghost"
+                      size="sm"
+                      className={actionMenuItemClass}
                       onClick={() => {
                         setCierreSaleMenu(null);
                         openEdit(sale);
                       }}
                     >
                       Editar
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-red-700 font-semibold"
+                      variant="ghost"
+                      size="sm"
+                      className={actionMenuItemClassDestructive}
                       onClick={() => {
                         setCierreSaleMenu(null);
                         void deleteSale(sale.id);
                       }}
                     >
                       Eliminar
-                    </button>
+                    </Button>
                   </>
                 )}
                 {isAdmin && sale.status === "PROCESADA" && (
-                  <button
+                  <Button
                     type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 text-amber-800 font-semibold"
+                    variant="ghost"
+                    size="sm"
+                    className={actionMenuItemClassWarning}
                     onClick={() => {
                       setCierreSaleMenu(null);
                       void handleRevert(sale.id);
                     }}
                   >
                     Revertir
-                  </button>
+                  </Button>
                 )}
               </div>
             );

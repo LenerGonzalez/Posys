@@ -10,8 +10,15 @@ import { format } from "date-fns";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import {
+  POLLO_SELECT_COMPACT_DESKTOP_CLASS,
+  POLLO_SELECT_COMPACT_MOBILE_CLASS,
+  POLLO_SELECT_DESKTOP_CLASS,
+  POLLO_SELECT_MOBILE_BUTTON_CLASS,
+} from "../common/polloSelectStyles";
 import Toast from "../common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import Button from "../common/Button";
 import * as XLSX from "xlsx";
 import {
   fetchGlobalInventoryKpisPollo_debug,
@@ -43,9 +50,8 @@ export default function EvolutivoInventarioPollo({
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [selectedKey, setSelectedKey] = useState<string>("");
 
-  // Search dropdown
-  const [productSearch, setProductSearch] = useState("");
-  const [productPickerOpen, setProductPickerOpen] = useState(false);
+  /** Texto para filtrar la lista del select de producto (no sustituye al valor elegido). */
+  const [productFilterQuery, setProductFilterQuery] = useState("");
 
   const selected = useMemo(
     () => products.find((p) => p.key === selectedKey) || null,
@@ -103,7 +109,7 @@ export default function EvolutivoInventarioPollo({
         // si el seleccionado ya no existe, limpia
         if (selectedKey && !withStock.some((o) => o.key === selectedKey)) {
           setSelectedKey("");
-          setProductSearch("");
+          setProductFilterQuery("");
         }
       } catch (e) {
         console.error("Error products inventory:", e);
@@ -396,24 +402,27 @@ export default function EvolutivoInventarioPollo({
       .replace(/[\u0300-\u036f]/g, "")
       .trim();
 
-  const filteredProducts = useMemo(() => {
-    const q = norm(productSearch);
-    if (!q) return products;
-
-    return products.filter((p: any) => {
-      const name = norm(p.productName || "");
-      const key = norm(p.key || "");
-      return name.includes(q) || key.includes(q);
-    });
-  }, [products, productSearch]);
-
-  // sincroniza el input cuando cambias selectedKey
-  useEffect(() => {
-    if (!selectedKey) return;
-    const p = products.find((x: any) => x.key === selectedKey);
-    if (p) setProductSearch(p.productName || "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey]);
+  const filteredProductSelectOptions = useMemo(() => {
+    const q = norm(productFilterQuery);
+    const rows = products
+      .filter((p: any) => {
+        if (selectedKey && p.key === selectedKey) return true;
+        if (!q) return true;
+        const name = norm(p.productName || "");
+        const key = norm(p.key || "");
+        return name.includes(q) || key.includes(q);
+      })
+      .map((p: any) => ({
+        value: p.key,
+        label: `${p.productName} — ${
+          p.measurement === "lb" ? "Lbs" : "Unid"
+        } · stock ${qty3((p as any).remaining)}`,
+      }));
+    return [
+      { value: "", label: "— Elegir producto —" },
+      ...rows,
+    ];
+  }, [products, productFilterQuery, selectedKey]);
 
   // =========================
   // Guardar ajuste manual
@@ -568,88 +577,48 @@ export default function EvolutivoInventarioPollo({
       {/* Mobile: producto + filtros + tabla inside a card */}
       <div className="sm:hidden mb-4">
         <div className="border rounded-2xl p-2 bg-white space-y-2">
-          <div className="relative">
+          <div className="space-y-2">
             <div className="text-xs text-gray-500 mb-1">
               Producto (solo con stock)
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                className="border rounded px-2 py-1.5 text-sm flex-1 min-w-0"
-                placeholder="Buscar producto por nombre…"
-                value={productSearch}
-                onChange={(e) => {
-                  setProductSearch(e.target.value);
-                  setProductPickerOpen(true);
-                }}
-                onFocus={() => setProductPickerOpen(true)}
-              />
+            <input
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm w-full min-w-0 shadow-sm"
+              placeholder="Buscar para filtrar lista…"
+              value={productFilterQuery}
+              onChange={(e) => setProductFilterQuery(e.target.value)}
+            />
+            <div className="flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                <MobileHtmlSelect
+                  value={selectedKey}
+                  onChange={(v) => {
+                    setSelectedKey(v);
+                    setProductFilterQuery("");
+                  }}
+                  options={filteredProductSelectOptions}
+                  sheetTitle="Producto"
+                  triggerIcon="menu"
+                  selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                  buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+                />
+              </div>
               {selectedKey ? (
-                <button
+                <Button
                   type="button"
                   aria-label="Limpiar producto"
                   title="Limpiar producto"
                   onClick={() => {
                     setSelectedKey("");
-                    setProductSearch("");
-                    setProductPickerOpen(false);
+                    setProductFilterQuery("");
                   }}
-                  className="bg-gray-200 text-gray-700 px-2 py-1 rounded-md hover:bg-gray-300 flex items-center justify-center text-sm"
+                  variant="secondary"
+                  size="sm"
+                  className="!rounded-xl shrink-0 flex items-center justify-center !px-2 !py-2 hover:!bg-gray-200"
                 >
                   <span>🧹</span>
-                </button>
+                </Button>
               ) : null}
             </div>
-
-            {/* Dropdown (same behavior as desktop) */}
-            {productPickerOpen && (
-              <div className="absolute z-50 mt-2 w-full bg-white border rounded-xl shadow-lg max-h-56 overflow-auto">
-                <div className="px-2 py-1 text-xs text-gray-500 border-b bg-gray-50">
-                  {filteredProducts.length} producto(s) con stock
-                </div>
-
-                {filteredProducts.length === 0 ? (
-                  <div className="px-2 py-2 text-sm text-gray-500">
-                    No hay coincidencias.
-                  </div>
-                ) : (
-                  filteredProducts.map((p: any) => (
-                    <button
-                      key={p.key}
-                      type="button"
-                      onClick={() => {
-                        if (selectedKey === p.key) {
-                          setSelectedKey("");
-                          setProductSearch("");
-                        } else {
-                          setSelectedKey(p.key);
-                          setProductSearch(p.productName || "");
-                        }
-                        setProductPickerOpen(false);
-                      }}
-                      className="w-full text-left px-2 py-1.5 hover:bg-gray-100 active:bg-gray-200 text-sm"
-                    >
-                      <div className="font-medium truncate">
-                        {p.productName}
-                      </div>
-                      <div className="text-[11px] text-gray-500">
-                        {p.measurement === "lb" ? "Lbs" : "Unidades"} • stock:{" "}
-                        {qty3((p as any).remaining)}
-                      </div>
-                    </button>
-                  ))
-                )}
-
-                <div className="p-1 border-t bg-white">
-                  <button
-                    type="button"
-                    className="w-full text-sm px-2 py-1 rounded-md border hover:bg-gray-50"
-                    onClick={() => setProductPickerOpen(false)}
-                  >
-                    Cerrar
-                  </button>
-                </div>
-              </div>
-            )}
 
             {selected ? (
               <>
@@ -703,46 +672,45 @@ export default function EvolutivoInventarioPollo({
           </div>
 
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
               onClick={() => setAdjModalOpen(true)}
-              className="bg-blue-600 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-base hover:bg-blue-700"
+              variant="primary"
+              className="!rounded-lg text-sm sm:text-base"
             >
               Crear Movimiento
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={handleExportExcel}
-              className="bg-green-600 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-base hover:bg-green-700"
+              variant="primary"
+              className="!bg-green-600 hover:!bg-green-700 !text-white !rounded-lg text-sm sm:text-base"
             >
               Exportar Excel
-            </button>
+            </Button>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 w-full">
-            <div className="w-full sm:w-auto min-w-0 flex-1">
-              <MobileHtmlSelect
-                label="Tipo"
-                value={typeFilter}
-                onChange={setTypeFilter}
-                options={typeFilterSelectOptions}
-                sheetTitle="Filtrar por tipo"
-                selectClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm"
-                buttonClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm text-left flex items-center justify-between gap-2 bg-white"
-              />
-            </div>
-
-            <div className="w-full sm:w-auto min-w-0 flex-1">
-              <MobileHtmlSelect
-                label="Precio"
-                value={priceFilter}
-                onChange={setPriceFilter}
-                options={priceFilterSelectOptions}
-                sheetTitle="Filtrar por precio"
-                selectClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm"
-                buttonClassName="border rounded px-2 py-2 w-full sm:w-56 text-sm text-left flex items-center justify-between gap-2 bg-white"
-              />
-            </div>
+          <div className="grid grid-cols-2 gap-2 w-full items-end">
+            <MobileHtmlSelect
+              label="Tipo"
+              value={typeFilter}
+              onChange={setTypeFilter}
+              options={typeFilterSelectOptions}
+              sheetTitle="Filtrar por tipo"
+              triggerIcon="menu"
+              selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+              buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+            />
+            <MobileHtmlSelect
+              label="Precio"
+              value={priceFilter}
+              onChange={setPriceFilter}
+              options={priceFilterSelectOptions}
+              sheetTitle="Filtrar por precio"
+              triggerIcon="menu"
+              selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+              buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+            />
           </div>
 
           {/* Mobile: listado como cards */}
@@ -804,102 +772,50 @@ export default function EvolutivoInventarioPollo({
         </div>
       </div>
 
-      {/* Desktop selector + table */}
-      <div className="hidden sm:grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
-        <div className="relative">
+      {/* Desktop: producto + resumen */}
+      <div className="hidden sm:grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        <div className="space-y-2 min-w-0">
           <label className="block text-sm text-gray-600 mb-1">
             Producto (solo con stock)
           </label>
-
-          <div className="flex items-center gap-4">
-            <input
-              className="border rounded px-3 py-2 flex-1 min-w-0"
-              placeholder="Buscar producto por nombre…"
-              value={productSearch}
-              onChange={(e) => {
-                setProductSearch(e.target.value);
-                setProductPickerOpen(true);
-              }}
-              onFocus={() => setProductPickerOpen(true)}
-            />
-
-            {/* Clear button when a product is selected (broom icon) */}
+          <input
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm w-full min-w-0 shadow-sm"
+            placeholder="Buscar para filtrar lista…"
+            value={productFilterQuery}
+            onChange={(e) => setProductFilterQuery(e.target.value)}
+          />
+          <div className="flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              <MobileHtmlSelect
+                value={selectedKey}
+                onChange={(v) => {
+                  setSelectedKey(v);
+                  setProductFilterQuery("");
+                }}
+                options={filteredProductSelectOptions}
+                sheetTitle="Producto"
+                triggerIcon="menu"
+                selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+              />
+            </div>
             {selectedKey ? (
-              <button
+              <Button
                 type="button"
                 aria-label="Limpiar producto"
                 title="Limpiar producto"
                 onClick={() => {
                   setSelectedKey("");
-                  setProductSearch("");
-                  setProductPickerOpen(false);
+                  setProductFilterQuery("");
                 }}
-                className="bg-blue-600 text-white px-2 py-1 sm:px-3 sm:py-2 rounded-md text-sm hover:bg-blue-700 flex items-center justify-center"
+                variant="secondary"
+                size="sm"
+                className="!rounded-xl shrink-0 !px-3 !py-2"
               >
-                <span className="text-sm">Limpiar</span>
-              </button>
+                Limpiar
+              </Button>
             ) : null}
           </div>
-
-          {/* Dropdown */}
-          {productPickerOpen && (
-            <div className="absolute z-50 mt-2 w-full bg-white border rounded-xl shadow-lg max-h-72 overflow-auto">
-              <div className="px-3 py-2 text-xs text-gray-500 border-b bg-gray-50">
-                {filteredProducts.length} producto(s) con stock
-              </div>
-
-              {filteredProducts.length === 0 ? (
-                <div className="px-3 py-3 text-sm text-gray-500">
-                  No hay coincidencias.
-                </div>
-              ) : (
-                filteredProducts.map((p: any) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => {
-                      if (selectedKey === p.key) {
-                        // toggle off if clicking the already selected product
-                        setSelectedKey("");
-                        setProductSearch("");
-                      } else {
-                        setSelectedKey(p.key);
-                        setProductSearch(p.productName || "");
-                      }
-                      setProductPickerOpen(false);
-                    }}
-                    className="w-full text-left px-3 py-2 hover:bg-gray-100 active:bg-gray-200"
-                  >
-                    <div className="font-medium truncate">{p.productName}</div>
-                    <div className="text-xs text-gray-500">
-                      {p.measurement === "lb" ? "Lbs" : "Unidades"} • stock:{" "}
-                      {qty3((p as any).remaining)}
-                    </div>
-                  </button>
-                ))
-              )}
-
-              <div className="p-2 border-t bg-white">
-                <button
-                  type="button"
-                  className="w-full text-sm px-3 py-2 rounded-lg border hover:bg-gray-50"
-                  onClick={() => setProductPickerOpen(false)}
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Click fuera para cerrar */}
-          {productPickerOpen && (
-            <button
-              type="button"
-              className="fixed inset-0 z-40 cursor-default"
-              onClick={() => setProductPickerOpen(false)}
-              aria-label="close"
-            />
-          )}
 
           {!selectedKey ? (
             <div className="mt-1 text-xs text-red-600">
@@ -910,14 +826,14 @@ export default function EvolutivoInventarioPollo({
 
         <div className="text-sm text-gray-700 flex items-end">
           {selected ? (
-            <button
+            <Button
               type="button"
               onClick={() => {
-                // allow clearing selection by clicking the selected panel
                 setSelectedKey("");
-                setProductSearch("");
+                setProductFilterQuery("");
               }}
-              className="w-full border rounded-xl bg-white p-3 text-left"
+              variant="outline"
+              className="w-full !rounded-xl bg-white p-3 text-left !justify-start font-normal"
             >
               <div className="text-xs text-gray-500">
                 Seleccionado (clic para limpiar)
@@ -928,7 +844,7 @@ export default function EvolutivoInventarioPollo({
                 <b>{selected.measurement === "lb" ? "Lbs" : "Unidades"}</b> •
                 Stock actual: <b>{qty3((selected as any).remaining)}</b>
               </div>
-            </button>
+            </Button>
           ) : (
             <div className="w-full text-gray-500">
               Para ver el evolutivo tenés que seleccionar un producto.
@@ -963,31 +879,34 @@ export default function EvolutivoInventarioPollo({
       {selected && (
         <>
           <div className="mb-4 hidden sm:flex gap-2 items-center">
-            <button
+            <Button
               type="button"
               onClick={() => setAdjModalOpen(true)}
-              className="bg-blue-600 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-base hover:bg-blue-700"
+              variant="primary"
+              className="!rounded-lg text-sm sm:text-base"
             >
               Crear Movimiento
-            </button>
+            </Button>
 
-            <button
+            <Button
               type="button"
               onClick={handleExportExcel}
-              className="bg-green-600 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-sm sm:text-base hover:bg-green-700"
+              variant="primary"
+              className="!bg-green-600 hover:!bg-green-700 !text-white !rounded-lg text-sm sm:text-base"
             >
               Exportar Excel
-            </button>
+            </Button>
 
-            <div className="flex flex-wrap items-end gap-2 ml-2">
+            <div className="grid grid-cols-2 gap-2 ml-0 sm:ml-2 min-w-0 w-full max-w-md shrink-0">
               <MobileHtmlSelect
                 label="Tipo"
                 value={typeFilter}
                 onChange={setTypeFilter}
                 options={typeFilterSelectOptions}
                 sheetTitle="Filtrar por tipo"
-                selectClassName="border rounded px-2 py-2 text-sm min-w-[10rem]"
-                buttonClassName="border rounded px-2 py-2 text-sm min-w-[10rem] text-left flex items-center justify-between gap-2 bg-white"
+                triggerIcon="menu"
+                selectClassName={`${POLLO_SELECT_COMPACT_DESKTOP_CLASS} min-w-0 w-full`}
+                buttonClassName={`${POLLO_SELECT_COMPACT_MOBILE_CLASS} min-w-0 w-full`}
               />
 
               <MobileHtmlSelect
@@ -996,8 +915,9 @@ export default function EvolutivoInventarioPollo({
                 onChange={setPriceFilter}
                 options={priceFilterSelectOptions}
                 sheetTitle="Filtrar por precio"
-                selectClassName="border rounded px-2 py-2 text-sm min-w-[10rem]"
-                buttonClassName="border rounded px-2 py-2 text-sm min-w-[10rem] text-left flex items-center justify-between gap-2 bg-white"
+                triggerIcon="menu"
+                selectClassName={`${POLLO_SELECT_COMPACT_DESKTOP_CLASS} min-w-0 w-full`}
+                buttonClassName={`${POLLO_SELECT_COMPACT_MOBILE_CLASS} min-w-0 w-full`}
               />
             </div>
           </div>
@@ -1032,8 +952,9 @@ export default function EvolutivoInventarioPollo({
                       onChange={(v) => setAdjType(v as AdjType)}
                       options={adjTypeSelectOptions}
                       sheetTitle="Tipo de ajuste"
-                      selectClassName="border rounded px-3 py-2 w-full text-sm"
-                      buttonClassName="border rounded px-3 py-2 w-full text-sm text-left flex items-center justify-between gap-2 bg-white"
+                      triggerIcon="menu"
+                      selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                      buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
                     />
                   </div>
 
@@ -1051,16 +972,17 @@ export default function EvolutivoInventarioPollo({
                   </div>
 
                   <div className="flex items-end">
-                    <button
+                    <Button
                       type="button"
                       onClick={async () => {
                         await saveAdjustment();
                         setAdjModalOpen(false);
                       }}
-                      className="w-full bg-blue-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-blue-700"
+                      variant="primary"
+                      className="w-full !rounded-lg text-sm"
                     >
                       Guardar
-                    </button>
+                    </Button>
                   </div>
 
                   <div className="sm:col-span-2 lg:col-span-4">
@@ -1077,13 +999,15 @@ export default function EvolutivoInventarioPollo({
                 </div>
 
                 <div className="mt-4 flex justify-end">
-                  <button
+                  <Button
                     type="button"
                     onClick={() => setAdjModalOpen(false)}
-                    className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-md border text-sm hover:bg-gray-50"
+                    variant="outline"
+                    size="sm"
+                    className="!rounded-md sm:!px-4 sm:!py-2 text-sm hover:!bg-gray-50"
                   >
                     Cancelar
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>

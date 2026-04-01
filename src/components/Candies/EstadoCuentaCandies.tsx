@@ -16,6 +16,7 @@ import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
+import Button from "../common/Button";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
 import KpiCard from "../common/KpiCard";
@@ -1119,13 +1120,15 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         <h2 className="text-xl sm:text-2xl font-bold">Estado de Cuenta</h2>
         <div className="flex items-center gap-2">
           <RefreshButton onClick={refresh} loading={loading} />
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={exportToExcel}
-            className="px-3 py-2 border rounded bg-white hover:bg-gray-50 text-sm"
+            className="!rounded-xl"
           >
             Excel
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1154,15 +1157,17 @@ export default function EstadoCuentaCandies(): React.ReactElement {
       {/* KPIs Desktop */}
       <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         <div className="sm:col-span-4 flex justify-end">
-          <button
+          <Button
             type="button"
+            variant="primary"
+            size="sm"
             onClick={toggleAllKpis}
-            className={`text-sm px-3 py-1 border rounded ${
-              allCollapsed ? "bg-blue-600 text-white" : "bg-red-600 text-white"
-            } hover:opacity-90`}
+            className={`!rounded-xl text-sm !px-3 !py-1 ${
+              allCollapsed ? "!bg-blue-600 hover:!bg-blue-700" : "!bg-red-600 hover:!bg-red-700"
+            }`}
           >
             {allCollapsed ? "Ver Indicadores" : "Ocultar Indicadores"}
-          </button>
+          </Button>
         </div>
 
         {/* Agrupación de 4 KPI en un solo contenedor */}
@@ -1232,10 +1237,12 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             <div className="border rounded-2xl p-3 bg-white">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold">Comisiones</div>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setComisionesModalOpen(true)}
-                  className="text-orange-500 hover:text-orange-600 ml-2"
+                  className="!p-1.5 !rounded-xl ml-2 !text-orange-500 hover:!text-orange-600 hover:!bg-orange-50"
                   title="Ver comisiones por vendedor"
                 >
                   <svg
@@ -1250,7 +1257,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                       clipRule="evenodd"
                     />
                   </svg>
-                </button>
+                </Button>
               </div>
               {!collapseComisiones && (
                 <div className="mt-3 space-y-2">
@@ -1397,8 +1404,9 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
       {/* Botón + filtros */}
       <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3">
-        <button
+        <Button
           type="button"
+          variant="primary"
           onClick={() => {
             setEditingId(null);
             setDate(today());
@@ -1410,10 +1418,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             setVendorId("");
             setModalOpen(true);
           }}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          className="!rounded-xl"
         >
           Agregar movimiento
-        </button>
+        </Button>
 
         <div className="flex flex-col sm:flex-row gap-2 flex-wrap">
           <div className="w-full sm:w-auto min-w-0 sm:min-w-[12rem]">
@@ -1471,13 +1479,16 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               <h3 className="font-semibold">
                 {editingId ? "Editar movimiento" : "Agregar movimiento"}
               </h3>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => setModalOpen(false)}
-                className="text-gray-500 hover:text-gray-700"
+                className="!rounded-xl !text-gray-500 hover:!text-gray-700 !px-2"
+                aria-label="Cerrar"
               >
                 ✕
-              </button>
+              </Button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -1615,20 +1626,22 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               </div>
 
               <div className="sm:col-span-3 flex gap-2 justify-end mt-2">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 border rounded"
+                  className="!rounded-xl"
                 >
                   Cancelar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="primary"
                   onClick={saveMovement}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  className="!rounded-xl"
                 >
                   Guardar movimiento
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -1641,12 +1654,14 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           <div className="bg-white rounded-lg shadow-xl border w-[95%] max-w-2xl p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Comisiones por Vendedor</h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                variant="secondary"
+                size="sm"
+                className="!rounded-xl"
                 onClick={() => setComisionesModalOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <div className="space-y-4 text-sm max-h-[60vh] overflow-auto">
@@ -1759,13 +1774,16 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                     </span>
                   ) : r.movement === "Abono" ? (
                     r.customerId ? (
-                      <button
-                        className="text-[11px] px-2 py-[2px] rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200"
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-[11px] !px-2 !py-[2px] !rounded-full !font-normal bg-emerald-100 text-emerald-800 border border-emerald-200 hover:bg-emerald-200/80"
                         onClick={() => openAbonoModal(String(r.customerId))}
                         title="Ver detalle de abono"
                       >
                         ABONO
-                      </button>
+                      </Button>
                     ) : (
                       <span className="text-[11px] px-2 py-[2px] rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
                         ABONO
@@ -1795,14 +1813,16 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
                 <td className="border p-1">
                   {typeof r.packages === "number" && r.saleId ? (
-                    <button
+                    <Button
                       type="button"
-                      className="underline text-blue-600 hover:text-blue-800"
+                      variant="ghost"
+                      size="sm"
+                      className="!h-auto !px-1 !py-0 !rounded-md underline !text-blue-600 hover:!text-blue-800 hover:!bg-blue-50 !font-normal"
                       onClick={() => openItemsDrawer(r.saleId!, r)}
                       title="Ver detalle de productos"
                     >
                       {r.packages}
-                    </button>
+                    </Button>
                   ) : (
                     "—"
                   )}
@@ -1836,15 +1856,18 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                     <div className="text-xs text-gray-400">—</div>
                   ) : (
                     <div className="inline-block">
-                      <button
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
                         onClick={() =>
                           setActionOpenId(actionOpenId === r.id ? null : r.id)
                         }
-                        className="px-2 py-1 rounded hover:bg-gray-100"
+                        className="!px-2 !py-1 !rounded-lg"
                         aria-label="Acciones"
                       >
                         ⋯
-                      </button>
+                      </Button>
 
                       {actionOpenId === r.id && (
                         <div
@@ -1853,8 +1876,10 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                           }}
                           className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm"
                         >
-                          <button
-                            className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="block w-full !rounded-none justify-start px-3 py-2 text-sm font-normal"
                             onClick={() => {
                               setEditingId(r.id);
                               setDate(r.date);
@@ -1877,9 +1902,11 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                             }}
                           >
                             Editar
-                          </button>
-                          <button
-                            className="block w-full text-left px-3 py-2 text-red-600 hover:bg-gray-100"
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="block w-full !rounded-none justify-start px-3 py-2 text-sm !text-red-600 hover:!bg-red-50"
                             onClick={async () => {
                               setActionOpenId(null);
                               if (!window.confirm("¿Eliminar este movimiento?"))
@@ -1900,7 +1927,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                             }}
                           >
                             Eliminar
-                          </button>
+                          </Button>
                         </div>
                       )}
                     </div>
@@ -1980,12 +2007,14 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           <div className="bg-white rounded-lg shadow-xl border w-[90%] max-w-md p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Detalle Abono</h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+              <Button
+                variant="secondary"
+                size="sm"
+                className="!rounded-xl"
                 onClick={() => setAbonoModalOpen(false)}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             {abonoLoading ? (
