@@ -1203,7 +1203,6 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           from={from}
           to={to}
           refreshKey={refreshKey}
-          onRefresh={refresh}
         />
       ) : (
         <>

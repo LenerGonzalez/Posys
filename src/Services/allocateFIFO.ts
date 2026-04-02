@@ -7,6 +7,7 @@ import {
   where,
   type Firestore,
 } from "firebase/firestore";
+import { isBatchStockActivo } from "./batchStockStatus";
 
 export interface Allocation {
   batchId: string;
@@ -80,6 +81,7 @@ export default async function allocateFIFOAndUpdateBatches(
       const cost = Number(data.purchasePrice ?? 0);
 
       if (rem <= 0) continue;
+      if (!isBatchStockActivo(data)) continue;
 
       // Tomar lo que se pueda de este lote
       const take = Math.min(rem, need);

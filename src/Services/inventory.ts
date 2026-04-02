@@ -14,6 +14,11 @@ import {
   runTransaction,
 } from "firebase/firestore";
 import { format } from "date-fns";
+import {
+  type BatchStockStatus,
+  parseBatchStockStatus,
+  isBatchStockActivo,
+} from "./batchStockStatus";
 
 /** Crea un lote (entrada mensual) en inventory_batches */
 export async function newBatch(payload: {
@@ -32,9 +37,13 @@ export async function newBatch(payload: {
   // ✅ NUEVO (solo metadatos para agrupar en UI)
   batchGroupId?: string;
   orderName?: string;
+  /** Activo = se puede vender; Pendiente = no debitar en ventas */
+  estadoStock?: BatchStockStatus;
 }) {
+  const estadoStock = parseBatchStockStatus(payload.estadoStock);
   const data = {
     ...payload,
+    estadoStock,
     remaining: payload.quantity,
     status: "PENDIENTE" as "PENDIENTE" | "PAGADO",
     createdAt: Timestamp.now(),
@@ -124,6 +133,7 @@ export async function allocateSaleFIFO(
       const batch = batchSnap.data() as any;
       const rem = Number(batch.remaining ?? 0);
       if (rem <= 0) continue;
+      if (!isBatchStockActivo(batch)) continue;
 
       const take = Math.min(rem, toConsume);
 

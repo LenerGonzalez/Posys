@@ -10,7 +10,6 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../../firebase";
-import RefreshButton from "../common/RefreshButton";
 import Button from "../common/Button";
 import SlideOverDrawer from "../common/SlideOverDrawer";
 import {
@@ -101,35 +100,45 @@ function lineFinalFromItem(it: Record<string, unknown>): number {
 }
 
 /**
- * Comisión por ítem alineada con Cierre: si la venta trae `vendorCommissionAmount`,
- * se prorratea por (monto línea / total venta), como cada fila en cierre.
- * Si no, mismo orden que KPI de cierre: vendorGain → margenVendedor → uvXpaq×paq.
+ * Comisión por ítem = `getVendorGain` de CierreVentasDulces: `vendorGain` persistido,
+ * si no `uvXpaq`×paquetes, si no `margenVendedor`.
  */
-function lineCommissionFromItem(
-  it: Record<string, unknown>,
-  sale: Record<string, unknown>,
-  lineFinal: number,
-): number {
-  const saleTotalRoot =
-    Number(
-      sale.total ??
-        sale.itemsTotal ??
-        sale.amount ??
-        sale.amountCharged ??
-        0,
-    ) || 0;
-  const saleCommissionRoot = Number(sale.vendorCommissionAmount ?? 0) || 0;
-  if (saleCommissionRoot > 0 && saleTotalRoot > 0 && lineFinal > 0) {
-    return round2((saleCommissionRoot * lineFinal) / saleTotalRoot);
-  }
+function lineVendorGainFromItem(it: Record<string, unknown>): number {
   const vg = Number(it.vendorGain ?? NaN);
   if (Number.isFinite(vg) && vg !== 0) return round2(vg);
-  const mv = round2(Number(it.margenVendedor ?? 0));
-  if (mv !== 0) return mv;
   const uv = Number(it.uvXpaq ?? it.upaquete ?? NaN);
   const qtyPacks = Number(it.packages ?? it.qty ?? it.quantity ?? 0);
   if (Number.isFinite(uv) && qtyPacks > 0) return round2(uv * qtyPacks);
-  return 0;
+  return round2(Number(it.margenVendedor ?? 0));
+}
+
+/**
+ * U. Neta por línea = misma base que la tabla de Cierre de ventas dulces (columna U. Neta):
+ * `uNetaPorPaquete × paquetes` de la línea; si falta, `inversorGain`; último recurso fórmula
+ * contable `uBruta − prorrateo − margenVendedor`.
+ */
+function lineInvestorNetFromItem(it: Record<string, unknown>): number {
+  const qtyPacks = Number(it.packages ?? it.qty ?? it.quantity ?? 0);
+  const unp = Number(it.uNetaPorPaquete ?? NaN);
+  if (Number.isFinite(unp) && unp !== 0 && qtyPacks > 0) {
+    return round2(unp * qtyPacks);
+  }
+  const ig = Number(it.inversorGain ?? NaN);
+  if (Number.isFinite(ig) && ig !== 0) return round2(ig);
+  const uBruta = Number(it.uBruta ?? 0);
+  const pror = Number(it.prorrateo ?? 0);
+  const margen = Number(it.margenVendedor ?? 0);
+  return round2(uBruta - pror - margen);
+}
+
+function saleMatchesVentasFilter(
+  sale: Record<string, unknown>,
+  f: "todos" | "contado" | "credito",
+): boolean {
+  const typ = String(sale.type || "CONTADO").toUpperCase();
+  if (f === "contado") return typ === "CONTADO";
+  if (f === "credito") return typ === "CREDITO";
+  return true;
 }
 
 function accumulateSalesByMaster(
@@ -137,10 +146,11 @@ function accumulateSalesByMaster(
   sellersById: Map<string, Record<string, unknown>>,
   intoMaster: Record<string, SaleAttrib>,
   intoPair: Record<string, SaleAttrib>,
-  contadoOnly: boolean,
+  saleTypeFilter: "todos" | "contado" | "credito",
 ) {
   const typ = String(sale.type || "CONTADO").toUpperCase();
-  if (contadoOnly && typ !== "CONTADO") return;
+  if (saleTypeFilter === "contado" && typ !== "CONTADO") return;
+  if (saleTypeFilter === "credito" && typ !== "CREDITO") return;
 
   const items = Array.isArray(sale.items) ? (sale.items as Record<string, unknown>[]) : [];
   const allocRoot = sale.allocationsByItem as
@@ -154,8 +164,8 @@ function accumulateSalesByMaster(
     const itemPk = Math.max(0, Number(it.packages || 0));
     const lineFinal = lineFinalFromItem(it);
     const itemUb = Number(it.uBruta || 0);
-    const itemInv = Number(it.inversorGain || 0);
-    const itemVend = lineCommissionFromItem(it, sale, lineFinal);
+    const itemInv = lineInvestorNetFromItem(it);
+    const itemVend = lineVendorGainFromItem(it);
 
     const entry = allocRoot?.[productId];
     const allocs = Array.isArray(entry?.allocations)
@@ -246,14 +256,12 @@ type Props = {
   from: string;
   to: string;
   refreshKey: number;
-  onRefresh: () => void;
 };
 
 export default function CandiesUtilidadesPanel({
   from,
   to,
   refreshKey,
-  onRefresh,
 }: Props): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<MasterOrderUtilRow[]>([]);
@@ -269,7 +277,7 @@ export default function CandiesUtilidadesPanel({
     "vendedores",
   );
   const [ventasAtribFilter, setVentasAtribFilter] = useState<
-    "todos" | "contado"
+    "todos" | "contado" | "credito"
   >("todos");
 
   const load = useCallback(async () => {
@@ -277,8 +285,6 @@ export default function CandiesUtilidadesPanel({
     try {
       const fromK = String(from || "").slice(0, 10);
       const toK = String(to || "").slice(0, 10);
-      const contadoOnly = ventasAtribFilter === "contado";
-
       const qOrders = query(
         collection(db, "candy_main_orders"),
         orderBy("createdAt", "desc"),
@@ -369,7 +375,14 @@ export default function CandiesUtilidadesPanel({
       const pushSale = (id: string, s: Record<string, unknown>) => {
         const d = String(s.date || "").slice(0, 10);
         if (!d || d < fromK || d > toK) return;
-        accumulateSalesByMaster(s, sMap, attribMaster, pair, contadoOnly);
+        if (!saleMatchesVentasFilter(s, ventasAtribFilter)) return;
+        accumulateSalesByMaster(
+          s,
+          sMap,
+          attribMaster,
+          pair,
+          ventasAtribFilter,
+        );
         salesLite.push({
           id,
           date: d,
@@ -506,10 +519,16 @@ export default function CandiesUtilidadesPanel({
     invGain = round2(invGain);
     vendGain = round2(vendGain);
 
-    const contado = ventasAtribFilter === "contado";
     const salesForMasterFiltered = salesList.filter((sl) => {
+      if (!saleMatchesVentasFilter(sl.data, ventasAtribFilter)) return false;
       const probe: Record<string, SaleAttrib> = {};
-      accumulateSalesByMaster(sl.data, sellersById, probe, {}, contado);
+      accumulateSalesByMaster(
+        sl.data,
+        sellersById,
+        probe,
+        {},
+        ventasAtribFilter,
+      );
       return (
         (probe[mid]?.monto || 0) > 0.001 || (probe[mid]?.packages || 0) > 0.001
       );
@@ -645,7 +664,13 @@ export default function CandiesUtilidadesPanel({
     let ventasTabUn = 0;
     for (const sl of salesForMasterFiltered) {
       const probe: Record<string, SaleAttrib> = {};
-      accumulateSalesByMaster(sl.data, sellersById, probe, {}, contado);
+      accumulateSalesByMaster(
+        sl.data,
+        sellersById,
+        probe,
+        {},
+        ventasAtribFilter,
+      );
       const a = probe[mid] || emptyAttrib();
       ventasTabPk += a.packages;
       ventasTabMonto += a.monto;
@@ -732,16 +757,20 @@ export default function CandiesUtilidadesPanel({
           <strong>Dispers.</strong> = paquetes asignados a órdenes de vendedor
           (desde esta maestra). <strong>Vendido</strong> = paquetes de ventas
           vinculadas por <code className="text-xs">allocationsByItem</code>.{" "}
-          <strong>Ventas efectivas</strong> y <strong>comisión atribuida</strong>{" "}
-          usan el mismo monto de línea y la misma regla de comisión que{" "}
-          <strong>Cierre de ventas dulces</strong> (precio×paq − desc., comisión
-          prorrateada desde <code className="text-xs">vendorCommissionAmount</code>
-          ). <strong>UB Efectiva</strong> sigue viniendo de los ítems. Las
+          <strong>Monto</strong> por ítem = precio×paq − desc. /{" "}
+          <code className="text-xs">lineFinal</code> / <code className="text-xs">total</code>{" "}
+          (como cierre). <strong>Comisión</strong> ={" "}
+          <code className="text-xs">vendorGain</code> o{" "}
+          <code className="text-xs">uvXpaq×paq</code> o margen (como columna
+          Comisión en ventas diarias). <strong>U. Neta atribuida</strong> ={" "}
+          <code className="text-xs">uNetaPorPaquete×paquetes</code> de la línea
+          (misma columna U. Neta del cierre), o <code className="text-xs">inversorGain</code>.{" "}
+          <strong>UB Efectiva</strong> = <code className="text-xs">uBruta</code>{" "}
+          del ítem. Las
           utilidades “esperadas” de vendedor están en el drawer, no en la fila de
           la maestra.
         </p>
         <div className="flex items-center gap-2 flex-wrap">
-          <RefreshButton onClick={onRefresh} loading={loading} />
           <Button
             type="button"
             variant="outline"
@@ -771,10 +800,21 @@ export default function CandiesUtilidadesPanel({
         >
           Solo CONTADO
         </button>
+        <button
+          type="button"
+          className={chipCls(ventasAtribFilter === "credito")}
+          onClick={() => setVentasAtribFilter("credito")}
+        >
+          Solo CRÉDITO
+        </button>
       </div>
-      <p className="text-xs text-slate-500 -mt-2">
-        Crédito factura utilidad antes de cobrar; usá “Solo CONTADO” para ver lo
-        más cercano al efectivo cobrado.
+        <p className="text-xs text-slate-500 -mt-2">
+        Tres vistas: todas las ventas del rango, solo contado (cash), o solo
+        ventas a crédito. Los importes se reparten entre maestras según{" "}
+        <code className="text-[10px]">allocationsByItem</code> y, en el pedido
+        del vendedor, <code className="text-[10px]">masterAllocations.units</code>{" "}
+        (ej. 24 unidades a una maestra y 1176 a otra ⇒ la primera recibe 24/1200
+        de esa venta).
       </p>
 
       {snapshotMsg ? (
@@ -1263,7 +1303,11 @@ export default function CandiesUtilidadesPanel({
 
                 <DrawerSectionTitle className="mt-0">
                   Ventas del periodo (documento completo, no por paquete){" "}
-                  {ventasAtribFilter === "contado" ? "· solo CONTADO" : "· todas"}
+                  {ventasAtribFilter === "contado"
+                    ? "· solo CONTADO"
+                    : ventasAtribFilter === "credito"
+                      ? "· solo CRÉDITO"
+                      : "· todas"}
                 </DrawerSectionTitle>
                 {drawerDetail.salesForMaster.length === 0 ? (
                   <p className="text-sm text-slate-500">

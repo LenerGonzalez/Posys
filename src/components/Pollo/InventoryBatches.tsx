@@ -16,6 +16,13 @@ import {
 import { db } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import { newBatch, markBatchAsPaid } from "../../Services/inventory";
+import {
+  parseBatchStockStatus,
+  labelEstadoStock,
+  summarizeGroupStockStatus,
+  type BatchStockStatus,
+  type GroupStockStatusSummary,
+} from "../../Services/batchStockStatus";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { roundQty } from "../../Services/decimal";
 import RefreshButton from "../common/RefreshButton";
@@ -43,6 +50,18 @@ import {
 } from "../common/DrawerContentCards";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+function groupStockBadgeClass(s: GroupStockStatusSummary): string {
+  if (s === "activa") return "bg-emerald-100 text-emerald-800";
+  if (s === "pendiente") return "bg-amber-100 text-amber-800";
+  return "bg-slate-100 text-slate-700";
+}
+
+function groupStockBadgeLabel(s: GroupStockStatusSummary): string {
+  if (s === "activa") return "Activa";
+  if (s === "pendiente") return "Pendiente";
+  return "Mixto";
+}
 
 const fmtExistRemQty = (n: number) => Number(n || 0).toFixed(3);
 
@@ -214,6 +233,8 @@ interface Batch {
   // ✅ metadata grupo/pedido
   batchGroupId?: string;
   orderName?: string;
+  /** Activo = vendible; Pendiente = no se debita en ventas */
+  estadoStock: BatchStockStatus;
 }
 
 type GroupRow = {
@@ -222,6 +243,7 @@ type GroupRow = {
   date: string;
   typeLabel: string;
   status: "PENDIENTE" | "PAGADO";
+  stockStatusSummary: GroupStockStatusSummary;
 
   lbsIn: number;
   lbsRem: number;
@@ -236,6 +258,11 @@ type GroupRow = {
 
   items: Batch[];
 };
+
+/** El pedido tiene al menos una línea con existencia &gt; 0 (lb, un o cajilla). */
+function groupHasStockRemaining(g: GroupRow): boolean {
+  return g.lbsRem > 0 || g.udsRem > 0 || g.cajillasRem > 0;
+}
 
 // ===== helpers =====
 function uid(prefix = "LOT") {
@@ -302,6 +329,8 @@ export default function InventoryBatches({
   const [quantity, setQuantity] = useState<number>(0);
   const [purchasePrice, setPurchasePrice] = useState<number>(NaN);
   const [salePrice, setSalePrice] = useState<number>(0);
+  const [lineEstadoStock, setLineEstadoStock] =
+    useState<BatchStockStatus>("ACTIVO");
 
   // items agregados al pedido
   type OrderItem = {
@@ -320,6 +349,7 @@ export default function InventoryBatches({
     invoiceTotal: number;
     expectedTotal: number;
     utilidadBruta: number;
+    estadoStock: BatchStockStatus;
   };
 
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
@@ -336,6 +366,11 @@ export default function InventoryBatches({
   // confirmar pago
   const [showPayDialog, setShowPayDialog] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<GroupRow | null>(null);
+  /** Confirmar cambio Activa / Pendiente (solo lotes con existencia &gt; 0). */
+  const [estadoStockConfirm, setEstadoStockConfirm] = useState<{
+    group: GroupRow;
+    estado: BatchStockStatus;
+  } | null>(null);
   // acordeón móvil: id del grupo expandido (null = ninguno)
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const toggleGroupExpand = (groupId: string) =>
@@ -506,6 +541,7 @@ export default function InventoryBatches({
 
           batchGroupId: b.batchGroupId,
           orderName: b.orderName,
+          estadoStock: parseBatchStockStatus(b.estadoStock),
         });
       });
 
@@ -868,12 +904,15 @@ export default function InventoryBatches({
       );
       const utilidadBruta = Number((totalEsperado - totalFacturado).toFixed(2));
 
+      const stockStatusSummary = summarizeGroupStockStatus(ordered);
+
       rows.push({
         groupId,
         orderName: orderNameLocal,
         date,
         typeLabel,
         status,
+        stockStatusSummary,
         lbsIn,
         lbsRem,
         udsIn,
@@ -953,6 +992,14 @@ export default function InventoryBatches({
     [],
   );
 
+  const estadoStockSelectOptions = useMemo(
+    () => [
+      { value: "ACTIVO", label: "Activa" },
+      { value: "PENDIENTE", label: "Pendiente" },
+    ],
+    [],
+  );
+
   const productByUnitSelectOptions = useMemo(
     () => [
       { value: "", label: "Selecciona un producto", disabled: true },
@@ -971,11 +1018,13 @@ export default function InventoryBatches({
       setQuantity(Number(existing.quantity || 0));
       setPurchasePrice(Number(existing.purchasePrice || 0));
       setSalePrice(Number(existing.salePrice || 0));
+      setLineEstadoStock(parseBatchStockStatus(existing.estadoStock));
       return;
     }
 
     const p = products.find((x) => x.id === productId);
     if (p) {
+      setLineEstadoStock("ACTIVO");
       setQuantity(0);
       setSalePrice(Number(p.price || 0));
       if (p.providerPrice != null && Number.isFinite(Number(p.providerPrice))) {
@@ -984,6 +1033,7 @@ export default function InventoryBatches({
         setPurchasePrice(NaN);
       }
     } else {
+      setLineEstadoStock("ACTIVO");
       setQuantity(0);
       setSalePrice(0);
       setPurchasePrice(NaN);
@@ -1080,6 +1130,7 @@ export default function InventoryBatches({
                 invoiceTotal: inv,
                 expectedTotal: exp,
                 utilidadBruta: util,
+                estadoStock: lineEstadoStock,
               },
         ),
       );
@@ -1099,6 +1150,7 @@ export default function InventoryBatches({
           invoiceTotal: inv,
           expectedTotal: exp,
           utilidadBruta: util,
+          estadoStock: lineEstadoStock,
         },
       ]);
     }
@@ -1107,6 +1159,7 @@ export default function InventoryBatches({
     setQuantity(NaN);
     setPurchasePrice(NaN);
     setSalePrice(0);
+    setLineEstadoStock("ACTIVO");
   };
 
   const removeOrderItem = (tempId: string) => {
@@ -1146,6 +1199,17 @@ export default function InventoryBatches({
 
         return updated;
       }),
+    );
+  };
+
+  const updateOrderItemEstadoStock = (
+    tempId: string,
+    estado: BatchStockStatus,
+  ) => {
+    setOrderItems((prev) =>
+      prev.map((it) =>
+        it.tempId === tempId ? { ...it, estadoStock: estado } : it,
+      ),
     );
   };
 
@@ -1229,6 +1293,7 @@ export default function InventoryBatches({
     setQuantity(0);
     setPurchasePrice(NaN);
     setSalePrice(0);
+    setLineEstadoStock("ACTIVO");
     setOrderItems([]);
   };
 
@@ -1260,6 +1325,7 @@ export default function InventoryBatches({
             notes: "",
             batchGroupId: groupId,
             orderName: name,
+            estadoStock: parseBatchStockStatus(it.estadoStock),
           });
         }
 
@@ -1304,6 +1370,7 @@ export default function InventoryBatches({
             invoiceTotal: Number(it.invoiceTotal || 0),
             expectedTotal: Number(it.expectedTotal || 0),
             remaining: newRemaining,
+            estadoStock: parseBatchStockStatus(it.estadoStock),
           });
         } else {
           await newBatch({
@@ -1320,6 +1387,7 @@ export default function InventoryBatches({
             notes: "",
             batchGroupId: groupId,
             orderName: name,
+            estadoStock: parseBatchStockStatus(it.estadoStock),
           });
         }
       }
@@ -1386,11 +1454,64 @@ export default function InventoryBatches({
         invoiceTotal: inv,
         expectedTotal: exp,
         utilidadBruta: Number((exp - inv).toFixed(2)),
+        estadoStock: parseBatchStockStatus(b.estadoStock),
       };
     });
 
     setOrderItems(items);
     setShowCreateModal(true);
+  };
+
+  const requestEstadoStockChange = (
+    g: GroupRow,
+    estado: BatchStockStatus,
+  ) => {
+    setRowActionMenu(null);
+    setEstadoStockConfirm({ group: g, estado });
+  };
+
+  const cancelEstadoStockConfirm = () => setEstadoStockConfirm(null);
+
+  const confirmEstadoStockChange = async () => {
+    if (!estadoStockConfirm) return;
+    const { group: g, estado } = estadoStockConfirm;
+    setEstadoStockConfirm(null);
+    await executeSetGroupEstadoStock(g, estado);
+  };
+
+  const executeSetGroupEstadoStock = async (
+    g: GroupRow,
+    estado: BatchStockStatus,
+  ) => {
+    setMsg("");
+    const targets = g.items.filter(
+      (b) => roundQty(Number(b.remaining || 0)) > 0,
+    );
+    if (!targets.length) {
+      setMsg("No hay lotes con existencia mayor a 0 para actualizar.");
+      return;
+    }
+    try {
+      for (const b of targets) {
+        await updateDoc(doc(db, "inventory_batches", b.id), {
+          estadoStock: estado,
+        });
+      }
+      const n = targets.length;
+      setMsg(
+        estado === "ACTIVO"
+          ? `✅ ${n} lote(s) con existencia activado(s) para ventas`
+          : `✅ ${n} lote(s) con existencia pasado(s) a pendiente (ventas)`,
+      );
+      setRowActionMenu(null);
+      setDesktopDrawerGroup((prev) =>
+        prev && prev.groupId === g.groupId ? null : prev,
+      );
+      refresh();
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al actualizar estado de inventario");
+    }
   };
 
   const deleteGroup = async (g: GroupRow) => {
@@ -1538,7 +1659,8 @@ export default function InventoryBatches({
           "Facturado",
           "Esperado",
           "Utilidad",
-          "Estado",
+          "Estado pago",
+          "Estado inventario",
         ],
       ],
       body: groupedRows.map((g) => [
@@ -1553,6 +1675,7 @@ export default function InventoryBatches({
         money(g.totalEsperado),
         money(g.utilidadBruta),
         g.status,
+        groupStockBadgeLabel(g.stockStatusSummary),
       ]),
       styles: { fontSize: 8 },
       headStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0] },
@@ -1582,7 +1705,8 @@ export default function InventoryBatches({
             "Total facturado",
             "Total esperado",
             "Utilidad",
-            "Estado",
+            "Estado pago",
+            "Estado inventario",
           ],
         ],
         body: group.items.map((item) => [
@@ -1599,6 +1723,7 @@ export default function InventoryBatches({
               (item.invoiceTotal || item.purchasePrice * item.quantity),
           ),
           item.status,
+          labelEstadoStock(item.estadoStock),
         ]),
         styles: { fontSize: 8 },
         headStyles: { fillColor: [230, 230, 230], textColor: [0, 0, 0] },
@@ -1631,6 +1756,7 @@ export default function InventoryBatches({
         "expectedTotal",
         "utilidadBruta",
         "status",
+        "estadoStock",
         "notes",
         "paidAmount",
         "paidAt",
@@ -1672,6 +1798,7 @@ export default function InventoryBatches({
           b.expectedTotal ?? "",
           utilidad,
           b.status || "",
+          b.estadoStock || "ACTIVO",
           b.notes || "",
           b.paidAmount ?? "",
           paidAtStr,
@@ -1734,6 +1861,7 @@ export default function InventoryBatches({
             expectedTotal: b.expectedTotal,
             utilidadBruta: utilidad,
             status: b.status,
+            estadoStock: b.estadoStock,
             notes: b.notes || "",
             paidAmount: b.paidAmount || "",
             paidAt: paidAtStr,
@@ -1929,6 +2057,34 @@ export default function InventoryBatches({
                       Pagar inventario
                     </Button>
                   )}
+                  {isAdmin &&
+                    groupHasStockRemaining(g) &&
+                    g.stockStatusSummary !== "pendiente" && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
+                        onClick={() =>
+                          requestEstadoStockChange(g, "PENDIENTE")
+                        }
+                      >
+                        Poner pendiente (ventas)
+                      </Button>
+                    )}
+                  {isAdmin &&
+                    groupHasStockRemaining(g) &&
+                    g.stockStatusSummary !== "activa" && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal text-emerald-900"
+                        onClick={() => requestEstadoStockChange(g, "ACTIVO")}
+                      >
+                        Activar (ventas)
+                      </Button>
+                    )}
                   {isAdmin && (
                     <>
                       <Button
@@ -2726,7 +2882,7 @@ export default function InventoryBatches({
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-3">
+                            <div className="flex flex-col items-end gap-1.5">
                               <span
                                 className={`px-2 py-1 rounded text-xs shrink-0 ${
                                   g.status === "PAGADO"
@@ -2735,6 +2891,13 @@ export default function InventoryBatches({
                                 }`}
                               >
                                 {g.status}
+                              </span>
+                              <span
+                                className={`px-2 py-1 rounded text-xs shrink-0 font-medium ${groupStockBadgeClass(
+                                  g.stockStatusSummary,
+                                )}`}
+                              >
+                                {groupStockBadgeLabel(g.stockStatusSummary)}
                               </span>
                             </div>
                           </div>
@@ -2814,8 +2977,21 @@ export default function InventoryBatches({
                                           key={item.id}
                                           className="flex items-center text-xs justify-between gap-2"
                                         >
-                                          <div className="font-semibold text-gray-800 truncate">
-                                            {item.productName}
+                                          <div className="font-semibold text-gray-800 truncate flex items-center gap-1.5 min-w-0">
+                                            <span className="truncate">
+                                              {item.productName}
+                                            </span>
+                                            <span
+                                              className={`shrink-0 px-1.5 py-0.5 rounded-[6px] text-[10px] font-semibold ${groupStockBadgeClass(
+                                                item.estadoStock === "ACTIVO"
+                                                  ? "activa"
+                                                  : "pendiente",
+                                              )}`}
+                                            >
+                                              {labelEstadoStock(
+                                                item.estadoStock,
+                                              )}
+                                            </span>
                                           </div>
                                           <div className="text-gray-600 text-right">
                                             <div>
@@ -2958,10 +3134,17 @@ export default function InventoryBatches({
                   </td>
                   <td className="px-3 py-2.5 align-middle min-w-0">
                     <div
-                      className="font-medium text-gray-900 truncate"
+                      className="font-medium text-gray-900 truncate flex flex-wrap items-center gap-1.5"
                       title={g.orderName}
                     >
-                      {g.orderName}
+                      <span className="truncate">{g.orderName}</span>
+                      <span
+                        className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${groupStockBadgeClass(
+                          g.stockStatusSummary,
+                        )}`}
+                      >
+                        {groupStockBadgeLabel(g.stockStatusSummary)}
+                      </span>
                     </div>
                     <div
                       className="text-xs text-gray-500 truncate mt-0.5"
@@ -3035,14 +3218,23 @@ export default function InventoryBatches({
         titleId="inv-batch-drawer-title"
         badge={
           desktopDrawerGroup ? (
-            <span
-              className={`inline-block px-2 py-0.5 rounded text-xs ${
-                desktopDrawerGroup.status === "PAGADO"
-                  ? "bg-green-100 text-green-700"
-                  : "bg-yellow-100 text-yellow-700"
-              }`}
-            >
-              {desktopDrawerGroup.status}
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span
+                className={`inline-block px-2 py-0.5 rounded text-xs ${
+                  desktopDrawerGroup.status === "PAGADO"
+                    ? "bg-green-100 text-green-700"
+                    : "bg-yellow-100 text-yellow-700"
+                }`}
+              >
+                Pago: {desktopDrawerGroup.status}
+              </span>
+              <span
+                className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${groupStockBadgeClass(
+                  desktopDrawerGroup.stockStatusSummary,
+                )}`}
+              >
+                {groupStockBadgeLabel(desktopDrawerGroup.stockStatusSummary)}
+              </span>
             </span>
           ) : null
         }
@@ -3187,8 +3379,13 @@ export default function InventoryBatches({
                         value: money(b.salePrice),
                       },
                       {
-                        label: "Estado lote",
+                        label: "Estado pago",
                         value: b.status,
+                        ddClassName: "text-sm font-medium text-gray-900",
+                      },
+                      {
+                        label: "Estado inventario",
+                        value: labelEstadoStock(b.estadoStock),
                         ddClassName: "text-sm font-medium text-gray-900",
                       },
                       {
@@ -3495,6 +3692,24 @@ export default function InventoryBatches({
                   </div>
                 </div>
 
+                <div className="mt-3 max-w-xs">
+                  <MobileHtmlSelect
+                    label="Estado"
+                    value={lineEstadoStock}
+                    onChange={(v) =>
+                      setLineEstadoStock(parseBatchStockStatus(v))
+                    }
+                    options={estadoStockSelectOptions}
+                    sheetTitle="Estado del ingreso"
+                    triggerIcon="menu"
+                    selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                    buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+                  />
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Activa: se puede vender. Pendiente: no debita en ventas.
+                  </p>
+                </div>
+
                 <div className="flex justify-end mt-3">
                   <Button
                     type="button"
@@ -3528,6 +3743,7 @@ export default function InventoryBatches({
                       <th className="p-2 border">Total facturado</th>
                       <th className="p-2 border">Total esperado</th>
                       <th className="p-2 border">Utilidad bruta</th>
+                      <th className="p-2 border">Estado</th>
                       <th className="p-2 border">Acciones</th>
                     </tr>
                   </thead>
@@ -3536,7 +3752,7 @@ export default function InventoryBatches({
                     {orderItems.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={9}
+                          colSpan={10}
                           className="p-4 text-center text-gray-500"
                         >
                           No hay productos agregados.
@@ -3633,6 +3849,24 @@ export default function InventoryBatches({
                           </td>
                           <td className="p-2 border">
                             {money(it.utilidadBruta)}
+                          </td>
+
+                          <td className="p-2 border text-left min-w-[8.5rem]">
+                            <MobileHtmlSelect
+                              label=""
+                              value={it.estadoStock}
+                              onChange={(v) =>
+                                updateOrderItemEstadoStock(
+                                  it.tempId,
+                                  parseBatchStockStatus(v),
+                                )
+                              }
+                              options={estadoStockSelectOptions}
+                              sheetTitle="Estado"
+                              triggerIcon="menu"
+                              selectClassName={`${POLLO_SELECT_COMPACT_DESKTOP_CLASS} w-full`}
+                              buttonClassName={`${POLLO_SELECT_COMPACT_MOBILE_CLASS} w-full`}
+                            />
                           </td>
 
                           <td className="p-2 border">
@@ -4051,7 +4285,7 @@ export default function InventoryBatches({
               </div>
 
               <div className="bg-white rounded border overflow-x-auto">
-                <table className="min-w-[1100px] text-xs md:text-sm">
+                <table className="min-w-[1200px] text-xs md:text-sm">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
                       <th className="p-2 border">Producto</th>
@@ -4063,7 +4297,8 @@ export default function InventoryBatches({
                       <th className="p-2 border">Total factura</th>
                       <th className="p-2 border">Total esperado</th>
                       <th className="p-2 border">Utilidad</th>
-                      <th className="p-2 border">Estado</th>
+                      <th className="p-2 border">Estado pago</th>
+                      <th className="p-2 border">Estado inventario</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4095,6 +4330,9 @@ export default function InventoryBatches({
                           <td className="p-2 border">{money(exp)}</td>
                           <td className="p-2 border">{money(exp - inv)}</td>
                           <td className="p-2 border">{b.status}</td>
+                          <td className="p-2 border">
+                            {labelEstadoStock(b.estadoStock)}
+                          </td>
                         </tr>
                       );
                     })}
@@ -4166,6 +4404,79 @@ export default function InventoryBatches({
                   size="sm"
                   className="rounded-lg shadow-none hover:bg-slate-300"
                   onClick={cancelPayDialog}
+                >
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {estadoStockConfirm &&
+        createPortal(
+          <div className="fixed inset-0 z-[81] flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/50"
+              onClick={cancelEstadoStockConfirm}
+              aria-hidden
+            />
+            <div
+              className="relative bg-white rounded-xl shadow-2xl border w-[90%] max-w-md p-6"
+              role="alertdialog"
+              aria-labelledby="estado-stock-confirm-title"
+              aria-describedby="estado-stock-confirm-desc"
+            >
+              <h3
+                id="estado-stock-confirm-title"
+                className="text-lg font-bold mb-3 text-center text-gray-900"
+              >
+                {estadoStockConfirm.estado === "ACTIVO"
+                  ? "Activar lotes para ventas"
+                  : "Poner lotes en pendiente (ventas)"}
+              </h3>
+              <p
+                id="estado-stock-confirm-desc"
+                className="text-sm text-gray-700 mb-5 text-center leading-relaxed"
+              >
+                <strong>{estadoStockConfirm.group.orderName}</strong> —{" "}
+                {estadoStockConfirm.group.date}
+                <br />
+                <br />
+                {estadoStockConfirm.estado === "ACTIVO" ? (
+                  <>
+                    ¿Confirmas activar para ventas todos los{" "}
+                    <strong>lotes con existencia mayor a 0</strong> de este
+                    pedido? Podrán descontarse en el formulario de venta.
+                  </>
+                ) : (
+                  <>
+                    ¿Confirmas marcar como pendiente todos los{" "}
+                    <strong>lotes con existencia mayor a 0</strong>? Ese stock no
+                    se podrá vender hasta que lo actives de nuevo.
+                  </>
+                )}
+              </p>
+              <div className="flex flex-wrap justify-center gap-3">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  className={
+                    estadoStockConfirm.estado === "ACTIVO"
+                      ? "rounded-lg bg-emerald-600 shadow-none hover:bg-emerald-700 active:bg-emerald-800"
+                      : "rounded-lg shadow-none"
+                  }
+                  onClick={() => void confirmEstadoStockChange()}
+                >
+                  Confirmar
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="rounded-lg shadow-none hover:bg-slate-300"
+                  onClick={cancelEstadoStockConfirm}
                 >
                   Cancelar
                 </Button>

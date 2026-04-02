@@ -22,6 +22,7 @@ import { hasRole } from "../../utils/roles";
 import LoadingOverlay from "../common/LoadingOverlay";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Button from "../common/Button";
+import SlideOverDrawer from "../common/SlideOverDrawer";
 import jsPDF from "jspdf";
 import { set } from "date-fns";
 
@@ -570,7 +571,7 @@ export default function SalesCandiesPOS({
   // ===== MOBILE UI (colapsables) =====
   const [openSaleInfo, setOpenSaleInfo] = useState(true);
   const [openItems, setOpenItems] = useState(false);
-  const [openAbonos, setOpenAbonos] = useState(false);
+  const [abonoDrawerOpen, setAbonoDrawerOpen] = useState(false);
 
   // Totales
   const totalPackages = useMemo(
@@ -2602,162 +2603,20 @@ export default function SalesCandiesPOS({
             <div className="mt-4 border rounded-lg p-3 bg-gray-50">
               <Button
                 type="button"
-                variant="ghost"
-                onClick={() => setOpenAbonos((v) => !v)}
-                className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-left rounded-lg h-auto min-h-0 py-3 font-normal"
+                variant="outline"
+                onClick={() => setAbonoDrawerOpen(true)}
+                className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-left rounded-lg h-auto min-h-0 py-3 font-normal border-amber-200 bg-amber-50/50 hover:bg-amber-50"
               >
-                <div className="font-semibold">
+                <div className="font-semibold text-amber-950">
                   Abonos (se registran al guardar)
                 </div>
-                <div className="text-xs text-gray-600">
+                <div className="text-xs text-amber-900/80">
                   Agregado: {money(abonoTotalPending)}
-                  <span className="ml-2 text-sm">{openAbonos ? "−" : "+"}</span>
+                  <span className="ml-2 text-sm font-semibold text-amber-700">
+                    Abrir panel →
+                  </span>
                 </div>
               </Button>
-
-              {openAbonos && (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mt-3">
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Cliente
-                      </label>
-                      <MobileHtmlSelect
-                        value={abonoCustomerId}
-                        onChange={setAbonoCustomerId}
-                        options={abonoCustomerSelectOptions}
-                        selectClassName={`${inpBase} py-2.5 mt-1`}
-                        buttonClassName={`${selectButtonClass} mt-1`}
-                        sheetTitle="Cliente para abono"
-                      />
-                    </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Abono
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        inputMode="decimal"
-                        max={maxAbonoForCustomer}
-                        className={`${inpBase} mt-1`}
-                        value={abonoAmount === 0 ? "" : abonoAmount}
-                        onChange={(e) =>
-                          setAbonoAmount(clampAbonoAmount(e.target.value))
-                        }
-                        placeholder="0.00"
-                        disabled={!abonoCustomerId}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
-                    <div className="p-2 rounded bg-white border">
-                      <div className="text-xs text-gray-600">Saldo actual</div>
-                      <div className="font-semibold">
-                        {money(abonoCustomerBalance)}
-                      </div>
-                    </div>
-                    <div className="p-2 rounded bg-white border">
-                      <div className="text-xs text-gray-600">Abono</div>
-                      <div className="font-semibold">
-                        {money(abonoPreviewAmount)}
-                      </div>
-                    </div>
-                    <div className="p-2 rounded bg-white border">
-                      <div className="text-xs text-gray-600">Saldo final</div>
-                      <div className="font-semibold">
-                        {money(abonoSaldoFinal)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex justify-end">
-                    <Button
-                      type="button"
-                      variant="primary"
-                      className={`rounded-lg ${
-                        abonoDisabled
-                          ? "!bg-gray-300 !text-gray-600"
-                          : "!bg-amber-600 hover:!bg-amber-700 active:!bg-amber-800"
-                      }`}
-                      onClick={addPendingAbono}
-                      disabled={abonoDisabled}
-                    >
-                      Agregar abono
-                    </Button>
-                  </div>
-
-                  <div className="mt-3">
-                    <div className="w-full overflow-x-auto">
-                      <div className="border rounded overflow-hidden min-w-[560px] bg-white">
-                        <div className="grid grid-cols-12 bg-gray-100 px-3 py-2 text-xs font-semibold border-b">
-                          <div className="col-span-3">Cliente</div>
-                          <div className="col-span-1">Fecha</div>
-                          <div className="col-span-2 text-right">Saldo</div>
-                          <div className="col-span-2 text-right">Abono</div>
-                          <div className="col-span-3 text-right">
-                            Saldo Pendiente
-                          </div>
-                          <div className="col-span-1 text-center">Quitar</div>
-                        </div>
-                        {pendingAbonos.length === 0 ? (
-                          <div className="px-3 py-4 text-sm text-gray-500">
-                            Sin abonos agregados.
-                          </div>
-                        ) : (
-                          (() => {
-                            const running: Record<string, number> = {};
-                            return pendingAbonos.map((a) => {
-                              const base =
-                                customerBalanceById[a.customerId] || 0;
-                              const next =
-                                (running[a.customerId] || 0) +
-                                Number(a.amount || 0);
-                              running[a.customerId] = next;
-                              const saldoPend = round2(
-                                Math.max(0, base - next),
-                              );
-                              return (
-                                <div
-                                  key={a.id}
-                                  className="grid grid-cols-12 items-center px-3 py-2 border-b text-sm gap-x-2"
-                                >
-                                  <div className="col-span-3">
-                                    {a.customerName || "—"}
-                                  </div>
-                                  <div className="col-span-1">{a.date}</div>
-                                  <div className="col-span-2 text-right">
-                                    {money(base)}
-                                  </div>
-                                  <div className="col-span-2 text-right">
-                                    {money(a.amount)}
-                                  </div>
-                                  <div className="col-span-3 text-right">
-                                    {money(saldoPend)}
-                                  </div>
-                                  <div className="col-span-1 text-center">
-                                    <Button
-                                      type="button"
-                                      variant="danger"
-                                      size="sm"
-                                      className="rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 active:!bg-red-300 shadow-none"
-                                      onClick={() => removePendingAbono(a.id)}
-                                      title="Quitar abono"
-                                    >
-                                      ✕
-                                    </Button>
-                                  </div>
-                                </div>
-                              );
-                            });
-                          })()
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
             </div>
           </div>
 
@@ -3235,208 +3094,18 @@ export default function SalesCandiesPOS({
                   </div>
                 )}
 
-                <div className="mt-3 border rounded-xl p-3 bg-white">
+                <div className="mt-3 border rounded-xl p-3 bg-amber-50/40 border-amber-200">
                   <Button
                     type="button"
-                    variant="ghost"
-                    onClick={() => setOpenAbonos((v) => !v)}
-                    className="w-full flex items-center justify-between font-semibold rounded-lg h-auto min-h-0 py-2"
+                    variant="outline"
+                    onClick={() => setAbonoDrawerOpen(true)}
+                    className="w-full flex items-center justify-between font-semibold rounded-xl h-auto min-h-0 py-3 border-amber-300 bg-white"
                   >
-                    <span>Abonos</span>
-                    <span className="text-lg">{openAbonos ? "−" : "+"}</span>
+                    <span>Abonos (panel lateral)</span>
+                    <span className="text-sm text-amber-800">
+                      {money(abonoTotalPending)} →
+                    </span>
                   </Button>
-
-                  {openAbonos && (
-                    <>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                        <div className="col-span-2">
-                          <label className="block text-xs text-gray-600">
-                            Cliente
-                          </label>
-                          <div className="mt-1 flex gap-1 items-center min-w-0">
-                            <input
-                              className="flex-1 border p-2 rounded min-w-0 text-sm"
-                              placeholder="Buscar cliente..."
-                              value={abonoCustomerQuery}
-                              onChange={(e) =>
-                                setAbonoCustomerQuery(e.target.value)
-                              }
-                              onClick={() => {
-                                if (abonoCustomerQuery)
-                                  setAbonoCustomerQuery("");
-                              }}
-                            />
-                            {abonoCustomerQuery ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                className="shrink-0 px-2 py-2 text-sm text-blue-600 rounded-lg h-auto min-h-0 shadow-none"
-                                onClick={() => setAbonoCustomerQuery("")}
-                              >
-                                Limpiar
-                              </Button>
-                            ) : null}
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="mt-2 w-full border p-2 rounded-xl text-left bg-white flex justify-between items-center gap-2 min-w-0 font-normal h-auto min-h-0"
-                            onClick={() => setMobileSheet("abonoClient")}
-                          >
-                            <span className="truncate text-sm">
-                              {abonoCustomerId
-                                ? selectedAbonoCustomer?.name ||
-                                  "Cliente"
-                                : "Elegir cliente"}
-                            </span>
-                            <span className="text-slate-400 shrink-0">▼</span>
-                          </Button>
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600">
-                            Abono
-                          </label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            max={maxAbonoForCustomer}
-                            className="w-full border p-2 rounded"
-                            value={abonoAmount === 0 ? "" : abonoAmount}
-                            onChange={(e) =>
-                              setAbonoAmount(clampAbonoAmount(e.target.value))
-                            }
-                            placeholder="0.00"
-                            disabled={!abonoCustomerId}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
-                        <div className="p-2 rounded bg-gray-50 border">
-                          <div className="text-xs text-gray-600">
-                            Saldo actual
-                          </div>
-                          <div className="font-semibold">
-                            {money(abonoCustomerBalance)}
-                          </div>
-                        </div>
-                        <div className="p-2 rounded bg-gray-50 border">
-                          <div className="text-xs text-gray-600">Abono</div>
-                          <div className="font-semibold">
-                            {money(abonoPreviewAmount)}
-                          </div>
-                        </div>
-                        <div className="p-2 rounded bg-gray-50 border">
-                          <div className="text-xs text-gray-600">
-                            Saldo final
-                          </div>
-                          <div className="font-semibold">
-                            {money(abonoSaldoFinal)}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-2 flex justify-end">
-                        <Button
-                          type="button"
-                          variant="primary"
-                          className={`rounded-lg ${
-                            abonoDisabled
-                              ? "!bg-gray-300 !text-gray-600"
-                              : "!bg-amber-600 hover:!bg-amber-700 active:!bg-amber-800"
-                          }`}
-                          onClick={addPendingAbono}
-                          disabled={abonoDisabled}
-                        >
-                          Agregar abono
-                        </Button>
-                      </div>
-
-                      <div className="mt-3 space-y-2">
-                        {pendingAbonos.length === 0 ? (
-                          <div className="text-xs text-gray-500">
-                            Sin abonos agregados.
-                          </div>
-                        ) : (
-                          (() => {
-                            const running: Record<string, number> = {};
-                            return pendingAbonos.map((a) => {
-                              const base =
-                                customerBalanceById[a.customerId] || 0;
-                              const next =
-                                (running[a.customerId] || 0) +
-                                Number(a.amount || 0);
-                              running[a.customerId] = next;
-                              const saldoPend = round2(
-                                Math.max(0, base - next),
-                              );
-                              return (
-                                <div
-                                  key={a.id}
-                                  className="border rounded-lg p-2 bg-gray-50 text-sm"
-                                >
-                                  <div className="space-y-1">
-                                    <div className="flex justify-between">
-                                      <span className="text-slate-600">
-                                        Cliente
-                                      </span>
-                                      <strong className="text-right">
-                                        {a.customerName || "—"}
-                                      </strong>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span className="text-slate-600">
-                                        Fecha
-                                      </span>
-                                      <strong className="text-right">
-                                        {a.date}
-                                      </strong>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span className="text-slate-600">
-                                        Saldo
-                                      </span>
-                                      <strong className="text-right">
-                                        {money(base)}
-                                      </strong>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span className="text-slate-600">
-                                        Abono
-                                      </span>
-                                      <strong className="text-right">
-                                        {money(a.amount)}
-                                      </strong>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span className="text-slate-600">
-                                        Saldo Pendiente
-                                      </span>
-                                      <strong className="text-right">
-                                        {money(saldoPend)}
-                                      </strong>
-                                    </div>
-                                  </div>
-                                  <div className="mt-2 text-right">
-                                    <Button
-                                      type="button"
-                                      variant="danger"
-                                      size="sm"
-                                      className="rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 shadow-none"
-                                      onClick={() => removePendingAbono(a.id)}
-                                    >
-                                      Quitar
-                                    </Button>
-                                  </div>
-                                </div>
-                              );
-                            });
-                          })()
-                        )}
-                      </div>
-                    </>
-                  )}
                 </div>
               </div>
             )}
@@ -3453,6 +3122,153 @@ export default function SalesCandiesPOS({
           </Button>
         </div>
       </form>
+
+      <SlideOverDrawer
+        open={abonoDrawerOpen}
+        onClose={() => setAbonoDrawerOpen(false)}
+        title="Abonos con esta venta"
+        subtitle="Se guardan al pulsar «Registrar venta». Podés sumar varios abonos."
+        titleId="sales-candies-abonos-drawer-title"
+        panelMaxWidthClassName="max-w-lg"
+        zIndexClassName="z-[80]"
+      >
+        <div className="space-y-4 overflow-y-auto px-1 pb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Cliente
+              </label>
+              <MobileHtmlSelect
+                value={abonoCustomerId}
+                onChange={setAbonoCustomerId}
+                options={abonoCustomerSelectOptions}
+                selectClassName={`${inpBase} py-2.5 mt-1`}
+                buttonClassName={`${selectButtonClass} mt-1`}
+                sheetTitle="Cliente para abono"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Fecha del abono
+              </label>
+              <input
+                type="date"
+                className={`${inpBase} mt-1`}
+                value={abonoDate}
+                onChange={(e) => setAbonoDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Monto
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                max={maxAbonoForCustomer}
+                className={`${inpBase} mt-1`}
+                value={abonoAmount === 0 ? "" : abonoAmount}
+                onChange={(e) =>
+                  setAbonoAmount(clampAbonoAmount(e.target.value))
+                }
+                placeholder="0.00"
+                disabled={!abonoCustomerId}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+            <div className="p-2 rounded-lg bg-slate-50 border border-slate-200">
+              <div className="text-xs text-slate-600">Saldo actual</div>
+              <div className="font-semibold">{money(abonoCustomerBalance)}</div>
+            </div>
+            <div className="p-2 rounded-lg bg-slate-50 border border-slate-200">
+              <div className="text-xs text-slate-600">Abono</div>
+              <div className="font-semibold">{money(abonoPreviewAmount)}</div>
+            </div>
+            <div className="p-2 rounded-lg bg-slate-50 border border-slate-200">
+              <div className="text-xs text-slate-600">Saldo final</div>
+              <div className="font-semibold">{money(abonoSaldoFinal)}</div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="primary"
+              className={`rounded-lg ${
+                abonoDisabled
+                  ? "!bg-gray-300 !text-gray-600"
+                  : "!bg-amber-600 hover:!bg-amber-700 active:!bg-amber-800"
+              }`}
+              onClick={addPendingAbono}
+              disabled={abonoDisabled}
+            >
+              Agregar abono
+            </Button>
+          </div>
+
+          <div className="w-full overflow-x-auto rounded-lg border border-slate-200 bg-white">
+            <div className="grid grid-cols-12 bg-slate-100 px-3 py-2 text-xs font-semibold border-b border-slate-200">
+              <div className="col-span-3">Cliente</div>
+              <div className="col-span-2">Fecha</div>
+              <div className="col-span-2 text-right">Saldo</div>
+              <div className="col-span-2 text-right">Abono</div>
+              <div className="col-span-2 text-right">Saldo pend.</div>
+              <div className="col-span-1 text-center">—</div>
+            </div>
+            {pendingAbonos.length === 0 ? (
+              <div className="px-3 py-6 text-sm text-slate-500">
+                Sin abonos agregados.
+              </div>
+            ) : (
+              (() => {
+                const running: Record<string, number> = {};
+                return pendingAbonos.map((a) => {
+                  const base = customerBalanceById[a.customerId] || 0;
+                  const next =
+                    (running[a.customerId] || 0) + Number(a.amount || 0);
+                  running[a.customerId] = next;
+                  const saldoPend = round2(Math.max(0, base - next));
+                  return (
+                    <div
+                      key={a.id}
+                      className="grid grid-cols-12 items-center px-3 py-2 border-b border-slate-100 text-sm gap-x-1"
+                    >
+                      <div className="col-span-3 truncate">
+                        {a.customerName || "—"}
+                      </div>
+                      <div className="col-span-2">{a.date}</div>
+                      <div className="col-span-2 text-right tabular-nums">
+                        {money(base)}
+                      </div>
+                      <div className="col-span-2 text-right tabular-nums">
+                        {money(a.amount)}
+                      </div>
+                      <div className="col-span-2 text-right tabular-nums">
+                        {money(saldoPend)}
+                      </div>
+                      <div className="col-span-1 text-center">
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          className="rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 shadow-none"
+                          onClick={() => removePendingAbono(a.id)}
+                          title="Quitar abono"
+                        >
+                          ✕
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                });
+              })()
+            )}
+          </div>
+        </div>
+      </SlideOverDrawer>
 
       {msg && <p className="mt-2 text-sm">{msg}</p>}
 

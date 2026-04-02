@@ -17,6 +17,7 @@ import { format } from "date-fns";
 import { Role } from "../../apis/apis";
 import { hasRole } from "../../utils/roles";
 import allocateFIFOAndUpdateBatches from "../../Services/allocateFIFO";
+import { isBatchStockActivo } from "../../Services/batchStockStatus";
 import { roundQty, addQty, gteQty } from "../../Services/decimal";
 import RefreshButton from "../../components/common/RefreshButton";
 import Button from "../../components/common/Button";
@@ -193,6 +194,7 @@ export default function SaleForm({
     const batchesByProduct: Record<string, Array<any>> = {};
     snap.forEach((d) => {
       const x = d.data() as any;
+      if (!isBatchStockActivo(x)) return;
       const pid = x.productId;
       const rem = Number(x.remaining || 0);
       if (pid) m[pid] = addQty(m[pid] || 0, rem);
@@ -377,6 +379,7 @@ export default function SaleForm({
     let total = 0;
     snap.forEach((d) => {
       const b = d.data() as any;
+      if (!isBatchStockActivo(b)) return;
       total = addQty(total, Number(b.remaining || 0));
     });
     return roundQty(total);
@@ -417,6 +420,7 @@ export default function SaleForm({
 
       for (const d of docsSorted) {
         const b = d.data as any;
+        if (!isBatchStockActivo(b)) continue;
         const candidate = Number(b.salePrice ?? b.sale_price ?? b.price ?? NaN);
         if (!Number.isNaN(candidate)) {
           return Number(candidate);
@@ -434,6 +438,7 @@ export default function SaleForm({
     let total = 0;
     all.forEach((d) => {
       const b = d.data() as any;
+      if (!isBatchStockActivo(b)) return;
       const name = (b.productName || "").trim().toLowerCase();
       if (name === productName.trim().toLowerCase()) {
         total = addQty(total, Number(b.remaining || 0));
