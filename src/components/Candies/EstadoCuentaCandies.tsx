@@ -31,6 +31,7 @@ import {
   fetchBaseSummaryCandies,
   type BaseSummaryCandies,
 } from "../../Services/baseSummaryCandies";
+import CandiesUtilidadesPanel from "./CandiesUtilidadesPanel";
 
 interface Seller {
   id: string;
@@ -480,6 +481,9 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   ); // ✅ nuevo
 
   const { refreshKey, refresh } = useManualRefresh();
+  const [candiesAccountView, setCandiesAccountView] = useState<
+    "estado" | "utilidades"
+  >("estado");
 
   // 0) cargar sellers + customers
   useEffect(() => {
@@ -1154,22 +1158,57 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         </div>
       </div>
 
-      {/* KPIs Desktop */}
-      <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <div className="sm:col-span-4 flex justify-end">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setCandiesAccountView("estado")}
+            className={`px-4 py-2 rounded-full text-sm font-semibold border transition-colors ${
+              candiesAccountView === "estado"
+                ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            Estado cuenta
+          </button>
+          <button
+            type="button"
+            onClick={() => setCandiesAccountView("utilidades")}
+            className={`px-4 py-2 rounded-full text-sm font-semibold border transition-colors ${
+              candiesAccountView === "utilidades"
+                ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            Utilidades
+          </button>
+        </div>
+        {candiesAccountView === "estado" ? (
           <Button
             type="button"
             variant="primary"
             size="sm"
             onClick={toggleAllKpis}
-            className={`!rounded-xl text-sm !px-3 !py-1 ${
+            className={`!rounded-xl text-sm !px-3 !py-1 shrink-0 ${
               allCollapsed ? "!bg-blue-600 hover:!bg-blue-700" : "!bg-red-600 hover:!bg-red-700"
             }`}
           >
-            {allCollapsed ? "Ver Indicadores" : "Ocultar Indicadores"}
+            {allCollapsed ? "Ver indicadores" : "Ocultar indicadores"}
           </Button>
-        </div>
+        ) : null}
+      </div>
 
+      {candiesAccountView === "utilidades" ? (
+        <CandiesUtilidadesPanel
+          from={from}
+          to={to}
+          refreshKey={refreshKey}
+          onRefresh={refresh}
+        />
+      ) : (
+        <>
+      {/* KPIs Desktop */}
+      <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         {/* Agrupación de 4 KPI en un solo contenedor */}
         <div className="sm:col-span-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -1946,6 +1985,9 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           </tbody>
         </table>
       </div>
+
+        </>
+      )}
 
       {/* Drawer detalle items de venta */}
       <SlideOverDrawer
