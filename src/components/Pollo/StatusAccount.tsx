@@ -35,6 +35,7 @@ import {
   DrawerMoneyStrip,
   DrawerSectionTitle,
   DrawerDetailDlCard,
+  DrawerStatGrid,
 } from "../common/DrawerContentCards";
 
 const money = (n: unknown) => {
@@ -216,10 +217,76 @@ type CashSaleLine = {
   productName: string;
   unitPrice: number;
   qtyLabel: string;
+  /** Cantidad numérica de la línea (misma unidad que `measurement` cuando existe). */
+  qty: number;
+  /** Medida del producto en venta: "lb"/"LB" = libras; resto (unidad, cajilla, huevo…) = KPI unidades. */
+  measurement: string;
   amount: number;
   grossProfit: number;
   seller: string;
 };
+
+/** Igual criterio que SaleFormV2: solo esos valores cuentan como venta por libras. */
+function isPolloLbMeasurement(m: string): boolean {
+  const s = String(m || "").toLowerCase().trim();
+  return (
+    s === "lb" ||
+    s === "lbs" ||
+    s === "libra" ||
+    s === "libras"
+  );
+}
+
+/** Fallback si la venta vieja no trae `measurement` en el ítem. */
+function parseCashQtyLabelForKpis(qtyLabel: string): {
+  lbs: number;
+  units: number;
+} {
+  const s = String(qtyLabel).trim();
+  if (!s || s === "—") return { lbs: 0, units: 0 };
+  const m = s.match(/^([\d.]+)\s*(.*)$/);
+  const qty = m ? parseFloat(m[1]) : 0;
+  const rest = (m?.[2] || "").toLowerCase().trim();
+  if (/\b(lb|lbs|libra|libras)\b/.test(rest) || rest === "lb")
+    return { lbs: qty, units: 0 };
+  if (!rest) return { lbs: 0, units: qty };
+  return { lbs: 0, units: qty };
+}
+
+function lineKpiBucket(line: CashSaleLine): "lb" | "unidad" {
+  const m = String(line.measurement || "").trim();
+  if (m && isPolloLbMeasurement(m)) return "lb";
+  if (m && !isPolloLbMeasurement(m)) return "unidad";
+  const q = parseCashQtyLabelForKpis(line.qtyLabel);
+  if (q.lbs > 0 && q.units === 0) return "lb";
+  return "unidad";
+}
+
+function aggregateCashSaleLinesForDrawer(lines: CashSaleLine[]) {
+  const products = new Set<string>();
+  let lbs = 0;
+  let units = 0;
+  let amount = 0;
+  let grossProfit = 0;
+  for (const line of lines) {
+    products.add(line.productName);
+    amount += line.amount;
+    grossProfit += line.grossProfit;
+    const qty = Number(line.qty ?? 0);
+    if (qty <= 0) continue;
+    const bucket = lineKpiBucket(line);
+    if (bucket === "lb") lbs += qty;
+    else units += qty;
+  }
+  return {
+    productCount: products.size,
+    lineCount: lines.length,
+    lbs: round2(lbs),
+    units: round2(units),
+    amount: round2(amount),
+    grossProfit: round2(grossProfit),
+  };
+}
 
 /** Expande una venta CONTADO en líneas para el drawer (producto / precio / cantidad / monto / U.B.). */
 function appendCashSaleLinesForDoc(
@@ -248,6 +315,9 @@ function appendCashSaleLinesForDoc(
       const g = Number(it.grossProfit);
       const gp = Number.isFinite(g) ? round2(g) : round2(lineFinal - cogs);
       const unit = String(it.unit || "").trim();
+      const measurement = String(
+        it.measurement ?? it.unit ?? "",
+      ).trim();
       const qtyLabel =
         `${Number(qty).toFixed(3)}${unit ? ` ${unit}` : ""}`.trim();
       if (!into[day]) into[day] = [];
@@ -257,6 +327,8 @@ function appendCashSaleLinesForDoc(
         productName: String(it.productName || "—"),
         unitPrice: Number(it.unitPrice ?? 0),
         qtyLabel,
+        qty,
+        measurement,
         amount: round2(lineFinal),
         grossProfit: gp,
         seller,
@@ -281,6 +353,8 @@ function appendCashSaleLinesForDoc(
     productName: String(x.productName || "—"),
     unitPrice: Number(x.unitPrice ?? 0),
     qtyLabel,
+    qty,
+    measurement: meas,
     amount: round2(amt),
     grossProfit: gp,
     seller,
@@ -1082,6 +1156,11 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     if (!cashSalesDrawerDate) return [];
     return cashSaleLinesByDay[cashSalesDrawerDate] ?? [];
   }, [cashSalesDrawerDate, cashSaleLinesByDay]);
+
+  const cashSalesDrawerKpis = useMemo(
+    () => aggregateCashSaleLinesForDrawer(cashLinesForDrawer),
+    [cashLinesForDrawer],
+  );
 
   useEffect(() => {
     if (!abonoDiaDrawerDate) return;
@@ -2878,6 +2957,40 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           </p>
         ) : (
           <div className="space-y-3">
+            <DrawerStatGrid
+              items={[
+                {
+                  label: "Cant. productos (distintos)",
+                  value: cashSalesDrawerKpis.productCount,
+                  tone: "slate",
+                },
+                {
+                  label: "Líneas",
+                  value: cashSalesDrawerKpis.lineCount,
+                  tone: "sky",
+                },
+                {
+                  label: "Libras (tipo libra)",
+                  value: qty3(cashSalesDrawerKpis.lbs),
+                  tone: "amber",
+                },
+                {
+                  label: "Unidades (no libra)",
+                  value: qty3(cashSalesDrawerKpis.units),
+                  tone: "violet",
+                },
+                {
+                  label: "Monto",
+                  value: money(cashSalesDrawerKpis.amount),
+                  tone: "indigo",
+                },
+                {
+                  label: "Utilidad bruta",
+                  value: money(cashSalesDrawerKpis.grossProfit),
+                  tone: "emerald",
+                },
+              ]}
+            />
             <DrawerSectionTitle className="mt-0">
               {cashLinesForDrawer.length} línea(s) · solo cash (CONTADO)
             </DrawerSectionTitle>

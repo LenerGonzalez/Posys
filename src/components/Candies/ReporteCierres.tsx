@@ -1,5 +1,5 @@
 // // src/components/Externos/SaldosPendientesExternos.tsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
@@ -19,8 +19,13 @@ import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
 import Button from "../common/Button";
 import useManualRefresh from "../../hooks/useManualRefresh";
-import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
+import ActionMenu, {
+  ActionMenuTrigger,
+  actionMenuItemClass,
+  actionMenuItemClassDestructive,
+} from "../common/ActionMenu";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import SlideOverDrawer from "../common/SlideOverDrawer";
 
 type RecordType = "CUENTA_NUEVA" | "ABONO";
 
@@ -202,15 +207,15 @@ export default function SaldosPendientesExternos({
     setDetailTo("");
   };
 
-  // modal cliente
-  const [clientModalOpen, setClientModalOpen] = useState(false);
+  // drawer cliente
+  const [clientDrawerOpen, setClientDrawerOpen] = useState(false);
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   const [clientName, setClientName] = useState("");
   const [clientPhone, setClientPhone] = useState("");
   const [clientDescription, setClientDescription] = useState("");
 
-  // modal movimiento
-  const [recordModalOpen, setRecordModalOpen] = useState(false);
+  // drawer movimiento/registro
+  const [recordDrawerOpen, setRecordDrawerOpen] = useState(false);
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   /** Id del cliente en external_pending_clients */
   const [recordClientKey, setRecordClientKey] = useState("");
@@ -219,20 +224,20 @@ export default function SaldosPendientesExternos({
   const [recordAmount, setRecordAmount] = useState("");
   const [recordNotes, setRecordNotes] = useState("");
 
-  // modal detalle cliente
-  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  // drawer detalle cliente (mismo contenido que «Ver»)
+  const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
   const [detailClientKey, setDetailClientKey] = useState<string | null>(null);
 
-  const clientModalRef = useRef<HTMLDivElement | null>(null);
-  const recordModalRef = useRef<HTMLDivElement | null>(null);
-  const detailModalRef = useRef<HTMLDivElement | null>(null);
-  const actionMenuRef = useRef<HTMLDivElement | null>(null);
-  const [actionOpenId, setActionOpenId] = useState<string | null>(null);
   const [mainToolsMenuRect, setMainToolsMenuRect] = useState<DOMRect | null>(
     null,
   );
   const [summaryRowMenu, setSummaryRowMenu] = useState<{
     clientKey: string;
+    rect: DOMRect;
+  } | null>(null);
+  /** Menú ⋮ por fila en tabla detalle de registros */
+  const [detailRecordMenu, setDetailRecordMenu] = useState<{
+    recordId: string;
     rect: DOMRect;
   } | null>(null);
   const [recordClientLocked, setRecordClientLocked] = useState(false);
@@ -778,7 +783,7 @@ export default function SaldosPendientesExternos({
   const openCreateClientModal = () => {
     resetClientForm();
     setClientRubroType("dulces");
-    setClientModalOpen(true);
+    setClientDrawerOpen(true);
   };
 
   const openEditClientModal = (client: ExternalClient) => {
@@ -788,7 +793,7 @@ export default function SaldosPendientesExternos({
     setClientName(client.name || "");
     setClientPhone(client.phone || "");
     setClientDescription(client.description || "");
-    setClientModalOpen(true);
+    setClientDrawerOpen(true);
   };
 
   const openCreateRecordModal = (
@@ -803,16 +808,16 @@ export default function SaldosPendientesExternos({
     } else {
       setRecordClientLocked(false);
     }
-    setRecordModalOpen(true);
+    setRecordDrawerOpen(true);
   };
 
-  /** Un solo flujo: mismo modal que cuenta/abono; cliente fijo si viene de una fila. */
+  /** Un solo flujo: mismo drawer que cuenta/abono; cliente fijo si viene de una fila. */
   const openMovementModal = (clientKey: string) => {
     resetRecordForm();
     setRecordType("CUENTA_NUEVA");
     setRecordClientKey(clientKey);
     setRecordClientLocked(true);
-    setRecordModalOpen(true);
+    setRecordDrawerOpen(true);
   };
 
   const openEditRecordModal = (row: ExternalRecord) => {
@@ -823,7 +828,12 @@ export default function SaldosPendientesExternos({
     setRecordAmount(String(Number(row.amount || 0).toFixed(2)));
     setRecordNotes(row.notes || "");
     setRecordClientLocked(true);
-    setRecordModalOpen(true);
+    setRecordDrawerOpen(true);
+  };
+
+  const openClientDetailDrawer = (clientKey: string) => {
+    setDetailClientKey(clientKey);
+    setDetailDrawerOpen(true);
   };
 
   const saveClient = async () => {
@@ -916,7 +926,7 @@ export default function SaldosPendientesExternos({
         await updateDoc(ref, { clientIdentifier: ident });
       }
 
-      setClientModalOpen(false);
+      setClientDrawerOpen(false);
       resetClientForm();
       showFeedback(
         editingClientId
@@ -1013,7 +1023,7 @@ export default function SaldosPendientesExternos({
         });
       }
 
-      setRecordModalOpen(false);
+      setRecordDrawerOpen(false);
       resetRecordForm();
       showFeedback(
         editingRecordId
@@ -1147,67 +1157,20 @@ export default function SaldosPendientesExternos({
   };
 
   useEffect(() => {
-    const handleMouseDown = (ev: MouseEvent) => {
-      const target = ev.target as HTMLElement;
-      if (target?.closest?.("[data-action-menu-root]")) return;
-      if (
-        clientModalOpen &&
-        clientModalRef.current &&
-        !clientModalRef.current.contains(target)
-      ) {
-        setClientModalOpen(false);
-      }
-
-      if (
-        recordModalOpen &&
-        recordModalRef.current &&
-        !recordModalRef.current.contains(target)
-      ) {
-        setRecordModalOpen(false);
-      }
-
-      if (
-        detailModalOpen &&
-        detailModalRef.current &&
-        !detailModalRef.current.contains(target)
-      ) {
-        setDetailModalOpen(false);
-      }
-
-      if (
-        actionOpenId &&
-        actionMenuRef.current &&
-        !actionMenuRef.current.contains(target)
-      ) {
-        setActionOpenId(null);
-      }
-    };
-
     const handleKeyDown = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
-        setClientModalOpen(false);
-        setRecordModalOpen(false);
-        resetRecordForm();
-        setDetailModalOpen(false);
-        setActionOpenId(null);
         setMainToolsMenuRect(null);
         setSummaryRowMenu(null);
+        setDetailRecordMenu(null);
       }
     };
 
-    document.addEventListener("mousedown", handleMouseDown);
     document.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.removeEventListener("mousedown", handleMouseDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [
-    clientModalOpen,
-    recordModalOpen,
-    detailModalOpen,
-    actionOpenId,
-  ]);
+  }, []);
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
@@ -1246,7 +1209,8 @@ export default function SaldosPendientesExternos({
             <Button
               type="button"
               variant="ghost"
-              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+              size="sm"
+              className={actionMenuItemClass}
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("CUENTA_NUEVA");
@@ -1257,7 +1221,8 @@ export default function SaldosPendientesExternos({
             <Button
               type="button"
               variant="ghost"
-              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+              size="sm"
+              className={actionMenuItemClass}
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("ABONO");
@@ -1278,7 +1243,8 @@ export default function SaldosPendientesExternos({
             <Button
               type="button"
               variant="ghost"
-              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+              size="sm"
+              className={actionMenuItemClass}
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateClientModal();
@@ -1289,7 +1255,8 @@ export default function SaldosPendientesExternos({
             <Button
               type="button"
               variant="ghost"
-              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+              size="sm"
+              className={actionMenuItemClass}
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("CUENTA_NUEVA");
@@ -1300,7 +1267,8 @@ export default function SaldosPendientesExternos({
             <Button
               type="button"
               variant="ghost"
-              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+              size="sm"
+              className={actionMenuItemClass}
               onClick={() => {
                 setMainToolsMenuRect(null);
                 openCreateRecordModal("ABONO");
@@ -1311,7 +1279,8 @@ export default function SaldosPendientesExternos({
             <Button
               type="button"
               variant="ghost"
-              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+              size="sm"
+              className={actionMenuItemClass}
               onClick={() => {
                 setMainToolsMenuRect(null);
                 exportToExcel();
@@ -1323,8 +1292,9 @@ export default function SaldosPendientesExternos({
             <Button
               type="button"
               variant="ghost"
+              size="sm"
               disabled={migrationBusy || loading}
-              className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`${actionMenuItemClass} disabled:opacity-50 disabled:cursor-not-allowed`}
               onClick={() => {
                 setMainToolsMenuRect(null);
                 void migrateLegacyClientRubroFields();
@@ -1375,10 +1345,10 @@ export default function SaldosPendientesExternos({
                   <Button
                     type="button"
                     variant="ghost"
-                    className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+                    size="sm"
+                    className={actionMenuItemClass}
                     onClick={() => {
-                      setDetailClientKey(r.clientKey);
-                      setDetailModalOpen(true);
+                      openClientDetailDrawer(r.clientKey);
                       setSummaryRowMenu(null);
                     }}
                   >
@@ -1387,7 +1357,8 @@ export default function SaldosPendientesExternos({
                   <Button
                     type="button"
                     variant="ghost"
-                    className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+                    size="sm"
+                    className={actionMenuItemClass}
                     onClick={() => {
                       setSummaryRowMenu(null);
                       openMovementModal(r.clientKey);
@@ -1400,7 +1371,8 @@ export default function SaldosPendientesExternos({
                       <Button
                         type="button"
                         variant="ghost"
-                        className="w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
+                        size="sm"
+                        className={actionMenuItemClass}
                         onClick={() => {
                           setSummaryRowMenu(null);
                           openEditClientModal(ext);
@@ -1411,7 +1383,8 @@ export default function SaldosPendientesExternos({
                       <Button
                         type="button"
                         variant="ghost"
-                        className="w-full !rounded-none justify-start px-3 py-2 text-sm font-semibold !text-red-700 hover:!bg-red-50"
+                        size="sm"
+                        className={actionMenuItemClassDestructive}
                         onClick={() => {
                           setSummaryRowMenu(null);
                           void deleteClientSafe(r.clientKey);
@@ -1593,7 +1566,16 @@ export default function SaldosPendientesExternos({
                   filteredSummaries.map((r) => (
                     <div
                       key={r.clientKey}
-                      className="border rounded-lg p-3 bg-white shadow-sm"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openClientDetailDrawer(r.clientKey)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openClientDetailDrawer(r.clientKey);
+                        }
+                      }}
+                      className="border rounded-lg p-3 bg-white shadow-sm cursor-pointer hover:bg-slate-50/90 transition-colors text-left w-full"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 pr-3 min-w-0">
@@ -1675,7 +1657,11 @@ export default function SaldosPendientesExternos({
                   </thead>
                   <tbody>
                     {filteredSummaries.map((r) => (
-                      <tr key={r.clientKey} className="text-center">
+                      <tr
+                        key={r.clientKey}
+                        className="text-center cursor-pointer hover:bg-slate-50/80"
+                        onClick={() => openClientDetailDrawer(r.clientKey)}
+                      >
                         <td className="border p-2">
                           <span
                             className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${RUBRO_BADGE_CLASS[r.rubroType]}`}
@@ -1698,12 +1684,16 @@ export default function SaldosPendientesExternos({
                         <td className="border p-2">{r.lastSaleDate || "—"}</td>
                         <td className="border p-2">{r.lastAbonoDate || "—"}</td>
                         <td className="border p-2">{r.registros}</td>
-                        <td className="border p-2">
+                        <td
+                          className="border p-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <div className="flex items-center justify-center">
                             <ActionMenuTrigger
                               className="inline-flex"
                               aria-label="Acciones del cliente"
                               onClick={(e) => {
+                                e.stopPropagation();
                                 setSummaryRowMenu({
                                   clientKey: r.clientKey,
                                   rect: e.currentTarget.getBoundingClientRect(),
@@ -1840,7 +1830,11 @@ export default function SaldosPendientesExternos({
                   </thead>
                   <tbody>
                     {paginatedDetailRows.map((r) => (
-                      <tr key={r.id} className="text-center">
+                      <tr
+                        key={r.id}
+                        className="text-center cursor-pointer hover:bg-slate-50/80"
+                        onClick={() => openClientDetailDrawer(r.clientId)}
+                      >
                         <td className="border p-2 text-left">{r.clientName}</td>
                         <td className="border p-2">
                           {r.type === "CUENTA_NUEVA" ? (
@@ -1858,55 +1852,22 @@ export default function SaldosPendientesExternos({
                         <td className="border p-2 font-semibold">
                           {money((r as any).balanceAfter || 0)}
                         </td>
-                        <td className="border p-2 relative">
+                        <td
+                          className="border p-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {!readonly ? (
-                            <div className="inline-block">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                onClick={() =>
-                                  setActionOpenId(
-                                    actionOpenId === r.id ? null : r.id,
-                                  )
-                                }
-                                className="!rounded-md px-2 py-1 hover:bg-gray-100 md:px-1 md:py-0.5 md:text-[12px] shadow-none font-normal min-w-0"
-                                aria-label="Acciones"
-                              >
-                                ⋯
-                              </Button>
-
-                              {actionOpenId === r.id && (
-                                <div
-                                  ref={(el) => {
-                                    actionMenuRef.current =
-                                      el as HTMLDivElement | null;
-                                  }}
-                                  className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm min-w-[140px]"
-                                >
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    className="!block w-full !rounded-none justify-start px-3 py-2 text-sm font-normal hover:bg-gray-100"
-                                    onClick={() => {
-                                      openEditRecordModal(r);
-                                      setActionOpenId(null);
-                                    }}
-                                  >
-                                    Editar
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    className="!block w-full !rounded-none justify-start px-3 py-2 text-sm font-semibold !text-red-600 hover:bg-gray-100"
-                                    onClick={() => {
-                                      setActionOpenId(null);
-                                      deleteRecordSafe(r.id);
-                                    }}
-                                  >
-                                    Eliminar
-                                  </Button>
-                                </div>
-                              )}
+                            <div className="flex justify-center">
+                              <ActionMenuTrigger
+                                aria-label="Acciones del registro"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDetailRecordMenu({
+                                    recordId: r.id,
+                                    rect: e.currentTarget.getBoundingClientRect(),
+                                  });
+                                }}
+                              />
                             </div>
                           ) : (
                             <span className="text-xs text-gray-400">—</span>
@@ -1976,147 +1937,156 @@ export default function SaldosPendientesExternos({
         </div>
       </div>
 
-      {/* modal cliente */}
-      {clientModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setClientModalOpen(false)}
-          />
-
-          <div
-            ref={clientModalRef}
-            className="relative bg-white rounded-2xl p-4 w-full max-w-xl shadow-xl max-h-[90vh] overflow-auto pb-[env(safe-area-inset-bottom)]"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">
-                {editingClientId ? "Editar cliente" : "Crear cliente"}
-              </h3>
-
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setClientModalOpen(false)}
-                className="!rounded-full px-2 py-1 text-gray-500 hover:!text-gray-700 shadow-none font-normal"
-              >
-                ✕
-              </Button>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3">
-              <div>
-                <MobileHtmlSelect
-                  label="Rubro del cliente"
-                  value={clientRubroType}
-                  onChange={(v) => setClientRubroType(v as RubroType)}
-                  options={clientRubroModalOptions}
-                  selectClassName="border rounded-xl px-3 py-2 w-full bg-white"
-                  buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white min-h-[2.75rem]"
-                  sheetTitle="Rubro del cliente"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Nombre
-                </label>
-                <input
-                  className="border rounded px-3 py-2 w-full"
-                  value={clientName}
-                  onChange={(e) => setClientName(e.target.value)}
-                  placeholder="Nombre del cliente"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Teléfono
-                </label>
-                <input
-                  className="border rounded px-3 py-2 w-full"
-                  value={clientPhone}
-                  onChange={(e) => setClientPhone(e.target.value)}
-                  placeholder="Teléfono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Descripción
-                </label>
-                <textarea
-                  className="border rounded px-3 py-2 w-full min-h-[90px]"
-                  value={clientDescription}
-                  onChange={(e) => setClientDescription(e.target.value)}
-                  placeholder="Descripción"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 mt-2">
+      <ActionMenu
+        anchorRect={detailRecordMenu?.rect ?? null}
+        isOpen={!!detailRecordMenu}
+        onClose={() => setDetailRecordMenu(null)}
+        width={200}
+      >
+        {detailRecordMenu ? (
+          (() => {
+            const row = paginatedDetailRows.find(
+              (x) => x.id === detailRecordMenu.recordId,
+            );
+            if (!row) return null;
+            return (
+              <>
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  onClick={() => setClientModalOpen(false)}
-                  className="px-2 py-1 md:px-4 mb-5 md:py-2 !rounded-md text-xs sm:text-sm shadow-none"
+                  className={actionMenuItemClass}
+                  onClick={() => {
+                    openEditRecordModal(row);
+                    setDetailRecordMenu(null);
+                  }}
                 >
-                  Cancelar
+                  Editar
                 </Button>
                 <Button
                   type="button"
-                  variant="primary"
+                  variant="ghost"
                   size="sm"
-                  onClick={saveClient}
-                  className="px-2 py-1 md:px-4 md:py-2 mb-5 !rounded-md text-xs sm:text-sm shadow-none"
+                  className={actionMenuItemClassDestructive}
+                  onClick={() => {
+                    setDetailRecordMenu(null);
+                    void deleteRecordSafe(row.id);
+                  }}
                 >
-                  Guardar cliente
+                  Eliminar
                 </Button>
-              </div>
-            </div>
+              </>
+            );
+          })()
+        ) : null}
+      </ActionMenu>
+
+      <SlideOverDrawer
+        open={clientDrawerOpen}
+        onClose={() => setClientDrawerOpen(false)}
+        title={editingClientId ? "Editar cliente" : "Crear cliente"}
+        titleId="rc-ext-client-drawer-title"
+        zIndexClassName="z-[78]"
+        panelMaxWidthClassName="max-w-xl"
+        footer={
+          <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setClientDrawerOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button type="button" variant="primary" size="sm" onClick={saveClient}>
+              Guardar cliente
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid grid-cols-1 gap-3 pb-1">
+          <div>
+            <MobileHtmlSelect
+              label="Rubro del cliente"
+              value={clientRubroType}
+              onChange={(v) => setClientRubroType(v as RubroType)}
+              options={clientRubroModalOptions}
+              selectClassName="border rounded-xl px-3 py-2 w-full bg-white"
+              buttonClassName="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white min-h-[2.75rem]"
+              sheetTitle="Rubro del cliente"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">Nombre</label>
+            <input
+              className="border rounded px-3 py-2 w-full"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              placeholder="Nombre del cliente"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">Teléfono</label>
+            <input
+              className="border rounded px-3 py-2 w-full"
+              value={clientPhone}
+              onChange={(e) => setClientPhone(e.target.value)}
+              placeholder="Teléfono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">
+              Descripción
+            </label>
+            <textarea
+              className="border rounded px-3 py-2 w-full min-h-[90px]"
+              value={clientDescription}
+              onChange={(e) => setClientDescription(e.target.value)}
+              placeholder="Descripción"
+            />
           </div>
         </div>
-      )}
+      </SlideOverDrawer>
 
-      {/* modal registro */}
-      {recordModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => {
-              setRecordModalOpen(false);
-              resetRecordForm();
-            }}
-          />
-
-          <div
-            ref={recordModalRef}
-            className="relative bg-white rounded-2xl p-4 w-full max-w-2xl shadow-xl max-h-[90vh] overflow-auto pb-[env(safe-area-inset-bottom)]"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">
-                {editingRecordId
-                  ? "Editar registro"
-                  : recordType === "CUENTA_NUEVA"
-                    ? "Agregar Venta"
-                    : "Agregar Abono"}
-              </h3>
-
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setRecordModalOpen(false);
-                  resetRecordForm();
-                }}
-                className="!rounded-full px-2 py-1 text-gray-500 hover:!text-gray-700 shadow-none font-normal"
-              >
-                ✕
-              </Button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <SlideOverDrawer
+        open={recordDrawerOpen}
+        onClose={() => {
+          setRecordDrawerOpen(false);
+          resetRecordForm();
+        }}
+        title={
+          editingRecordId
+            ? "Editar registro"
+            : recordType === "CUENTA_NUEVA"
+              ? "Agregar venta"
+              : "Agregar abono"
+        }
+        titleId="rc-ext-record-drawer-title"
+        zIndexClassName="z-[79]"
+        panelMaxWidthClassName="max-w-2xl"
+        footer={
+          <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setRecordDrawerOpen(false);
+                resetRecordForm();
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button type="button" variant="primary" size="sm" onClick={saveRecord}>
+              Guardar registro
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pb-1">
               <div className="md:col-span-2">
                 <MobileHtmlSelect
                   label="Cliente"
@@ -2225,63 +2195,31 @@ export default function SaldosPendientesExternos({
                   </div>
                 </div>
               </div>
-
-              <div className="md:col-span-2 flex justify-end gap-2 mt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setRecordModalOpen(false);
-                    resetRecordForm();
-                  }}
-                  className="px-2 py-1 md:px-4 mb-5 md:py-2 !rounded-md text-xs sm:text-sm shadow-none"
-                >
-                  Cancelar
-                </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  onClick={saveRecord}
-                  className="px-2 py-1 md:px-4 md:py-2 mb-5 !rounded-md text-xs sm:text-sm shadow-none"
-                >
-                  Guardar registro
-                </Button>
-              </div>
             </div>
-          </div>
-        </div>
-      )}
+      </SlideOverDrawer>
 
-      {/* modal detalle cliente */}
-      {detailModalOpen && detailClientSummary && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setDetailModalOpen(false)}
-          />
-
-          <div
-            ref={detailModalRef}
-            className="relative bg-white rounded-2xl p-4 w-full max-w-4xl shadow-xl max-h-[90vh] overflow-auto"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">
-                Detalle de {detailClientSummary.clientName}
-              </h3>
-
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setDetailModalOpen(false)}
-                className="!rounded-full px-2 py-1 text-gray-500 hover:!text-gray-700 shadow-none font-normal"
-              >
-                ✕
-              </Button>
-            </div>
-
+      <SlideOverDrawer
+        open={detailDrawerOpen && !!detailClientSummary}
+        onClose={() => {
+          setDetailDrawerOpen(false);
+          setDetailClientKey(null);
+        }}
+        title={
+          detailClientSummary
+            ? `Detalle de ${detailClientSummary.clientName}`
+            : "Detalle"
+        }
+        subtitle={
+          detailClientSummary
+            ? `${RUBRO_LABEL[detailClientSummary.rubroType]} · ${detailClientSummary.phone || "Sin teléfono"}`
+            : undefined
+        }
+        titleId="rc-ext-detail-drawer-title"
+        zIndexClassName="z-[80]"
+        panelMaxWidthClassName="max-w-4xl"
+      >
+        {detailClientSummary ? (
+          <>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <div className="border rounded-xl p-3 bg-emerald-50">
                 <div className="text-xs text-gray-600">Cuentas nuevas</div>
@@ -2348,9 +2286,11 @@ export default function SaldosPendientesExternos({
                 </tbody>
               </table>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        ) : (
+          <p className="text-sm text-gray-500">Sin datos de cliente.</p>
+        )}
+      </SlideOverDrawer>
 
     </div>
   );

@@ -22,6 +22,12 @@ import Button from "../common/Button";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
 import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerSectionTitle,
+  DrawerStatGrid,
+} from "../common/DrawerContentCards";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import { backfillCandyInventoryFromMainOrder } from "../../Services/inventory_candies";
 
@@ -389,6 +395,18 @@ export default function CandyMainOrders() {
   const [orderInventoryAgg, setOrderInventoryAgg] = useState<
     Record<string, OrderInventoryAgg>
   >({});
+
+  /** Detalle desde el listado (slide-over) */
+  const [masterDrawerOpen, setMasterDrawerOpen] = useState(false);
+  const [masterDrawerLoading, setMasterDrawerLoading] = useState(false);
+  const [masterDrawerOrder, setMasterDrawerOrder] =
+    useState<CandyOrderSummaryRow | null>(null);
+  const [masterDrawerItems, setMasterDrawerItems] = useState<CandyOrderItem[]>(
+    [],
+  );
+  const [masterDrawerUBrutaGlobal, setMasterDrawerUBrutaGlobal] = useState<
+    number | null
+  >(null);
 
   // modal orden
   const [openOrderModal, setOpenOrderModal] = useState(false);
@@ -1480,6 +1498,69 @@ export default function CandyMainOrders() {
     if ((o.createdAt as any)?.toDate)
       return (o.createdAt as any).toDate().toISOString().slice(0, 10);
     return "—";
+  };
+
+  const openMasterOrderDrawer = async (o: CandyOrderSummaryRow) => {
+    setMasterDrawerOpen(true);
+    setMasterDrawerOrder(o);
+    setMasterDrawerItems([]);
+    setMasterDrawerUBrutaGlobal(null);
+    setMasterDrawerLoading(true);
+    try {
+      const orderSnap = await getDoc(doc(db, "candy_main_orders", o.id));
+      if (!orderSnap.exists()) {
+        setMsg("❌ No se encontró la orden.");
+        setMasterDrawerOpen(false);
+        return;
+      }
+      const orderData = orderSnap.data() as any;
+      setMasterDrawerUBrutaGlobal(
+        Number.isFinite(Number(orderData.uBrutaGlobal))
+          ? Number(orderData.uBrutaGlobal)
+          : null,
+      );
+
+      const itemsFromDoc: CandyOrderItem[] = Array.isArray(orderData.items)
+        ? (orderData.items as CandyOrderItem[])
+        : [];
+
+      const invSnap = await getDocs(
+        query(
+          collection(db, "inventory_candies"),
+          where("orderId", "==", o.id),
+        ),
+      );
+
+      const remainingByProduct: Record<string, number> = {};
+      invSnap.forEach((d) => {
+        const x = d.data() as any;
+        const productId = String(x.productId || "");
+        if (!productId) return;
+        const remainingPackages = getRemainingPackagesFromInvDoc(x);
+        remainingByProduct[productId] =
+          (remainingByProduct[productId] || 0) + remainingPackages;
+      });
+
+      const itemsForUi = itemsFromDoc.map((it) => {
+        const cat = catalog.find((c) => c.id === it.id);
+        return {
+          ...it,
+          name: String(cat?.name ?? it.name ?? "").trim(),
+          category: String(cat?.category ?? it.category ?? "Caramelo").trim(),
+          remainingPackages:
+            remainingByProduct[it.id] ??
+            it.remainingPackages ??
+            it.packages ??
+            0,
+        };
+      });
+      setMasterDrawerItems(itemsForUi);
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al cargar el detalle de la orden.");
+    } finally {
+      setMasterDrawerLoading(false);
+    }
   };
 
   // =========================
@@ -3677,7 +3758,16 @@ export default function CandyMainOrders() {
               return (
                 <div
                   key={o.id}
-                  className="border rounded-xl p-3 bg-white shadow-sm"
+                  role="button"
+                  tabIndex={0}
+                  className="border rounded-xl p-3 bg-white shadow-sm cursor-pointer hover:bg-slate-50/90 transition-colors"
+                  onClick={() => void openMasterOrderDrawer(o)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      void openMasterOrderDrawer(o);
+                    }
+                  }}
                 >
                   <div className="flex items-start gap-3">
                     <div className="flex-1">
@@ -3924,7 +4014,16 @@ export default function CandyMainOrders() {
                     return (
                       <tr
                         key={o.id}
-                        className="hover:bg-gray-50 whitespace-nowrap"
+                        className="hover:bg-gray-50 whitespace-nowrap cursor-pointer"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => void openMasterOrderDrawer(o)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            void openMasterOrderDrawer(o);
+                          }
+                        }}
                       >
                         <td className="p-2 border-b">{fecha}</td>
                         <td className="p-2 border-b">{o.name}</td>
@@ -3957,14 +4056,15 @@ export default function CandyMainOrders() {
                             className="!h-8 !w-8"
                             aria-label="Acciones de la orden"
                             iconClassName="h-5 w-5 text-gray-700"
-                            onClick={(e) =>
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setOrderListMenu({
                                 id: o.id,
                                 rect: (
                                   e.currentTarget as HTMLElement
                                 ).getBoundingClientRect(),
-                              })
-                            }
+                              });
+                            }}
                           />
                         </td>
                       </tr>
@@ -4010,6 +4110,164 @@ export default function CandyMainOrders() {
             </div>
           </div>
         </div>
+
+        <SlideOverDrawer
+          open={masterDrawerOpen}
+          onClose={() => {
+            setMasterDrawerOpen(false);
+            setMasterDrawerOrder(null);
+            setMasterDrawerItems([]);
+            setMasterDrawerUBrutaGlobal(null);
+          }}
+          title={masterDrawerOrder?.name ?? "Orden maestra"}
+          subtitle={
+            masterDrawerOrder ? getOrderListDate(masterDrawerOrder) : undefined
+          }
+          badge={
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+              Orden maestra
+            </span>
+          }
+        >
+          {masterDrawerLoading ? (
+            <div className="py-8 text-center text-sm text-gray-600">
+              Cargando detalle…
+            </div>
+          ) : masterDrawerOrder ? (
+            <>
+              {(() => {
+                const o = masterDrawerOrder;
+                const agg = orderInventoryAgg[o.id];
+                const grossEst =
+                  Number(o.totalRivas || 0) - Number(o.subtotal || 0);
+                const uBruta =
+                  masterDrawerUBrutaGlobal != null &&
+                  masterDrawerUBrutaGlobal > 0
+                    ? masterDrawerUBrutaGlobal
+                    : grossEst;
+                const logi = Number(o.logisticsCost || 0);
+                const utilidadNeta = uBruta - logi;
+                const sj = Number(o.totalSanJorge || 0);
+
+                return (
+                  <>
+                    <DrawerStatGrid
+                      items={[
+                        {
+                          label: "Productos (líneas)",
+                          value: masterDrawerItems.length,
+                          tone: "slate",
+                        },
+                        {
+                          label: "Paquetes ingresados",
+                          value: o.totalPackages,
+                          tone: "sky",
+                        },
+                        {
+                          label: "Paquetes restantes",
+                          value: agg ? agg.remainingPackages : 0,
+                          tone: "amber",
+                        },
+                        {
+                          label: "Esperado Rivas",
+                          value: `C$ ${Number(o.totalRivas || 0).toFixed(2)}`,
+                          tone: "indigo",
+                        },
+                        {
+                          label: "Esperado Isla",
+                          value: `C$ ${Number(o.totalIsla || 0).toFixed(2)}`,
+                          tone: "indigo",
+                        },
+                        ...(sj > 0.01
+                          ? [
+                              {
+                                label: "Esperado San Jorge",
+                                value: `C$ ${sj.toFixed(2)}`,
+                                tone: "indigo" as const,
+                              },
+                            ]
+                          : []),
+                        {
+                          label: "Total facturado (proveedor)",
+                          value: `C$ ${Number(o.subtotal || 0).toFixed(2)}`,
+                          tone: "violet",
+                        },
+                        {
+                          label: "Gastos logísticos",
+                          value: `C$ ${logi.toFixed(2)}`,
+                          tone: "rose",
+                        },
+                        {
+                          label: "U. bruta (est.)",
+                          value: `C$ ${uBruta.toFixed(2)}`,
+                          tone: "emerald",
+                        },
+                        {
+                          label: "Utilidad neta (est.)",
+                          value: `C$ ${utilidadNeta.toFixed(2)}`,
+                          tone: "emerald",
+                        },
+                        {
+                          label: "Utilidad vendedor",
+                          value: "—",
+                          tone: "slate",
+                          valueClassName: "text-gray-500",
+                        },
+                        {
+                          label: "Vendedor",
+                          value: "—",
+                          tone: "slate",
+                          valueClassName: "text-gray-500",
+                        },
+                      ]}
+                    />
+                  </>
+                );
+              })()}
+
+              <DrawerSectionTitle>Productos</DrawerSectionTitle>
+              {masterDrawerItems.length === 0 ? (
+                <div className="mt-2 text-sm text-gray-600">
+                  Sin productos en esta orden.
+                </div>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {masterDrawerItems.map((it) => (
+                    <DrawerDetailDlCard
+                      key={it.id}
+                      title={
+                        <span className="leading-snug">{it.name || it.id}</span>
+                      }
+                      rows={[
+                        { label: "Categoría", value: it.category || "—" },
+                        {
+                          label: "Paquetes",
+                          value: String(it.packages ?? 0),
+                        },
+                        {
+                          label: "Restantes",
+                          value: String(it.remainingPackages ?? 0),
+                        },
+                        {
+                          label: "Subtotal (proveedor)",
+                          value: `C$ ${Number(it.subtotal || 0).toFixed(2)}`,
+                        },
+                        {
+                          label: "Esperado Rivas",
+                          value: `C$ ${Number(it.totalRivas || 0).toFixed(2)}`,
+                        },
+                        {
+                          label: "Esperado Isla",
+                          value: `C$ ${Number(it.totalIsla || 0).toFixed(2)}`,
+                        },
+                      ]}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          ) : null}
+        </SlideOverDrawer>
       </div>
     </div>
   );

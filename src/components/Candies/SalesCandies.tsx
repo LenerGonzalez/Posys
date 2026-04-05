@@ -38,6 +38,31 @@ const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 // helper: round 2 decimals
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
+/**
+ * U. neta **por paquete** desde `inventory_candies_sellers` (pedido del vendedor).
+ * `uNeta` / `uInvestor` en el doc son totales de la línea, no por paquete — no usar
+ * como sustituto directo de `uNetaPorPaquete`. Si el campo `uNetaPorPaquete` coincide
+ * con el total (error de datos), se deriva como uNeta ÷ paquetes.
+ */
+function investorNetPerPackFromVendorInventory(
+  d: Record<string, unknown> | null | undefined,
+): number | undefined {
+  if (!d || typeof d !== "object") return undefined;
+  const pk = Math.max(0, Number(d.packages ?? 0));
+  const un = Number(d.uNeta ?? d.uInvestor ?? NaN);
+  const unpStored = Number(d.uNetaPorPaquete ?? NaN);
+
+  if (pk > 0 && Number.isFinite(un)) {
+    const derived = round2(un / pk);
+    if (!Number.isFinite(unpStored) || unpStored === 0) return derived;
+    // Confundieron U. neta total con "por paquete"
+    if (Math.abs(unpStored - un) < 0.02) return derived;
+    return round2(unpStored);
+  }
+  if (Number.isFinite(unpStored) && unpStored !== 0) return round2(unpStored);
+  return undefined;
+}
+
 const PLACES = [
   "Altagracia",
   "Taguizapa",
@@ -915,6 +940,30 @@ export default function SalesCandiesPOS({
     return round2(sum);
   }, [items]);
 
+  /** Σ (uNeta×paq × paquetes vendidos) por línea, misma lógica que `inversorGain` al guardar. */
+  const totalUNetaFromVendorOrder = useMemo(() => {
+    let sum = 0;
+    for (const it of items) {
+      const qtyPk = Math.max(0, Number(it.qtyPackages || 0));
+      if (qtyPk <= 0) continue;
+      const vendorDetail = stockDetailsByProduct[it.productId] || {};
+      const fromInventory = investorNetPerPackFromVendorInventory(
+        vendorDetail as Record<string, unknown>,
+      );
+      const unp =
+        fromInventory !== undefined
+          ? fromInventory
+          : Number.isFinite(Number(it.uNetaPorPaquete ?? NaN))
+            ? Number(it.uNetaPorPaquete)
+            : Number.isFinite(Number(it.uNeta ?? NaN))
+              ? round2(Number(it.uNeta) / qtyPk)
+              : NaN;
+      if (!Number.isFinite(unp)) continue;
+      sum += unp * qtyPk;
+    }
+    return round2(sum);
+  }, [items, stockDetailsByProduct]);
+
   // Cargar catálogos
   useEffect(() => {
     (async () => {
@@ -1283,6 +1332,10 @@ export default function SalesCandiesPOS({
       return null;
     })();
 
+    const uNetaPorPaqueteFromOrder = investorNetPerPackFromVendorInventory(
+      orderData as Record<string, unknown> | undefined,
+    );
+
     const newItem: SelectedItem = {
       productId: pid,
       productName: prod.name || "",
@@ -1296,6 +1349,7 @@ export default function SalesCandiesPOS({
       margenVendedor: 0,
       uBruta: 0,
       uvXpaq: uvXpaqFromOrder ?? undefined,
+      uNetaPorPaquete: uNetaPorPaqueteFromOrder,
     };
     setItems((prev) => [...prev, newItem]);
     setProductId("");
@@ -1466,23 +1520,19 @@ export default function SalesCandiesPOS({
               ? Number(detailUv)
               : undefined;
 
-          const detailUNeta = Number(
-            vendorDetail?.uNetaPorPaquete ??
-              vendorDetail?.uNeta ??
-              vendorDetail?.u_neta ??
-              NaN,
+          /** Siempre desde inventario vendedor (orden); no usar uNeta del doc como "por paquete". */
+          const fromInventory = investorNetPerPackFromVendorInventory(
+            vendorDetail as Record<string, unknown>,
           );
-
-          const uNetaPorPaquete = Number.isFinite(
-            Number(it.uNetaPorPaquete ?? NaN),
-          )
-            ? Number(it.uNetaPorPaquete)
-            : Number.isFinite(detailUNeta)
-              ? Number(detailUNeta)
-              : Number.isFinite(Number(it.uNeta ?? NaN)) &&
-                  (it.qtyPackages || 0) > 0
-                ? round2(Number(it.uNeta) / (it.qtyPackages || 1))
-                : undefined;
+          const uNetaPorPaquete =
+            fromInventory !== undefined
+              ? fromInventory
+              : Number.isFinite(Number(it.uNetaPorPaquete ?? NaN))
+                ? Number(it.uNetaPorPaquete)
+                : Number.isFinite(Number(it.uNeta ?? NaN)) &&
+                    (it.qtyPackages || 0) > 0
+                  ? round2(Number(it.uNeta) / (it.qtyPackages || 1))
+                  : undefined;
 
           const margenVendedor = Number.isFinite(Number(uvxpaqFinal ?? NaN))
             ? round2((it.qtyPackages || 0) * Number(uvxpaqFinal || 0))
@@ -2341,7 +2391,7 @@ export default function SalesCandiesPOS({
           </div>
 
           {/* Lista de precios / sucursal */}
-          <div className="md:col-span-1">
+          {/* <div className="md:col-span-1">
             <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
               Lista de precios / Sucursal
             </label>
@@ -2383,7 +2433,7 @@ export default function SalesCandiesPOS({
             <div className="text-xs text-gray-500 mt-1">
               La sucursal se toma automáticamente del vendedor seleccionado.
             </div>
-          </div>
+          </div> */}
 
           {/* Selector de producto */}
           <div className="md:col-span-2">
@@ -2567,34 +2617,61 @@ export default function SalesCandiesPOS({
             </div>
 
             {items.length > 0 && (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-3 text-sm">
-                <div className="p-2 rounded bg-blue-50 border border-blue-200">
-                  <div className="text-xs text-gray-600">Paquetes totales</div>
-                  <div className="font-semibold">{totalPackages}</div>
-                </div>
-                <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
-                  <div className="text-xs text-gray-600">Total venta</div>
-                  <div className="font-semibold">{money(totalAmount)}</div>
-                </div>
-                <div className="p-2 rounded bg-amber-50 border border-amber-200">
-                  <div className="text-xs text-gray-600">Comisión vendedor</div>
-                  <div className="font-semibold">
-                    {money(vendorCommissionAmount)}{" "}
-                    {vendorCommissionPercent
-                      ? `(${vendorCommissionPercent.toFixed(2)}%)`
-                      : ""}
+              <div className="mt-3 -mx-1 px-1">
+                <div className="flex flex-nowrap gap-2.5 overflow-x-auto pb-1.5 [scrollbar-width:thin]">
+                  <div className="shrink-0 min-w-[10.5rem] rounded-xl border border-sky-200/80 bg-gradient-to-br from-sky-50 to-white px-3 py-2.5 shadow-sm ring-1 ring-sky-900/5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-sky-700/80">
+                      Paquetes totales
+                    </div>
+                    <div className="mt-0.5 tabular-nums text-base font-semibold text-sky-950">
+                      {totalPackages}
+                    </div>
                   </div>
-                </div>
-                <div className="p-2 rounded bg-indigo-50 border border-indigo-200">
-                  <div className="text-xs text-gray-600">Total abonos</div>
-                  <div className="font-semibold">
-                    {money(abonoTotalPending)}
+                  <div className="shrink-0 min-w-[10.5rem] rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white px-3 py-2.5 shadow-sm ring-1 ring-emerald-900/5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-emerald-800/80">
+                      Total venta
+                    </div>
+                    <div className="mt-0.5 tabular-nums text-base font-semibold text-emerald-950">
+                      {money(totalAmount)}
+                    </div>
                   </div>
-                </div>
-                <div className="p-2 rounded bg-teal-50 border border-teal-200">
-                  <div className="text-xs text-gray-600">Total final</div>
-                  <div className="font-semibold">
-                    {money(totalFinalWithAbonos)}
+                  <div className="shrink-0 min-w-[10.5rem] rounded-xl border border-amber-200/80 bg-gradient-to-br from-amber-50 to-white px-3 py-2.5 shadow-sm ring-1 ring-amber-900/5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-amber-900/70">
+                      Comisión vendedor
+                    </div>
+                    <div className="mt-0.5 tabular-nums text-base font-semibold text-amber-950">
+                      {money(vendorCommissionAmount)}
+                      {vendorCommissionPercent
+                        ? ` (${vendorCommissionPercent.toFixed(2)}%)`
+                        : ""}
+                    </div>
+                  </div>
+                  <div className="shrink-0 min-w-[10.5rem] rounded-xl border border-violet-200/80 bg-gradient-to-br from-violet-50 to-white px-3 py-2.5 shadow-sm ring-1 ring-violet-900/5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-violet-800/80">
+                      Utilidad Neta
+                    </div>
+                    <div className="mt-0.5 tabular-nums text-base font-semibold text-violet-950">
+                      {money(totalUNetaFromVendorOrder)}
+                    </div>
+                    {/* <div className="mt-0.5 text-[10px] text-violet-700/70">
+                      uNeta×paq × paquetes
+                    </div> */}
+                  </div>
+                  <div className="shrink-0 min-w-[10.5rem] rounded-xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50 to-white px-3 py-2.5 shadow-sm ring-1 ring-indigo-900/5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-indigo-800/80">
+                      Total abonos
+                    </div>
+                    <div className="mt-0.5 tabular-nums text-base font-semibold text-indigo-950">
+                      {money(abonoTotalPending)}
+                    </div>
+                  </div>
+                  <div className="shrink-0 min-w-[10.5rem] rounded-xl border border-teal-200/80 bg-gradient-to-br from-teal-50 to-white px-3 py-2.5 shadow-sm ring-1 ring-teal-900/5">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-teal-800/80">
+                      Total final
+                    </div>
+                    <div className="mt-0.5 tabular-nums text-base font-semibold text-teal-950">
+                      {money(totalFinalWithAbonos)}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3062,33 +3139,55 @@ export default function SalesCandiesPOS({
                 )}
 
                 {items.length > 0 && (
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                    <div className="p-2 rounded bg-blue-50 border border-blue-200">
-                      <div className="text-xs text-gray-600">Paquetes</div>
-                      <div className="font-semibold">{totalPackages}</div>
-                    </div>
-                    <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
-                      <div className="text-xs text-gray-600">Monto</div>
-                      <div className="font-semibold">{money(totalAmount)}</div>
-                    </div>
-                    <div className="p-2 rounded bg-amber-50 border border-amber-200">
-                      <div className="text-xs text-gray-600">Comisión</div>
-                      <div className="font-semibold">
-                        {money(vendorCommissionAmount)}
+                  <div className="mt-2 -mx-1 px-1">
+                    <div className="flex flex-nowrap gap-2 overflow-x-auto pb-1.5 [scrollbar-width:thin]">
+                      <div className="shrink-0 min-w-[9.5rem] rounded-xl border border-sky-200/80 bg-gradient-to-br from-sky-50 to-white px-2.5 py-2 shadow-sm ring-1 ring-sky-900/5 text-sm">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-sky-700/80">
+                          Paquetes
+                        </div>
+                        <div className="mt-0.5 font-semibold tabular-nums text-sky-950">
+                          {totalPackages}
+                        </div>
                       </div>
-                    </div>
-                    <div className="p-2 rounded bg-indigo-50 border border-indigo-200">
-                      <div className="text-xs text-gray-600">Abonos</div>
-                      <div className="font-semibold">
-                        {money(abonoTotalPending)}
+                      <div className="shrink-0 min-w-[9.5rem] rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white px-2.5 py-2 shadow-sm ring-1 ring-emerald-900/5 text-sm">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-emerald-800/80">
+                          Monto
+                        </div>
+                        <div className="mt-0.5 font-semibold tabular-nums text-emerald-950">
+                          {money(totalAmount)}
+                        </div>
                       </div>
-                    </div>
-                    <div className="p-2 rounded bg-teal-50 border border-teal-200">
-                      <div className="text-xs text-gray-600">
-                        Total Ventas + Abonos
+                      <div className="shrink-0 min-w-[9.5rem] rounded-xl border border-amber-200/80 bg-gradient-to-br from-amber-50 to-white px-2.5 py-2 shadow-sm ring-1 ring-amber-900/5 text-sm">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-amber-900/70">
+                          Comisión
+                        </div>
+                        <div className="mt-0.5 font-semibold tabular-nums text-amber-950">
+                          {money(vendorCommissionAmount)}
+                        </div>
                       </div>
-                      <div className="font-semibold">
-                        {money(totalFinalWithAbonos)}
+                      <div className="shrink-0 min-w-[9.5rem] rounded-xl border border-violet-200/80 bg-gradient-to-br from-violet-50 to-white px-2.5 py-2 shadow-sm ring-1 ring-violet-900/5 text-sm">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-violet-800/80">
+                          U. neta (pedido)
+                        </div>
+                        <div className="mt-0.5 font-semibold tabular-nums text-violet-950">
+                          {money(totalUNetaFromVendorOrder)}
+                        </div>
+                      </div>
+                      <div className="shrink-0 min-w-[9.5rem] rounded-xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50 to-white px-2.5 py-2 shadow-sm ring-1 ring-indigo-900/5 text-sm">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-indigo-800/80">
+                          Abonos
+                        </div>
+                        <div className="mt-0.5 font-semibold tabular-nums text-indigo-950">
+                          {money(abonoTotalPending)}
+                        </div>
+                      </div>
+                      <div className="shrink-0 min-w-[9.5rem] rounded-xl border border-teal-200/80 bg-gradient-to-br from-teal-50 to-white px-2.5 py-2 shadow-sm ring-1 ring-teal-900/5 text-sm">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-teal-800/80">
+                          Venta + abonos
+                        </div>
+                        <div className="mt-0.5 font-semibold tabular-nums text-teal-950">
+                          {money(totalFinalWithAbonos)}
+                        </div>
                       </div>
                     </div>
                   </div>

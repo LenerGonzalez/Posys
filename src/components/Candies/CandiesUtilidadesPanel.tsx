@@ -29,6 +29,12 @@ const money = (n: unknown) => {
 const round2 = (n: number) =>
   Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100;
 
+/** Glosario (modal desde Estado de cuenta → ícono junto a Utilidades). */
+export const UTILIDADES_UTIL_GLOSSARY_TEXT = `Dispers. = paquetes asignados a órdenes de vendedor (desde esta maestra). Vendido = paquetes de ventas vinculadas por allocationsByItem. Monto por ítem = precio×paq − desc. / lineFinal / total (como cierre). Comisión = vendorGain o uvXpaq×paq o margen (como columna Comisión en ventas diarias). U. Neta atribuida = uNetaPorPaquete×paquetes de la línea (misma columna U. Neta del cierre), o inversorGain. UB Efectiva = (U bruta del ítem ÷ paquetes de la línea) × paquetes atribuidos a esta maestra; en la práctica equivale a prorratear uBruta por allocations. Las utilidades “esperadas” de vendedor por pedido están en el drawer al abrir la orden, no en la fila de la maestra.`;
+
+/** Tres vistas de atribución (modal ícono junto a CRÉDITO). */
+export const UTILIDADES_ATRIB_VISTAS_TEXT = `Tres vistas: todas las ventas del rango, solo contado (cash), o solo ventas a crédito. Los importes se reparten entre maestras según allocationsByItem y, en el pedido del vendedor, masterAllocations.units (ej. 24 unidades a una maestra y 1176 a otra ⇒ la primera recibe 24/1200 de esa venta).`;
+
 /** Paquetes siempre enteros en UI (las atribuciones internas pueden ser fracción). */
 const fmtPacks = (n: unknown) =>
   String(Math.round(Number(n) || 0));
@@ -82,12 +88,31 @@ const emptyAttrib = (): SaleAttrib => ({
   vendorGain: 0,
 });
 
+/** Paquetes en la línea de venta (Firestore: `packages` o `qtyPackages`; si falta, unidades / upp). */
+function linePacksForItem(it: Record<string, unknown>): number {
+  const fromDoc = Math.max(0, Number(it.packages ?? it.qtyPackages ?? 0));
+  if (fromDoc > 0) return Math.floor(fromDoc);
+  const qtyUnits = Math.max(0, Number(it.qty ?? it.quantity ?? 0));
+  const upp = Math.max(1, Math.floor(Number(it.unitsPerPackage || 1)));
+  if (qtyUnits > 0) return Math.floor(qtyUnits / upp);
+  return 0;
+}
+
+/** Unidades totales de la línea (para `allocations.units` / FIFO). */
+function lineUnitsForItem(it: Record<string, unknown>): number {
+  const u = Math.max(0, Number(it.qty ?? it.quantity ?? 0));
+  if (u > 0) return Math.floor(u);
+  const pk = linePacksForItem(it);
+  const upp = Math.max(1, Math.floor(Number(it.unitsPerPackage || 1)));
+  return pk * upp;
+}
+
 /**
  * Monto por ítem igual que {@link CierreVentasDulces} al aplanar ventas:
  * `lineFinal`, o precio×paquetes − descuento, o `total` como respaldo.
  */
 function lineFinalFromItem(it: Record<string, unknown>): number {
-  const qtyPacks = Number(it.packages ?? it.qty ?? it.quantity ?? 0);
+  const qtyPacks = linePacksForItem(it);
   const explicit = Number(it.lineFinal ?? 0);
   if (explicit > 0) return round2(explicit);
   const unit = Number(it.unitPricePackage || it.unitPrice || 0);
@@ -106,8 +131,8 @@ function lineFinalFromItem(it: Record<string, unknown>): number {
 function lineVendorGainFromItem(it: Record<string, unknown>): number {
   const vg = Number(it.vendorGain ?? NaN);
   if (Number.isFinite(vg) && vg !== 0) return round2(vg);
-  const uv = Number(it.uvXpaq ?? it.upaquete ?? NaN);
-  const qtyPacks = Number(it.packages ?? it.qty ?? it.quantity ?? 0);
+  const uv = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
+  const qtyPacks = linePacksForItem(it);
   if (Number.isFinite(uv) && qtyPacks > 0) return round2(uv * qtyPacks);
   return round2(Number(it.margenVendedor ?? 0));
 }
@@ -118,7 +143,7 @@ function lineVendorGainFromItem(it: Record<string, unknown>): number {
  * contable `uBruta − prorrateo − margenVendedor`.
  */
 function lineInvestorNetFromItem(it: Record<string, unknown>): number {
-  const qtyPacks = Number(it.packages ?? it.qty ?? it.quantity ?? 0);
+  const qtyPacks = linePacksForItem(it);
   const unp = Number(it.uNetaPorPaquete ?? NaN);
   if (Number.isFinite(unp) && unp !== 0 && qtyPacks > 0) {
     return round2(unp * qtyPacks);
@@ -160,12 +185,26 @@ function accumulateSalesByMaster(
   for (const it of items) {
     const productId = String(it.productId || "").trim();
     if (!productId) continue;
-    const itemQty = Math.max(0, Number(it.qty ?? it.quantity ?? 0));
-    const itemPk = Math.max(0, Number(it.packages || 0));
+    const itemPk = linePacksForItem(it);
+    const totalUnitsForLine = lineUnitsForItem(it);
     const lineFinal = lineFinalFromItem(it);
     const itemUb = Number(it.uBruta || 0);
     const itemInv = lineInvestorNetFromItem(it);
     const itemVend = lineVendorGainFromItem(it);
+
+    /** U bruta por paquete; U neta y comisión por paquete (como ventas / orden vendedor). */
+    const denomP = itemPk > 0 ? itemPk : 1;
+    const ubPerPack = itemUb / denomP;
+    const unp = Number(it.uNetaPorPaquete ?? NaN);
+    const invPerPack =
+      Number.isFinite(unp) && unp !== 0
+        ? unp
+        : itemInv / denomP;
+    const uvx = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
+    const vendPerPack =
+      Number.isFinite(uvx) && uvx !== 0
+        ? uvx
+        : itemVend / denomP;
 
     const entry = allocRoot?.[productId];
     const allocs = Array.isArray(entry?.allocations)
@@ -188,7 +227,9 @@ function accumulateSalesByMaster(
         0,
       );
       const fracFromItem =
-        itemQty > 0 ? au / itemQty : 1 / Math.max(1, allocs.length);
+        totalUnitsForLine > 0
+          ? au / totalUnitsForLine
+          : 1 / Math.max(1, allocs.length);
 
       for (const m of mas) {
         const mid = String(m.masterOrderId || "").trim();
@@ -198,22 +239,25 @@ function accumulateSalesByMaster(
           totalMu > 0 ? mu / totalMu : 1 / Math.max(1, mas.length);
         const c = fracFromItem * wMaster;
 
+        /** Paquetes de esta línea atribuidos a esta maestra (para × por paquete). */
+        const allocatedPacks = itemPk * c;
+
         if (!intoMaster[mid]) intoMaster[mid] = emptyAttrib();
         const M = intoMaster[mid];
-        M.packages += itemPk * c;
+        M.packages += allocatedPacks;
         M.monto += lineFinal * c;
-        M.uBruta += itemUb * c;
-        M.inversorGain += itemInv * c;
-        M.vendorGain += itemVend * c;
+        M.uBruta += ubPerPack * allocatedPacks;
+        M.inversorGain += invPerPack * allocatedPacks;
+        M.vendorGain += vendPerPack * allocatedPacks;
 
         const pairKey = `${mid}__${sid}`;
         if (!intoPair[pairKey]) intoPair[pairKey] = emptyAttrib();
         const P = intoPair[pairKey];
-        P.packages += itemPk * c;
+        P.packages += allocatedPacks;
         P.monto += lineFinal * c;
-        P.uBruta += itemUb * c;
-        P.inversorGain += itemInv * c;
-        P.vendorGain += itemVend * c;
+        P.uBruta += ubPerPack * allocatedPacks;
+        P.inversorGain += invPerPack * allocatedPacks;
+        P.vendorGain += vendPerPack * allocatedPacks;
       }
     }
   }
@@ -279,6 +323,7 @@ export default function CandiesUtilidadesPanel({
   const [ventasAtribFilter, setVentasAtribFilter] = useState<
     "todos" | "contado" | "credito"
   >("todos");
+  const [atribVistasModalOpen, setAtribVistasModalOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -753,23 +798,13 @@ export default function CandiesUtilidadesPanel({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-slate-600 max-w-3xl">
-          <strong>Dispers.</strong> = paquetes asignados a órdenes de vendedor
-          (desde esta maestra). <strong>Vendido</strong> = paquetes de ventas
-          vinculadas por <code className="text-xs">allocationsByItem</code>.{" "}
-          <strong>Monto</strong> por ítem = precio×paq − desc. /{" "}
-          <code className="text-xs">lineFinal</code> / <code className="text-xs">total</code>{" "}
-          (como cierre). <strong>Comisión</strong> ={" "}
-          <code className="text-xs">vendorGain</code> o{" "}
-          <code className="text-xs">uvXpaq×paq</code> o margen (como columna
-          Comisión en ventas diarias). <strong>U. Neta atribuida</strong> ={" "}
-          <code className="text-xs">uNetaPorPaquete×paquetes</code> de la línea
-          (misma columna U. Neta del cierre), o <code className="text-xs">inversorGain</code>.{" "}
-          <strong>UB Efectiva</strong> = <code className="text-xs">uBruta</code>{" "}
-          del ítem. Las
-          utilidades “esperadas” de vendedor están en el drawer, no en la fila de
-          la maestra.
-        </p>
+        {/* <p className="text-sm text-slate-600 max-w-3xl">
+          Órdenes maestras y atribución de ventas. Definiciones (Dispers., U.
+          Neta, UB efectiva, etc.): pulsá el ícono{" "}
+          <strong className="text-slate-800">ℹ</strong> junto al botón{" "}
+          <strong className="text-slate-800">Utilidades</strong> en la barra
+          superior.
+        </p> */}
         <div className="flex items-center gap-2 flex-wrap">
           <Button
             type="button"
@@ -784,42 +819,93 @@ export default function CandiesUtilidadesPanel({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-slate-500">Atribución ventas:</span>
-        <button
-          type="button"
-          className={chipCls(ventasAtribFilter === "todos")}
-          onClick={() => setVentasAtribFilter("todos")}
-        >
-          Todas (cash + crédito)
-        </button>
-        <button
-          type="button"
-          className={chipCls(ventasAtribFilter === "contado")}
-          onClick={() => setVentasAtribFilter("contado")}
-        >
-          Solo CONTADO
-        </button>
-        <button
-          type="button"
-          className={chipCls(ventasAtribFilter === "credito")}
-          onClick={() => setVentasAtribFilter("credito")}
-        >
-          Solo CRÉDITO
-        </button>
+      <div className="flex flex-col gap-2">
+        <span className="hidden md:inline text-xs text-slate-500">
+          Atribución ventas:
+        </span>
+        <div className="flex w-full flex-nowrap items-stretch gap-1 md:flex-wrap md:gap-2">
+          <button
+            type="button"
+            className={`${chipCls(ventasAtribFilter === "todos")} flex-1 min-w-0 text-center text-[10px] leading-tight sm:text-xs`}
+            onClick={() => setVentasAtribFilter("todos")}
+          >
+            Todas
+          </button>
+          <button
+            type="button"
+            className={`${chipCls(ventasAtribFilter === "contado")} flex-1 min-w-0 text-center text-[10px] leading-tight sm:text-xs`}
+            onClick={() => setVentasAtribFilter("contado")}
+          >
+            Contado
+          </button>
+          <button
+            type="button"
+            className={`${chipCls(ventasAtribFilter === "credito")} flex-1 min-w-0 text-center text-[10px] leading-tight sm:text-xs`}
+            onClick={() => setVentasAtribFilter("credito")}
+          >
+            Crédito
+          </button>
+          <button
+            type="button"
+            className="flex h-auto w-9 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+            title="Qué son las tres vistas de atribución"
+            aria-label="Ayuda: tres vistas de atribución"
+            onClick={() => setAtribVistasModalOpen(true)}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-4 w-4"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fillRule="evenodd"
+                d="M18 10A8 8 0 112 10a8 8 0 0116 0zm-9-3a1 1 0 10-2 0 1 1 0 002 0zM9 9a1 1 0 00-1 1v4a1 1 0 102 0v-4a1 1 0 00-1-1z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
-        <p className="text-xs text-slate-500 -mt-2">
-        Tres vistas: todas las ventas del rango, solo contado (cash), o solo
-        ventas a crédito. Los importes se reparten entre maestras según{" "}
-        <code className="text-[10px]">allocationsByItem</code> y, en el pedido
-        del vendedor, <code className="text-[10px]">masterAllocations.units</code>{" "}
-        (ej. 24 unidades a una maestra y 1176 a otra ⇒ la primera recibe 24/1200
-        de esa venta).
-      </p>
 
       {snapshotMsg ? (
         <div className="text-sm text-slate-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           {snapshotMsg}
+        </div>
+      ) : null}
+
+      {atribVistasModalOpen ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="atrib-vistas-title"
+          onClick={() => setAtribVistasModalOpen(false)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              id="atrib-vistas-title"
+              className="text-base font-semibold text-slate-900"
+            >
+              Tres vistas de atribución
+            </h3>
+            <p className="mt-3 text-sm leading-relaxed text-slate-600">
+              {UTILIDADES_ATRIB_VISTAS_TEXT}
+            </p>
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="!rounded-xl"
+                onClick={() => setAtribVistasModalOpen(false)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -843,7 +929,7 @@ export default function CandiesUtilidadesPanel({
         ]}
       />
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="hidden md:block overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
         <p className="px-3 py-2 text-[10px] text-slate-500 border-b border-slate-100 bg-slate-50/90 whitespace-nowrap">
           Deslizá horizontalmente para ver el texto completo. Paquetes = números enteros.
         </p>
@@ -889,7 +975,16 @@ export default function CandiesUtilidadesPanel({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && !loading ? (
+            {loading && rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={12}
+                  className="p-6 text-center text-slate-500 border-b border-slate-100"
+                >
+                  Cargando…
+                </td>
+              </tr>
+            ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={12} className="p-6 text-center text-slate-500 border-b border-slate-100">
                   No hay órdenes maestras en este rango.
@@ -983,6 +1078,60 @@ export default function CandiesUtilidadesPanel({
             ) : null}
           </tbody>
         </table>
+      </div>
+
+      {/* Móvil: cards (mismo detalle que la tabla; tap abre drawer) */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-4 text-center text-sm text-slate-500">
+            Cargando…
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-4 text-center text-sm text-slate-500">
+            No hay órdenes maestras en este rango.
+          </div>
+        ) : (
+          rows.map((r) => (
+            <div
+              key={r.id}
+              role="button"
+              tabIndex={0}
+              className="w-full cursor-pointer rounded-xl outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-indigo-400"
+              onClick={() => setDrawerRow(r)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setDrawerRow(r);
+                }
+              }}
+            >
+              <DrawerDetailDlCard
+                title={
+                  <span className="block leading-snug">
+                    <span className="block text-[11px] font-normal text-slate-500">
+                      {r.date}
+                    </span>
+                    <span className="block text-sm font-bold text-slate-900">
+                      {r.name}
+                    </span>
+                  </span>
+                }
+                rows={[
+                  { label: "P. ingresados", value: fmtPacks(r.totalPackages) },
+                  { label: "P. restantes", value: fmtPacks(r.remainingMasterPacks) },
+                  { label: "Dispers.", value: fmtPacks(r.dispersAsignada) },
+                  { label: "Vendido", value: fmtPacks(r.vendidoPacks) },
+                  { label: "Inversión", value: money(r.subtotal) },
+                  { label: "Venta Isla", value: money(r.totalIsla) },
+                  { label: "U.Bruta maestra", value: money(r.uBrutaGlobal) },
+                  { label: "Ventas efectivas", value: money(r.ventasEfectivas) },
+                  { label: "UB Efectiva", value: money(r.ubEfectiva) },
+                  { label: "Logística", value: money(r.logisticsCost) },
+                ]}
+              />
+            </div>
+          ))
+        )}
       </div>
 
       <SlideOverDrawer

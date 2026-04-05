@@ -19,6 +19,9 @@ import {
 import Toast from "../common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
 import Button from "../common/Button";
+import PolloChip, { type PolloChipVariant } from "../common/PolloChip";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import { DrawerDetailDlCard } from "../common/DrawerContentCards";
 import * as XLSX from "xlsx";
 import {
   fetchGlobalInventoryKpisPollo_debug,
@@ -28,6 +31,58 @@ import {
   type ProductOption,
   type ProductKpis,
 } from "../../Services/inventory_evolution_pollo";
+
+function tipoMoveChipVariant(t: string): PolloChipVariant {
+  switch (t) {
+    case "INGRESO":
+      return "emerald";
+    case "VENTA_CASH":
+      return "amber";
+    case "VENTA_CREDITO":
+      return "violet";
+    case "MERMA":
+    case "ROBO":
+      return "rose";
+    default:
+      return "neutral";
+  }
+}
+
+type KpiTone =
+  | "slate"
+  | "sky"
+  | "amber"
+  | "violet"
+  | "emerald"
+  | "rose"
+  | "indigo";
+
+const KPI_TONE: Record<KpiTone, string> = {
+  slate: "border-slate-200 bg-slate-50/90",
+  sky: "border-sky-200 bg-sky-50/90",
+  amber: "border-amber-200 bg-amber-50/90",
+  violet: "border-violet-200 bg-violet-50/90",
+  emerald: "border-emerald-200 bg-emerald-50/90",
+  rose: "border-rose-200 bg-rose-50/90",
+  indigo: "border-indigo-200 bg-indigo-50/90",
+};
+
+function KpiCard({
+  title,
+  value,
+  tone,
+}: {
+  title: string;
+  value: string;
+  tone: KpiTone;
+}) {
+  return (
+    <div className={`border rounded-2xl p-3 shadow-sm ${KPI_TONE[tone]}`}>
+      <div className="text-xs text-gray-600 font-medium">{title}</div>
+      <div className="text-2xl font-bold text-gray-900 tabular-nums">{value}</div>
+    </div>
+  );
+}
 
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 const today = () => format(new Date(), "yyyy-MM-dd");
@@ -90,6 +145,13 @@ export default function EvolutivoInventarioPollo({
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
   const [priceFilter, setPriceFilter] = useState<string>("ALL");
   const [toastMsg, setToastMsg] = useState("");
+
+  const [ingresoBatchId, setIngresoBatchId] = useState<string | null>(null);
+  const [ingresoBatchRow, setIngresoBatchRow] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
+  const [ingresoBatchLoading, setIngresoBatchLoading] = useState(false);
 
   // =========================
   // 1) Cargar productos
@@ -251,6 +313,37 @@ export default function EvolutivoInventarioPollo({
   }, [from, to, selectedKey, refreshKey, selected]);
 
   const unitLabel = selected?.measurement === "lb" ? "Lbs" : "Unidades";
+
+  const soldCashPlusCredit = useMemo(() => {
+    const a = Number(productKpis.soldCash ?? 0);
+    const b = Number(productKpis.soldCredit ?? 0);
+    return Number((a + b).toFixed(3));
+  }, [productKpis.soldCash, productKpis.soldCredit]);
+
+  useEffect(() => {
+    if (!ingresoBatchId) {
+      setIngresoBatchRow(null);
+      setIngresoBatchLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIngresoBatchLoading(true);
+    setIngresoBatchRow(null);
+    (async () => {
+      try {
+        const snap = await getDoc(fsDoc(db, "inventory_batches", ingresoBatchId));
+        if (cancelled) return;
+        setIngresoBatchRow(snap.exists() ? snap.data() : null);
+      } catch {
+        if (!cancelled) setIngresoBatchRow(null);
+      } finally {
+        if (!cancelled) setIngresoBatchLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ingresoBatchId]);
 
   // Balance corrido (para la tabla del rango)
   const movesWithBalance = useMemo(() => {
@@ -533,41 +626,49 @@ export default function EvolutivoInventarioPollo({
         <div className="border rounded-2xl p-3 bg-white space-y-2">
           <div className="text-xs text-gray-500">KPIs</div>
           <div className="grid grid-cols-2 gap-2">
-            <div className="border rounded p-2 text-center">
-              <div className="text-xs text-gray-500">Ingresado (Lbs)</div>
-              <div className="font-bold">{qty3(global.incomingLbs)}</div>
-            </div>
-            <div className="border rounded p-2 text-center">
-              <div className="text-xs text-gray-500">Ingresado (Unid)</div>
-              <div className="font-bold">{qty3(global.incomingUnits)}</div>
-            </div>
-            <div className="border rounded p-2 text-center">
-              <div className="text-xs text-gray-500">Existente (Lbs)</div>
-              <div className="font-bold">{qty3(global.remainingLbs)}</div>
-            </div>
-            <div className="border rounded p-2 text-center">
-              <div className="text-xs text-gray-500">Existente (Unid)</div>
-              <div className="font-bold">{qty3(global.remainingUnits)}</div>
-            </div>
+            <KpiCard
+              tone="sky"
+              title="Ingresado (Lbs)"
+              value={qty3(global.incomingLbs)}
+            />
+            <KpiCard
+              tone="slate"
+              title="Ingresado (Unid)"
+              value={qty3(global.incomingUnits)}
+            />
+            <KpiCard
+              tone="emerald"
+              title="Existente (Lbs)"
+              value={qty3(global.remainingLbs)}
+            />
+            <KpiCard
+              tone="violet"
+              title="Existente (Unid)"
+              value={qty3(global.remainingUnits)}
+            />
           </div>
         </div>
       </div>
 
       {/* Desktop KPIs */}
       <div className="hidden sm:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <Card
+        <KpiCard
+          tone="sky"
           title="Ingresado (Lbs) en rango"
           value={qty3(global.incomingLbs)}
         />
-        <Card
+        <KpiCard
+          tone="slate"
           title="Ingresado (Unidades) en rango"
           value={qty3(global.incomingUnits)}
         />
-        <Card
+        <KpiCard
+          tone="emerald"
           title="Existente (Lbs) general"
           value={qty3(global.remainingLbs)}
         />
-        <Card
+        <KpiCard
+          tone="violet"
           title="Existente (Unidades) general"
           value={qty3(global.remainingUnits)}
         />
@@ -634,37 +735,32 @@ export default function EvolutivoInventarioPollo({
 
                 {/* Product KPIs (mobile) */}
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <div className="border rounded p-1.5 text-center bg-white text-sm">
-                    <div className="text-[11px] text-gray-500">
-                      {unitLabel} ingresadas (rango)
-                    </div>
-                    <div className="font-bold">
-                      {qty3(productKpis.incoming)}
-                    </div>
-                  </div>
-                  <div className="border rounded p-1.5 text-center bg-white text-sm">
-                    <div className="text-[11px] text-gray-500">
-                      {unitLabel} vendidas Cash
-                    </div>
-                    <div className="font-bold">
-                      {qty3(productKpis.soldCash)}
-                    </div>
-                  </div>
-                  <div className="border rounded p-1.5 text-center bg-white text-sm">
-                    <div className="text-[11px] text-gray-500">
-                      {unitLabel} vendidas Crédito
-                    </div>
-                    <div className="font-bold">
-                      {qty3(productKpis.soldCredit)}
-                    </div>
-                  </div>
-                  <div className="border rounded p-1.5 text-center bg-white text-sm">
-                    <div className="text-[11px] text-gray-500">
-                      {unitLabel} existentes
-                    </div>
-                    <div className="font-bold">
-                      {qty3(productKpis.remaining)}
-                    </div>
+                  <KpiCard
+                    tone="sky"
+                    title={`${unitLabel} ingresadas (rango)`}
+                    value={qty3(productKpis.incoming)}
+                  />
+                  <KpiCard
+                    tone="amber"
+                    title={`${unitLabel} vendidas Cash`}
+                    value={qty3(productKpis.soldCash)}
+                  />
+                  <KpiCard
+                    tone="violet"
+                    title={`${unitLabel} vendidas Crédito`}
+                    value={qty3(productKpis.soldCredit)}
+                  />
+                  <KpiCard
+                    tone="indigo"
+                    title={`${unitLabel} vendidas (cash + crédito)`}
+                    value={qty3(soldCashPlusCredit)}
+                  />
+                  <div className="col-span-2">
+                    <KpiCard
+                      tone="emerald"
+                      title={`${unitLabel} existentes`}
+                      value={qty3(productKpis.remaining)}
+                    />
                   </div>
                 </div>
               </>
@@ -728,14 +824,37 @@ export default function EvolutivoInventarioPollo({
                     0,
                 );
                 const total = price * Number(m.qtyOut || 0);
+                const openIngreso =
+                  m.type === "INGRESO" && m.ref
+                    ? () => setIngresoBatchId(String(m.ref))
+                    : undefined;
                 return (
                   <div
                     key={`${m.ref || idx}-${m.date}`}
-                    className="border rounded p-2 bg-white text-sm"
+                    role={openIngreso ? "button" : undefined}
+                    tabIndex={openIngreso ? 0 : undefined}
+                    onClick={openIngreso}
+                    onKeyDown={
+                      openIngreso
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openIngreso();
+                            }
+                          }
+                        : undefined
+                    }
+                    className={`border rounded p-2 bg-white text-sm ${
+                      openIngreso
+                        ? "cursor-pointer hover:border-sky-300 hover:bg-sky-50/40"
+                        : ""
+                    }`}
                   >
-                    <div className="flex justify-between items-start">
+                    <div className="flex justify-between items-start gap-2">
                       <div className="text-[11px] text-gray-500">{m.date}</div>
-                      <div className="text-sm font-semibold">{m.type}</div>
+                      <PolloChip variant={tipoMoveChipVariant(String(m.type))}>
+                        {m.type}
+                      </PolloChip>
                     </div>
                     <div className="mt-1 text-sm text-gray-700">
                       {m.description}
@@ -855,20 +974,29 @@ export default function EvolutivoInventarioPollo({
 
       {/* KPIs por producto */}
       {selected && (
-        <div className="hidden sm:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <Card
+        <div className="hidden sm:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+          <KpiCard
+            tone="sky"
             title={`${unitLabel} ingresadas (rango)`}
             value={qty3(productKpis.incoming)}
           />
-          <Card
+          <KpiCard
+            tone="amber"
             title={`${unitLabel} vendidas Cash (rango)`}
             value={qty3(productKpis.soldCash)}
           />
-          <Card
+          <KpiCard
+            tone="violet"
             title={`${unitLabel} vendidas Crédito (rango)`}
             value={qty3(productKpis.soldCredit)}
           />
-          <Card
+          <KpiCard
+            tone="indigo"
+            title={`${unitLabel} vendidas (cash + crédito)`}
+            value={qty3(soldCashPlusCredit)}
+          />
+          <KpiCard
+            tone="emerald"
             title={`${unitLabel} existentes (stock actual)`}
             value={qty3(productKpis.remaining)}
           />
@@ -1052,21 +1180,25 @@ export default function EvolutivoInventarioPollo({
               </tr>
             ) : (
               movesWithBalance.map((m, idx) => (
-                <tr key={`${m.ref || idx}-${m.date}`} className="text-center">
+                <tr
+                  key={`${m.ref || idx}-${m.date}`}
+                  className={`text-center ${
+                    m.type === "INGRESO" && m.ref
+                      ? "cursor-pointer hover:bg-sky-50/80"
+                      : ""
+                  }`}
+                  onClick={() => {
+                    if (m.type === "INGRESO" && m.ref)
+                      setIngresoBatchId(String(m.ref));
+                  }}
+                >
                   <td className="border p-1">{m.date}</td>
                   <td className="border p-1">
-                    <span
-                      className={
-                        m.type === "INGRESO"
-                          ? "text-green-600 font-semibold"
-                          : m.type === "VENTA_CASH" ||
-                              m.type === "VENTA_CREDITO"
-                            ? "text-red-600 font-semibold"
-                            : "text-gray-700"
-                      }
-                    >
-                      {m.type}
-                    </span>
+                    <div className="flex justify-center">
+                      <PolloChip variant={tipoMoveChipVariant(String(m.type))}>
+                        {m.type}
+                      </PolloChip>
+                    </div>
                   </td>
                   <td className="border p-1 text-left">{m.description}</td>
                   <td className="border p-1">
@@ -1120,18 +1252,83 @@ export default function EvolutivoInventarioPollo({
       </div>
 
       {/* Mobile: already rendered above inside card (sm:hidden) */}
+      <SlideOverDrawer
+        open={ingresoBatchId !== null}
+        onClose={() => {
+          setIngresoBatchId(null);
+          setIngresoBatchRow(null);
+        }}
+        title="Detalle de lote (ingreso)"
+        subtitle={ingresoBatchId || undefined}
+        titleId="status-inv-ingreso-lote-title"
+        panelMaxWidthClassName="max-w-lg"
+      >
+        {ingresoBatchLoading ? (
+          <p className="text-sm text-gray-500">Cargando…</p>
+        ) : !ingresoBatchRow ? (
+          <p className="text-sm text-gray-500">
+            No se encontró el lote o no hay permisos.
+          </p>
+        ) : (
+          <DrawerDetailDlCard
+            title={String(ingresoBatchRow.productName ?? "Lote")}
+            rows={[
+              {
+                label: "Fecha",
+                value: String(
+                  ingresoBatchRow.date ??
+                    ingresoBatchRow.batchDate ??
+                    "—",
+                ),
+              },
+              {
+                label: "Producto",
+                value: String(ingresoBatchRow.productName ?? "—"),
+              },
+              {
+                label: "Cantidad",
+                value: qty3(ingresoBatchRow.quantity),
+              },
+              {
+                label: "Precio costo",
+                value: `C$ ${Number(ingresoBatchRow.purchasePrice ?? 0).toFixed(2)}`,
+                ddClassName: "tabular-nums",
+              },
+              {
+                label: "Facturado",
+                value: `C$ ${Number(ingresoBatchRow.invoiceTotal ?? 0).toFixed(2)}`,
+                ddClassName: "tabular-nums font-semibold",
+              },
+              {
+                label: "Precio venta",
+                value: `C$ ${Number(ingresoBatchRow.salePrice ?? 0).toFixed(2)}`,
+                ddClassName: "tabular-nums",
+              },
+              {
+                label: "Esperado",
+                value: `C$ ${Number(ingresoBatchRow.expectedTotal ?? 0).toFixed(2)}`,
+                ddClassName: "tabular-nums text-emerald-900 font-semibold",
+              },
+              {
+                label: "Utilidad bruta",
+                value: `C$ ${Number(
+                  ingresoBatchRow.utilidadBruta != null &&
+                    Number.isFinite(Number(ingresoBatchRow.utilidadBruta))
+                    ? Number(ingresoBatchRow.utilidadBruta)
+                    : Number(ingresoBatchRow.expectedTotal ?? 0) -
+                        Number(ingresoBatchRow.invoiceTotal ?? 0),
+                ).toFixed(2)}`,
+                ddClassName:
+                  "tabular-nums text-violet-900 font-semibold",
+              },
+            ]}
+          />
+        )}
+      </SlideOverDrawer>
+
       {toastMsg && (
         <Toast message={toastMsg} onClose={() => setToastMsg("")} />
       )}
-    </div>
-  );
-}
-
-function Card({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="border rounded-2xl p-3 bg-white">
-      <div className="text-xs text-gray-500">{title}</div>
-      <div className="text-2xl font-bold">{value}</div>
     </div>
   );
 }

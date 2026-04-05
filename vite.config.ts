@@ -6,7 +6,8 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
+      /** `prompt` para que `useRegisterSW().needRefresh` solo sea true con SW en espera (nueva build). */
+      registerType: "prompt",
       injectRegister: "auto",
       devOptions: { enabled: true },
 
@@ -56,8 +57,9 @@ export default defineConfig({
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         cleanupOutdatedCaches: true,
+        /** Con `registerType: "prompt"`, el SW nuevo queda en espera hasta «Actualizar». */
         clientsClaim: true,
-        skipWaiting: true,
+        skipWaiting: false,
       },
     }),
   ],

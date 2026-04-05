@@ -209,6 +209,8 @@ interface Product {
   measurement: string; // lb / unidad / etc.
   price: number;
   providerPrice?: number;
+  /** false = no aparece al crear pedidos; los lotes existentes siguen listándose */
+  active?: boolean;
 }
 
 interface Batch {
@@ -377,8 +379,8 @@ export default function InventoryBatches({
     setExpandedGroupId((prev) => (prev === groupId ? null : groupId));
 
   // estado para KPIs colapsable
-  /** Panel de KPIs (Resumen / Finanzas / Cobros): inicia colapsado. */
-  const [kpisExpanded, setKpisExpanded] = useState<boolean>(false);
+  /** Panel de KPIs (Resumen / Finanzas / Cobros): visible por defecto. */
+  const [kpisExpanded, setKpisExpanded] = useState<boolean>(true);
 
   type AvailabilityFilter = "all" | "with" | "without";
   const [availabilityFilter, setAvailabilityFilter] =
@@ -392,10 +394,10 @@ export default function InventoryBatches({
   const [salePonderadoDetailKey, setSalePonderadoDetailKey] = useState<
     string | null
   >(null);
-  /** Paneles de costo/venta ponderados: inician colapsados. */
+  /** Paneles de costo/venta ponderados: visibles por defecto. */
   const [weightedCostPanelExpanded, setWeightedCostPanelExpanded] =
-    useState(false);
-  const [saleVsCostPanelExpanded, setSaleVsCostPanelExpanded] = useState(false);
+    useState(true);
+  const [saleVsCostPanelExpanded, setSaleVsCostPanelExpanded] = useState(true);
   /** Menú ⋮ junto a Refrescar (exportar / crear lote). */
   const [mainToolsMenuRect, setMainToolsMenuRect] =
     useState<DOMRect | null>(null);
@@ -484,7 +486,6 @@ export default function InventoryBatches({
       const prods: Product[] = [];
       psnap.forEach((d) => {
         const it = d.data() as any;
-        if (it.active !== true) return;
         prods.push({
           id: d.id,
           name: it.name ?? it.productName ?? "(sin nombre)",
@@ -497,6 +498,7 @@ export default function InventoryBatches({
           )
             ? Number(it.providerPrice)
             : undefined,
+          active: it.active !== false,
         });
       });
       setProducts(prods);
@@ -957,19 +959,25 @@ export default function InventoryBatches({
     return Array.from(map.entries()).map(([type, items]) => ({ type, items }));
   }, [groupedRowsMobile]);
 
+  /** Productos que se pueden agregar a un pedido nuevo (excluye inactivos). */
+  const productsOrderable = useMemo(
+    () => products.filter((p) => p.active !== false),
+    [products],
+  );
+
   // ===== productos filtrados por unidad =====
   const productsByUnit = useMemo(() => {
     const u = String(unitFilter || "")
       .toLowerCase()
       .trim();
-    const list = products.filter(
+    const list = productsOrderable.filter(
       (p) =>
         String(p.measurement || "")
           .toLowerCase()
           .trim() === u,
     );
     return list.sort((a, b) => a.name.localeCompare(b.name, "es"));
-  }, [products, unitFilter]);
+  }, [productsOrderable, unitFilter]);
 
   const productFilterSelectOptions = useMemo(() => {
     const { map, todosExistLine } = existenciasPeriodoPorProducto;
@@ -977,7 +985,7 @@ export default function InventoryBatches({
       { value: "", label: `Todos (exist. ${todosExistLine})` },
       ...products.map((p) => ({
         value: p.id,
-        label: `${p.name} ${p.price ? `(${money(p.price)})` : ""} — existencia: ${fmtExistRemQty(map.get(p.id) ?? 0)}`,
+        label: `${p.name}${p.active === false ? " (inactivo)" : ""} ${p.price ? `(${money(p.price)})` : ""} — existencia: ${fmtExistRemQty(map.get(p.id) ?? 0)}`,
       })),
     ];
   }, [products, existenciasPeriodoPorProducto]);

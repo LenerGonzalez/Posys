@@ -1,19 +1,36 @@
-// src/components/ProductForm.tsx
+// src/components/Pollo/ProductForm.tsx
 import React, { useEffect, useState } from "react";
 import { db } from "../../firebase";
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   getDocs,
   updateDoc,
-  query,
-  where,
-  limit,
 } from "firebase/firestore";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import Button from "../common/Button";
+import ActionMenu, {
+  ActionMenuTrigger,
+  actionMenuItemClass,
+  actionMenuItemClassDestructive,
+  actionMenuItemClassGreen,
+} from "../common/ActionMenu";
+import { propagatePolloProductDisplayFields } from "../../Services/syncPolloProductDisplay";
 
 const money = (n: number) => `C$${(Number(n) || 0).toFixed(2)}`;
+
+function normalizeCategory(s: string) {
+  return String(s ?? "")
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeMeasurement(s: string) {
+  return String(s ?? "")
+    .trim()
+    .toUpperCase();
+}
 
 interface Product {
   id: string;
@@ -22,11 +39,10 @@ interface Product {
   category: string;
   measurement: string;
   providerPrice?: number;
-  active?: boolean; // <-- nuevo (soft delete)
+  active?: boolean;
 }
 
 export default function ProductForm() {
-  // formulario crear
   const [name, setName] = useState("");
   const [price, setPrice] = useState<number>(0);
   const [providerPrice, setProviderPrice] = useState<number>(0);
@@ -34,21 +50,18 @@ export default function ProductForm() {
   const [category, setCategory] = useState("");
   const [measurement, setMeasurement] = useState("");
 
-  // listado / tabla
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingList, setLoadingList] = useState(true);
-  const [showInactive, setShowInactive] = useState(false); // <-- opcional
+  const [showInactive, setShowInactive] = useState(false);
 
-  // edición en tabla
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editCategory, setEditCategory] = useState("");
-  const [editMeasurement, setEditMeasurement] = useState("");
-  const [editPrice, setEditPrice] = useState<number>(0);
-  const [editProviderPrice, setEditProviderPrice] = useState<number>(0);
+  /** null = cerrado; producto base al editar (para propagar solo si cambió). */
+  const [drawerEditBase, setDrawerEditBase] = useState<Product | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // modal crear
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [rowMenu, setRowMenu] = useState<{
+    id: string;
+    rect: DOMRect;
+  } | null>(null);
 
   const loadProducts = async () => {
     setLoadingList(true);
@@ -61,9 +74,9 @@ export default function ProductForm() {
         name: it.name ?? "",
         price: Number(it.price ?? 0),
         providerPrice: Number(it.providerPrice ?? 0),
-        category: it.category ?? "",
-        measurement: it.measurement ?? "",
-        active: it.active !== false, // default true si no existe
+        category: normalizeCategory(it.category ?? ""),
+        measurement: normalizeMeasurement(it.measurement ?? ""),
+        active: it.active !== false,
       });
     });
     setProducts(rows);
@@ -74,139 +87,146 @@ export default function ProductForm() {
     loadProducts();
   }, []);
 
+  const resetForm = () => {
+    setName("");
+    setPrice(0);
+    setProviderPrice(0);
+    setCategory("");
+    setMeasurement("");
+    setMessage("");
+    setDrawerEditBase(null);
+  };
+
+  const openCreate = () => {
+    resetForm();
+    setDrawerOpen(true);
+  };
+
+  const openEdit = (p: Product) => {
+    setDrawerEditBase(p);
+    setName(p.name);
+    setPrice(p.price);
+    setProviderPrice(p.providerPrice || 0);
+    setCategory(p.category);
+    setMeasurement(p.measurement);
+    setMessage("");
+    setDrawerOpen(true);
+  };
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setDrawerEditBase(null);
+    resetForm();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
 
-    if (!name || price <= 0 || !measurement) {
+    const cat = normalizeCategory(category);
+    const meas = normalizeMeasurement(measurement);
+
+    if (!name.trim() || price <= 0 || !meas) {
       setMessage("❌ Completa nombre, precio válido y unidad de medida");
       return;
     }
 
     try {
-      const payload = {
-        name,
-        price: parseFloat(price.toFixed(2)),
-        providerPrice: parseFloat((providerPrice || 0).toFixed(2)),
-        category,
-        measurement,
-        active: true, // <-- por defecto activos
-      };
-      const newRef = await addDoc(collection(db, "products"), payload);
+      if (drawerEditBase) {
+        const ref = doc(db, "products", drawerEditBase.id);
+        await updateDoc(ref, {
+          name: name.trim(),
+          price: parseFloat(price.toFixed(2)),
+          providerPrice: parseFloat((providerPrice || 0).toFixed(2)),
+          category: cat,
+          measurement: meas,
+        });
 
-      // actualiza UI sin recargar
-      setProducts((prev) => [{ id: newRef.id, ...payload }, ...prev]);
+        const patch: {
+          name?: string;
+          category?: string;
+          measurement?: string;
+        } = {};
+        if (name.trim() !== drawerEditBase.name) patch.name = name.trim();
+        if (cat !== normalizeCategory(drawerEditBase.category))
+          patch.category = cat;
+        if (meas !== normalizeMeasurement(drawerEditBase.measurement))
+          patch.measurement = meas;
 
-      setMessage("✅ Producto registrado con exito.");
-      setName("");
-      setPrice(0);
-      setProviderPrice(0);
-      setMeasurement("");
-      setCategory("");
+        if (Object.keys(patch).length > 0) {
+          await propagatePolloProductDisplayFields(drawerEditBase.id, patch);
+        }
 
-      // cerrar modal al crear
-      setShowCreateModal(false);
+        setProducts((prev) =>
+          prev.map((x) =>
+            x.id === drawerEditBase.id
+              ? {
+                  ...x,
+                  name: name.trim(),
+                  category: cat,
+                  measurement: meas,
+                  price: parseFloat(price.toFixed(2)),
+                  providerPrice: parseFloat((providerPrice || 0).toFixed(2)),
+                }
+              : x,
+          ),
+        );
+      } else {
+        const payload = {
+          name: name.trim(),
+          price: parseFloat(price.toFixed(2)),
+          providerPrice: parseFloat((providerPrice || 0).toFixed(2)),
+          category: cat,
+          measurement: meas,
+          active: true,
+        };
+        const newRef = await addDoc(collection(db, "products"), payload);
+        setProducts((prev) => [{ id: newRef.id, ...payload }, ...prev]);
+      }
+
+      closeDrawer();
     } catch (err: any) {
       setMessage("❌ Error: " + err.message);
     }
   };
 
-  const startEdit = (p: Product) => {
-    setEditingId(p.id);
-    setEditName(p.name);
-    setEditCategory(p.category);
-    setEditMeasurement(p.measurement);
-    setEditPrice(p.price);
-    setEditProviderPrice(p.providerPrice || 0);
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditName("");
-    setEditCategory("");
-    setEditMeasurement("");
-    setEditPrice(0);
-  };
-
-  const saveEdit = async () => {
-    if (!editingId) return;
-    const ref = doc(db, "products", editingId);
-    await updateDoc(ref, {
-      name: editName,
-      category: editCategory,
-      measurement: editMeasurement,
-      price: parseFloat((editPrice || 0).toFixed(2)),
-      providerPrice: parseFloat((editProviderPrice || 0).toFixed(2)),
-    });
-    setProducts((prev) =>
-      prev.map((x) =>
-        x.id === editingId
-          ? {
-              ...x,
-              name: editName,
-              category: editCategory,
-              measurement: editMeasurement,
-              price: parseFloat((editPrice || 0).toFixed(2)),
-              providerPrice: parseFloat((editProviderPrice || 0).toFixed(2)),
-            }
-          : x,
-      ),
-    );
-    cancelEdit();
-  };
-
-  // Activar / Desactivar (soft delete)
   const toggleActive = async (p: Product) => {
     const ref = doc(db, "products", p.id);
-    const newActive = !(p.active !== false); // true -> false, false -> true
+    const newActive = !(p.active !== false);
     await updateDoc(ref, { active: newActive });
     setProducts((prev) =>
       prev.map((x) => (x.id === p.id ? { ...x, active: newActive } : x)),
     );
+    setRowMenu(null);
   };
 
-  // Eliminar con validación de lotes asociados
-  const deleteProduct = async (id: string) => {
-    // 1) valida si tiene lotes
-    const qB = query(
-      collection(db, "inventory_batches"),
-      where("productId", "==", id),
-      limit(1),
+  /** “Eliminar” = baja lógica; no borra documento ni afecta ventas/lotes históricos. */
+  const softDeleteProduct = async (p: Product) => {
+    const ok = confirm(
+      "¿Ocultar este producto en listas nuevas?\n" +
+        "Las ventas e inventarios ya registrados no se modifican.",
     );
-    const hasBatches = !(await getDocs(qB)).empty;
-    if (hasBatches) {
-      alert(
-        "No se puede eliminar: hay lotes asociados a este producto.\n" +
-          "Sugerencia: desactívalo para ocultarlo.",
-      );
-      return;
-    }
-
-    // 2) confirmar y eliminar
-    const ok = confirm("¿Eliminar este producto definitivamente?");
     if (!ok) return;
-    await deleteDoc(doc(db, "products", id));
-    setProducts((prev) => prev.filter((x) => x.id !== id));
+    const ref = doc(db, "products", p.id);
+    await updateDoc(ref, { active: false });
+    setProducts((prev) =>
+      prev.map((x) => (x.id === p.id ? { ...x, active: false } : x)),
+    );
+    setRowMenu(null);
   };
 
-  // Filtrado para ocultar inactivos si showInactive=false
   const visibleRows = showInactive
     ? products
     : products.filter((p) => p.active !== false);
 
+  const drawerTitle = drawerEditBase ? "Editar producto" : "Registrar producto";
+
   return (
     <div className="max-w-6xl mx-auto">
-      {/* Encabezado con botón para abrir modal */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Productos</h2>
-        <button
-          className="inline-flex items-center gap-2 bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700"
-          onClick={() => {
-            setMessage("");
-            setShowCreateModal(true);
-          }}
-        >
-          <span className="inline-block bg-green-700/40 rounded-full p-1">
+        <Button type="button" variant="primary" size="md" onClick={openCreate}>
+          <span className="inline-block bg-white/15 rounded-full p-1">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-4 w-4"
@@ -223,137 +243,108 @@ export default function ProductForm() {
             </svg>
           </span>
           Nuevo producto
-        </button>
+        </Button>
       </div>
 
-      {/* ===== Modal: Crear producto ===== */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => setShowCreateModal(false)}
-          />
-          <div className="relative z-10 w-[95%] max-w-lg bg-white rounded-lg shadow-2xl border p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-lg font-bold text-green-700 flex items-center gap-2">
-                <span className="inline-block bg-green-100 text-green-700 rounded-full p-2">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 4v16m8-8H4"
-                    />
-                  </svg>
-                </span>
-                Registrar producto
-              </h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                onClick={() => setShowCreateModal(false)}
-              >
-                Cerrar
-              </button>
-            </div>
-
-            {/* Form Crear (idéntico, solo reubicado) */}
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
-                  Categoría
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
-                >
-                  <option value="">Selecciona</option>
-                  <option value="pollo">Pollo</option>
-                  <option value="cerdo">Cerdo</option>
-                  <option value="huevo">Huevos</option>
-                  <option value="ropa">Ropa</option>
-                  <option value="otros">Otros</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
-                  Nombre del producto
-                </label>
-                <input
-                  type="text"
-                  className="w-full border p-2 rounded"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
-                  Tipo de unidad de medida
-                </label>
-                <select
-                  value={measurement}
-                  onChange={(e) => setMeasurement(e.target.value)}
-                  className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-green-400"
-                >
-                  <option value="">Selecciona</option>
-                  <option value="lb">Libra</option>
-                  <option value="cajilla">Cajilla</option>
-                  <option value="kg">Kilogramo</option>
-                  <option value="unidad">Unidad</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm">
-                  Precio proveedor (ej: 40.00)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="w-full border p-2 rounded"
-                  value={Number.isNaN(providerPrice) ? "" : providerPrice}
-                  onChange={(e) => setProviderPrice(parseFloat(e.target.value))}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm">
-                  Precio por unidad (ej: 55.50)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="w-full border p-2 rounded"
-                  value={Number.isNaN(price) ? "" : price}
-                  onChange={(e) => setPrice(parseFloat(e.target.value))}
-                  onFocus={(e) =>
-                    e.target.value === "0" ? setPrice(NaN) : null
-                  }
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full"
-              >
-                Agregar producto
-              </button>
-
-              {message && <p className="text-sm mt-2">{message}</p>}
-            </form>
+      <SlideOverDrawer
+        open={drawerOpen}
+        onClose={closeDrawer}
+        title={drawerTitle}
+        subtitle={drawerEditBase ? `ID: ${drawerEditBase.id}` : undefined}
+        titleId="product-form-drawer-title"
+        panelMaxWidthClassName="max-w-lg"
+        footer={
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end border-t border-gray-100 pt-3">
+            <Button type="button" variant="secondary" onClick={closeDrawer}>
+              Cancelar
+            </Button>
+            <Button type="submit" form="product-form-drawer-form" variant="primary">
+              {drawerEditBase ? "Guardar cambios" : "Agregar producto"}
+            </Button>
           </div>
-        </div>
-      )}
+        }
+      >
+        <form
+          id="product-form-drawer-form"
+          onSubmit={handleSubmit}
+          className="space-y-4"
+        >
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Categoría
+            </label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full border border-gray-300 p-2 rounded-lg focus:ring-2 focus:ring-green-400 uppercase"
+            >
+              <option value="">Selecciona</option>
+              <option value="POLLO">Pollo</option>
+              <option value="CERDO">Cerdo</option>
+              <option value="HUEVO">Huevos</option>
+              <option value="ROPA">Ropa</option>
+              <option value="OTROS">Otros</option>
+            </select>
+          </div>
 
-      {/* Controles de lista */}
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Nombre del producto
+            </label>
+            <input
+              type="text"
+              className="w-full border p-2 rounded-lg"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Tipo de unidad de medida
+            </label>
+            <select
+              value={measurement}
+              onChange={(e) => setMeasurement(e.target.value)}
+              className="w-full border border-gray-300 p-2 rounded-lg focus:ring-2 focus:ring-green-400 uppercase"
+            >
+              <option value="">Selecciona</option>
+              <option value="LB">Libra</option>
+              <option value="CAJILLA">Cajilla</option>
+              <option value="KG">Kilogramo</option>
+              <option value="UNIDAD">Unidad</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm">Precio proveedor (ej: 40.00)</label>
+            <input
+              type="number"
+              step="0.01"
+              className="w-full border p-2 rounded-lg"
+              value={Number.isNaN(providerPrice) ? "" : providerPrice}
+              onChange={(e) => setProviderPrice(parseFloat(e.target.value))}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm">Precio por unidad (ej: 55.50)</label>
+            <input
+              type="number"
+              step="0.01"
+              className="w-full border p-2 rounded-lg"
+              value={Number.isNaN(price) ? "" : price}
+              onChange={(e) => setPrice(parseFloat(e.target.value))}
+              onFocus={(e) =>
+                e.target.value === "0" ? setPrice(NaN) : null
+              }
+            />
+          </div>
+
+          {message ? <p className="text-sm text-gray-700">{message}</p> : null}
+        </form>
+      </SlideOverDrawer>
+
       <div className="flex items-center justify-between mt-6 mb-2">
         <h3 className="text-lg font-semibold p-2">Productos</h3>
         <label className="flex items-center gap-2 text-sm">
@@ -366,7 +357,6 @@ export default function ProductForm() {
         </label>
       </div>
 
-      {/* Tabla */}
       <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
         <table className="min-w-full w-full text-sm">
           <thead className="bg-slate-100 sticky top-0 z-10">
@@ -377,7 +367,7 @@ export default function ProductForm() {
               <th className="p-3 border-b text-right">Precio proveedor</th>
               <th className="p-3 border-b text-right">Precio</th>
               <th className="p-3 border-b text-left">Estado</th>
-              <th className="p-3 border-b text-left">Acciones</th>
+              <th className="p-3 border-b text-left w-24">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -395,93 +385,23 @@ export default function ProductForm() {
               </tr>
             ) : (
               visibleRows.map((p) => {
-                const isEditing = editingId === p.id;
                 const isActive = p.active !== false;
                 return (
                   <tr
                     key={p.id}
                     className="text-center odd:bg-white even:bg-slate-50"
                   >
-                    <td className="p-3 border-b text-left">
-                      {isEditing ? (
-                        <input
-                          className="w-full border p-1 rounded"
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                        />
-                      ) : (
-                        p.name
-                      )}
+                    <td className="p-3 border-b text-left">{p.name}</td>
+                    <td className="p-3 border-b text-left uppercase">
+                      {normalizeCategory(p.category)}
                     </td>
-                    <td className="p-3 border-b text-left">
-                      {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded"
-                          value={editCategory}
-                          onChange={(e) => setEditCategory(e.target.value)}
-                        >
-                          <option value="">Selecciona</option>
-                          <option value="pollo">Pollo</option>
-                          <option value="cerdo">Cerdo</option>
-                          <option value="huevo">Huevos</option>
-                          <option value="ropa">Ropa</option>
-                          <option value="otros">Otros</option>
-                        </select>
-                      ) : (
-                        p.category
-                      )}
-                    </td>
-                    <td className="p-3 border-b text-left">
-                      {isEditing ? (
-                        <select
-                          className="w-full border p-1 rounded"
-                          value={editMeasurement}
-                          onChange={(e) => setEditMeasurement(e.target.value)}
-                        >
-                          <option value="">Selecciona</option>
-                          <option value="lb">Libra</option>
-                          <option value="cajilla">Cajilla</option>
-                          <option value="kg">Kilogramo</option>
-                          <option value="unidad">Unidad</option>
-                        </select>
-                      ) : (
-                        p.measurement
-                      )}
+                    <td className="p-3 border-b text-left uppercase">
+                      {normalizeMeasurement(p.measurement)}
                     </td>
                     <td className="p-3 border-b text-right">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="w-full border p-1 rounded text-right"
-                          value={
-                            Number.isNaN(editProviderPrice)
-                              ? ""
-                              : editProviderPrice
-                          }
-                          onChange={(e) =>
-                            setEditProviderPrice(parseFloat(e.target.value))
-                          }
-                        />
-                      ) : (
-                        money(p.providerPrice || 0)
-                      )}
+                      {money(p.providerPrice || 0)}
                     </td>
-                    <td className="p-3 border-b text-right">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="w-full border p-1 rounded text-right"
-                          value={Number.isNaN(editPrice) ? "" : editPrice}
-                          onChange={(e) =>
-                            setEditPrice(parseFloat(e.target.value))
-                          }
-                        />
-                      ) : (
-                        money(p.price)
-                      )}
-                    </td>
+                    <td className="p-3 border-b text-right">{money(p.price)}</td>
                     <td className="p-3 border-b text-left">
                       <span
                         className={`px-2 py-0.5 rounded text-xs ${
@@ -493,48 +413,17 @@ export default function ProductForm() {
                         {isActive ? "Activo" : "Inactivo"}
                       </span>
                     </td>
-                    <td className="p-3 border-b text-left space-x-2">
-                      {isEditing ? (
-                        <>
-                          <button
-                            className="px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700"
-                            onClick={saveEdit}
-                          >
-                            Guardar
-                          </button>
-                          <button
-                            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-200 text-slate-700 hover:bg-slate-300"
-                            onClick={cancelEdit}
-                          >
-                            Cancelar
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            className="px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700"
-                            onClick={() => startEdit(p)}
-                          >
-                            Editar
-                          </button>
-                          <button
-                            className={`px-3 py-1.5 rounded-md text-xs font-semibold ${
-                              isActive
-                                ? "bg-slate-600 hover:bg-slate-700 text-white"
-                                : "bg-emerald-600 hover:bg-emerald-700 text-white"
-                            }`}
-                            onClick={() => toggleActive(p)}
-                          >
-                            {isActive ? "Desactivar" : "Activar"}
-                          </button>
-                          <button
-                            className="px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-red-600 hover:bg-red-700"
-                            onClick={() => deleteProduct(p.id)}
-                          >
-                            Eliminar
-                          </button>
-                        </>
-                      )}
+                    <td className="p-3 border-b text-left">
+                      <ActionMenuTrigger
+                        aria-label={`Acciones ${p.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const r = (
+                            e.currentTarget as HTMLButtonElement
+                          ).getBoundingClientRect();
+                          setRowMenu({ id: p.id, rect: r });
+                        }}
+                      />
                     </td>
                   </tr>
                 );
@@ -543,6 +432,56 @@ export default function ProductForm() {
           </tbody>
         </table>
       </div>
+
+      <ActionMenu
+        anchorRect={rowMenu?.rect ?? null}
+        isOpen={!!rowMenu}
+        onClose={() => setRowMenu(null)}
+      >
+        {rowMenu ? (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClassGreen}
+              onClick={() => {
+                const p = products.find((x) => x.id === rowMenu.id);
+                if (p) openEdit(p);
+                setRowMenu(null);
+              }}
+            >
+              Editar
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClass}
+              onClick={() => {
+                const p = products.find((x) => x.id === rowMenu.id);
+                if (p) void toggleActive(p);
+              }}
+            >
+              {products.find((x) => x.id === rowMenu.id)?.active !== false
+                ? "Desactivar"
+                : "Activar"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClassDestructive}
+              onClick={() => {
+                const p = products.find((x) => x.id === rowMenu.id);
+                if (p) void softDeleteProduct(p);
+              }}
+            >
+              Eliminar (ocultar)
+            </Button>
+          </>
+        ) : null}
+      </ActionMenu>
     </div>
   );
 }

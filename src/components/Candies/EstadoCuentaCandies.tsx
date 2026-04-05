@@ -31,7 +31,10 @@ import {
   fetchBaseSummaryCandies,
   type BaseSummaryCandies,
 } from "../../Services/baseSummaryCandies";
-import CandiesUtilidadesPanel from "./CandiesUtilidadesPanel";
+import CandiesUtilidadesPanel, {
+  UTILIDADES_ATRIB_VISTAS_TEXT,
+  UTILIDADES_UTIL_GLOSSARY_TEXT,
+} from "./CandiesUtilidadesPanel";
 
 interface Seller {
   id: string;
@@ -484,6 +487,8 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   const [candiesAccountView, setCandiesAccountView] = useState<
     "estado" | "utilidades"
   >("estado");
+  const [utilidadesGlossaryOpen, setUtilidadesGlossaryOpen] = useState(false);
+  const [tipoFiltroInfoOpen, setTipoFiltroInfoOpen] = useState(false);
 
   // 0) cargar sellers + customers
   useEffect(() => {
@@ -1182,6 +1187,29 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           >
             Utilidades
           </button>
+          {candiesAccountView === "utilidades" ? (
+            <button
+              type="button"
+              title="Definiciones: Dispersión, UB efectiva, comisiones, U. Neta…"
+              aria-label="Definiciones de utilidades"
+              onClick={() => setUtilidadesGlossaryOpen(true)}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-5 w-5"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M18 10A8 8 0 11 2 10a8 8 0 0116 0zm-9-3a1 1 0 10-2 0 1 1 0 002 0zM9 9a1 1 0 00-1 1v4a1 1 0 102 0v-4a1 1 0 00-1-1z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </button>
+          ) : null}
         </div>
         {candiesAccountView === "estado" ? (
           <Button
@@ -1486,7 +1514,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             />
           </div>
 
-          <div className="w-full sm:w-auto min-w-0 sm:min-w-[10rem]">
+          <div className="hidden w-full sm:w-auto min-w-0 sm:min-w-[10rem] md:block">
             <MobileHtmlSelect
               label="Tipo"
               value={typeFilter}
@@ -1499,6 +1527,64 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               buttonClassName="border rounded px-2 py-2 text-sm w-full text-left flex items-center justify-between gap-2 bg-white"
             />
           </div>
+        </div>
+
+        {/* Móvil: tipo venta en una sola fila (Todos · Cash · Crédito · ℹ) */}
+        <div className="flex flex-nowrap items-stretch gap-1 md:hidden">
+          <button
+            type="button"
+            onClick={() => setTypeFilter("ALL")}
+            className={`flex-1 min-w-0 rounded-full border px-2 py-2 text-center text-[11px] font-semibold leading-tight transition-colors ${
+              typeFilter === "ALL"
+                ? "border-indigo-600 bg-indigo-600 text-white"
+                : "border-gray-200 bg-white text-gray-700"
+            }`}
+          >
+            Todos
+          </button>
+          <button
+            type="button"
+            onClick={() => setTypeFilter("Cash")}
+            className={`flex-1 min-w-0 rounded-full border px-2 py-2 text-center text-[11px] font-semibold leading-tight transition-colors ${
+              typeFilter === "Cash"
+                ? "border-indigo-600 bg-indigo-600 text-white"
+                : "border-gray-200 bg-white text-gray-700"
+            }`}
+          >
+            Cash
+          </button>
+          <button
+            type="button"
+            onClick={() => setTypeFilter("Crédito")}
+            className={`flex-1 min-w-0 rounded-full border px-2 py-2 text-center text-[11px] font-semibold leading-tight transition-colors ${
+              typeFilter === "Crédito"
+                ? "border-indigo-600 bg-indigo-600 text-white"
+                : "border-gray-200 bg-white text-gray-700"
+            }`}
+          >
+            Crédito
+          </button>
+          <button
+            type="button"
+            title="Qué significa cada vista de tipo"
+            aria-label="Ayuda: filtro Tipo (ventas)"
+            onClick={() => setTipoFiltroInfoOpen(true)}
+            className="flex w-9 shrink-0 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-600"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-4 w-4"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden
+            >
+              <path
+                fillRule="evenodd"
+                d="M18 10A8 8 0 11 2 10a8 8 0 0116 0zm-9-3a1 1 0 10-2 0 1 1 0 002 0zM9 9a1 1 0 00-1 1v4a1 1 0 102 0v-4a1 1 0 00-1-1z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -1757,6 +1843,49 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         </div>
       )}
 
+      {tipoFiltroInfoOpen ? (
+        <div
+          className="fixed inset-0 z-[85] flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="tipo-filtro-info-title"
+          onClick={() => setTipoFiltroInfoOpen(false)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-gray-200 bg-white p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              id="tipo-filtro-info-title"
+              className="text-base font-bold text-gray-900"
+            >
+              Filtro por tipo de venta
+            </h3>
+            <p className="mt-3 text-sm leading-relaxed text-gray-600">
+              <strong>Todos</strong>: muestra movimientos sin filtrar por venta
+              cash o crédito. <strong>Cash</strong>: solo filas cuyo tipo es
+              venta al contado (CONTADO). <strong>Crédito</strong>: solo ventas
+              a crédito. En la vista <strong>Utilidades</strong>, las tres
+              vistas (todas / contado / crédito) reparten importes entre órdenes
+              maestras así:
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-gray-600">
+              {UTILIDADES_ATRIB_VISTAS_TEXT}
+            </p>
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="!rounded-xl"
+                onClick={() => setTipoFiltroInfoOpen(false)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* Tabla (desktop + móvil) */}
       <div className="block overflow-x-auto">
         <table className="min-w-full w-full border text-sm table-auto">
@@ -1987,6 +2116,42 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
         </>
       )}
+
+      {/* Fuera del bloque «estado» para que funcione en vista Utilidades */}
+      {utilidadesGlossaryOpen ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="utilidades-glossary-title"
+          onClick={() => setUtilidadesGlossaryOpen(false)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-gray-200 bg-white p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              id="utilidades-glossary-title"
+              className="text-base font-bold text-gray-900"
+            >
+              Definiciones (utilidades dulces)
+            </h3>
+            <p className="mt-3 text-sm leading-relaxed text-gray-600 whitespace-pre-wrap">
+              {UTILIDADES_UTIL_GLOSSARY_TEXT}
+            </p>
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="!rounded-xl"
+                onClick={() => setUtilidadesGlossaryOpen(false)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Drawer detalle items de venta */}
       <SlideOverDrawer

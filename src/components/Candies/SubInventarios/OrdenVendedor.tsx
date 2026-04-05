@@ -32,6 +32,12 @@ import { backfillCandyInventoryFromMainOrder } from "../../../Services/inventory
 import TrasladosModal from "./TrasladosModal";
 import ActionMenu, { ActionMenuTrigger } from "../../common/ActionMenu";
 import Button from "../../common/Button";
+import SlideOverDrawer from "../../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerSectionTitle,
+  DrawerStatGrid,
+} from "../../common/DrawerContentCards";
 
 // Helper: redondeo a 2 decimales (consistente con otros componentes)
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
@@ -308,6 +314,9 @@ export default function VendorCandyOrders({
 
   // ===== Modal pedido =====
   const [openForm, setOpenForm] = useState(false);
+  const [vendorOrderDrawerOpen, setVendorOrderDrawerOpen] = useState(false);
+  const [vendorOrderDrawerSummary, setVendorOrderDrawerSummary] =
+    useState<OrderSummaryRow | null>(null);
   const [editingOrderKey, setEditingOrderKey] = useState<string | null>(null);
 
   const [sellerId, setSellerId] = useState<string>("");
@@ -1290,6 +1299,121 @@ export default function VendorCandyOrders({
     const start = (page - 1) * PAGE_SIZE;
     return orderSummaries.slice(start, start + PAGE_SIZE);
   }, [orderSummaries, page]);
+
+  /** Líneas de producto para el slide-over de detalle (misma lógica que al abrir edición, sin sync a BD) */
+  const vendorOrderDrawerItems = useMemo((): OrderItem[] => {
+    const orderKey = vendorOrderDrawerSummary?.orderKey;
+    if (!orderKey) return [];
+    const [sid] = orderKey.split("__");
+    const orderRows = rowsByRole.filter((r) => getRowOrderKey(r) === orderKey);
+    const seller = sellers.find((s) => s.id === sid) || null;
+    const br = seller?.branch;
+
+    return orderRows.map((r) => {
+      const p = productsAll.find((x) => x.id === String(r.productId)) || null;
+
+      const unitPriceRivas = Number(r.unitPriceRivas || p?.unitPriceRivas || 0);
+      const unitPriceSanJorge = Number(
+        r.unitPriceSanJorge || p?.unitPriceSanJorge || 0,
+      );
+      const unitPriceIsla = Number(r.unitPriceIsla || p?.unitPriceIsla || 0);
+
+      const packs = Number(r.packages || 0);
+
+      const pricePerPackage =
+        br === "RIVAS"
+          ? unitPriceRivas
+          : br === "SAN_JORGE"
+            ? unitPriceSanJorge
+            : unitPriceIsla;
+
+      const providerPriceRow = Number((r as any).providerPrice || 0);
+      const providerPriceFromProduct = Number(p?.providerPrice || 0);
+      const providerPrice =
+        providerPriceFromProduct > 0 &&
+        (providerPriceRow <= 0 ||
+          Math.abs(providerPriceRow - providerPriceFromProduct) > 0.01)
+          ? providerPriceFromProduct
+          : providerPriceRow;
+
+      const grossPerPack = computeGrossPerPack(
+        p,
+        { pricePerPackage, providerPrice },
+        br,
+      );
+      const grossProfit = grossPerPack * packs;
+
+      const totalRivas = Number(r.totalRivas || 0);
+      const totalSanJorge = Number(r.totalSanJorge || 0);
+      const totalIsla = Number(r.totalIsla || 0);
+
+      const totalExpected =
+        br === "RIVAS"
+          ? totalRivas
+          : br === "SAN_JORGE"
+            ? totalSanJorge
+            : totalIsla;
+
+      const vendorMarginPercent = clampPercent(
+        r.vendorMarginPercent ?? getSellerMarginPercent(sid),
+      );
+
+      const logisticAllocated =
+        Number((r as any).logisticAllocated ?? (r as any).gastos ?? 0) ||
+        (p ? p.logisticAllocatedPerPack * packs : 0);
+
+      const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+
+      const uVendor = Number(split.uVendor || 0);
+      const uInvestor = Number(split.uInvestor || 0);
+
+      return {
+        id: r.id,
+        productId: String(r.productId || ""),
+        productName: r.productName || p?.name || "",
+        category: r.category || p?.category || "",
+
+        unitsPerPackage: Number(r.unitsPerPackage || p?.unitsPerPackage || 0),
+        packages: packs,
+
+        totalExpected,
+        pricePerPackage,
+
+        grossProfit,
+
+        logisticAllocated,
+
+        vendorMarginPercent: split.vendorMarginPercent,
+        uAproximada: Number(r.uAproximada || 0),
+        uVendor,
+        uInvestor,
+
+        totalRivas,
+        totalSanJorge,
+        totalIsla,
+
+        unitPriceRivas,
+        unitPriceSanJorge,
+        unitPriceIsla,
+
+        providerPrice,
+
+        remainingPackages: Number(r.remainingPackages || 0),
+        transferDelta: getRowTransferDelta(r),
+      };
+    });
+  }, [
+    vendorOrderDrawerSummary?.orderKey,
+    rowsByRole,
+    sellers,
+    productsAll,
+    transferRowDeltas,
+  ]);
+
+  const openVendorOrderDrawer = (o: OrderSummaryRow) => {
+    setVendorOrderDrawerSummary(o);
+    setVendorOrderDrawerOpen(true);
+  };
 
   const goPrevPage = () => setPage((p) => Math.max(1, p - 1));
   const goNextPage = () => setPage((p) => Math.min(totalPages, p + 1));
@@ -4119,7 +4243,16 @@ export default function VendorCandyOrders({
                     return (
                       <tr
                         key={o.orderKey}
-                        className="hover:bg-slate-50 odd:bg-white even:bg-slate-50"
+                        className="hover:bg-slate-50 odd:bg-white even:bg-slate-50 cursor-pointer"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => openVendorOrderDrawer(o)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openVendorOrderDrawer(o);
+                          }
+                        }}
                       >
                         <td className="p-3 border-b max-w-[240px] whitespace-normal break-words">
                           {o.orderName || "—"}
@@ -4172,14 +4305,15 @@ export default function VendorCandyOrders({
                             className="!h-8 !w-8"
                             aria-label="Acciones del pedido"
                             iconClassName="h-5 w-5 text-gray-700"
-                            onClick={(e) =>
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setOrderRowMenu({
                                 orderKey: o.orderKey,
                                 rect: (
                                   e.currentTarget as HTMLElement
                                 ).getBoundingClientRect(),
-                              })
-                            }
+                              });
+                            }}
                           />
                         </td>
                       </tr>
@@ -4242,7 +4376,19 @@ export default function VendorCandyOrders({
             </div>
 
             {pagedOrders.map((o) => (
-              <div key={o.orderKey} className="bg-white border rounded">
+              <div
+                key={o.orderKey}
+                role="button"
+                tabIndex={0}
+                className="bg-white border rounded cursor-pointer hover:bg-slate-50/90 transition-colors"
+                onClick={() => openVendorOrderDrawer(o)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openVendorOrderDrawer(o);
+                  }
+                }}
+              >
                 <div className="p-2 flex items-center justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold">{o.sellerName}</div>
@@ -4336,6 +4482,176 @@ export default function VendorCandyOrders({
           </div>
         </>
       )}
+
+      <SlideOverDrawer
+        open={vendorOrderDrawerOpen}
+        onClose={() => {
+          setVendorOrderDrawerOpen(false);
+          setVendorOrderDrawerSummary(null);
+        }}
+        title={
+          vendorOrderDrawerSummary?.orderName?.trim() ||
+          vendorOrderDrawerSummary?.orderKey ||
+          "Pedido"
+        }
+        subtitle={
+          vendorOrderDrawerSummary
+            ? `${vendorOrderDrawerSummary.date} · ${vendorOrderDrawerSummary.sellerName}`
+            : undefined
+        }
+        badge={
+          <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-800">
+            Pedido vendedor
+          </span>
+        }
+      >
+        {vendorOrderDrawerSummary ? (
+          <>
+            {(() => {
+              const o = vendorOrderDrawerSummary;
+              const totalExpectedVal = Number(
+                o.totalExpectedActive ?? o.totalExpected ?? 0,
+              );
+              const grossProfitVal = Number(
+                o.grossProfitActive ?? o.grossProfit ?? 0,
+              );
+              const gastosVal = Number(o.gastosActive ?? o.gastos ?? 0);
+              const vendorProfitVal = Number(
+                o.vendorProfitActive ?? o.vendorProfit ?? 0,
+              );
+              const utilidadNeta = grossProfitVal - gastosVal - vendorProfitVal;
+              const costoProveedor = vendorOrderDrawerItems.reduce(
+                (s, it) =>
+                  s +
+                  Number(it.providerPrice || 0) * Number(it.packages || 0),
+                0,
+              );
+
+              const kpi = [
+                {
+                  label: "Productos (líneas)",
+                  value: vendorOrderDrawerItems.length,
+                  tone: "slate" as const,
+                },
+                {
+                  label: "Paquetes ingresados",
+                  value: o.totalPackages,
+                  tone: "sky" as const,
+                },
+                {
+                  label: "Paquetes restantes",
+                  value: o.totalRemainingPackages,
+                  tone: "amber" as const,
+                },
+                {
+                  label: "Total esperado",
+                  value: money(totalExpectedVal),
+                  tone: "sky" as const,
+                },
+                ...(isAdmin
+                  ? [
+                      {
+                        label: "Total facturado (proveedor)",
+                        value: money(costoProveedor),
+                        tone: "violet" as const,
+                      },
+                      {
+                        label: "U. bruta",
+                        value: money(grossProfitVal),
+                        tone: "emerald" as const,
+                      },
+                      {
+                        label: "Gastos",
+                        value: money(gastosVal),
+                        tone: "rose" as const,
+                      },
+                      {
+                        label: "Utilidad neta (inversor)",
+                        value: money(utilidadNeta),
+                        tone: "emerald" as const,
+                      },
+                    ]
+                  : []),
+                {
+                  label: "Utilidad vendedor",
+                  value: money(vendorProfitVal),
+                  tone: "amber" as const,
+                },
+                {
+                  label: "Vendedor",
+                  value: o.sellerName,
+                  tone: "indigo" as const,
+                  valueClassName: "font-semibold",
+                },
+                {
+                  label: "Trasl. salida",
+                  value: o.transferredOut,
+                  tone: "slate" as const,
+                },
+                {
+                  label: "Trasl. entrada",
+                  value: o.transferredIn,
+                  tone: "slate" as const,
+                },
+              ];
+
+              return <DrawerStatGrid items={kpi} />;
+            })()}
+
+            <DrawerSectionTitle>Productos</DrawerSectionTitle>
+            {vendorOrderDrawerItems.length === 0 ? (
+              <div className="mt-2 text-sm text-gray-600">
+                Sin productos en este pedido.
+              </div>
+            ) : (
+              <div className="mt-2 space-y-2">
+                {vendorOrderDrawerItems.map((it) => (
+                  <DrawerDetailDlCard
+                    key={it.id}
+                    title={
+                      <span className="leading-snug">
+                        {it.productName || it.productId}
+                      </span>
+                    }
+                    rows={[
+                      { label: "Categoría", value: it.category || "—" },
+                      { label: "Paquetes", value: String(it.packages ?? 0) },
+                      {
+                        label: "Restantes",
+                        value: String(it.remainingPackages ?? 0),
+                      },
+                      {
+                        label: "Precio / paq.",
+                        value: money(it.pricePerPackage || 0),
+                      },
+                      {
+                        label: "Total esperado (línea)",
+                        value: money(it.totalExpected || 0),
+                      },
+                      ...(isAdmin
+                        ? [
+                            {
+                              label: "U. bruta (línea)",
+                              value: money(it.grossProfit || 0),
+                            },
+                            {
+                              label: "Gastos (línea)",
+                              value: money(it.logisticAllocated || 0),
+                            },
+                          ]
+                        : []),
+                      {
+                        label: "U. vendedor (línea)",
+                        value: money(it.uVendor || 0),
+                      },
+                    ]}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : null}
+      </SlideOverDrawer>
 
       {/* ===================== MODAL ===================== */}
       {openForm && (
@@ -4686,43 +5002,61 @@ export default function VendorCandyOrders({
 
                 {/* Desktop table */}
                 <div className="hidden md:block overflow-x-auto">
-                  <table className="min-w-full w-full text-xs table-auto divide-y divide-gray-100">
+                  <table className="w-full min-w-[1100px] text-xs table-fixed divide-y divide-gray-100">
                     <thead className="bg-gray-50">
                       <tr className="sticky top-0 z-10 whitespace-nowrap">
-                        <th className="text-left p-2 border-b">Tipo</th>
-                        <th className="text-left p-2 border-b">Producto</th>
-                        <th className="text-right p-2 border-b">Agregados </th>
-                        <th className="text-right p-2 border-b">Restantes</th>
+                        <th className="w-[4.5rem] text-left p-2 border-b">
+                          Tipo
+                        </th>
+                        <th className="w-[11rem] min-w-[8rem] text-left p-2 border-b">
+                          Producto
+                        </th>
+                        <th className="w-[5.5rem] text-right p-2 border-b">
+                          Agregados
+                        </th>
+                        <th className="w-[5.5rem] text-right p-2 border-b">
+                          Restantes
+                        </th>
                         {isAdmin && (
-                          <th className="text-right p-2 border-b">
+                          <th className="w-[5.5rem] text-right p-2 border-b">
                             Precio Costo
                           </th>
                         )}
-                        <th className="text-right p-2 border-b">
+                        <th className="w-[5.5rem] text-right p-2 border-b">
                           Precio Venta
                         </th>
-                        <th className="text-right p-2 border-b">
+                        <th className="w-[6.5rem] text-right p-2 border-b">
                           Monto Esperado
                         </th>
                         {isAdmin && (
                           <>
-                            <th className="text-right p-2 border-b">U.Bruta</th>
-                            <th className="text-right p-2 border-b">Gastos</th>
-                            <th className="text-right p-2 border-b">U x paq</th>
-                            <th className="text-right p-2 border-b">
+                            <th className="w-[6.5rem] text-right p-2 border-b">
+                              U.Bruta
+                            </th>
+                            <th className="w-[5rem] text-right p-2 border-b">
+                              Gastos
+                            </th>
+                            <th className="w-[5rem] text-right p-2 border-b">
+                              U x paq
+                            </th>
+                            <th className="w-[5rem] text-right p-2 border-b">
                               UN x Paq
                             </th>
-                            <th className="text-right p-2 border-b">
+                            <th className="w-[5rem] text-right p-2 border-b">
                               UV x Paq
                             </th>
-                            <th className="text-right p-2 border-b">
+                            <th className="w-[5.5rem] text-right p-2 border-b">
                               U Vendor
                             </th>
-                            <th className="text-right p-2 border-b">U. Neta</th>
+                            <th className="w-[5.5rem] text-right p-2 border-b">
+                              U. Neta
+                            </th>
                           </>
                         )}
-                        <th className="text-right p-2 border-b">Margen (%)</th>
-                        <th className="text-left p-2 border-b">X</th>
+                        <th className="w-[5.5rem] text-right p-2 border-b">
+                          Margen (%)
+                        </th>
+                        <th className="w-10 text-left p-2 border-b">X</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -4778,12 +5112,23 @@ export default function VendorCandyOrders({
                         return (
                           <tr
                             key={it.id}
-                            className="hover:bg-gray-50 whitespace-nowrap"
+                            className="hover:bg-gray-50 whitespace-nowrap align-middle"
                           >
-                            <td className="p-2 border-b">{it.category}</td>
-                            <td className="p-2 border-b">{it.productName}</td>
+                            <td className="p-2 border-b align-middle">
+                              {it.category}
+                            </td>
+                            <td className="p-2 border-b align-middle">
+                              <div className="min-w-0 max-w-[11rem]">
+                                <span
+                                  className="block truncate text-left"
+                                  title={it.productName}
+                                >
+                                  {it.productName}
+                                </span>
+                              </div>
+                            </td>
 
-                            <td className="p-2 border-b text-right">
+                            <td className="p-2 border-b text-right align-middle">
                               {!isReadOnly ? (
                                 editingPackagesMap[it.id] ? (
                                   <input
@@ -4805,7 +5150,7 @@ export default function VendorCandyOrders({
                                     autoFocus
                                   />
                                 ) : (
-                                  <div className="flex items-center justify-end gap-2">
+                                  <div className="flex items-center justify-end gap-1">
                                     <span className={zeroClass(it.packages)}>
                                       {it.packages}
                                     </span>
@@ -4813,7 +5158,7 @@ export default function VendorCandyOrders({
                                       type="button"
                                       variant="primary"
                                       size="sm"
-                                      className="h-7 w-7 rounded p-0 shadow-none !text-base"
+                                      className="h-6 w-6 rounded p-0 shadow-none !text-sm"
                                       onClick={() => openPackageEdit(it.id)}
                                       aria-label="Editar paquetes"
                                       title="Editar paquetes"
@@ -4821,8 +5166,8 @@ export default function VendorCandyOrders({
                                       <svg
                                         xmlns="http://www.w3.org/2000/svg"
                                         className="shrink-0"
-                                        width={18}
-                                        height={18}
+                                        width={14}
+                                        height={14}
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
@@ -4842,7 +5187,7 @@ export default function VendorCandyOrders({
                                 </span>
                               )}
                             </td>
-                            <td className="p-2 border-b text-right">
+                            <td className="p-2 border-b text-right align-middle">
                               {isAdmin ? (
                                 editingRemainingMap[it.id] ? (
                                   <div className="flex items-center justify-end gap-2">
@@ -4881,7 +5226,7 @@ export default function VendorCandyOrders({
                                     )}
                                   </div>
                                 ) : (
-                                  <div className="flex items-center justify-end gap-2">
+                                  <div className="flex items-center justify-end gap-1">
                                     <span
                                       className={zeroClass(
                                         it.remainingPackages,
@@ -4893,7 +5238,7 @@ export default function VendorCandyOrders({
                                       type="button"
                                       variant="primary"
                                       size="sm"
-                                      className="h-7 w-7 rounded p-0 shadow-none !text-base"
+                                      className="h-6 w-6 rounded p-0 shadow-none !text-sm"
                                       onClick={() => openRemainingEdit(it.id)}
                                       aria-label="Editar restantes"
                                       title="Editar restantes"
@@ -4901,8 +5246,8 @@ export default function VendorCandyOrders({
                                       <svg
                                         xmlns="http://www.w3.org/2000/svg"
                                         className="shrink-0"
-                                        width={18}
-                                        height={18}
+                                        width={14}
+                                        height={14}
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
@@ -4947,26 +5292,32 @@ export default function VendorCandyOrders({
                               </span>
                             </td>
 
-                            <td className="p-2 border-b text-right">
-                              <div className="flex items-center justify-end gap-2">
-                                <span className={zeroClass(totalExpected)}>
+                            <td className="p-2 border-b text-right align-middle">
+                              <div className="flex flex-col items-end gap-1">
+                                <span
+                                  className={`tabular-nums ${zeroClass(totalExpected)}`}
+                                >
                                   {money(totalExpected)}
                                 </span>
-                                {isAdmin && (
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                    onClick={async () => recalcItem(it.id)}
-                                    aria-label="Recalcular total esperado"
-                                  >
-                                    🔁
-                                  </Button>
-                                )}
-                                {savingCalcMap[it.id] && (
-                                  <div className="text-xs text-gray-500">
-                                    Calc…
+                                {(isAdmin || savingCalcMap[it.id]) && (
+                                  <div className="flex items-center justify-end gap-1">
+                                    {isAdmin && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                        onClick={async () => recalcItem(it.id)}
+                                        aria-label="Recalcular total esperado"
+                                      >
+                                        🔁
+                                      </Button>
+                                    )}
+                                    {savingCalcMap[it.id] && (
+                                      <div className="text-[10px] text-gray-500">
+                                        Calc…
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -4974,30 +5325,34 @@ export default function VendorCandyOrders({
 
                             {isAdmin && (
                               <>
-                                <td className="p-2 border-b text-right">
-                                  <div className="flex items-center justify-end gap-2">
+                                <td className="p-2 border-b text-right align-middle">
+                                  <div className="flex flex-col items-end gap-1">
                                     <span
-                                      className={zeroClass(grossProfitBase)}
+                                      className={`tabular-nums ${zeroClass(grossProfitBase)}`}
                                     >
                                       {money(grossProfitBase)}
                                     </span>
-                                    {isAdmin && (
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                        onClick={async () =>
-                                          await recalcItem(it.id)
-                                        }
-                                        aria-label="Recalcular U. Bruta"
-                                      >
-                                        🔁
-                                      </Button>
-                                    )}
-                                    {savingCalcMap[it.id] && (
-                                      <div className="text-xs text-gray-500">
-                                        Calc…
+                                    {(isAdmin || savingCalcMap[it.id]) && (
+                                      <div className="flex items-center justify-end gap-1">
+                                        {isAdmin && (
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                            onClick={async () =>
+                                              await recalcItem(it.id)
+                                            }
+                                            aria-label="Recalcular U. Bruta"
+                                          >
+                                            🔁
+                                          </Button>
+                                        )}
+                                        {savingCalcMap[it.id] && (
+                                          <div className="text-[10px] text-gray-500">
+                                            Calc…
+                                          </div>
+                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -5083,7 +5438,7 @@ export default function VendorCandyOrders({
                                     autoFocus
                                   />
                                 ) : (
-                                  <div className="flex items-center justify-end gap-2">
+                                  <div className="flex items-center justify-end gap-1">
                                     <span
                                       className={zeroClass(
                                         Number(
@@ -5102,7 +5457,7 @@ export default function VendorCandyOrders({
                                       type="button"
                                       variant="primary"
                                       size="sm"
-                                      className="hidden h-7 w-7 rounded p-0 shadow-none !text-base md:inline-flex"
+                                      className="hidden h-6 w-6 rounded p-0 shadow-none !text-sm md:inline-flex"
                                       onClick={() => openMarginEdit(it.id)}
                                       aria-label="Editar margen"
                                       title="Editar margen"
@@ -5110,8 +5465,8 @@ export default function VendorCandyOrders({
                                       <svg
                                         xmlns="http://www.w3.org/2000/svg"
                                         className="shrink-0"
-                                        width={18}
-                                        height={18}
+                                        width={14}
+                                        height={14}
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
@@ -5169,7 +5524,7 @@ export default function VendorCandyOrders({
                         <tr>
                           <td
                             className="p-3 text-sm text-gray-600"
-                            colSpan={isAdmin ? 14 : 9}
+                            colSpan={isAdmin ? 16 : 8}
                           >
                             No hay productos asociados.
                           </td>
@@ -5388,50 +5743,14 @@ export default function VendorCandyOrders({
                                       <div className="text-gray-600">
                                         Total esperado
                                       </div>
-                                      <div className="font-semibold flex items-center justify-end gap-2">
+                                      <div className="mt-0.5 flex flex-col items-end gap-1">
                                         <div
-                                          className={zeroClass(totalExpected)}
+                                          className={`font-semibold tabular-nums ${zeroClass(totalExpected)}`}
                                         >
                                           {money(totalExpected)}
                                         </div>
-                                        {isAdmin && (
-                                          <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                            onClick={async (e) => {
-                                              e.stopPropagation();
-                                              await recalcItem(it.id);
-                                            }}
-                                            aria-label="Recalcular total esperado"
-                                          >
-                                            🔁
-                                          </Button>
-                                        )}
-                                        {savingCalcMap[it.id] && (
-                                          <div className="text-xs text-gray-500">
-                                            Calc…
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                    {isAdmin && (
-                                      <>
-                                        <div>
-                                          <div className="text-gray-600">
-                                            U. Bruta
-                                          </div>
-                                          <div className="font-semibold flex items-center justify-end gap-2">
-                                            <div
-                                              className={zeroClass(
-                                                Number(grossProfitBase || 0),
-                                              )}
-                                            >
-                                              {money(
-                                                Number(grossProfitBase || 0),
-                                              )}
-                                            </div>
+                                        {(isAdmin || savingCalcMap[it.id]) && (
+                                          <div className="flex items-center gap-1">
                                             {isAdmin && (
                                               <Button
                                                 type="button"
@@ -5442,14 +5761,59 @@ export default function VendorCandyOrders({
                                                   e.stopPropagation();
                                                   await recalcItem(it.id);
                                                 }}
-                                                aria-label="Recalcular U. Bruta"
+                                                aria-label="Recalcular total esperado"
                                               >
                                                 🔁
                                               </Button>
                                             )}
                                             {savingCalcMap[it.id] && (
-                                              <div className="text-xs text-gray-500">
+                                              <div className="text-[10px] text-gray-500">
                                                 Calc…
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {isAdmin && (
+                                      <>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            U. Bruta
+                                          </div>
+                                          <div className="mt-0.5 flex flex-col items-end gap-1">
+                                            <div
+                                              className={`font-semibold tabular-nums ${zeroClass(
+                                                Number(grossProfitBase || 0),
+                                              )}`}
+                                            >
+                                              {money(
+                                                Number(grossProfitBase || 0),
+                                              )}
+                                            </div>
+                                            {(isAdmin ||
+                                              savingCalcMap[it.id]) && (
+                                              <div className="flex items-center gap-1">
+                                                {isAdmin && (
+                                                  <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                                    onClick={async (e) => {
+                                                      e.stopPropagation();
+                                                      await recalcItem(it.id);
+                                                    }}
+                                                    aria-label="Recalcular U. Bruta"
+                                                  >
+                                                    🔁
+                                                  </Button>
+                                                )}
+                                                {savingCalcMap[it.id] && (
+                                                  <div className="text-[10px] text-gray-500">
+                                                    Calc…
+                                                  </div>
+                                                )}
                                               </div>
                                             )}
                                           </div>

@@ -99,8 +99,7 @@ function useIsMobile() {
 
 function PwaUpdatePrompt(): React.ReactElement | null {
   const {
-    offlineReady: [offlineReady, setOfflineReady],
-    needRefresh: [needRefresh, setNeedRefresh],
+    needRefresh: [needRefresh],
     updateServiceWorker,
   } = useRegisterSW({
     onRegisteredSW(_swUrl, registration) {
@@ -129,57 +128,11 @@ function PwaUpdatePrompt(): React.ReactElement | null {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  useEffect(() => {
-    if (!offlineReady) return;
-    const timeoutId = window.setTimeout(() => setOfflineReady(false), 4000);
-    return () => window.clearTimeout(timeoutId);
-  }, [offlineReady, setOfflineReady]);
-
-  if (!offlineReady && !needRefresh) return null;
-
-  if (needRefresh) {
-    return (
-      <div className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/75 px-4 backdrop-blur-sm">
-        <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-2xl">
-          <div className="bg-gradient-to-r from-sky-50 via-white to-blue-50 px-4 py-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold text-white">
-                P
-              </div>
-              <div>
-                <div className="text-sm font-semibold text-slate-900">
-                  Posys
-                </div>
-                <div className="text-xs text-slate-500">
-                  Actualizacion disponible
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-4">
-            <div className="text-sm leading-6 text-slate-700">
-              Hola, hay una nueva actualizacion, por favor presiona
-              Actualizar para disfrutar de una nueva y mejorada experiencia.
-            </div>
-
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={() => updateServiceWorker(true)}
-                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                Actualizar
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  /** Solo cuando el SW detecta un build nuevo en espera (vite-plugin-pwa / workbox). */
+  if (!needRefresh) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-4 z-[250] flex justify-center px-4">
+    <div className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/75 px-4 backdrop-blur-sm">
       <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-2xl">
         <div className="bg-gradient-to-r from-sky-50 via-white to-blue-50 px-4 py-3">
           <div className="flex items-center gap-3">
@@ -189,9 +142,7 @@ function PwaUpdatePrompt(): React.ReactElement | null {
             <div>
               <div className="text-sm font-semibold text-slate-900">Posys</div>
               <div className="text-xs text-slate-500">
-                {needRefresh
-                  ? "Actualizacion disponible"
-                  : "Modo offline activado"}
+                Actualizacion disponible
               </div>
             </div>
           </div>
@@ -199,17 +150,18 @@ function PwaUpdatePrompt(): React.ReactElement | null {
 
         <div className="p-4">
           <div className="text-sm leading-6 text-slate-700">
-            La app ya puede funcionar offline y seguira usando el tema claro
-            original.
+            Hay una nueva version de la app. Pulsa Actualizar para cargarla.
           </div>
 
-          <div className="mt-3 flex justify-end gap-2">
+          <div className="mt-4 flex justify-end">
             <button
               type="button"
-              onClick={() => setOfflineReady(false)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                void updateServiceWorker(true);
+              }}
+              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
-              Cerrar
+              Actualizar
             </button>
           </div>
         </div>

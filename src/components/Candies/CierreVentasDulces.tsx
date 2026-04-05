@@ -180,6 +180,38 @@ interface SellerCandy {
 
 // helpers
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
+/**
+ * U. neta **por paquete** desde inventario vendedor o línea de venta (misma regla que SalesCandies).
+ * `uNeta` en el doc de inventario es total de línea, no por paquete.
+ */
+function investorNetPerPackFromVendorInventory(
+  d: Record<string, unknown> | null | undefined,
+): number | undefined {
+  if (!d || typeof d !== "object") return undefined;
+  const pk = Math.max(0, Number(d.packages ?? 0));
+  const un = Number(d.uNeta ?? d.uInvestor ?? NaN);
+  const unpStored = Number(d.uNetaPorPaquete ?? NaN);
+
+  if (pk > 0 && Number.isFinite(un)) {
+    const derived = round2(un / pk);
+    if (!Number.isFinite(unpStored) || unpStored === 0) return derived;
+    if (Math.abs(unpStored - un) < 0.02) return derived;
+    return round2(unpStored);
+  }
+  if (Number.isFinite(unpStored) && unpStored !== 0) return round2(unpStored);
+  return undefined;
+}
+
+/** Paquetes en una línea guardada en `sales_candies.items`. */
+function linePacksFromSaleItem(it: any): number {
+  const fromDoc = Math.max(0, Number(it?.packages ?? it?.qtyPackages ?? 0));
+  if (fromDoc > 0) return Math.floor(fromDoc);
+  const qtyUnits = Math.max(0, Number(it?.qty ?? it?.quantity ?? 0));
+  const upp = Math.max(1, Math.floor(Number(it?.unitsPerPackage ?? 1)));
+  if (qtyUnits > 0) return Math.floor(qtyUnits / upp);
+  return 0;
+}
 const round3 = (n: number) => Math.round((Number(n) || 0) * 1000) / 1000;
 const money = (n: unknown) => Number(n ?? 0).toFixed(2);
 const qty3 = (n: unknown) => Math.trunc(Number(n ?? 0)).toString();
@@ -581,6 +613,7 @@ export default function CierreVentasDulces({
   const [productCardOpen, setProductCardOpen] = useState(false);
   const [abonosCardOpen, setAbonosCardOpen] = useState(false);
   const [isBackfillingUv, setIsBackfillingUv] = useState(false);
+  const [isBackfillingLegacy, setIsBackfillingLegacy] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   // bulk revert preview state
@@ -1148,17 +1181,10 @@ export default function CierreVentasDulces({
         map[sid] = map[sid] || {};
         const pname = String(x.productName || x.productName?.toString() || "");
         const key = pname ? normKey(pname) : String(x.productId || "");
-        const explicit = Number(
-          x.upaquete ?? x.uPaquete ?? x.u_per_package ?? NaN,
+        const perPack = investorNetPerPackFromVendorInventory(
+          x as Record<string, unknown>,
         );
-        let val = NaN as number;
-        if (Number.isFinite(explicit)) val = explicit;
-        else {
-          const gross = Number(x.grossProfit ?? x.gainVendor ?? 0);
-          const packs = Math.max(1, Number(x.packages ?? 0));
-          val = packs > 0 ? gross / packs : 0;
-        }
-        map[sid][key] = Number(val || 0);
+        map[sid][key] = round2(Number(perPack ?? 0));
       });
     }
     return map;
@@ -1304,14 +1330,16 @@ export default function CierreVentasDulces({
 
   const backfillLegacySales = async () => {
     if (!isAdmin) return;
+    if (isBackfillingLegacy) return;
     if (
       !window.confirm(
-        "¿Backfill: calcular y persistir uNetaPorPaquete, vendorGain, inversorGain en ventas del periodo?",
+        "¿Backfill: recalcular desde inventario actual uNetaPorPaquete, uvXpaq (comisión vendedor por paq.), margenVendedor, vendorGain e inversorGain en las ventas del periodo? Se priorizan los valores del pedido del vendedor sobre lo guardado en la venta.",
       )
     )
       return;
 
     try {
+      setIsBackfillingLegacy(true);
       setMessage("");
       const qSales = query(
         collection(db, "sales_candies"),
@@ -1343,24 +1371,34 @@ export default function CierreVentasDulces({
 
         let changed = false;
         const nextItems = items.map((it: any) => {
-          const qtyPaq = Number(it?.packages ?? it?.qty ?? it?.quantity ?? 0);
+          const qtyPaq = linePacksFromSaleItem(it);
           const pname = String(it?.productName || data?.productName || "");
           const key = normKey(pname);
 
-          const uNetaFromMap = upaMap?.[vendorId]?.[key];
-          const uNetaPorPaquete = Number.isFinite(Number(uNetaFromMap))
-            ? Number(uNetaFromMap)
-            : Number.isFinite(Number(it?.uNetaPorPaquete ?? NaN))
-              ? Number(it.uNetaPorPaquete)
-              : Number.isFinite(Number(it?.uNeta ?? NaN)) && qtyPaq > 0
-                ? round2(Number(it.uNeta) / qtyPaq)
-                : undefined;
+          const rawMap = upaMap?.[vendorId]?.[key];
+          const fromInventoryMap = Number.isFinite(Number(rawMap))
+            ? Number(rawMap)
+            : undefined;
+          const fromLine = investorNetPerPackFromVendorInventory(
+            it as Record<string, unknown>,
+          );
+          const uNetaPorPaquete =
+            fromInventoryMap !== undefined
+              ? fromInventoryMap
+              : fromLine !== undefined
+                ? fromLine
+                : Number.isFinite(Number(it?.uNetaPorPaquete ?? NaN))
+                  ? Number(it.uNetaPorPaquete)
+                  : Number.isFinite(Number(it?.uNeta ?? NaN)) && qtyPaq > 0
+                    ? round2(Number(it.uNeta) / qtyPaq)
+                    : undefined;
 
+          /** Comisión vendedor por paq. desde inventario actual (misma fuente que buildUvxpaqMap). */
           const uvFromMap = uvMap?.[vendorId]?.[key];
-          const uvxpaqFinal = Number.isFinite(Number(it?.uvXpaq ?? NaN))
-            ? Number(it.uvXpaq)
-            : Number.isFinite(Number(uvFromMap))
-              ? Number(uvFromMap)
+          const uvxpaqFinal = Number.isFinite(Number(uvFromMap))
+            ? Number(uvFromMap)
+            : Number.isFinite(Number(it?.uvXpaq ?? NaN))
+              ? Number(it.uvXpaq)
               : undefined;
 
           const vendorGain = round2(
@@ -1382,6 +1420,8 @@ export default function CierreVentasDulces({
               : it.uvXpaq,
             vendorGain,
             inversorGain,
+            /** Alineado con comisión recalculada (muchos listados usan margenVendedor). */
+            margenVendedor: vendorGain,
             uBruta: it.uBruta || computedUBruta,
           };
 
@@ -1390,7 +1430,8 @@ export default function CierreVentasDulces({
             newIt.uvXpaq !== it.uvXpaq ||
             newIt.vendorGain !== it.vendorGain ||
             newIt.inversorGain !== it.inversorGain ||
-            newIt.uBruta !== it.uBruta
+            newIt.uBruta !== it.uBruta ||
+            newIt.margenVendedor !== it.margenVendedor
           ) {
             changed = true;
           }
@@ -1421,6 +1462,8 @@ export default function CierreVentasDulces({
     } catch (e) {
       console.error(e);
       setMessage("❌ Error durante backfill de ventas.");
+    } finally {
+      setIsBackfillingLegacy(false);
     }
   };
 
@@ -2535,15 +2578,19 @@ export default function CierreVentasDulces({
                   type="button"
                   variant="danger"
                   onClick={backfillLegacySales}
-                  disabled={!hasVisibleSales}
+                  disabled={!hasVisibleSales || isBackfillingLegacy}
                   size="sm"
                   className={`w-full justify-between !rounded-full !px-3 !py-1.5 text-xs !font-semibold ${
-                    hasVisibleSales
+                    hasVisibleSales && !isBackfillingLegacy
                       ? "!bg-rose-600 hover:!bg-rose-700"
                       : "!bg-rose-300 opacity-60 cursor-not-allowed"
                   }`}
                 >
-                  <span>Backfill ventas (legacy)</span>
+                  <span>
+                    {isBackfillingLegacy
+                      ? "Corrigiendo ventas…"
+                      : "Backfill ventas (legacy)"}
+                  </span>
                 </Button>
               )}
 
