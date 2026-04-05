@@ -949,7 +949,7 @@ export default function CandiesUtilidadesPanel({
                 P. Restantes
               </th>
               <th className="px-2 py-1.5 border-b border-slate-200 font-semibold text-right whitespace-nowrap">
-                Dispers.
+                Dispersado
               </th>
               <th className="px-2 py-1.5 border-b border-slate-200 font-semibold text-right whitespace-nowrap">
                 Vendido
@@ -961,7 +961,7 @@ export default function CandiesUtilidadesPanel({
                 Venta Isla
               </th>
               <th className="px-2 py-1.5 border-b border-slate-200 font-semibold text-right whitespace-nowrap bg-violet-50/90">
-                U.Bruta Maestra
+                UBMaestra
               </th>
               <th className="px-2 py-1.5 border-b border-slate-200 font-semibold text-right whitespace-nowrap bg-sky-50/90">
                 Ventas efectivas
