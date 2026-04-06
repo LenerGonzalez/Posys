@@ -193,6 +193,8 @@ type SaleRow = {
   customer: string;
   type: string;
   amount: number;
+  /** Utilidad bruta de la venta (misma lógica que CierreVentas). */
+  grossProfit: number;
   productName: string;
   /** Ej. "12.500 lb" o "3.000 ud" */
   qtyLabel: string;
@@ -818,6 +820,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             customer: x.customerName || x.customer || "—",
             type: "CONTADO",
             amount: Number(total.toFixed(2)),
+            grossProfit: grossProfitFromSaleDoc(x as Record<string, unknown>),
             productName: productName || "—",
             qtyLabel,
             unitPrice: Number((unitPrice || 0).toFixed(4)),
@@ -862,6 +865,18 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
   // saldo base: ventas cash + abonos
   const saldoBase = base?.saldoBase ?? 0;
+
+  /** Suma utilidad bruta de todas las ventas cash del periodo (drawer Saldo inicial). */
+  const ventasCashUbAcumulada = useMemo(
+    () =>
+      round2(
+        salesRows.reduce(
+          (acc, s) => acc + (Number(s.grossProfit) || 0),
+          0,
+        ),
+      ),
+    [salesRows],
+  );
 
   // ========= Balance CAJA (NO se infla) =========
   const ledgerWithCashBalance = useMemo(() => {
@@ -2730,6 +2745,14 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
         {saldoDrawerTab === "ventas" ? (
           <>
+            <div className="mt-3 rounded-xl border border-emerald-200/90 bg-gradient-to-br from-emerald-50/95 to-white px-3 py-3 shadow-sm">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800/90">
+                Utilidad bruta acumulada (ventas cash)
+              </div>
+              <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
+                {money(ventasCashUbAcumulada)}
+              </div>
+            </div>
             <DrawerSectionTitle>Ventas Cash ({salesRows.length})</DrawerSectionTitle>
             <div className="mt-2 space-y-2">
               {salesRows.length === 0 ? (
@@ -2755,6 +2778,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                         value: money(s.amount),
                         ddClassName:
                           "text-sm font-bold tabular-nums text-green-700",
+                      },
+                      {
+                        label: "Utilidad bruta",
+                        value: money(s.grossProfit),
+                        ddClassName:
+                          "text-sm font-semibold tabular-nums text-emerald-800",
                       },
                     ]}
                   />

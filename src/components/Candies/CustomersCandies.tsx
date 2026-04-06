@@ -25,6 +25,13 @@ import {
   commissionFromSaleDoc,
   saleTotalFromDoc,
 } from "../../Services/commissionAbonoCandies";
+import {
+  distribuirAbonoEntrePendientes,
+  getOldestPendingSaleId,
+  listPendingSaleIdsOldestFirst,
+  mergeDistribucionConPendientesSinCobro,
+  type AbonoDistribuido,
+} from "../../utils/creditAccountAbono";
 import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
 import RefreshButton from "../common/RefreshButton";
 import CommissionAbonoHelpButton from "../common/CommissionAbonoHelpModal";
@@ -37,6 +44,7 @@ import {
 import MobileKpiTwoColumn from "../common/MobileKpiTwoColumn";
 import Toast from "../common/Toast";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Button from "../common/Button";
 
 const PLACES = [
   "Altagracia",
@@ -429,6 +437,101 @@ async function deleteARMovesBySaleId(saleId: string) {
   );
 }
 
+type CandySaleLineRow = {
+  productName: string;
+  qty: number;
+  unitPrice: number;
+  discount?: number;
+  total: number;
+  lineCommission: number;
+  commissionPerPackage: number;
+};
+
+/** Líneas de venta dulces (reutiliza la misma lógica que el drawer de detalle). */
+async function fetchCandiesSaleLines(
+  saleId: string,
+  sellersPreloaded?: Awaited<
+    ReturnType<typeof fetchSellersCandiesCommissionMap>
+  >,
+): Promise<{
+  rows: CandySaleLineRow[];
+  data: any;
+  commissionTotal: number;
+  /** yyyy-MM-dd preferente */
+  saleDateLabel: string;
+} | null> {
+  const byId = await getDoc(doc(db, "sales_candies", saleId));
+  let data: any = null;
+
+  if (byId.exists()) {
+    data = byId.data();
+  } else {
+    const snap = await getDocs(
+      query(collection(db, "sales_candies"), where("name", "==", saleId)),
+    );
+    data = snap.docs[0]?.data();
+  }
+
+  if (!data) return null;
+
+  let arr: any[] = [];
+  if (Array.isArray(data?.items)) arr = data.items;
+  else if (data?.items && typeof data.items === "object") {
+    try {
+      arr = Object.values(data.items);
+    } catch {
+      arr = [];
+    }
+  } else if (data?.item) arr = [data.item];
+
+  const sellers =
+    sellersPreloaded ?? (await fetchSellersCandiesCommissionMap());
+  const commissionTotal = commissionFromSaleDoc(data, sellers);
+
+  const rowsRaw = arr.map((it: any) => ({
+    productName: String(it.productName || ""),
+    qty: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
+    unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? it.price ?? 0),
+    discount: Number(it.discount || 0),
+    total: Number(it.total ?? it.lineFinal ?? it.amount ?? 0),
+    marginRaw: Number(it.margenVendedor || 0),
+  }));
+
+  const sumMargin = rowsRaw.reduce((a, r) => a + r.marginRaw, 0);
+  const sumLineTot = rowsRaw.reduce((a, r) => a + r.total, 0);
+
+  const rows = rowsRaw.map((r) => {
+    let lineComm = r.marginRaw;
+    if (
+      !(lineComm > 0.005) &&
+      sumMargin < 0.005 &&
+      sumLineTot > 0 &&
+      commissionTotal > 0
+    ) {
+      lineComm = roundCurrency((r.total / sumLineTot) * commissionTotal);
+    }
+    const commPerPkg = r.qty > 0 ? roundCurrency(lineComm / r.qty) : 0;
+    return {
+      productName: r.productName,
+      qty: r.qty,
+      unitPrice: r.unitPrice,
+      discount: r.discount,
+      total: r.total,
+      lineCommission: roundCurrency(lineComm),
+      commissionPerPackage: commPerPkg,
+    };
+  });
+
+  const saleDateLabel =
+    data?.date != null
+      ? String(data.date).slice(0, 10)
+      : data?.createdAt?.toDate?.()
+        ? data.createdAt.toDate().toISOString().slice(0, 10)
+        : "";
+
+  return { rows, data, commissionTotal, saleDateLabel };
+}
+
 async function removeAbonoFromSaleByMovementId(
   saleId: string | undefined,
   movementId: string,
@@ -528,6 +631,26 @@ export default function CustomersCandy({
   const [statementHeaderMenuRect, setStatementHeaderMenuRect] =
     useState<DOMRect | null>(null);
 
+  const [multiAbonoOpen, setMultiAbonoOpen] = useState(false);
+  const [multiAbonoInput, setMultiAbonoInput] = useState("");
+  const [multiAbonoDate, setMultiAbonoDate] = useState(() =>
+    formatLocalDate(new Date()),
+  );
+  const [multiAbonoDistrib, setMultiAbonoDistrib] = useState<
+    AbonoDistribuido[] | null
+  >(null);
+  const [multiAbonoComment, setMultiAbonoComment] = useState("");
+  const [multiAbonoLinesBySaleId, setMultiAbonoLinesBySaleId] = useState<
+    Record<string, CandySaleLineRow[]>
+  >({});
+  const [multiAbonoSaleDateBySaleId, setMultiAbonoSaleDateBySaleId] = useState<
+    Record<string, string>
+  >({});
+  const [multiAbonoLinesLoading, setMultiAbonoLinesLoading] = useState(false);
+  /** Avisos solo visibles dentro del drawer de abono múltiple (validaciones, errores). */
+  const [multiAbonoNotice, setMultiAbonoNotice] = useState("");
+  const [savingMultiAbono, setSavingMultiAbono] = useState(false);
+
   const openItemsDrawer = async (saleId: string) => {
     setDrawerSaleTab("ventas");
     setItemsDrawerOpen(true);
@@ -537,70 +660,18 @@ export default function CustomersCandy({
     setItemsDrawerMeta(null);
 
     try {
-      // ✅ más robusto: primero por ID del doc
-      const byId = await getDoc(doc(db, "sales_candies", saleId));
-      let data: any = null;
-
-      if (byId.exists()) {
-        data = byId.data();
-      } else {
-        // fallback por campo "name" (por si así lo guardaste)
-        const snap = await getDocs(
-          query(collection(db, "sales_candies"), where("name", "==", saleId)),
-        );
-        data = snap.docs[0]?.data();
+      const res = await fetchCandiesSaleLines(saleId);
+      if (!res) {
+        setItemsModalRows([]);
+        setItemsDrawerMeta({
+          totalPackages: 0,
+          saleAmount: 0,
+          commissionTotal: 0,
+          saleDate: undefined,
+        });
+        return;
       }
-
-      let arr: any[] = [];
-      if (Array.isArray(data?.items)) arr = data.items;
-      else if (data?.items && typeof data.items === "object") {
-        try {
-          arr = Object.values(data.items);
-        } catch (e) {
-          arr = [];
-        }
-      } else if (data?.item) arr = [data.item];
-
-      const sellers = await fetchSellersCandiesCommissionMap();
-      const commissionTotal = data
-        ? commissionFromSaleDoc(data, sellers)
-        : 0;
-
-      const rowsRaw = arr.map((it: any) => ({
-        productName: String(it.productName || ""),
-        qty: Number(it.packages ?? it.qty ?? it.quantity ?? 0),
-        unitPrice: Number(it.unitPricePackage ?? it.unitPrice ?? it.price ?? 0),
-        discount: Number(it.discount || 0),
-        total: Number(it.total ?? it.lineFinal ?? it.amount ?? 0),
-        marginRaw: Number(it.margenVendedor || 0),
-      }));
-
-      const sumMargin = rowsRaw.reduce((a, r) => a + r.marginRaw, 0);
-      const sumLineTot = rowsRaw.reduce((a, r) => a + r.total, 0);
-
-      const rows = rowsRaw.map((r) => {
-        let lineComm = r.marginRaw;
-        if (
-          !(lineComm > 0.005) &&
-          sumMargin < 0.005 &&
-          sumLineTot > 0 &&
-          commissionTotal > 0
-        ) {
-          lineComm = roundCurrency((r.total / sumLineTot) * commissionTotal);
-        }
-        const commPerPkg =
-          r.qty > 0 ? roundCurrency(lineComm / r.qty) : 0;
-        return {
-          productName: r.productName,
-          qty: r.qty,
-          unitPrice: r.unitPrice,
-          discount: r.discount,
-          total: r.total,
-          lineCommission: roundCurrency(lineComm),
-          commissionPerPackage: commPerPkg,
-        };
-      });
-
+      const { rows, data, commissionTotal } = res;
       setItemsModalRows(rows);
 
       const totalPk = rows.reduce((a, r) => a + r.qty, 0);
@@ -680,6 +751,10 @@ export default function CustomersCandy({
   const [abonoTargetSaleId, setAbonoTargetSaleId] = useState<string | null>(
     null,
   );
+  /** Modal pago total (comentario antes de registrar). */
+  const [showPagoTotalModal, setShowPagoTotalModal] = useState(false);
+  const [pagoTotalSaleId, setPagoTotalSaleId] = useState<string | null>(null);
+  const [pagoTotalComment, setPagoTotalComment] = useState("");
   const [saleMenuAnchor, setSaleMenuAnchor] = useState<{
     saleId: string;
     rect: DOMRect;
@@ -782,79 +857,79 @@ export default function CustomersCandy({
         });
       });
 
-      // Saldos + último abono
-      for (const c of list) {
-        try {
-          const qMov = query(
-            collection(db, "ar_movements"),
-            where("customerId", "==", c.id),
-          );
-          const mSnap = await getDocs(qMov);
+      // Saldos + último abono (en paralelo para no dilatar N×Firestore)
+      await Promise.all(
+        list.map(async (c) => {
+          try {
+            const qMov = query(
+              collection(db, "ar_movements"),
+              where("customerId", "==", c.id),
+            );
+            const mSnap = await getDocs(qMov);
 
-          let sumMov = 0;
-          let lastAbono: any = null;
-          const movements: MovementRow[] = [];
+            let sumMov = 0;
+            let lastAbono: any = null;
+            const movements: MovementRow[] = [];
 
-          mSnap.forEach((m) => {
-            const x = m.data() as any;
-            const amt = Number(x.amount || 0);
-            sumMov += amt;
+            mSnap.forEach((m) => {
+              const x = m.data() as any;
+              const amt = Number(x.amount || 0);
+              sumMov += amt;
 
-            const d =
-              x.date ??
-              (x.createdAt?.toDate?.()
-                ? x.createdAt.toDate().toISOString().slice(0, 10)
-                : "");
+              const d =
+                x.date ??
+                (x.createdAt?.toDate?.()
+                  ? x.createdAt.toDate().toISOString().slice(0, 10)
+                  : "");
 
-            movements.push({
-              id: m.id,
-              date: d,
-              type:
-                (x.type as "CARGO" | "ABONO") ??
-                (amt < 0 ? "ABONO" : "CARGO"),
-              amount: amt,
-              ref: x.ref || {},
-              comment: x.comment || "",
-              createdAt: x.createdAt,
+              movements.push({
+                id: m.id,
+                date: d,
+                type:
+                  (x.type as "CARGO" | "ABONO") ??
+                  (amt < 0 ? "ABONO" : "CARGO"),
+                amount: amt,
+                ref: x.ref || {},
+                comment: x.comment || "",
+                createdAt: x.createdAt,
+              });
+
+              if (amt < 0) {
+                const ts = x.createdAt?.seconds
+                  ? Number(x.createdAt.seconds)
+                  : 0;
+
+                if (!lastAbono || ts >= lastAbono.ts) {
+                  lastAbono = { date: d, amount: Math.abs(amt), ts };
+                }
+              }
             });
 
-            // detectar abonos (negativos)
-            if (amt < 0) {
-              const ts = x.createdAt?.seconds
-                ? Number(x.createdAt.seconds)
-                : 0;
+            const init = Number(c.initialDebt || 0);
+            const effectiveInit = getEffectiveInitialDebt(
+              init,
+              String(c.initialDebtDate || ""),
+              movements,
+            );
 
-              if (!lastAbono || ts >= lastAbono.ts) {
-                lastAbono = { date: d, amount: Math.abs(amt), ts };
-              }
+            c.balance = effectiveInit + sumMov;
+
+            if (lastAbono) {
+              c.lastAbonoDate = lastAbono?.date;
+              c.lastAbonoAmount = lastAbono?.amount;
+            } else {
+              c.lastAbonoDate = "";
+              c.lastAbonoAmount = 0;
             }
-          });
 
-          const init = Number(c.initialDebt || 0);
-          const effectiveInit = getEffectiveInitialDebt(
-            init,
-            String(c.initialDebtDate || ""),
-            movements,
-          );
-
-          // ✅ balance incluye deuda inicial efectiva
-          c.balance = effectiveInit + sumMov;
-
-          if (lastAbono) {
-            c.lastAbonoDate = lastAbono?.date;
-            c.lastAbonoAmount = lastAbono?.amount;
-          } else {
+            await loadLastSaleForCustomer(c);
+          } catch {
+            c.balance = Number(c.initialDebt || 0);
             c.lastAbonoDate = "";
             c.lastAbonoAmount = 0;
           }
-
-          await loadLastSaleForCustomer(c);
-        } catch {
-          c.balance = Number(c.initialDebt || 0);
-          c.lastAbonoDate = "";
-          c.lastAbonoAmount = 0;
-        }
-      }
+        }),
+      );
 
       setRows(list);
     } catch (e) {
@@ -1370,6 +1445,34 @@ export default function CustomersCandy({
     return buildSaleAbonoLedger(stRows, saleLedgerSaleId);
   }, [stRows, saleLedgerSaleId]);
 
+  const oldestPendingSaleId = useMemo(
+    () =>
+      getOldestPendingSaleId(
+        stRows,
+        normalizeDebtStatus,
+        getPendingForSale,
+        getCargoSaleDate,
+      ),
+    [stRows],
+  );
+
+  const pendingCreditKpi = useMemo(() => {
+    const ids = listPendingSaleIdsOldestFirst(
+      stRows,
+      normalizeDebtStatus,
+      getPendingForSale,
+      getCargoSaleDate,
+    );
+    let totalPend = 0;
+    for (const sid of ids) {
+      totalPend += getPendingForSale(stRows, sid);
+    }
+    return {
+      count: ids.length,
+      totalPendiente: roundCurrency(totalPend),
+    };
+  }, [stRows]);
+
   /** Panel de edición (compra/abono de la venta): en modal principal o en «Cuenta de la venta». */
   const showLedgerStyleEditPanel =
     !!editMovId &&
@@ -1434,6 +1537,21 @@ export default function CustomersCandy({
     if (!abonoDate) {
       setMsg("Selecciona la fecha del abono.");
       return;
+    }
+
+    const oldest = getOldestPendingSaleId(
+      stRows,
+      normalizeDebtStatus,
+      getPendingForSale,
+      getCargoSaleDate,
+    );
+    if (oldest) {
+      if (!abonoTargetSaleId || abonoTargetSaleId !== oldest) {
+        setMsg(
+          "Hay ventas a crédito pendientes: primero aboná la factura más antigua.",
+        );
+        return;
+      }
     }
 
     if (abonoTargetSaleId) {
@@ -1534,12 +1652,22 @@ export default function CustomersCandy({
     }
   };
 
-  const payFullSale = async (saleId: string) => {
+  const openPagoTotalModal = (saleId: string) => {
     if (!stCustomer) return;
     setMsg("");
     const pending = getPendingForSale(stRows, saleId);
     if (!(pending > 0.005)) {
       setMsg("No hay saldo pendiente para esta venta.");
+      return;
+    }
+    const oldestPay = getOldestPendingSaleId(
+      stRows,
+      normalizeDebtStatus,
+      getPendingForSale,
+      getCargoSaleDate,
+    );
+    if (oldestPay && saleId !== oldestPay) {
+      setMsg("Solo podés pagar primero la factura más antigua pendiente.");
       return;
     }
     const cargo = stRows.find(
@@ -1552,6 +1680,54 @@ export default function CustomersCandy({
       setMsg("No se encontró el cargo de esta venta.");
       return;
     }
+    const payDate = formatLocalDate(new Date());
+    const saleD = (cargo.date || "").slice(0, 10);
+    if (saleD && payDate < saleD) {
+      setMsg(
+        `La fecha de pago no puede ser anterior a la fecha de la venta (${saleD}).`,
+      );
+      return;
+    }
+    setPagoTotalSaleId(saleId);
+    setPagoTotalComment("");
+    setShowPagoTotalModal(true);
+  };
+
+  const executePayFullSale = async () => {
+    const saleId = pagoTotalSaleId;
+    if (!saleId || !stCustomer) return;
+    setMsg("");
+    const pending = getPendingForSale(stRows, saleId);
+    if (!(pending > 0.005)) {
+      setMsg("No hay saldo pendiente para esta venta.");
+      setShowPagoTotalModal(false);
+      setPagoTotalSaleId(null);
+      return;
+    }
+    const oldestPay = getOldestPendingSaleId(
+      stRows,
+      normalizeDebtStatus,
+      getPendingForSale,
+      getCargoSaleDate,
+    );
+    if (oldestPay && saleId !== oldestPay) {
+      setMsg("Solo podés pagar primero la factura más antigua pendiente.");
+      setShowPagoTotalModal(false);
+      setPagoTotalSaleId(null);
+      return;
+    }
+    const cargo = stRows.find(
+      (m) =>
+        m.type === "CARGO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) > 0,
+    );
+    if (!cargo) {
+      setMsg("No se encontró el cargo de esta venta.");
+      setShowPagoTotalModal(false);
+      setPagoTotalSaleId(null);
+      return;
+    }
     const payAmt = roundCurrency(pending);
     const payDate = formatLocalDate(new Date());
     const saleD = (cargo.date || "").slice(0, 10);
@@ -1561,11 +1737,10 @@ export default function CustomersCandy({
       );
       return;
     }
-
-    const okPay = confirm(
-      `¿Confirmar el pago total de esta factura por ${money(payAmt)}?`,
-    );
-    if (!okPay) return;
+    const userNote = pagoTotalComment.trim();
+    const comment = userNote
+      ? `${FULL_PAYMENT_COMMENT_PREFIX} (${saleId.slice(0, 8)}…) — ${userNote}`
+      : `${FULL_PAYMENT_COMMENT_PREFIX} (${saleId.slice(0, 8)}…)`;
 
     try {
       setSavingAbono(true);
@@ -1574,7 +1749,7 @@ export default function CustomersCandy({
         type: "ABONO",
         amount: -payAmt,
         date: payDate,
-        comment: `${FULL_PAYMENT_COMMENT_PREFIX} (${saleId.slice(0, 8)}…)`,
+        comment,
         createdAt: Timestamp.now(),
         ref: { saleId },
         vendorId: stCustomer.vendorId || "",
@@ -1626,12 +1801,168 @@ export default function CustomersCandy({
           : prev,
       );
 
+      setShowPagoTotalModal(false);
+      setPagoTotalSaleId(null);
+      setPagoTotalComment("");
       setMsg("✅ Factura pagada");
     } catch (e) {
       console.error(e);
       setMsg("❌ Error al registrar el pago");
     } finally {
       setSavingAbono(false);
+    }
+  };
+
+  const calcularAbonoMultiple = async () => {
+    setMultiAbonoNotice("");
+    setMultiAbonoLinesBySaleId({});
+    setMultiAbonoSaleDateBySaleId({});
+    const raw = String(multiAbonoInput || "").replace(",", ".");
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n) || !(n > 0)) {
+      setMultiAbonoNotice("Ingresa un monto válido mayor a 0.");
+      setMultiAbonoDistrib(null);
+      return;
+    }
+    const tope = roundCurrency(pendingCreditKpi.totalPendiente);
+    if (n > tope + 0.001) {
+      setMultiAbonoNotice(
+        `El monto no puede ser mayor al total pendiente (${money(tope)}).`,
+      );
+      setMultiAbonoDistrib(null);
+      return;
+    }
+    const dist = distribuirAbonoEntrePendientes(
+      stRows,
+      n,
+      normalizeDebtStatus,
+      getPendingForSale,
+      getCargoSaleDate,
+    );
+    const merged = mergeDistribucionConPendientesSinCobro(
+      stRows,
+      dist,
+      normalizeDebtStatus,
+      getPendingForSale,
+      getCargoSaleDate,
+    );
+    setMultiAbonoDistrib(merged);
+    if (!merged.length) {
+      setMultiAbonoNotice("No hay ventas pendientes para aplicar el abono.");
+      return;
+    }
+    setMultiAbonoLinesLoading(true);
+    try {
+      const sellers = await fetchSellersCandiesCommissionMap();
+      const entries = await Promise.all(
+        merged.map(async (d) => {
+          const res = await fetchCandiesSaleLines(d.saleId, sellers);
+          const saleDate =
+            (res?.saleDateLabel || "").trim() ||
+            getCargoSaleDate(stRows, d.saleId) ||
+            "";
+          return [
+            d.saleId,
+            { rows: res?.rows ?? [], saleDate },
+          ] as const;
+        }),
+      );
+      setMultiAbonoLinesBySaleId(
+        Object.fromEntries(entries.map(([id, v]) => [id, v.rows])),
+      );
+      setMultiAbonoSaleDateBySaleId(
+        Object.fromEntries(entries.map(([id, v]) => [id, v.saleDate])),
+      );
+      setMultiAbonoNotice("");
+    } catch (e) {
+      console.error(e);
+      setMultiAbonoNotice("❌ Error cargando líneas de venta.");
+    } finally {
+      setMultiAbonoLinesLoading(false);
+    }
+  };
+
+  const registerMultiAbonos = async () => {
+    if (!stCustomer || !multiAbonoDistrib?.length) return;
+    setMsg("");
+    setMultiAbonoNotice("");
+    const aRegistrar = multiAbonoDistrib.filter(
+      (d) => d.abonoCalculado > 0.005,
+    );
+    if (!aRegistrar.length) {
+      setMultiAbonoNotice("No hay abonos calculados para registrar.");
+      return;
+    }
+    const totalAb = roundCurrency(
+      aRegistrar.reduce((a, d) => a + d.abonoCalculado, 0),
+    );
+    const ok = confirm(
+      `¿Registrar ${aRegistrar.length} abono(s) por un total de ${money(totalAb)}?`,
+    );
+    if (!ok) return;
+    try {
+      setSavingMultiAbono(true);
+      const abonoAt = Timestamp.now();
+      const comBase = String(multiAbonoComment || "").trim();
+      for (const d of aRegistrar) {
+        const suf = `Abono múltiple (${d.saleId.slice(0, 8)}…)`;
+        const comment = comBase ? `${comBase} — ${suf}` : suf;
+        await addDoc(collection(db, "ar_movements"), {
+          customerId: stCustomer.id,
+          type: "ABONO",
+          amount: -d.abonoCalculado,
+          date: multiAbonoDate,
+          comment,
+          createdAt: abonoAt,
+          ref: { saleId: d.saleId },
+          vendorId: stCustomer.vendorId || "",
+          vendorName: stCustomer.vendorName || "",
+        });
+      }
+      await syncAbonoCommissionsForCustomer(stCustomer.id);
+      let newList = await fetchMovementRowsForCustomer(stCustomer.id);
+      for (const d of aRegistrar) {
+        newList = await syncCargoDebtStatusForSaleId(newList, d.saleId);
+      }
+      setStRows(newList);
+      recomputeKpis(
+        newList,
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+      );
+      const sumMov = newList.reduce(
+        (acc, it) => acc + (Number(it.amount) || 0),
+        0,
+      );
+      const effectiveInit = getEffectiveInitialDebt(
+        Number(stCustomer.initialDebt || 0),
+        String(stCustomer.initialDebtDate || ""),
+        newList,
+      );
+      const nuevoSaldo = Number(effectiveInit || 0) + sumMov;
+      setRows((prev) =>
+        prev.map((c) =>
+          c.id === stCustomer.id ? { ...c, balance: nuevoSaldo } : c,
+        ),
+      );
+      setStCustomer((prev) =>
+        prev ? { ...prev, balance: nuevoSaldo } : prev,
+      );
+      setMultiAbonoDistrib(null);
+      setMultiAbonoInput("");
+      setMultiAbonoComment("");
+      setMultiAbonoLinesBySaleId({});
+      setMultiAbonoSaleDateBySaleId({});
+      setMultiAbonoOpen(false);
+      setMsg("✅ Abonos múltiples registrados");
+      window.alert(
+        `Registro completado.\nSe registraron ${aRegistrar.length} abono(s) por un total de ${money(totalAb)}.`,
+      );
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error al registrar abonos");
+    } finally {
+      setSavingMultiAbono(false);
     }
   };
 
@@ -3993,6 +4324,62 @@ export default function CustomersCandy({
                 </div>
               </div>
             )}
+
+            {showPagoTotalModal && pagoTotalSaleId && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[92]">
+                <div className="bg-white rounded-lg shadow-2xl border w-[95%] max-w-md p-4">
+                  <h3 className="text-lg font-bold">Pago total de factura</h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Cliente: {stCustomer?.name || "—"}
+                  </p>
+                  <p className="text-sm mt-2">
+                    Monto a pagar:{" "}
+                    <span className="font-semibold tabular-nums">
+                      {money(
+                        getPendingForSale(stRows, pagoTotalSaleId),
+                      )}
+                    </span>
+                  </p>
+                  <div className="mt-3">
+                    <label className="block text-sm font-semibold">
+                      Comentario del pago
+                    </label>
+                    <textarea
+                      className="w-full border p-2 rounded resize-y min-h-20 mt-1"
+                      value={pagoTotalComment}
+                      onChange={(e) => setPagoTotalComment(e.target.value)}
+                      maxLength={250}
+                      placeholder="Ej. Efectivo, transferencia…"
+                    />
+                    <div className="text-xs text-gray-500 text-right mt-1">
+                      {pagoTotalComment.length}/250
+                    </div>
+                  </div>
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                      onClick={() => {
+                        setShowPagoTotalModal(false);
+                        setPagoTotalSaleId(null);
+                        setPagoTotalComment("");
+                      }}
+                      disabled={savingAbono}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+                      onClick={() => void executePayFullSale()}
+                      disabled={savingAbono}
+                    >
+                      {savingAbono ? "Guardando…" : "Confirmar pago total"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -4008,7 +4395,13 @@ export default function CustomersCandy({
               className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
               onClick={() => {
                 setStatementHeaderMenuRect(null);
-                setAbonoTargetSaleId(null);
+                const oldestId = getOldestPendingSaleId(
+                  stRows,
+                  normalizeDebtStatus,
+                  getPendingForSale,
+                  getCargoSaleDate,
+                );
+                setAbonoTargetSaleId(oldestId);
                 setAbonoAmount(0);
                 setAbonoDate(formatLocalDate(new Date()));
                 setAbonoComment("");
@@ -4022,8 +4415,33 @@ export default function CustomersCandy({
               className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
               onClick={() => {
                 setStatementHeaderMenuRect(null);
+                setMultiAbonoInput("");
+                setMultiAbonoDistrib(null);
+                setMultiAbonoNotice("");
+                setMultiAbonoLinesBySaleId({});
+                setMultiAbonoSaleDateBySaleId({});
+                setMultiAbonoDate(formatLocalDate(new Date()));
+                setMultiAbonoOpen(true);
+              }}
+            >
+              Abono múltiple
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+              onClick={() => {
+                setStatementHeaderMenuRect(null);
                 setShowStatement(false);
                 setItemsDrawerOpen(false);
+                setMultiAbonoOpen(false);
+                setMultiAbonoDistrib(null);
+                setMultiAbonoComment("");
+                setMultiAbonoNotice("");
+                setMultiAbonoLinesBySaleId({});
+                setMultiAbonoSaleDateBySaleId({});
+                setShowPagoTotalModal(false);
+                setPagoTotalSaleId(null);
+                setPagoTotalComment("");
               }}
             >
               Cerrar
@@ -4054,6 +4472,10 @@ export default function CustomersCandy({
                 );
               }
               const pend = getPendingForSale(stRows, sid);
+              const bloqueadoPorOrden =
+                oldestPendingSaleId &&
+                sid !== oldestPendingSaleId &&
+                pend > 0.005;
               return (
                 <div className="py-1">
                   <button
@@ -4064,15 +4486,34 @@ export default function CustomersCandy({
                       void openItemsDrawer(sid);
                     }}
                   >
-                    Ver detalle de compra
+                    Ver venta
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => {
+                      setSaleMenuAnchor(null);
+                      setSaleLedgerSaleId(sid);
+                    }}
+                  >
+                    Ver abonos
                   </button>
                   <button
                     type="button"
                     className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
-                    disabled={savingAbono || !(pend > 0.005)}
+                    disabled={
+                      savingAbono ||
+                      !(pend > 0.005) ||
+                      Boolean(bloqueadoPorOrden)
+                    }
+                    title={
+                      bloqueadoPorOrden
+                        ? "Primero la factura más antigua pendiente"
+                        : undefined
+                    }
                     onClick={() => {
                       setSaleMenuAnchor(null);
-                      void payFullSale(sid);
+                      openPagoTotalModal(sid);
                     }}
                   >
                     Pagar
@@ -4080,7 +4521,16 @@ export default function CustomersCandy({
                   <button
                     type="button"
                     className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
-                    disabled={savingAbono || !(pend > 0.005)}
+                    disabled={
+                      savingAbono ||
+                      !(pend > 0.005) ||
+                      Boolean(bloqueadoPorOrden)
+                    }
+                    title={
+                      bloqueadoPorOrden
+                        ? "Primero la factura más antigua pendiente"
+                        : undefined
+                    }
                     onClick={() => {
                       setSaleMenuAnchor(null);
                       setAbonoTargetSaleId(sid);
@@ -4092,16 +4542,7 @@ export default function CustomersCandy({
                   >
                     Abonar
                   </button>
-                  <button
-                    type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
-                    onClick={() => {
-                      setSaleMenuAnchor(null);
-                      setSaleLedgerSaleId(sid);
-                    }}
-                  >
-                    Movimientos
-                  </button>
+               
                   {stRows.some(
                     (m) =>
                       m.type === "ABONO" &&
@@ -4130,7 +4571,7 @@ export default function CustomersCandy({
                           startEditMovement(cargoM);
                         }}
                       >
-                        Editar movimiento
+                        Editar venta
                       </button>
                       <button
                         type="button"
@@ -4643,6 +5084,231 @@ export default function CustomersCandy({
             )}
           </>
         )}
+      </SlideOverDrawer>
+
+      <SlideOverDrawer
+        open={multiAbonoOpen}
+        onClose={() => {
+          setMultiAbonoOpen(false);
+          setMultiAbonoDistrib(null);
+          setMultiAbonoComment("");
+          setMultiAbonoNotice("");
+          setMultiAbonoLinesBySaleId({});
+          setMultiAbonoSaleDateBySaleId({});
+        }}
+        title="Abono múltiple"
+        subtitle="Distribución del monto entre facturas pendientes (más antigua primero)"
+        titleId="candies-multi-abono-title"
+        zIndexClassName="z-[79]"
+        panelMaxWidthClassName="max-w-lg"
+      >
+        <div className="space-y-4 px-1 pb-6">
+          <DrawerMoneyStrip
+            items={[
+              {
+                label: "Facturas pendientes",
+                value: String(pendingCreditKpi.count),
+                tone: "slate",
+              },
+              {
+                label: "Total pendiente",
+                value: money(pendingCreditKpi.totalPendiente),
+                tone: "emerald",
+              },
+            ]}
+          />
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Fecha de los abonos
+            </label>
+            <input
+              type="date"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              value={multiAbonoDate}
+              onChange={(e) => setMultiAbonoDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Monto a distribuir
+            </label>
+            <input
+              type="text"
+              inputMode="decimal"
+              placeholder="Ingrese abono"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums"
+              value={multiAbonoInput}
+              onChange={(e) => {
+                const v = e.target.value;
+                setMultiAbonoInput(v);
+                if (String(v).trim() === "") {
+                  setMultiAbonoDistrib(null);
+                  setMultiAbonoLinesBySaleId({});
+                  setMultiAbonoSaleDateBySaleId({});
+                  setMultiAbonoNotice("");
+                }
+              }}
+            />
+            {multiAbonoNotice ? (
+              <div
+                role="alert"
+                className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+              >
+                {multiAbonoNotice}
+              </div>
+            ) : null}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Comentario de abono (opcional)
+            </label>
+            <textarea
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-y min-h-[72px]"
+              placeholder="Ej. Abono en efectivo"
+              value={multiAbonoComment}
+              onChange={(e) => setMultiAbonoComment(e.target.value)}
+              maxLength={250}
+            />
+          </div>
+          <Button
+            type="button"
+            variant="primary"
+            className="w-full rounded-xl"
+            disabled={multiAbonoLinesLoading}
+            onClick={() => void calcularAbonoMultiple()}
+          >
+            {multiAbonoLinesLoading ? "Cargando…" : "Calcular distribución"}
+          </Button>
+
+          {multiAbonoDistrib && multiAbonoDistrib.length > 0 ? (
+            <div className="space-y-3">
+              <DrawerSectionTitle>Distribución de abonos</DrawerSectionTitle>
+              {multiAbonoDistrib.map((d) => {
+                const lines = multiAbonoLinesBySaleId[d.saleId] ?? [];
+                const ventaFecha =
+                  multiAbonoSaleDateBySaleId[d.saleId] ||
+                  getCargoSaleDate(stRows, d.saleId) ||
+                  "";
+                const wrapTone = d.pagadoCompleto
+                  ? "border-emerald-300 bg-emerald-50/90"
+                  : d.abonoCalculado > 0.005
+                    ? "border-amber-300 bg-amber-50/90"
+                    : "border-red-300 bg-red-50/90";
+                return (
+                  <div
+                    key={d.saleId}
+                    className={`rounded-xl border p-3 shadow-sm ${wrapTone}`}
+                  >
+                    <div className="text-sm font-semibold text-slate-900">
+                      Venta ID: #{d.saleId.slice(0, 12000)}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-600">
+                      Fecha venta:{" "}
+                      <span className="font-medium text-slate-800 tabular-nums">
+                        {ventaFecha || "—"}
+                      </span>
+                    </div>
+                    {multiAbonoLinesLoading && lines.length === 0 ? (
+                      <p className="mt-2 text-xs text-slate-600">
+                        Cargando líneas…
+                      </p>
+                    ) : (
+                      <div className="mt-2 space-y-2">
+                        {lines.length === 0 ? (
+                          <p className="text-xs text-slate-600">
+                            Sin líneas de producto en la venta.
+                          </p>
+                        ) : (
+                          lines.map((it, idx) => (
+                            <DrawerDetailDlCard
+                              key={`${d.saleId}-${idx}`}
+                              className="!bg-white/85 border-slate-200"
+                              title={`Línea ${idx + 1}`}
+                              rows={[
+                                {
+                                  label: "Producto",
+                                  value: it.productName || "—",
+                                },
+                                {
+                                  label: "Paquetes",
+                                  value: String(it.qty),
+                                },
+                                {
+                                  label: "Precio unitario",
+                                  value: money(it.unitPrice),
+                                },
+                                {
+                                  label: "Descuento",
+                                  value:
+                                    it.discount != null && it.discount > 0.005
+                                      ? money(it.discount)
+                                      : "—",
+                                },
+                                {
+                                  label: "Monto",
+                                  value: money(it.total),
+                                },
+                                {
+                                  label: "Comisión línea",
+                                  value: money(it.lineCommission),
+                                },
+                                {
+                                  label: "Comisión/paquete",
+                                  value: money(it.commissionPerPackage),
+                                },
+                              ]}
+                            />
+                          ))
+                        )}
+                      </div>
+                    )}
+                    <div className="mt-3 grid grid-cols-1 gap-2 border-t border-slate-200/80 pt-3 sm:grid-cols-2">
+                      <div>
+                        <div className="text-[11px] text-slate-600">
+                          Abono distribuido
+                        </div>
+                        <div
+                          className={`text-sm font-semibold tabular-nums ${
+                            d.pagadoCompleto
+                              ? "text-emerald-700"
+                              : "text-emerald-700"
+                          }`}
+                        >
+                          {d.pagadoCompleto ? "Pagado" : money(d.abonoCalculado)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-slate-600">
+                          Saldo final
+                        </div>
+                        <div
+                          className={`text-sm font-semibold tabular-nums ${
+                            d.saldoFinal <= 0.005
+                              ? "text-emerald-700"
+                              : "text-red-600"
+                          }`}
+                        >
+                          {d.pagadoCompleto
+                            ? money(0)
+                            : money(d.saldoFinal)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <Button
+                type="button"
+                variant="primary"
+                className="w-full rounded-xl"
+                disabled={savingMultiAbono || multiAbonoLinesLoading}
+                onClick={() => void registerMultiAbonos()}
+              >
+                {savingMultiAbono ? "Guardando…" : "Registrar abonos"}
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </SlideOverDrawer>
     </div>
   );

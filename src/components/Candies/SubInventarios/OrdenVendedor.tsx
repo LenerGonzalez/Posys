@@ -4178,18 +4178,21 @@ export default function VendorCandyOrders({
       {!loading && (
         <>
           {/* Desktop table */}
-          <div className="hidden md:block bg-white border border-slate-200 rounded-xl shadow-sm overflow-x-auto max-w-full">
-            <div className="p-3 border-b flex items-center justify-between">
-              <div className="text-sm text-gray-700">
-                Total pedidos: <b>{orderSummaries.length}</b>
+          <div className="hidden max-w-full overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/[0.04] md:block">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200/90 bg-gradient-to-r from-slate-50 to-white px-4 py-3">
+              <div className="text-sm text-slate-700">
+                <span className="font-semibold text-slate-900">
+                  {orderSummaries.length}
+                </span>{" "}
+                pedido{orderSummaries.length === 1 ? "" : "s"}
               </div>
 
               {isAdmin ? (
                 <ActionMenuTrigger
-                  className="shrink-0 !h-10 !w-10"
+                  className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                   aria-label="Acciones del listado"
                   title="Nuevo pedido, sincronizar, actualizar Firestore"
-                  iconClassName="h-[22px] w-[22px] text-gray-700"
+                  iconClassName="h-[22px] w-[22px] text-slate-700"
                   onClick={(e) =>
                     setVendorListToolbarMenu({
                       rect: (
@@ -4201,10 +4204,10 @@ export default function VendorCandyOrders({
               ) : null}
             </div>
 
-            <div className="overflow-x-auto max-w-full w-full">
+            <div className="w-full max-w-full overflow-x-auto">
               <table className="w-full table-fixed text-xs">
-                <thead className="bg-slate-100 sticky top-0 z-10">
-                  <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
+                <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
+                  <tr className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                     <th className="text-left p-3 border-b">Nombre</th>
                     <th className="text-left p-3 border-b">Fecha</th>
                     <th className="text-left p-3 border-b">Vendedor</th>
@@ -4243,7 +4246,7 @@ export default function VendorCandyOrders({
                     return (
                       <tr
                         key={o.orderKey}
-                        className="hover:bg-slate-50 odd:bg-white even:bg-slate-50 cursor-pointer"
+                        className="cursor-pointer border-b border-slate-100 transition-colors odd:bg-white even:bg-slate-50/80 hover:bg-slate-100/80"
                         role="button"
                         tabIndex={0}
                         onClick={() => openVendorOrderDrawer(o)}
@@ -4335,8 +4338,8 @@ export default function VendorCandyOrders({
             </div>
 
             {/* Pagination */}
-            <div className="p-3 flex items-center justify-between">
-              <div className="text-xs text-gray-600">
+            <div className="flex flex-col gap-2 border-t border-slate-200/90 bg-slate-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs text-slate-600">
                 Página {page} / {totalPages}
               </div>
               <div className="flex gap-2">
@@ -4344,7 +4347,7 @@ export default function VendorCandyOrders({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="rounded shadow-none"
+                  className="rounded-lg border-slate-200 shadow-sm"
                   onClick={goPrevPage}
                   disabled={page <= 1}
                 >
@@ -4354,7 +4357,7 @@ export default function VendorCandyOrders({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="rounded shadow-none"
+                  className="rounded-lg border-slate-200 shadow-sm"
                   onClick={goNextPage}
                   disabled={page >= totalPages}
                 >
@@ -4365,12 +4368,15 @@ export default function VendorCandyOrders({
           </div>
 
           {/* Mobile cards */}
-          <div className="md:hidden space-y-2">
-            <div className="bg-white border rounded p-2 flex items-center justify-between">
-              <div className="text-xs text-gray-700">
-                Total pedidos: <b>{orderSummaries.length}</b>
+          <div className="space-y-3 md:hidden">
+            <div className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white p-3 shadow-sm">
+              <div className="text-xs text-slate-700">
+                <span className="font-semibold text-slate-900">
+                  {orderSummaries.length}
+                </span>{" "}
+                pedido{orderSummaries.length === 1 ? "" : "s"}
               </div>
-              <div className="text-xs text-gray-600">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium tabular-nums text-slate-800">
                 {page}/{totalPages}
               </div>
             </div>
@@ -4380,7 +4386,7 @@ export default function VendorCandyOrders({
                 key={o.orderKey}
                 role="button"
                 tabIndex={0}
-                className="bg-white border rounded cursor-pointer hover:bg-slate-50/90 transition-colors"
+                className="cursor-pointer rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/[0.03] transition-all hover:border-slate-300 hover:shadow-md active:scale-[0.99]"
                 onClick={() => openVendorOrderDrawer(o)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -4389,18 +4395,25 @@ export default function VendorCandyOrders({
                   }
                 }}
               >
-                <div className="p-2 flex items-center justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-semibold">{o.sellerName}</div>
-                    <div className="text-xs text-gray-600">
-                      {o.orderName || "—"} • {o.date}
+                <div className="flex items-center justify-between gap-2 p-3">
+                  <div className="flex min-w-0 flex-1 items-start gap-2">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-[10px] font-bold text-violet-800">
+                      PV
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900">
+                        {o.sellerName}
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        {o.orderName || "—"} • {o.date}
+                      </div>
                     </div>
                   </div>
 
                   <ActionMenuTrigger
-                    className="shrink-0 !h-8 !w-8"
+                    className="shrink-0 !h-9 !w-9 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                     aria-label="Acciones del pedido"
-                    iconClassName="h-5 w-5 text-gray-700"
+                    iconClassName="h-5 w-5 text-slate-700"
                     onClick={(e) => {
                       e.stopPropagation();
                       setOrderRowMenu({
@@ -4413,29 +4426,35 @@ export default function VendorCandyOrders({
                   />
                 </div>
 
-                <div className="px-2 pb-2">
+                <div className="px-3 pb-3">
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="border rounded p-2">
-                      <div className="text-gray-600">P. Agregados</div>
+                    <div className="rounded-lg border border-slate-200/80 bg-slate-50/90 p-2.5">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        P. Agregados
+                      </div>
                       <div
-                        className={`font-semibold ${zeroClass(o.totalPackages)}`}
+                        className={`font-semibold tabular-nums ${zeroClass(o.totalPackages)}`}
                       >
                         {o.totalPackages}
                       </div>
                     </div>
-                    <div className="border rounded p-2">
-                      <div className="text-gray-600">P. Restantes</div>
+                    <div className="rounded-lg border border-slate-200/80 bg-slate-50/90 p-2.5">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        P. Restantes
+                      </div>
                       <div
-                        className={`font-semibold ${zeroClass(o.totalRemainingPackages)}`}
+                        className={`font-semibold tabular-nums ${zeroClass(o.totalRemainingPackages)}`}
                       >
                         {o.totalRemainingPackages}
                       </div>
                     </div>
                     {isAdmin && (
-                      <div className="border rounded p-2">
-                        <div className="text-gray-600">Total esperado</div>
+                      <div className="rounded-lg border border-sky-200/70 bg-sky-50/90 p-2.5">
+                        <div className="text-[11px] font-medium text-sky-900/80">
+                          Total esperado
+                        </div>
                         <div
-                          className={`font-semibold ${zeroClass(
+                          className={`font-semibold tabular-nums ${zeroClass(
                             Number(
                               o.totalExpectedActive ?? o.totalExpected ?? 0,
                             ),
@@ -4452,17 +4471,17 @@ export default function VendorCandyOrders({
             ))}
 
             {!pagedOrders.length && (
-              <div className="p-3 text-sm text-gray-600 bg-white border rounded">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-center text-sm text-slate-600">
                 No hay pedidos.
               </div>
             )}
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 pt-1">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="flex-1 rounded shadow-none"
+                className="flex-1 rounded-lg border-slate-200 shadow-sm"
                 onClick={goPrevPage}
                 disabled={page <= 1}
               >
@@ -4472,7 +4491,7 @@ export default function VendorCandyOrders({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="flex-1 rounded shadow-none"
+                className="flex-1 rounded-lg border-slate-200 shadow-sm"
                 onClick={goNextPage}
                 disabled={page >= totalPages}
               >
@@ -4655,46 +4674,102 @@ export default function VendorCandyOrders({
 
       {/* ===================== MODAL ===================== */}
       {openForm && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-2 md:p-6">
-          <div className="bg-white w-[98vw] max-w-none max-h-[96vh] overflow-y-auto rounded shadow relative p-3 md:p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-2 backdrop-blur-[3px] md:p-6"
+          role="presentation"
+        >
+          <div
+            className="relative flex max-h-[96vh] w-[98vw] max-w-[min(100vw-1rem,1200px)] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white text-sm shadow-2xl shadow-slate-900/12 ring-1 ring-slate-900/[0.04]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="orden-vendedor-modal-title"
+          >
             {isSaving && (
-              <div className="absolute inset-0 bg-white/70 flex items-center justify-center z-50">
-                <div className="text-sm font-semibold">Guardando…</div>
+              <div className="absolute inset-0 z-[60] flex items-center justify-center rounded-2xl bg-white/75 backdrop-blur-sm">
+                <div className="flex items-center gap-3 rounded-xl border border-slate-200/80 bg-white px-5 py-3.5 shadow-lg">
+                  <svg
+                    className="h-5 w-5 animate-spin text-slate-700"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    aria-hidden
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                    />
+                  </svg>
+                  <div className="text-sm font-semibold text-slate-800">
+                    Guardando…
+                  </div>
+                </div>
               </div>
             )}
 
-            <div className="p-3 md:p-5 border-b flex items-center justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <div className="text-base md:text-lg font-semibold">
-                  {editingOrderKey ? "Editar pedido" : "Nuevo pedido"}
+            <div className="sticky top-0 z-20 shrink-0 border-b border-slate-200/90 bg-gradient-to-b from-slate-50 to-white px-3 pb-3 pt-3 sm:px-5 sm:pt-4 md:px-6">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-700 sm:flex">
+                  <svg
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.75}
+                    aria-hidden
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15.75 10.5V6a3.75 3.75 0 10-7.5 0v4.5m11.356-1.993l1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 01-1.12-1.243l1.264-12A1.125 1.125 0 015.513 7.5h12.974c.576 0 1.059.435 1.119 1.007zM8.25 10.5a.75.75 0 100-1.5.75.75 0 000 1.5zm7.5 0a.75.75 0 100-1.5.75.75 0 000 1.5z"
+                    />
+                  </svg>
                 </div>
-                <div className="text-xs text-gray-600">
-                  Nombre: {orderName || "—"}
+                <div className="min-w-0 flex-1">
+                  <div
+                    id="orden-vendedor-modal-title"
+                    className="text-base font-bold tracking-tight text-slate-900 md:text-lg"
+                  >
+                    {editingOrderKey ? "Editar pedido" : "Nuevo pedido"}
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-600">
+                    Nombre: {orderName || "—"}
+                  </div>
+                  <div className="mt-1 hidden text-xs text-slate-500 sm:block">
+                    U. Bruta viene de Orden Maestra. U. Vendedor e Inversionista
+                    se calculan aquí. U. Neta = U. Bruta - Gastos - U. Vendedor.
+                  </div>
                 </div>
-                <div className="text-xs text-gray-600 hidden sm:block">
-                  U. Bruta viene de Orden Maestra. U. Vendedor e Inversionista
-                  se calculan aquí. U. Neta = U. Bruta - Gastos - U. Vendedor.
-                </div>
-              </div>
 
-              <div className="shrink-0">
-                <ActionMenuTrigger
-                  className="!h-10 !w-10"
-                  aria-label="Acciones del pedido"
-                  iconClassName="h-[22px] w-[22px] text-gray-700"
-                  onClick={(e) =>
-                    setModalHeaderMenu({
-                      rect: (
-                        e.currentTarget as HTMLElement
-                      ).getBoundingClientRect(),
-                    })
-                  }
-                />
+                <div className="shrink-0">
+                  <ActionMenuTrigger
+                    className="!h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                    aria-label="Acciones del pedido"
+                    iconClassName="h-[22px] w-[22px] text-slate-700"
+                    onClick={(e) =>
+                      setModalHeaderMenu({
+                        rect: (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect(),
+                      })
+                    }
+                  />
+                </div>
               </div>
             </div>
 
-            {/* Form */}
-            <div className="p-3 md:p-5 space-y-3">
+            {/* Form: scroll + footer */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 pb-4 sm:px-5 md:px-6">
+                <div className="space-y-3">
               {/* Mobile: filtros + menú plantilla/importar */}
               <div className="md:hidden flex gap-2">
                 <Button
@@ -4708,9 +4783,9 @@ export default function VendorCandyOrders({
                   <span>{mobileMetaOpen ? "−" : "+"}</span>
                 </Button>
                 <ActionMenuTrigger
-                  className="shrink-0 !h-10 !w-10"
+                  className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                   aria-label="Plantilla e importar"
-                  iconClassName="h-[22px] w-[22px] text-gray-700"
+                  iconClassName="h-[22px] w-[22px] text-slate-700"
                   onClick={(e) =>
                     setModalImportMenu({
                       rect: (
@@ -4727,9 +4802,11 @@ export default function VendorCandyOrders({
                 {/* Top selectors */}
                 <div className="grid md:grid-cols-3 gap-2">
                   <div className="md:col-span-3">
-                    <label className="text-xs text-gray-600">Nombre</label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Nombre
+                    </label>
                     <input
-                      className="w-full border rounded p-2 text-sm"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       value={orderName}
                       onChange={(e) => setOrderName(e.target.value)}
                       placeholder="Nombre de la orden"
@@ -4744,16 +4821,18 @@ export default function VendorCandyOrders({
                       disabled={disableSellerSelect}
                       options={sellerSelectOptions}
                       sheetTitle="Vendedor"
-                      selectClassName="w-full border rounded p-2 text-sm"
-                      buttonClassName="w-full border rounded p-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                      selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                      buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
                     />
                   </div>
 
                   <div>
-                    <label className="text-xs text-gray-600">Fecha</label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Fecha
+                    </label>
                     <input
                       type="date"
-                      className="w-full border rounded p-2 text-sm"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       value={date}
                       onChange={(e) => setDate(e.target.value)}
                     />
@@ -4761,9 +4840,9 @@ export default function VendorCandyOrders({
 
                   <div className="hidden md:flex items-end justify-end">
                     <ActionMenuTrigger
-                      className="!h-10 !w-10"
+                      className="!h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                       aria-label="Plantilla e importar"
-                      iconClassName="h-[22px] w-[22px] text-gray-700"
+                      iconClassName="h-[22px] w-[22px] text-slate-700"
                       onClick={(e) =>
                         setModalImportMenu({
                           rect: (
@@ -4783,9 +4862,9 @@ export default function VendorCandyOrders({
                 </div>
 
                 {/* KPIs */}
-                <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-                  <div className="border rounded p-2 bg-sky-50 border-sky-200">
-                    <div className="text-xs text-gray-600">
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+                  <div className="rounded-xl border border-sky-200/90 bg-sky-50/90 p-2.5 shadow-sm ring-1 ring-sky-900/[0.04]">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-sky-900/70">
                       Paquetes Agregados
                     </div>
                     <div
@@ -4799,8 +4878,8 @@ export default function VendorCandyOrders({
 
                   {isAdmin && (
                     <>
-                      <div className="border rounded p-2 bg-blue-50 border-blue-200">
-                        <div className="text-xs text-gray-600">
+                      <div className="rounded-xl border border-blue-200/90 bg-blue-50/90 p-2.5 shadow-sm ring-1 ring-blue-900/[0.04]">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-blue-900/70">
                           Total esperado
                         </div>
                         <div
@@ -4811,8 +4890,8 @@ export default function VendorCandyOrders({
                           {money(kpiTotals.totalExpected)}
                         </div>
                       </div>
-                      <div className="border rounded p-2 bg-amber-50 border-amber-200">
-                        <div className="text-xs text-gray-600">
+                      <div className="rounded-xl border border-amber-200/90 bg-amber-50/90 p-2.5 shadow-sm ring-1 ring-amber-900/[0.04]">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-900/70">
                           Utilidad Bruta
                         </div>
                         <div
@@ -4826,8 +4905,8 @@ export default function VendorCandyOrders({
                     </>
                   )}
 
-                  <div className="border rounded p-2 bg-emerald-50 border-emerald-200">
-                    <div className="text-xs text-gray-600">
+                  <div className="rounded-xl border border-emerald-200/90 bg-emerald-50/90 p-2.5 shadow-sm ring-1 ring-emerald-900/[0.04]">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-900/70">
                       Utilidad. Vendedor
                     </div>
                     <div
@@ -4840,8 +4919,10 @@ export default function VendorCandyOrders({
                   </div>
 
                   {isAdmin && (
-                    <div className="border rounded p-2 bg-indigo-50 border-indigo-200">
-                      <div className="text-xs text-gray-600">Utilidad Neta</div>
+                    <div className="rounded-xl border border-indigo-200/90 bg-indigo-50/90 p-2.5 shadow-sm ring-1 ring-indigo-900/[0.04]">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-indigo-900/70">
+                        Utilidad Neta
+                      </div>
                       <div
                         className={`text-lg font-semibold ${zeroClass(
                           Number(kpiUNeta || 0),
@@ -4855,7 +4936,7 @@ export default function VendorCandyOrders({
               </div>
 
               {/* Add product row */}
-              <div className="border rounded p-3 space-y-2">
+              <div className="space-y-2 rounded-xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 p-4 shadow-sm">
                 <Button
                   type="button"
                   variant="outline"
@@ -4876,11 +4957,11 @@ export default function VendorCandyOrders({
 
                   <div className="grid md:grid-cols-4 gap-2">
                     <div className="md:col-span-2">
-                      <label className="text-xs text-gray-600">
+                      <label className="text-xs font-medium text-slate-600">
                         Buscar Producto
                       </label>
                       <input
-                        className="w-full border rounded p-2 text-sm"
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                         value={productSearch}
                         onChange={(e) => setProductSearch(e.target.value)}
                         placeholder="Buscar por categoría o nombre…"
@@ -4894,17 +4975,17 @@ export default function VendorCandyOrders({
                         onChange={setSelectedProductId}
                         options={productPickerSelectOptions}
                         sheetTitle="Producto"
-                        selectClassName="w-full border rounded p-2 text-sm"
-                        buttonClassName="w-full border rounded p-2 text-sm text-left flex items-center justify-between gap-2 bg-white"
+                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
                       />
                     </div>
 
                     <div>
-                      <label className="text-xs text-gray-600">
+                      <label className="text-xs font-medium text-slate-600">
                         Cantidad de Paquetes
                       </label>
                       <input
-                        className="w-full border rounded p-2 text-sm"
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                         value={packagesToAdd}
                         onChange={(e) => setPackagesToAdd(e.target.value)}
                         inputMode="numeric"
@@ -4927,29 +5008,29 @@ export default function VendorCandyOrders({
                 </div>
               </div>
 
-              {/* Items table */}
-              <div className="border rounded">
-                <div className="p-3 border-b flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-3">
-                  <div className="text-sm font-semibold shrink-0">
+              {/* Items table — montos por sucursal del vendedor (no columnas Rivas/Isla separadas como en Orden Maestra) */}
+              <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/[0.03]">
+                <div className="flex flex-col gap-2 border-b border-slate-200/90 bg-slate-50/80 p-3 md:flex-row md:items-center md:justify-between md:gap-3">
+                  <div className="shrink-0 text-sm font-semibold text-slate-900">
                     Productos asociados ({orderItems.length})
                   </div>
 
                   {/* Móvil: búsqueda + margen; acciones en menú */}
                   <div className="flex md:hidden flex-col gap-2 w-full">
                     <div className="flex items-center gap-2">
-                      <input
-                        className="border rounded px-2 py-1 text-sm flex-1 min-w-0"
-                        placeholder="Buscar producto"
-                        value={associatedSearch}
-                        onChange={(e) => {
-                          setAssociatedSearch(e.target.value);
-                          setItemsPage(1);
-                        }}
-                      />
+                    <input
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                      placeholder="Buscar producto"
+                      value={associatedSearch}
+                      onChange={(e) => {
+                        setAssociatedSearch(e.target.value);
+                        setItemsPage(1);
+                      }}
+                    />
                       <ActionMenuTrigger
-                        className="shrink-0 !h-10 !w-10"
+                        className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                         aria-label="Acciones de productos"
-                        iconClassName="h-[22px] w-[22px] text-gray-700"
+                        iconClassName="h-[22px] w-[22px] text-slate-700"
                         onClick={(e) =>
                           setModalItemsToolbarMenu({
                             rect: (
@@ -4960,7 +5041,7 @@ export default function VendorCandyOrders({
                       />
                     </div>
                     <input
-                      className="border rounded px-2 py-1 text-sm w-full"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       placeholder="Margen % (aplicar desde menú ⋮)"
                       value={bulkMarginPercent}
                       onChange={(e) => setBulkMarginPercent(e.target.value)}
@@ -4968,9 +5049,9 @@ export default function VendorCandyOrders({
                     />
                   </div>
 
-                  <div className="hidden md:flex flex-wrap gap-2 items-center justify-end flex-1 min-w-0">
+                  <div className="hidden min-w-0 flex-1 flex-wrap items-center justify-end gap-2 md:flex">
                     <input
-                      className="border rounded px-2 py-1 text-sm min-w-[8rem] max-w-xs flex-1"
+                      className="min-w-[8rem] max-w-xs flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       placeholder="Buscar producto"
                       value={associatedSearch}
                       onChange={(e) => {
@@ -4979,16 +5060,16 @@ export default function VendorCandyOrders({
                       }}
                     />
                     <input
-                      className="border rounded px-2 py-1 text-sm w-24 shrink-0"
+                      className="w-24 shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       placeholder="Margen %"
                       value={bulkMarginPercent}
                       onChange={(e) => setBulkMarginPercent(e.target.value)}
                       inputMode="decimal"
                     />
                     <ActionMenuTrigger
-                      className="shrink-0 !h-10 !w-10"
+                      className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                       aria-label="Aplicar margen o exportar"
-                      iconClassName="h-[22px] w-[22px] text-gray-700"
+                      iconClassName="h-[22px] w-[22px] text-slate-700"
                       onClick={(e) =>
                         setModalItemsToolbarMenu({
                           rect: (
@@ -5002,61 +5083,63 @@ export default function VendorCandyOrders({
 
                 {/* Desktop table */}
                 <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full min-w-[1100px] text-xs table-fixed divide-y divide-gray-100">
-                    <thead className="bg-gray-50">
+                  <table className="w-full min-w-[1100px] table-fixed divide-y divide-slate-100 text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
                       <tr className="sticky top-0 z-10 whitespace-nowrap">
-                        <th className="w-[4.5rem] text-left p-2 border-b">
+                        <th className="w-[4.5rem] border-b border-slate-200 p-2 text-left font-semibold text-slate-700">
                           Tipo
                         </th>
-                        <th className="w-[11rem] min-w-[8rem] text-left p-2 border-b">
+                        <th className="min-w-[8rem] w-[11rem] border-b border-slate-200 p-2 text-left font-semibold text-slate-700">
                           Producto
                         </th>
-                        <th className="w-[5.5rem] text-right p-2 border-b">
+                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                           Agregados
                         </th>
-                        <th className="w-[5.5rem] text-right p-2 border-b">
+                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                           Restantes
                         </th>
                         {isAdmin && (
-                          <th className="w-[5.5rem] text-right p-2 border-b">
+                          <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                             Precio Costo
                           </th>
                         )}
-                        <th className="w-[5.5rem] text-right p-2 border-b">
+                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                           Precio Venta
                         </th>
-                        <th className="w-[6.5rem] text-right p-2 border-b">
+                        <th className="w-[6.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                           Monto Esperado
                         </th>
                         {isAdmin && (
                           <>
-                            <th className="w-[6.5rem] text-right p-2 border-b">
+                            <th className="w-[6.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                               U.Bruta
                             </th>
-                            <th className="w-[5rem] text-right p-2 border-b">
+                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                               Gastos
                             </th>
-                            <th className="w-[5rem] text-right p-2 border-b">
+                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                               U x paq
                             </th>
-                            <th className="w-[5rem] text-right p-2 border-b">
+                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                               UN x Paq
                             </th>
-                            <th className="w-[5rem] text-right p-2 border-b">
+                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                               UV x Paq
                             </th>
-                            <th className="w-[5.5rem] text-right p-2 border-b">
+                            <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                               U Vendor
                             </th>
-                            <th className="w-[5.5rem] text-right p-2 border-b">
+                            <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                               U. Neta
                             </th>
                           </>
                         )}
-                        <th className="w-[5.5rem] text-right p-2 border-b">
+                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
                           Margen (%)
                         </th>
-                        <th className="w-10 text-left p-2 border-b">X</th>
+                        <th className="w-10 border-b border-slate-200 p-2 text-left font-semibold text-slate-700">
+                          X
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -5112,7 +5195,7 @@ export default function VendorCandyOrders({
                         return (
                           <tr
                             key={it.id}
-                            className="hover:bg-gray-50 whitespace-nowrap align-middle"
+                            className="whitespace-nowrap align-middle transition-colors hover:bg-slate-50/90"
                           >
                             <td className="p-2 border-b align-middle">
                               {it.category}
@@ -5539,12 +5622,15 @@ export default function VendorCandyOrders({
                   {pagedItemsByCategory.map(([cat, items]) => {
                     const expanded = !!openCategoryMap[cat];
                     return (
-                      <div key={cat} className="border rounded">
+                      <div
+                        key={cat}
+                        className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm"
+                      >
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="w-full justify-between px-3 py-2 text-sm font-normal shadow-none ring-offset-0"
+                          className="w-full justify-between px-3 py-2.5 text-sm font-normal shadow-none ring-offset-0 hover:bg-slate-50"
                           onClick={() => toggleCategory(cat)}
                         >
                           <span className="font-semibold">{cat}</span>
@@ -5613,9 +5699,9 @@ export default function VendorCandyOrders({
                               return (
                                 <div
                                   key={it.id}
-                                  className="border rounded p-2 text-xs space-y-2"
+                                  className="space-y-2 rounded-lg border border-slate-200/70 bg-slate-50/50 p-3 text-xs"
                                 >
-                                  <div className="font-semibold text-sm">
+                                  <div className="text-sm font-semibold text-slate-900">
                                     {it.productName}
                                   </div>
 
@@ -6011,8 +6097,8 @@ export default function VendorCandyOrders({
                   )}
                 </div>
                 {/* items pagination */}
-                <div className="p-3 flex items-center justify-between">
-                  <div className="text-xs text-gray-600">
+                <div className="flex items-center justify-between gap-2 border-t border-slate-200/90 bg-slate-50/50 px-3 py-2.5">
+                  <div className="text-xs text-slate-600">
                     Página items {itemsPage} / {itemsTotalPages}
                   </div>
                   <div className="flex gap-2">
@@ -6020,7 +6106,7 @@ export default function VendorCandyOrders({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="rounded shadow-none"
+                      className="rounded-lg border-slate-200 shadow-sm"
                       onClick={itemsPrev}
                       disabled={itemsPage <= 1}
                     >
@@ -6030,7 +6116,7 @@ export default function VendorCandyOrders({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="rounded shadow-none"
+                      className="rounded-lg border-slate-200 shadow-sm"
                       onClick={itemsNext}
                       disabled={itemsPage >= itemsTotalPages}
                     >
@@ -6039,40 +6125,52 @@ export default function VendorCandyOrders({
                   </div>
                 </div>
               </div>
-
-              {/* Footer actions */}
-              <div className="flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
-                <div className="text-xs text-gray-600">
-                  {editingOrderKey ? (
-                    <>
-                      Editando: <b>{editingOrderKey}</b>
-                    </>
-                  ) : (
-                    <>Nuevo pedido (aún no guardado)</>
-                  )}
-                </div>
-
-                <div className="flex justify-end">
-                  <ActionMenuTrigger
-                    className="!h-10 !w-10"
-                    aria-label="Cancelar o guardar"
-                    iconClassName="h-[22px] w-[22px] text-gray-700"
-                    onClick={(e) =>
-                      setModalFooterMenu({
-                        rect: (
-                          e.currentTarget as HTMLElement
-                        ).getBoundingClientRect(),
-                      })
-                    }
-                  />
                 </div>
               </div>
 
-              {/* msg inside modal */}
-              {msg && <div className="text-sm text-gray-700">{msg}</div>}
-              {syncMsg && (
-                <div className="text-sm text-gray-700">{syncMsg}</div>
-              )}
+              {/* Footer actions */}
+              <div className="shrink-0 border-t border-slate-200/90 bg-gradient-to-t from-slate-50/95 to-white px-3 py-3 shadow-[0_-8px_24px_-12px_rgba(15,23,42,0.08)] sm:px-5 md:px-6">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div className="text-xs text-slate-600">
+                    {editingOrderKey ? (
+                      <>
+                        Editando: <b>{editingOrderKey}</b>
+                      </>
+                    ) : (
+                      <>Nuevo pedido (aún no guardado)</>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2">
+                    <span className="mr-auto hidden text-xs text-slate-500 sm:inline">
+                      Guardar o cerrar desde el menú
+                    </span>
+                    <ActionMenuTrigger
+                      className="!h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                      aria-label="Cancelar o guardar"
+                      iconClassName="h-[22px] w-[22px] text-slate-700"
+                      onClick={(e) =>
+                        setModalFooterMenu({
+                          rect: (
+                            e.currentTarget as HTMLElement
+                          ).getBoundingClientRect(),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+
+                {msg && (
+                  <div className="mt-2 rounded-lg border border-slate-200/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                    {msg}
+                  </div>
+                )}
+                {syncMsg && (
+                  <div className="mt-2 rounded-lg border border-slate-200/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                    {syncMsg}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

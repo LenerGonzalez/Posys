@@ -2379,11 +2379,19 @@ export default function CandyMainOrders() {
 
       {/* MODAL ORDEN MAESTRA */}
       {openOrderModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-2 md:p-6">
-          <div className="relative bg-white p-3 sm:p-5 md:p-6 rounded-2xl shadow-lg w-[98vw] max-w-none max-h-[96vh] overflow-y-auto text-sm flex flex-col gap-3">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 md:p-6 bg-slate-900/50 backdrop-blur-[3px]"
+          role="presentation"
+        >
+          <div
+            className="relative flex flex-col w-[98vw] max-w-[min(100vw-1rem,1280px)] max-h-[96vh] overflow-hidden rounded-2xl border border-slate-200/80 bg-white text-sm shadow-2xl shadow-slate-900/12 ring-1 ring-slate-900/[0.04]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="orden-maestra-modal-title"
+          >
             {savingOrder && (
-              <div className="absolute inset-0 bg-white/70 z-50 flex items-center justify-center">
-                <div className="bg-white border rounded-xl px-4 py-3 shadow flex items-center gap-3">
+              <div className="absolute inset-0 z-[60] flex items-center justify-center rounded-2xl bg-white/75 backdrop-blur-sm">
+                <div className="flex items-center gap-3 rounded-xl border border-slate-200/80 bg-white px-5 py-3.5 shadow-lg">
                   <svg
                     className="animate-spin h-5 w-5 text-gray-700"
                     xmlns="http://www.w3.org/2000/svg"
@@ -2404,25 +2412,46 @@ export default function CandyMainOrders() {
                       d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
                     />
                   </svg>
-                  <div className="text-sm font-semibold">Guardando orden…</div>
+                  <div className="text-sm font-semibold text-slate-800">
+                    Guardando orden…
+                  </div>
                 </div>
               </div>
             )}
 
             {/* Header sticky */}
-            <div className="sticky top-0 bg-white z-20 pb-3 border-b">
-              <div className="flex items-start gap-2">
-                <h3 className="text-base md:text-xl font-bold min-w-0 flex-1 leading-snug">
+            <div className="sticky top-0 z-20 shrink-0 border-b border-slate-200/90 bg-gradient-to-b from-slate-50 to-white px-3 pt-3 pb-3 sm:px-5 sm:pt-4 sm:pb-4 md:px-6">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-700 sm:flex">
+                  <svg
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.75}
+                    aria-hidden
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664v.75h.75M9 19h2.25m2.25 0h2.25m-2.25 0v-.75c0-.414.336-.75.75-.75h2.25m-2.25 0h2.25m-2.25 0v-.75c0-.414.336-.75.75-.75H15"
+                    />
+                  </svg>
+                </div>
+                <h3
+                  id="orden-maestra-modal-title"
+                  className="min-w-0 flex-1 text-base font-bold leading-snug tracking-tight text-slate-900 md:text-xl"
+                >
                   {editingOrderId
                     ? "Editar Orden Maestra"
                     : "Nueva Orden Maestra"}
                 </h3>
 
                 <ActionMenuTrigger
-                  className="shrink-0 !h-10 !w-10"
+                  className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                   aria-label="Acciones de la orden"
                   title="Actualizar precios, inventario, cerrar"
-                  iconClassName="h-[22px] w-[22px] text-gray-700"
+                  iconClassName="h-[22px] w-[22px] text-slate-700"
                   onClick={(e) =>
                     setMasterModalHeaderMenu({
                       rect: (
@@ -2434,14 +2463,14 @@ export default function CandyMainOrders() {
               </div>
 
               {/* Config rápida (logística + % utilidades) */}
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-1 gap-2">
-                <div>
-                  <label className="block text-xs font-semibold">
+              <div className="mt-4 grid grid-cols-1 gap-2">
+                <div className="rounded-xl border border-slate-200/80 bg-white/80 p-3 shadow-sm">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Gastos logísticos (orden)
                   </label>
                   <input
                     type="number"
-                    className="w-full border p-2 rounded"
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                     value={logisticsCost}
                     onChange={(e) => setLogisticsCost(e.target.value)}
                     placeholder="0"
@@ -2451,17 +2480,20 @@ export default function CandyMainOrders() {
               </div>
 
               {/* Tabs (solo móvil) */}
-              <div className="md:hidden mt-3">
-                <div className="grid grid-cols-4 gap-2">
+              <div className="md:hidden mt-4">
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                  Secciones
+                </p>
+                <div className="grid grid-cols-4 gap-1 rounded-xl border border-slate-200/70 bg-slate-100/90 p-1">
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     onClick={() => setMobileTab("DATOS")}
-                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
+                    className={`!rounded-lg px-1.5 py-2.5 text-[11px] font-semibold leading-tight shadow-none transition-all ${
                       mobileTab === "DATOS"
-                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
-                        : "!bg-white !text-gray-700 !border-gray-200"
+                        ? "!border-transparent !bg-white !text-slate-900 shadow-sm"
+                        : "!border-transparent !bg-transparent !text-slate-600 hover:!bg-white/70"
                     }`}
                   >
                     Datos
@@ -2472,10 +2504,10 @@ export default function CandyMainOrders() {
                     variant="outline"
                     size="sm"
                     onClick={() => setMobileTab("AGREGAR")}
-                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
+                    className={`!rounded-lg px-1.5 py-2.5 text-[11px] font-semibold leading-tight shadow-none transition-all ${
                       mobileTab === "AGREGAR"
-                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
-                        : "!bg-white !text-gray-700 !border-gray-200"
+                        ? "!border-transparent !bg-white !text-slate-900 shadow-sm"
+                        : "!border-transparent !bg-transparent !text-slate-600 hover:!bg-white/70"
                     }`}
                   >
                     Agregar
@@ -2486,10 +2518,10 @@ export default function CandyMainOrders() {
                     variant="outline"
                     size="sm"
                     onClick={() => setMobileTab("ITEMS")}
-                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
+                    className={`!rounded-lg px-1.5 py-2.5 text-[11px] font-semibold leading-tight shadow-none transition-all ${
                       mobileTab === "ITEMS"
-                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
-                        : "!bg-white !text-gray-700 !border-gray-200"
+                        ? "!border-transparent !bg-white !text-slate-900 shadow-sm"
+                        : "!border-transparent !bg-transparent !text-slate-600 hover:!bg-white/70"
                     }`}
                   >
                     Items ({orderItems.length})
@@ -2500,10 +2532,10 @@ export default function CandyMainOrders() {
                     variant="outline"
                     size="sm"
                     onClick={() => setMobileTab("TOTALES")}
-                    className={`!rounded-md px-2 py-2 text-xs font-semibold shadow-none ${
+                    className={`!rounded-lg px-1.5 py-2.5 text-[11px] font-semibold leading-tight shadow-none transition-all ${
                       mobileTab === "TOTALES"
-                        ? "!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700"
-                        : "!bg-white !text-gray-700 !border-gray-200"
+                        ? "!border-transparent !bg-white !text-slate-900 shadow-sm"
+                        : "!border-transparent !bg-transparent !text-slate-600 hover:!bg-white/70"
                     }`}
                   >
                     Totales
@@ -2513,7 +2545,7 @@ export default function CandyMainOrders() {
 
               {msg && (
                 <div
-                  className="mt-3 p-2 rounded border text-sm bg-amber-50 border-amber-200 text-amber-950"
+                  className="mt-3 rounded-lg border border-amber-200/90 bg-amber-50/95 p-3 text-sm text-amber-950 shadow-sm"
                   role="status"
                 >
                   {msg}
@@ -2524,8 +2556,9 @@ export default function CandyMainOrders() {
             <form
               ref={orderFormRef}
               onSubmit={handleSaveOrder}
-              className="space-y-4 pt-4"
+              className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 sm:px-5 md:px-6"
             >
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain space-y-5 py-3 pb-4">
               {/* file input (oculto) */}
               <input
                 ref={fileInputRef}
@@ -2539,13 +2572,17 @@ export default function CandyMainOrders() {
               <div
                 className={`${mobileTab === "DATOS" ? "block" : "hidden"} md:block`}
               >
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-xl border border-slate-200/80 bg-slate-50/40 p-4 shadow-sm">
+                  <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Datos generales
+                  </h4>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div className="md:col-span-2">
-                    <label className="block text-[14px] md:text-sm font-semibold text-gray-600 md:text-gray-900">
+                    <label className="block text-[13px] font-semibold text-slate-700 md:text-sm">
                       Nombre de Orden
                     </label>
                     <input
-                      className="w-full border rounded px-2 py-1.5 md:p-2 text-[11px] leading-snug md:text-sm md:leading-normal placeholder:text-[11px] md:placeholder:text-sm"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-snug shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 md:text-sm md:leading-normal"
                       value={orderName}
                       onChange={(e) => setOrderName(e.target.value)}
                       placeholder="Ej: Pedido enero 19"
@@ -2553,24 +2590,24 @@ export default function CandyMainOrders() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold">
+                    <label className="block text-sm font-semibold text-slate-700">
                       Fecha del pedido
                     </label>
                     <input
                       type="date"
-                      className="w-full border p-2 rounded"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       value={orderDate}
                       onChange={(e) => setOrderDate(e.target.value)}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold">
+                    <label className="block text-sm font-semibold text-slate-700">
                       % Ganancia Rivas
                     </label>
                     <input
                       type="number"
-                      className="w-full border p-2 rounded"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       value={marginRivas}
                       onChange={(e) => setMarginRivas(e.target.value)}
                     />
@@ -2580,16 +2617,17 @@ export default function CandyMainOrders() {
                   <input type="hidden" value={marginSanJorge} readOnly />
 
                   <div>
-                    <label className="block text-sm font-semibold">
+                    <label className="block text-sm font-semibold text-slate-700">
                       % Ganancia Isla Ometepe
                     </label>
                     <input
                       type="number"
-                      className="w-full border p-2 rounded"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                       value={marginIsla}
                       onChange={(e) => setMarginIsla(e.target.value)}
                     />
                   </div>
+                </div>
                 </div>
               </div>
 
@@ -2597,7 +2635,10 @@ export default function CandyMainOrders() {
               <div
                 className={`${mobileTab === "AGREGAR" ? "block" : "hidden"} md:block`}
               >
-                <div className="border rounded p-3 bg-gray-50">
+                <div className="rounded-xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 p-4 shadow-sm">
+                  <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Agregar producto a la orden
+                  </h4>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <div>
                       <MobileHtmlSelect
@@ -2612,18 +2653,18 @@ export default function CandyMainOrders() {
                         disabled={catalogLoading}
                         options={orderCategorySelectOptions}
                         sheetTitle="Categoría"
-                        selectClassName="w-full border p-2 rounded"
-                        buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
                       />
                     </div>
 
                     <div className="md:col-span-2 space-y-2">
                       <div>
-                        <label className="block text-sm font-semibold">
+                        <label className="block text-sm font-semibold text-slate-700">
                           Buscar producto
                         </label>
                         <input
-                          className="w-full border p-2 rounded mb-2"
+                          className="mb-2 mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                           placeholder="Buscar producto..."
                           value={productSearch}
                           onChange={(e) => setProductSearch(e.target.value)}
@@ -2637,57 +2678,57 @@ export default function CandyMainOrders() {
                         disabled={catalogLoading}
                         options={orderProductSelectOptions}
                         sheetTitle="Producto"
-                        selectClassName="w-full border p-2 rounded"
-                        buttonClassName="w-full border p-2 rounded text-left flex items-center justify-between gap-2 bg-white"
+                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-semibold">
+                      <label className="block text-sm font-semibold text-slate-700">
                         Precio proveedor (paq)
                       </label>
                       <input
                         type="number"
-                        className="w-full border p-2 rounded bg-gray-100"
+                        className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
                         value={orderProviderPrice}
                         readOnly
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-semibold">
+                      <label className="block text-sm font-semibold text-slate-700">
                         Paquetes
                       </label>
                       <input
                         type="number"
                         min={0}
-                        className="w-full border p-2 rounded"
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                         value={orderPackages}
                         onChange={(e) => setOrderPackages(e.target.value)}
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-semibold">
+                      <label className="block text-sm font-semibold text-slate-700">
                         Unidades por paquete
                       </label>
                       <input
                         type="number"
-                        className="w-full border p-2 rounded bg-gray-100"
+                        className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
                         value={orderUnitsPerPackage}
                         readOnly
                       />
                     </div>
                   </div>
 
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-end gap-2 mt-3">
+                  <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-end">
                     <Button
                       type="button"
                       variant="primary"
                       size="sm"
                       onClick={() => void addItemToOrder()}
                       disabled={addingItemToOrder}
-                      className="!rounded-md shadow-none disabled:opacity-60"
+                      className="!rounded-lg px-4 shadow-sm disabled:opacity-60"
                     >
                       {addingItemToOrder ? "Cargando…" : "Agregar producto"}
                     </Button>
@@ -2696,12 +2737,15 @@ export default function CandyMainOrders() {
               </div>
 
               {/* Plantilla / import / export — menú ⋮ (móvil y web) */}
-              <div className="flex items-center justify-end">
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-slate-200/90 bg-slate-50/60 px-3 py-2.5">
+                <span className="text-xs text-slate-600">
+                  Excel: plantilla, importar o exportar
+                </span>
                 <ActionMenuTrigger
-                  className="!h-10 !w-10"
+                  className="!h-10 !w-10 shrink-0 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                   aria-label="Plantilla, importar y exportar Excel"
                   title="Descargar plantilla, importar o exportar"
-                  iconClassName="h-[22px] w-[22px] text-gray-700"
+                  iconClassName="h-[22px] w-[22px] text-slate-700"
                   onClick={(e) =>
                     setMasterModalExcelMenu({
                       rect: (
@@ -2716,28 +2760,33 @@ export default function CandyMainOrders() {
               <div
                 className={`${mobileTab === "ITEMS" ? "block" : "hidden"} md:block`}
               >
-                <div className="mt-2">
-                  <div className="mb-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                    <div className="text-xs text-gray-600">
+                <div className="mt-1">
+                  <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500 md:hidden">
+                    Líneas de la orden
+                  </h4>
+                  <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="text-xs text-slate-600">
                       Items:{" "}
-                      <span className="font-semibold">{orderItems.length}</span>
+                      <span className="font-semibold text-slate-900">
+                        {orderItems.length}
+                      </span>
                       {itemSearch.trim() ? (
                         <>
                           {" "}
                           · Mostrando{" "}
-                          <span className="font-semibold">
+                          <span className="font-semibold text-slate-900">
                             {filteredItems.length}
                           </span>
                         </>
                       ) : null}
                     </div>
 
-                    <div className="flex items-center gap-2 w-full md:w-auto">
+                    <div className="flex w-full items-center gap-2 md:w-auto">
                       <input
                         value={itemSearch}
                         onChange={(e) => setItemSearch(e.target.value)}
                         placeholder="Buscar producto o categoría…"
-                        className="w-full md:w-80 border rounded px-3 py-2 text-sm"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 md:w-80"
                       />
 
                       {/* Margen global deshabilitado: MV se recalcula desde precios de venta (current_prices)
@@ -2753,7 +2802,7 @@ export default function CandyMainOrders() {
                         type="button"
                         variant="primary"
                         size="sm"
-                        className="!rounded-md !bg-emerald-600 hover:!bg-emerald-700 active:!bg-emerald-800 shadow-none disabled:opacity-60"
+                        className="!rounded-lg !bg-emerald-600 shadow-sm hover:!bg-emerald-700 active:!bg-emerald-800 disabled:opacity-60"
                         disabled={refreshingSalePrices || !orderItems.length}
                         onClick={() =>
                           void refreshSalePricesFromCurrentPrices(true)
@@ -2766,40 +2815,80 @@ export default function CandyMainOrders() {
 
                   {/* Desktop: Tabla */}
                   <div className="hidden md:block">
-                    <div className="overflow-x-auto border rounded pb-5">
-                      <table className="min-w-[1400px] w-full text-xs">
-                        <thead className="bg-gray-100">
+                    <div className="overflow-x-auto rounded-xl border border-slate-200/80 bg-white pb-1 shadow-sm">
+                      <table className="min-w-[1150px] w-full text-xs">
+                        <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
                           <tr>
-                            <th className="text-left p-2">Categoría</th>
-                            <th className="text-left p-2">Producto</th>
-                            <th className="text-right p-2">Paquetes</th>
-                            <th className="text-right p-2">Restantes</th>
-                            <th className="text-right p-2">Und x Paq</th>
-                            <th className="text-right p-2">Precio prov</th>
+                            <th className="p-2 text-left font-semibold text-slate-700">
+                              Categoría
+                            </th>
+                            <th className="p-2 text-left font-semibold text-slate-700">
+                              Producto
+                            </th>
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Paquetes
+                            </th>
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Restantes
+                            </th>
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Unidades
+                            </th>
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Precio prov
+                            </th>
 
-                            <th className="text-right p-2">Facturado</th>
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Facturado
+                            </th>
 
-                            <th className="text-right p-2">Precio Rivas</th>
-                            <th className="text-right p-2">Precio Isla</th>
+                            {/* Columnas Rivas ocultas en UI (Precio / Esperado / MV / U. bruta) */}
+                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              Precio Rivas
+                            </th> */}
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Precio
+                            </th>
 
-                            <th className="text-right p-2">Esperado Rivas</th>
-                            <th className="text-right p-2">Esperado Isla</th>
+                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              Esperado Rivas
+                            </th> */}
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Esperado
+                            </th>
 
-                            <th className="text-right p-2">MV Rivas</th>
-                            <th className="text-right p-2">MV Isla</th>
+                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              MV Rivas
+                            </th> */}
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Margen
+                            </th>
 
-                            <th className="text-right p-2">U. Bruta Rivas</th>
-                            <th className="text-right p-2">U. Bruta Isla</th>
-                            <th className="text-right p-2">Prorrateo</th>
+                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              U. Bruta Rivas
+                            </th> */}
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              U. Bruta
+                            </th>
+                            <th className="p-2 text-right font-semibold text-slate-700">
+                              Prorrateo
+                            </th>
 
-                            <th className="text-center p-2">Acciones</th>
+                            <th className="p-2 text-center font-semibold text-slate-700">
+                              Opcion
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
                           {pagedFilteredItems.map((it) => (
-                            <tr key={it.id} className="border-t">
-                              <td className="p-2">{it.category}</td>
-                              <td className="p-2 font-semibold">{it.name}</td>
+                            <tr
+                              key={it.id}
+                              className="border-t border-slate-100 transition-colors hover:bg-slate-50/80"
+                            >
+                              <td className="p-2 text-slate-600">{it.category}</td>
+                              <td className="p-2 font-semibold text-slate-900">
+                                {it.name}
+                              </td>
 
                               <td className="p-2 text-right">
                                 {editingPackagesMap[it.id] ? (
@@ -2979,25 +3068,25 @@ export default function CandyMainOrders() {
                                 {Number(it.subtotal || 0).toFixed(2)}
                               </td>
 
-                              <td className="p-2 text-right">
+                              {/* <td className="p-2 text-right">
                                 <span>{Number(it.unitPriceRivas || 0)}</span>
-                              </td>
+                              </td> */}
                               <td className="p-2 text-right">
                                 <span>{Number(it.unitPriceIsla || 0)}</span>
                               </td>
 
-                              <td className="p-2 text-right">
+                              {/* <td className="p-2 text-right">
                                 {Number(it.totalRivas || 0).toFixed(2)}
-                              </td>
+                              </td> */}
                               <td className="p-2 text-right">
                                 {Number(it.totalIsla || 0).toFixed(2)}
                               </td>
 
-                              <td className="p-2 text-right">
+                              {/* <td className="p-2 text-right">
                                 <span>
                                   {Number(it.marginRivas ?? 0).toFixed(3)}
                                 </span>
-                              </td>
+                              </td> */}
 
                               <td className="p-2 text-right">
                                 <span>
@@ -3005,9 +3094,9 @@ export default function CandyMainOrders() {
                                 </span>
                               </td>
 
-                              <td className="p-2 text-right">
+                              {/* <td className="p-2 text-right">
                                 {Number(it.grossProfit || 0).toFixed(2)}
-                              </td>
+                              </td> */}
                               <td className="p-2 text-right">
                                 {Number(it.grossProfitIsla || 0).toFixed(2)}
                               </td>
@@ -3036,8 +3125,8 @@ export default function CandyMainOrders() {
                           {filteredItems.length === 0 && (
                             <tr>
                               <td
-                                colSpan={17}
-                                className="p-4 text-center text-gray-500"
+                                colSpan={13}
+                                className="p-8 text-center text-sm text-slate-500"
                               >
                                 No hay productos en la orden.
                               </td>
@@ -3047,8 +3136,8 @@ export default function CandyMainOrders() {
                       </table>
                     </div>
                     {/* Paginación items (desktop) */}
-                    <div className="mt-2 flex items-center justify-between">
-                      <div className="text-sm text-gray-600">
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-sm text-slate-600">
                         Mostrando{" "}
                         {Math.min(
                           (itemPage - 1) * ITEMS_PAGE_SIZE + 1,
@@ -3069,12 +3158,12 @@ export default function CandyMainOrders() {
                           size="sm"
                           disabled={itemPage <= 1}
                           onClick={() => setItemPage((p) => Math.max(1, p - 1))}
-                          className="!rounded-md shadow-none disabled:opacity-50 text-sm"
+                          className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
                         >
                           Anterior
                         </Button>
 
-                        <div className="px-3 py-1 border rounded text-sm">
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium tabular-nums text-slate-800 shadow-sm">
                           {itemPage} / {totalItemPages}
                         </div>
 
@@ -3086,7 +3175,7 @@ export default function CandyMainOrders() {
                           onClick={() =>
                             setItemPage((p) => Math.min(totalItemPages, p + 1))
                           }
-                          className="!rounded-md shadow-none disabled:opacity-50 text-sm"
+                          className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
                         >
                           Siguiente
                         </Button>
@@ -3097,14 +3186,14 @@ export default function CandyMainOrders() {
                   {/* MÓVIL: Cards */}
                   <div className="md:hidden space-y-3">
                     {filteredItems.length === 0 ? (
-                      <div className="p-4 border rounded bg-gray-50 text-gray-600">
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-center text-sm text-slate-600">
                         No hay productos en esta orden.
                       </div>
                     ) : (
                       filteredItems.map((it) => (
                         <div
                           key={it.id}
-                          className="border rounded-xl p-3 shadow-sm"
+                          className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]"
                         >
                           <div className="flex items-start gap-2">
                             <div className="flex-1 min-w-0">
@@ -3289,16 +3378,8 @@ export default function CandyMainOrders() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 mt-3">
-                            <div>
-                              <label className="text-xs text-gray-600">
-                                MV Rivas (%)
-                              </label>
-                              <div className="text-right font-semibold">
-                                {Number(it.marginRivas ?? 0).toFixed(3)}
-                              </div>
-                            </div>
-
+                          <div className="mt-3">
+                            {/* MV Rivas oculto en UI */}
                             <div>
                               <label className="text-xs text-gray-600">
                                 MV Isla (%)
@@ -3309,8 +3390,8 @@ export default function CandyMainOrders() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                            <div className="p-2 rounded bg-gray-50 border">
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                            <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
                               <div className="text-xs text-gray-600">
                                 Facturado
                               </div>
@@ -3319,34 +3400,20 @@ export default function CandyMainOrders() {
                               </div>
                             </div>
 
-                            <div className="p-2 rounded bg-blue-50 border">
-                              <div className="text-xs text-gray-600">
-                                Precio Rivas (paq)
-                              </div>
-                              <div className="font-semibold text-right">
-                                {Number(it.unitPriceRivas || 0)}
-                              </div>
-                            </div>
+                            {/* Precio Rivas (paq) oculto en UI */}
 
-                            <div className="p-2 rounded bg-blue-50 border">
+                            <div className="rounded border border-sky-200/80 bg-sky-50/90 p-2">
                               <div className="text-xs text-gray-600">
                                 Precio Isla (paq)
                               </div>
-                              <div className="font-semibold text-right">
+                              <div className="text-right font-semibold">
                                 {Number(it.unitPriceIsla || 0)}
                               </div>
                             </div>
 
-                            <div className="p-2 rounded bg-gray-50 border">
-                              <div className="text-xs text-gray-600">
-                                Esperado Rivas
-                              </div>
-                              <div className="font-semibold">
-                                {Number(it.totalRivas || 0).toFixed(2)}
-                              </div>
-                            </div>
+                            {/* Esperado Rivas oculto en UI */}
 
-                            <div className="p-2 rounded bg-gray-50 border">
+                            <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
                               <div className="text-xs text-gray-600">
                                 Esperado Isla
                               </div>
@@ -3355,7 +3422,7 @@ export default function CandyMainOrders() {
                               </div>
                             </div>
 
-                            <div className="p-2 rounded bg-gray-50 border">
+                            <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
                               <div className="text-xs text-gray-600">
                                 Prorrateo logístico
                               </div>
@@ -3365,16 +3432,9 @@ export default function CandyMainOrders() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-                            <div className="p-2 rounded bg-emerald-50 border">
-                              <div className="text-gray-600">
-                                U. Bruta Rivas
-                              </div>
-                              <div className="font-semibold">
-                                {Number(it.grossProfit || 0).toFixed(2)}
-                              </div>
-                            </div>
-                            <div className="p-2 rounded bg-emerald-50 border">
+                          <div className="mt-3 text-xs">
+                            {/* U. Bruta Rivas oculto en UI */}
+                            <div className="rounded border border-emerald-200/80 bg-emerald-50/90 p-2">
                               <div className="text-gray-600">U. Bruta Isla</div>
                               <div className="font-semibold">
                                 {Number(it.grossProfitIsla || 0).toFixed(2)}
@@ -3440,73 +3500,76 @@ export default function CandyMainOrders() {
               <div
                 className={`${mobileTab === "TOTALES" ? "block" : "hidden"} md:block`}
               >
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">
+                <h4 className="mb-3 mt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Resumen de la orden
+                </h4>
+                <div className="mt-1 grid grid-cols-1 gap-3 md:grid-cols-4">
+                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                       Paquetes totales
                     </div>
-                    <div className="text-lg font-semibold">
+                    <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
                       {orderKPIs.totalPackages}
                     </div>
                   </div>
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">
+                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                       Subtotal costo (facturado)
                     </div>
-                    <div className="text-lg font-semibold">
+                    <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
                       {Number(orderKPIs.subtotalCosto || 0).toFixed(2)}
                     </div>
                   </div>
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">
+                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                       Esperado (Rivas / Isla)
                     </div>
-                    <div className="text-sm font-semibold">
+                    <div className="mt-1 text-sm font-semibold leading-relaxed text-slate-800">
                       Rivas: {Number(orderKPIs.esperadoRivas || 0).toFixed(2)}
                       <br />
                       Isla: {Number(orderKPIs.esperadoIsla || 0).toFixed(2)}
                     </div>
                   </div>
-                  <div className="p-3 border rounded bg-gray-50">
-                    <div className="text-xs text-gray-600">
+                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                       Gastos logísticos
                     </div>
-                    <div className="text-lg font-semibold">
+                    <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
                       {Number(orderKPIs.gastosLogisticos || 0).toFixed(2)}
                     </div>
                   </div>
                 </div>
 
-                <div className="mt-3">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="p-3 border rounded bg-emerald-50">
-                      <div className="text-xs text-gray-600">
+                <div className="mt-4">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/90">
                         Utilidad Bruta Rivas
                       </div>
-                      <div className="text-lg font-semibold">
+                      <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
                         {Number(orderKPIs.utilidadBrutaRivas || 0).toFixed(2)}
                       </div>
                     </div>
 
-                    <div className="p-3 border rounded bg-emerald-50">
-                      <div className="text-xs text-gray-600">
+                    <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/90">
                         Utilidad Bruta Isla
                       </div>
-                      <div className="text-lg font-semibold">
+                      <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
                         {Number(orderKPIs.utilidadBrutaIsla || 0).toFixed(2)}
                       </div>
                     </div>
                   </div>
 
-                  <div className="mt-3 border rounded p-3 bg-white">
+                  <div className="mt-4 rounded-xl border border-dashed border-slate-200/90 bg-slate-50/60 p-3">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-gray-600">
-                        Plantilla, importar o exportar: menú ⋮ arriba o aquí
+                      <span className="text-xs text-slate-600">
+                        Plantilla, importar o exportar (menú ⋮ arriba o aquí)
                       </span>
                       <ActionMenuTrigger
-                        className="shrink-0 !h-10 !w-10"
+                        className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                         aria-label="Excel: plantilla, importar, exportar"
-                        iconClassName="h-[22px] w-[22px] text-gray-700"
+                        iconClassName="h-[22px] w-[22px] text-slate-700"
                         onClick={(e) =>
                           setMasterModalExcelMenu({
                             rect: (
@@ -3519,14 +3582,18 @@ export default function CandyMainOrders() {
                   </div>
                 </div>
               </div>
+              </div>
 
               {/* ===== Botonera sticky ===== */}
-              <div className="sticky bottom-0 bg-white pt-3 mt-4 border-t">
-                <div className="flex justify-end">
+              <div className="shrink-0 border-t border-slate-200/90 bg-gradient-to-t from-slate-50/95 to-white px-0 pb-3 pt-3 shadow-[0_-8px_24px_-12px_rgba(15,23,42,0.08)]">
+                <div className="flex items-center justify-end gap-2">
+                  <span className="mr-auto hidden text-xs text-slate-500 sm:inline">
+                    Guardar, limpiar o cerrar
+                  </span>
                   <ActionMenuTrigger
-                    className="!h-10 !w-10"
+                    className="!h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                     aria-label="Limpiar, cerrar o guardar orden"
-                    iconClassName="h-[22px] w-[22px] text-gray-700"
+                    iconClassName="h-[22px] w-[22px] text-slate-700"
                     onClick={(e) =>
                       setMasterModalFooterMenu({
                         rect: (
@@ -3538,12 +3605,12 @@ export default function CandyMainOrders() {
                 </div>
 
                 {/* Atajo móvil */}
-                <div className="md:hidden mt-2">
+                <div className="mt-2 md:hidden">
                   <Button
                     type="button"
                     variant="secondary"
                     size="sm"
-                    className="w-full !rounded-md shadow-none"
+                    className="w-full !rounded-xl border border-slate-200 bg-white py-2.5 text-slate-800 shadow-sm hover:bg-slate-50"
                     onClick={() => {
                       if (mobileTab === "DATOS" && !editingOrderId)
                         setMobileTab("AGREGAR");
@@ -3731,16 +3798,25 @@ export default function CandyMainOrders() {
       )}
 
       {/* LISTADO */}
-      <div className="mt-4">
+      <div className="mt-6">
+        <div className="mb-3 md:mb-4">
+          <h2 className="text-base font-bold tracking-tight text-slate-900 md:text-lg">
+            Órdenes maestras
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-500 md:text-sm">
+            Toca una orden para ver el detalle o usa el menú para editar.
+          </p>
+        </div>
+
         {/* MÓVIL: Cards */}
         <div className="md:hidden space-y-3">
           {loading ? (
-            <div className="p-4 border rounded bg-white text-center">
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-8 text-center text-sm text-slate-600">
               Cargando…
             </div>
           ) : orders.length === 0 ? (
-            <div className="p-4 border rounded bg-white text-center">
-              Sin ordenes maestras.
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-8 text-center text-sm text-slate-600">
+              Sin órdenes maestras.
             </div>
           ) : (
             orders.map((o) => {
@@ -3760,7 +3836,7 @@ export default function CandyMainOrders() {
                   key={o.id}
                   role="button"
                   tabIndex={0}
-                  className="border rounded-xl p-3 bg-white shadow-sm cursor-pointer hover:bg-slate-50/90 transition-colors"
+                  className="cursor-pointer rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03] transition-all hover:border-slate-300 hover:shadow-md active:scale-[0.99]"
                   onClick={() => void openMasterOrderDrawer(o)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -3770,17 +3846,22 @@ export default function CandyMainOrders() {
                   }}
                 >
                   <div className="flex items-start gap-3">
-                    <div className="flex-1">
-                      <div className="text-xs text-gray-500">{fecha}</div>
-                      <div className="font-semibold text-sm leading-tight">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-[11px] font-bold text-indigo-800">
+                      OM
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                        {fecha}
+                      </div>
+                      <div className="font-semibold leading-snug text-slate-900">
                         {o.name}
                       </div>
                     </div>
 
                     <ActionMenuTrigger
-                      className="shrink-0 !h-8 !w-8"
+                      className="shrink-0 !h-9 !w-9 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                       aria-label="Acciones de la orden"
-                      iconClassName="h-5 w-5 text-gray-700"
+                      iconClassName="h-5 w-5 text-slate-700"
                       onClick={(e) => {
                         e.stopPropagation();
                         setOrderListMenu({
@@ -3793,53 +3874,77 @@ export default function CandyMainOrders() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
-                    <div className="p-2 rounded bg-gray-50 border">
-                      <div className="text-xs text-gray-600">Paquetes</div>
-                      <div className="font-semibold">{o.totalPackages}</div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+                    <div className="rounded-lg border border-slate-200/80 bg-slate-50/90 p-2.5">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        Paquetes
+                      </div>
+                      <div className="font-semibold tabular-nums text-slate-900">
+                        {o.totalPackages}
+                      </div>
                     </div>
-                    <div className="p-2 rounded bg-gray-50 border">
-                      <div className="text-xs text-gray-600">Restantes</div>
-                      <div className="font-semibold">
+                    <div className="rounded-lg border border-slate-200/80 bg-slate-50/90 p-2.5">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        Restantes
+                      </div>
+                      <div className="font-semibold tabular-nums text-slate-900">
                         {agg ? agg.remainingPackages : 0}
                       </div>
                     </div>
 
-                    <div className="p-2 rounded bg-gray-50 border">
-                      <div className="text-xs text-gray-600">P. Proveedor</div>
-                      <div className="font-semibold">{precioProveedor}</div>
+                    <div className="rounded-lg border border-slate-200/80 bg-slate-50/90 p-2.5">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        P. proveedor
+                      </div>
+                      <div className="font-semibold tabular-nums text-slate-900">
+                        {precioProveedor}
+                      </div>
                     </div>
-                    <div className="p-2 rounded bg-gray-50 border">
-                      <div className="text-xs text-gray-600">Subtotal</div>
-                      <div className="font-semibold">
+                    <div className="rounded-lg border border-slate-200/80 bg-slate-50/90 p-2.5">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        Subtotal
+                      </div>
+                      <div className="font-semibold tabular-nums text-slate-900">
                         {Number(o.subtotal || 0).toFixed(2)}
                       </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
-                    <div className="p-2 rounded bg-blue-50 border">
-                      <div className="text-gray-600">Esperado Rivas</div>
-                      <div className="font-semibold">
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg border border-sky-200/70 bg-sky-50/90 p-2.5">
+                      <div className="font-medium text-sky-900/80">
+                        Esperado Rivas
+                      </div>
+                      <div className="font-semibold tabular-nums text-sky-950">
                         {Number(o.totalRivas || 0).toFixed(2)}
                       </div>
                     </div>
-                    <div className="p-2 rounded bg-blue-50 border">
-                      <div className="text-gray-600">Esperado Isla</div>
-                      <div className="font-semibold">
+                    <div className="rounded-lg border border-sky-200/70 bg-sky-50/90 p-2.5">
+                      <div className="font-medium text-sky-900/80">
+                        Esperado Isla
+                      </div>
+                      <div className="font-semibold tabular-nums text-sky-950">
                         {Number(o.totalIsla || 0).toFixed(2)}
                       </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
-                    <div className="p-2 rounded bg-emerald-50 border">
-                      <div className="text-gray-600">Gastos log.</div>
-                      <div className="font-semibold">{logi.toFixed(2)}</div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg border border-emerald-200/70 bg-emerald-50/90 p-2.5">
+                      <div className="font-medium text-emerald-900/80">
+                        Gastos log.
+                      </div>
+                      <div className="font-semibold tabular-nums text-emerald-950">
+                        {logi.toFixed(2)}
+                      </div>
                     </div>
-                    <div className="p-2 rounded bg-emerald-50 border">
-                      <div className="text-gray-600">U. Bruta (est)</div>
-                      <div className="font-semibold">{grossEst.toFixed(2)}</div>
+                    <div className="rounded-lg border border-emerald-200/70 bg-emerald-50/90 p-2.5">
+                      <div className="font-medium text-emerald-900/80">
+                        U. bruta (est.)
+                      </div>
+                      <div className="font-semibold tabular-nums text-emerald-950">
+                        {grossEst.toFixed(2)}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3946,17 +4051,20 @@ export default function CandyMainOrders() {
         </ActionMenu>
 
         {/* DESKTOP: tabla */}
-        <div className="hidden md:block bg-white border rounded">
-          <div className="p-3 border-b flex items-center justify-between">
-            <div className="text-sm text-gray-700">
-              Total pedidos: <b>{orders.length}</b>
+        <div className="hidden md:block overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/[0.04]">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200/90 bg-gradient-to-r from-slate-50 to-white px-4 py-3">
+            <div className="text-sm text-slate-700">
+              <span className="font-semibold text-slate-900">
+                {orders.length}
+              </span>{" "}
+              pedido{orders.length === 1 ? "" : "s"}
             </div>
 
             <ActionMenuTrigger
-              className="shrink-0 !h-10 !w-10"
+              className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
               aria-label="Acciones del listado"
               title="Actualizar prorrateo de órdenes maestras"
-              iconClassName="h-[22px] w-[22px] text-gray-700"
+              iconClassName="h-[22px] w-[22px] text-slate-700"
               onClick={(e) =>
                 setMainOrdersListToolbarMenu({
                   rect: (
@@ -3969,32 +4077,60 @@ export default function CandyMainOrders() {
 
           <div className="overflow-x-auto">
             <table className="min-w-[1100px] w-full text-xs">
-              <thead className="bg-gray-50">
+              <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
                 <tr className="whitespace-nowrap">
-                  <th className="text-left p-2 border-b">Fecha</th>
-                  <th className="text-left p-2 border-b">Nombre</th>
-                  <th className="text-right p-2 border-b">P. Totales</th>
-                  <th className="text-right p-2 border-b">P. Restantes</th>
-                  <th className="text-right p-2 border-b">P. Proveedor</th>
-                  <th className="text-right p-2 border-b">Subtotal</th>
-                  <th className="text-right p-2 border-b">Esperado Rivas</th>
-                  <th className="text-right p-2 border-b">Esperado Isla</th>
-                  <th className="text-right p-2 border-b">Gastos log.</th>
-                  <th className="text-right p-2 border-b">U. Bruta (est)</th>
-                  <th className="text-center p-2 border-b">Acciones</th>
+                  <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                    Fecha
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                    Nombre
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    P. totales
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    P. restantes
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    P. proveedor
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    Subtotal
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    Esp. Rivas
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    Esp. Isla
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    Gastos log.
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                    U. bruta (est.)
+                  </th>
+                  <th className="border-b border-slate-200 p-2.5 text-center font-semibold text-slate-700">
+                    Acciones
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={11} className="p-4 text-center">
+                    <td
+                      colSpan={11}
+                      className="p-10 text-center text-sm text-slate-500"
+                    >
                       Cargando…
                     </td>
                   </tr>
                 ) : orders.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="p-4 text-center">
-                      Sin ordenes maestras.
+                    <td
+                      colSpan={11}
+                      className="p-10 text-center text-sm text-slate-500"
+                    >
+                      Sin órdenes maestras.
                     </td>
                   </tr>
                 ) : (
@@ -4014,7 +4150,7 @@ export default function CandyMainOrders() {
                     return (
                       <tr
                         key={o.id}
-                        className="hover:bg-gray-50 whitespace-nowrap cursor-pointer"
+                        className="cursor-pointer whitespace-nowrap border-b border-slate-100 transition-colors hover:bg-slate-50/90"
                         role="button"
                         tabIndex={0}
                         onClick={() => void openMasterOrderDrawer(o)}
@@ -4025,37 +4161,39 @@ export default function CandyMainOrders() {
                           }
                         }}
                       >
-                        <td className="p-2 border-b">{fecha}</td>
-                        <td className="p-2 border-b">{o.name}</td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-slate-600">{fecha}</td>
+                        <td className="p-2.5 font-medium text-slate-900">
+                          {o.name}
+                        </td>
+                        <td className="p-2.5 text-right tabular-nums text-slate-800">
                           {o.totalPackages}
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-slate-800">
                           {agg ? agg.remainingPackages : 0}
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-slate-800">
                           {precioProveedor}
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-slate-800">
                           {Number(o.subtotal || 0).toFixed(2)}
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-sky-900">
                           {Number(o.totalRivas || 0).toFixed(2)}
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-sky-900">
                           {Number(o.totalIsla || 0).toFixed(2)}
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-slate-800">
                           {logi.toFixed(2)}
                         </td>
-                        <td className="p-2 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums font-medium text-emerald-800">
                           {grossEst.toFixed(2)}
                         </td>
-                        <td className="p-2 border-b text-center align-middle">
+                        <td className="p-2.5 text-center align-middle">
                           <ActionMenuTrigger
-                            className="!h-8 !w-8"
+                            className="!h-8 !w-8 rounded-lg border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                             aria-label="Acciones de la orden"
-                            iconClassName="h-5 w-5 text-gray-700"
+                            iconClassName="h-5 w-5 text-slate-700"
                             onClick={(e) => {
                               e.stopPropagation();
                               setOrderListMenu({
@@ -4075,9 +4213,10 @@ export default function CandyMainOrders() {
             </table>
           </div>
           {/* Paginación (desktop) */}
-          <div className="mt-2 flex items-center justify-between">
-            <div className="text-sm text-gray-600">
-              Mostrando {Math.min((page - 1) * PAGE_SIZE + 1, orders.length)}-
+          <div className="flex flex-col gap-2 border-t border-slate-200/90 bg-slate-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-slate-600">
+              Mostrando{" "}
+              {Math.min((page - 1) * PAGE_SIZE + 1, orders.length)}-
               {Math.min(page * PAGE_SIZE, orders.length)} de {orders.length}
             </div>
 
@@ -4088,12 +4227,12 @@ export default function CandyMainOrders() {
                 size="sm"
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="!rounded-md shadow-none disabled:opacity-50 text-sm"
+                className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
               >
                 Anterior
               </Button>
 
-              <div className="px-3 py-1 border rounded text-sm">
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium tabular-nums text-slate-800 shadow-sm">
                 {page} / {totalPages}
               </div>
 
@@ -4103,7 +4242,7 @@ export default function CandyMainOrders() {
                 size="sm"
                 disabled={page >= totalPages}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="!rounded-md shadow-none disabled:opacity-50 text-sm"
+                className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
               >
                 Siguiente
               </Button>

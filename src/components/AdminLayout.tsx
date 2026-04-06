@@ -16,6 +16,20 @@ import {
 import { hasRole } from "../utils/roles";
 import { canPath } from "../utils/access";
 
+/** Texto buscable: minúsculas, sin tildes, rutas camelCase partidas (p. ej. stockPedidos → stock pedidos). */
+function normalizeMenuSearchText(s: string): string {
+  let x = s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "");
+  x = x.replace(/[/_-]/g, " ");
+  for (let i = 0; i < 5; i++) {
+    x = x.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  }
+  x = x.replace(/([a-z])([A-Z])/g, "$1 $2");
+  return x.replace(/\s+/g, " ").trim();
+}
+
 export default function AdminLayout({
   role,
   roles,
@@ -300,6 +314,8 @@ export default function AdminLayout({
     module: "pollo" | "ropa" | "dulces" | "otras";
     section?: string;
     pathLabel: string;
+    /** Términos extra (sinónimos del menú, subpantallas, rutas habladas). */
+    keywords?: string;
   };
 
   const searchItems = useMemo(() => {
@@ -309,41 +325,61 @@ export default function AdminLayout({
     };
     const can = (key: string) => canPath(subject, key as any, "view");
 
-    const addPollo = (label: string, to: string, section: string) =>
+    const addPollo = (
+      label: string,
+      to: string,
+      section: string,
+      keywords?: string,
+    ) =>
       add(true, {
         label,
         to,
         module: "pollo",
         section,
         pathLabel: `Pollos Bea > ${section} > ${label}`,
+        keywords: keywords ?? "",
       });
-    const addRopa = (label: string, to: string, section: string) =>
+    const addRopa = (
+      label: string,
+      to: string,
+      section: string,
+      keywords?: string,
+    ) =>
       add(true, {
         label,
         to,
         module: "ropa",
         section,
         pathLabel: `Ropa > ${section} > ${label}`,
+        keywords: keywords ?? "",
       });
-    const addDulces = (label: string, to: string, section: string) =>
+    const addDulces = (
+      label: string,
+      to: string,
+      section: string,
+      keywords?: string,
+    ) =>
       add(true, {
         label,
         to,
         module: "dulces",
         section,
         pathLabel: `Dulces > ${section} > ${label}`,
+        keywords: keywords ?? "",
       });
-    const addOtras = (label: string, to: string) =>
+    const addOtras = (label: string, to: string, keywords?: string) =>
       add(true, {
         label,
         to,
         module: "otras",
         pathLabel: `Operaciones > ${label}`,
+        keywords: keywords ?? "",
       });
 
     if (isAdmin) {
       addPollo("Vender", `${base}/salesV2`, "Operaciones");
       addPollo("Saldo Pendientes", `${base}/customersPollo`, "Operaciones");
+      addPollo("Arqueo productos", `${base}/auditProductsPollo`, "Operaciones");
       addPollo("Transacciones", `${base}/transactionsPollo`, "Operaciones");
       addPollo("Cierre Ventas", `${base}/bills`, "Operaciones");
       addPollo("Estado de Cuenta", `${base}/statusAccount`, "Operaciones");
@@ -372,6 +408,12 @@ export default function AdminLayout({
 
       addDulces("Ordenes Maestras", `${base}/mainordersCandies`, "Inventario");
       addDulces(
+        "Stock - Pedidos",
+        `${base}/stockPedidosCandies`,
+        "Inventario",
+        "stock pedidos inventario pedidos vendedor",
+      );
+      addDulces(
         "Lista de Ordenes",
         `${base}/inventoryMainOrderCandies`,
         "Inventario",
@@ -381,9 +423,19 @@ export default function AdminLayout({
 
       addDulces("Data Center", `${base}/datacenter`, "Finanzas");
       addDulces("Entregas Cash", `${base}/cashDeliveries`, "Finanzas");
-      addDulces("Transacciones", `${base}/transactionCandies`, "Finanzas");
+      addDulces(
+        "Transacciones",
+        `${base}/transactionCandies`,
+        "Finanzas",
+        "ventas totales reporte ventas diarias reportes transacciones",
+      );
       addDulces("Cierres", `${base}/cierreVentasCandies`, "Finanzas");
-      addDulces("Reporte Cierres", `${base}/reporteCierresCandies`, "Finanzas");
+      addDulces(
+        "Saldos Externos",
+        `${base}/reporteCierresCandies`,
+        "Finanzas",
+        "reporte cierres reportes cierre externos",
+      );
       addDulces("Facturas", `${base}/billingsCandies`, "Finanzas");
       addDulces(
         "Consolidado Vendedores",
@@ -392,7 +444,12 @@ export default function AdminLayout({
       );
       addDulces("Dashboard", `${base}/dashboardCandies`, "Finanzas");
       addDulces("Clientes", `${base}/customersCandies`, "Finanzas");
-      addDulces("Estado de Cuenta", `${base}/estadoCuentaCandies`, "Finanzas");
+      addDulces(
+        "Estado de Cuenta",
+        `${base}/estadoCuentaCandies`,
+        "Finanzas",
+        "utilidades utilidad margen panel reportes cuenta clientes arqueo",
+      );
       addDulces("Vendedores", `${base}/vendorsCandies`, "Finanzas");
       addDulces("Gastos", `${base}/expensesCandies`, "Finanzas");
 
@@ -451,6 +508,13 @@ export default function AdminLayout({
         section: "Contabilidad",
         pathLabel: "Pollos Bea > Contabilidad > Saldos Pendientes",
       });
+      add(can("auditProductsPollo"), {
+        label: "Arqueo productos",
+        to: `${base}/auditProductsPollo`,
+        module: "pollo",
+        section: "Operaciones",
+        pathLabel: "Pollos Bea > Operaciones > Arqueo productos",
+      });
       add(can("statusAccount"), {
         label: "Estado de Cuenta",
         to: `${base}/statusAccount`,
@@ -488,6 +552,8 @@ export default function AdminLayout({
         module: "dulces",
         section: "Operaciones",
         pathLabel: "Dulces > Operaciones > Ventas del dia",
+        keywords:
+          "ventas totales reporte ventas transacciones diarias reportes",
       });
       add(can("cierreVentasCandies"), {
         label: "Cierre de Ventas",
@@ -510,6 +576,21 @@ export default function AdminLayout({
         section: "Operaciones",
         pathLabel: "Dulces > Operaciones > Clientes",
       });
+      add(can("estadoCuentaCandies"), {
+        label: "Estado de Cuenta",
+        to: `${base}/estadoCuentaCandies`,
+        module: "dulces",
+        section: "Finanzas",
+        pathLabel: "Dulces > Finanzas > Estado de Cuenta",
+        keywords: "utilidades utilidad margen panel reportes cuenta",
+      });
+      add(can("mainordersCandies"), {
+        label: "Orden Maestra",
+        to: `${base}/mainordersCandies`,
+        module: "dulces",
+        section: "Operaciones",
+        pathLabel: "Dulces > Operaciones > Orden Maestra",
+      });
       add(can("productsPricesCandies"), {
         label: "Precios Venta",
         to: `${base}/productsPricesCandies`,
@@ -530,6 +611,7 @@ export default function AdminLayout({
         module: "dulces",
         section: "Operaciones",
         pathLabel: "Dulces > Operaciones > Stock - Pedidos",
+        keywords: "stock pedidos inventario",
       });
       add(can("reporteCierresCandies"), {
         label: "Saldos Externos",
@@ -552,9 +634,13 @@ export default function AdminLayout({
 
   const filteredSearchItems = useMemo(() => {
     if (!searchQuery) return [] as SearchItem[];
-    return searchItems.filter((item) =>
-      (item.pathLabel + " " + item.label).toLowerCase().includes(searchQuery),
-    );
+    const q = normalizeMenuSearchText(searchQuery);
+    return searchItems.filter((item) => {
+      const hay = normalizeMenuSearchText(
+        `${item.pathLabel} ${item.label} ${item.to} ${item.section ?? ""} ${item.keywords ?? ""}`,
+      );
+      return hay.includes(q);
+    });
   }, [searchItems, searchQuery]);
 
   const revealSearchItem = (item: SearchItem) => {

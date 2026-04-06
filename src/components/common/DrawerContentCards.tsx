@@ -160,12 +160,17 @@ export type DrawerDlRow = {
 export function DrawerDetailDlCard({
   title,
   rows,
+  className = "",
 }: {
   title: React.ReactNode;
   rows: DrawerDlRow[];
+  /** Clases extra del contenedor (p. ej. fondo semitransparente por estado) */
+  className?: string;
 }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+    <div
+      className={`rounded-xl border border-gray-200 bg-white p-3 shadow-sm ${className}`.trim()}
+    >
       <div className="text-sm font-semibold text-gray-900 leading-snug">
         {title}
       </div>
