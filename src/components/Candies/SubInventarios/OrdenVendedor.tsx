@@ -424,6 +424,15 @@ export default function VendorCandyOrders({
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [productSearch, setProductSearch] = useState("");
   const [associatedSearch, setAssociatedSearch] = useState("");
+  /** Solo pedido nuevo: OM desde la que se descontará al guardar (FIFO si vacío) */
+  const [selectedMasterOrderId, setSelectedMasterOrderId] = useState<string>("");
+  /** Líneas con rem > 0 por doc candy_main_orders */
+  const [masterOrderLinesByOrderId, setMasterOrderLinesByOrderId] = useState<
+    Record<string, { productId: string; remainingPackages: number }[]>
+  >({});
+  const [masterOrderPickerOptions, setMasterOrderPickerOptions] = useState<
+    { id: string; label: string }[]
+  >([]);
 
   const [isSaving, setIsSaving] = useState(false);
   const [isBackfilling, setIsBackfilling] = useState(false);
@@ -510,6 +519,17 @@ export default function VendorCandyOrders({
   const selectedSeller = useMemo(
     () => sellers.find((s) => s.id === sellerId) || null,
     [sellerId, sellers],
+  );
+
+  const masterOrderHtmlSelectOptions = useMemo(
+    () => [
+      { value: "", label: "— Sin orden maestra (FIFO habitual) —" },
+      ...masterOrderPickerOptions.map((o) => ({
+        value: o.id,
+        label: o.label,
+      })),
+    ],
+    [masterOrderPickerOptions],
   );
 
   const sellerBranch: Branch | undefined = selectedSeller?.branch;
@@ -896,6 +916,43 @@ export default function VendorCandyOrders({
             if (!prev || cand.key > prev.key) pick[pid] = cand;
           }
         });
+
+        const masterLinesByOrderId: Record<
+          string,
+          { productId: string; remainingPackages: number }[]
+        > = {};
+        const orderPicker: { id: string; label: string }[] = [];
+        mainSnap.forEach((d) => {
+          const x = d.data() as any;
+          const items = Array.isArray(x.items) ? x.items : [];
+          const byPid: Record<string, number> = {};
+          for (const it of items) {
+            const pid = String(it.id || it.productId || "");
+            if (!pid) continue;
+            const rem = floor(it.remainingPackages ?? it.remainingPacks ?? 0);
+            if (rem > 0) byPid[pid] = (byPid[pid] || 0) + rem;
+          }
+          const lines = Object.entries(byPid).map(
+            ([productId, remainingPackages]) => ({
+              productId,
+              remainingPackages,
+            }),
+          );
+          if (lines.length > 0) {
+            masterLinesByOrderId[d.id] = lines;
+            const dateStr = String(x.date || "—");
+            const orderTitle = String(x.name || "").trim();
+            const totalRem = lines.reduce((s, l) => s + l.remainingPackages, 0);
+            orderPicker.push({
+              id: d.id,
+              label: orderTitle
+                ? `${orderTitle} · ${totalRem} paq. disponibles · ${dateStr}`
+                : `${totalRem} paq. disponibles · ${dateStr}`,
+            });
+          }
+        });
+        setMasterOrderLinesByOrderId(masterLinesByOrderId);
+        setMasterOrderPickerOptions(orderPicker);
 
         // 3) INVENTARIO REAL (inventory_candies) PARA DISPONIBLES
         const invMasterSnap = await getDocs(
@@ -1966,6 +2023,7 @@ export default function VendorCandyOrders({
     setEditingPackagesMap({});
     setEditingMarginMap({});
     setSyncMsg("");
+    setSelectedMasterOrderId("");
   };
 
   const openNewOrder = () => {
@@ -2894,6 +2952,139 @@ export default function VendorCandyOrders({
     setItemsPage(1);
   };
 
+  const mergeOrderItemsByProductId = (list: OrderItem[]): OrderItem[] => {
+    const s = sellers.find((x) => x.id === sellerId) || null;
+    const br = s?.branch;
+    const m = new Map<string, OrderItem>();
+    for (const it of list) {
+      const prev = m.get(it.productId);
+      if (!prev) {
+        m.set(it.productId, it);
+        continue;
+      }
+      const mergedPacks = floor(prev.packages + it.packages);
+      const pr = productsAll.find((x) => x.id === it.productId) || null;
+      const pricePerPackageM = pr
+        ? getPricePerPack(pr, br)
+        : it.pricePerPackage;
+      const grossPerPackM = computeGrossPerPack(pr, undefined, br);
+      const grossProfitM = grossPerPackM * mergedPacks;
+      const totalExpectedM = pricePerPackageM * mergedPacks;
+      const logisticAllocatedM = pr
+        ? pr.logisticAllocatedPerPack * mergedPacks
+        : 0;
+      const uApproxPerPackM = pr ? getUApproxPerPack(pr, br) : 0;
+      const uAproximadaM = uApproxPerPackM * mergedPacks;
+      const vendorMarginPercentM = clampPercent(prev.vendorMarginPercent);
+      const splitM = calcSplitFromGross(grossProfitM, vendorMarginPercentM);
+      m.set(it.productId, {
+        ...prev,
+        packages: mergedPacks,
+        totalExpected: totalExpectedM,
+        grossProfit: grossProfitM,
+        logisticAllocated: logisticAllocatedM,
+        uAproximada: uAproximadaM,
+        uVendor: splitM.uVendor,
+        uInvestor: splitM.uInvestor,
+        vendorMarginPercent: splitM.vendorMarginPercent,
+        totalRivas: (pr?.unitPriceRivas || 0) * mergedPacks,
+        totalSanJorge: (pr?.unitPriceSanJorge || 0) * mergedPacks,
+        totalIsla: (pr?.unitPriceIsla || 0) * mergedPacks,
+        remainingPackages: mergedPacks,
+      });
+    }
+    return [...m.values()];
+  };
+
+  const addAllProductsFromMasterOrder = () => {
+    if (editingOrderKey) return;
+    setMsg("");
+    if (!selectedMasterOrderId.trim()) {
+      return setMsg(
+        "⚠️ Seleccioná una orden maestra arriba para cargar sus productos.",
+      );
+    }
+    if (!sellerId) return setMsg("⚠️ Seleccioná un vendedor.");
+    if (!date) return setMsg("⚠️ Seleccioná una fecha.");
+    const lines =
+      masterOrderLinesByOrderId[selectedMasterOrderId.trim()] || [];
+    if (!lines.length) {
+      return setMsg("⚠️ Esa orden maestra no tiene paquetes disponibles.");
+    }
+
+    const s = sellers.find((x) => x.id === sellerId) || null;
+    const br = s?.branch;
+
+    const toAdd: OrderItem[] = [];
+    const skippedNames: string[] = [];
+
+    lines.forEach((line, lineIdx) => {
+      const packs = floor(line.remainingPackages);
+      if (packs <= 0) return;
+      const p = productsAll.find((x) => x.id === line.productId);
+      if (!p) {
+        skippedNames.push(line.productId);
+        return;
+      }
+
+      const pricePerPackage = getPricePerPack(p, br);
+      const grossPerPack = computeGrossPerPack(p, undefined, br);
+      const uApproxPerPack = getUApproxPerPack(p, br);
+      const uAproximada = uApproxPerPack * packs;
+      const totalExpected = pricePerPackage * packs;
+      const grossProfit = grossPerPack * packs;
+      const logisticAllocated = p.logisticAllocatedPerPack * packs;
+      const vendorMarginPercent = getSellerMarginPercent(sellerId);
+      const split = calcSplitFromGross(grossProfit, vendorMarginPercent);
+
+      const item: OrderItem = {
+        id: `tmp_${Date.now()}_${lineIdx}_${Math.random().toString(16).slice(2)}`,
+        productId: p.id,
+        productName: p.name,
+        category: p.category,
+        unitsPerPackage: p.unitsPerPackage,
+        packages: packs,
+        totalExpected,
+        pricePerPackage,
+        grossProfit,
+        logisticAllocated,
+        providerPrice: p.providerPrice,
+        vendorMarginPercent: split.vendorMarginPercent,
+        uAproximada,
+        uVendor: split.uVendor,
+        uInvestor: split.uInvestor,
+        totalRivas: (p.unitPriceRivas || 0) * packs,
+        totalSanJorge: (p.unitPriceSanJorge || 0) * packs,
+        totalIsla: (p.unitPriceIsla || 0) * packs,
+        unitPriceRivas: p.unitPriceRivas || 0,
+        unitPriceSanJorge: p.unitPriceSanJorge || 0,
+        unitPriceIsla: p.unitPriceIsla || 0,
+        remainingPackages: packs,
+        transferDelta: 0,
+      };
+      toAdd.push(item);
+    });
+
+    const toMerged = mergeOrderItemsByProductId(toAdd);
+    if (!toMerged.length) {
+      return setMsg(
+        skippedNames.length
+          ? "⚠️ Ningún producto de la OM está en el catálogo."
+          : "⚠️ No hay líneas con paquetes.",
+      );
+    }
+
+    setOrderItems((prev) =>
+      mergeOrderItemsByProductId([...toMerged, ...prev]),
+    );
+    setItemsPage(1);
+    let msg = `✅ Agregados ${toMerged.length} productos desde la orden maestra.`;
+    if (skippedNames.length) {
+      msg += ` Omitidos ${skippedNames.length} sin catálogo.`;
+    }
+    setMsg(msg);
+  };
+
   const removeItem = (id: string) => {
     setOrderItems((prev) => prev.filter((x) => x.id !== id));
   };
@@ -3785,6 +3976,8 @@ export default function VendorCandyOrders({
       setMsg("");
       if (isReadOnly) return setMsg("⚠️ Solo lectura.");
       if (!sellerId) return setMsg("⚠️ Seleccioná un vendedor.");
+      if (!String(orderName || "").trim())
+        return setMsg("⚠️ Ingresá el nombre de la orden.");
       if (!date) return setMsg("⚠️ Seleccioná una fecha.");
       if (!orderItems.length) return setMsg("⚠️ Agregá al menos 1 producto.");
 
@@ -3792,6 +3985,12 @@ export default function VendorCandyOrders({
       if (!seller) return setMsg("⚠️ Vendedor inválido.");
 
       const br = seller.branch;
+
+      /** Pedido nuevo: si el usuario eligió OM, la asignación de inventario usa solo lotes de esa orden */
+      const preferredMasterOrderIdForAlloc =
+        !editingOrderKey && selectedMasterOrderId.trim()
+          ? selectedMasterOrderId.trim()
+          : undefined;
 
       // ====== SOLO SI ESTAMOS EDITANDO: sacar filas viejas del pedido ======
       const prevRows = editingOrderKey
@@ -3843,9 +4042,11 @@ export default function VendorCandyOrders({
           let avail = availablePacks[it.productId] ?? 0;
           const p = productsAll.find((x) => x.id === it.productId) || null;
 
-          if (delta > avail && p?.masterOrderId) {
+          const backfillOrderId =
+            preferredMasterOrderIdForAlloc || p?.masterOrderId;
+          if (delta > avail && backfillOrderId) {
             try {
-              await backfillCandyInventoryFromMainOrder(p.masterOrderId);
+              await backfillCandyInventoryFromMainOrder(backfillOrderId);
               const refreshed = await fetchAvailablePacksByProduct(
                 it.productId,
                 it.productName,
@@ -3983,17 +4184,25 @@ export default function VendorCandyOrders({
             const { allocations } = await allocateVendorCandyPacks({
               productId: it.productId,
               packagesToAllocate: delta,
+              ...(preferredMasterOrderIdForAlloc
+                ? { preferredMasterOrderId: preferredMasterOrderIdForAlloc }
+                : {}),
             });
             allocationsByProduct.set(it.productId, allocations || []);
           } catch (e) {
             const p = productsAll.find((x) => x.id === it.productId) || null;
 
-            if (p?.masterOrderId) {
+            const retryBackfillId =
+              preferredMasterOrderIdForAlloc || p?.masterOrderId;
+            if (retryBackfillId) {
               try {
-                await backfillCandyInventoryFromMainOrder(p.masterOrderId);
+                await backfillCandyInventoryFromMainOrder(retryBackfillId);
                 const { allocations } = await allocateVendorCandyPacks({
                   productId: it.productId,
                   packagesToAllocate: delta,
+                  ...(preferredMasterOrderIdForAlloc
+                    ? { preferredMasterOrderId: preferredMasterOrderIdForAlloc }
+                    : {}),
                 });
                 allocationsByProduct.set(it.productId, allocations || []);
                 continue;
@@ -4277,7 +4486,7 @@ export default function VendorCandyOrders({
   // =========================
   // Solo admin puede cambiar el vendedor en el selector
   const disableSellerSelect = !isAdmin;
-  const desktopColumns = isAdmin ? 11 : 8;
+  const desktopColumns = isAdmin ? 9 : 6;
   const zeroClass = (v: number) => (Number(v) <= 0 ? "text-red-500" : "");
 
   // =========================
@@ -4299,17 +4508,6 @@ export default function VendorCandyOrders({
 
         <div className="flex flex-wrap gap-2">
           <RefreshButton onClick={refresh} />
-          {isAdmin && (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              className="rounded bg-amber-600 shadow-none hover:bg-amber-700 active:bg-amber-800"
-              onClick={() => setOpenTransferModal(true)}
-            >
-              Traslados
-            </Button>
-          )}
         </div>
       </div>
 
@@ -4369,28 +4567,42 @@ export default function VendorCandyOrders({
             </div>
 
             <div className="w-full max-w-full overflow-x-auto">
-              <table className="w-full table-fixed text-xs">
+              <table className="min-w-[1100px] w-full text-xs">
                 <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
-                  <tr className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                    <th className="text-left p-3 border-b">Nombre</th>
-                    <th className="text-left p-3 border-b">Fecha</th>
-                    <th className="text-left p-3 border-b">Vendedor</th>
-                    <th className="text-right p-3 border-b">P. Agregados</th>
-                    <th className="text-right p-3 border-b">P. Restantes</th>
+                  <tr className="whitespace-nowrap">
+                    <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                      Fecha
+                    </th>
+                    <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                      Nombre
+                    </th>
+                    <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                      Vendedor
+                    </th>
+                    <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                      P. Agregados
+                    </th>
+                    <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                      P. Restantes
+                    </th>
                     {isAdmin && (
-                      <th className="text-right p-3 border-b">
+                      <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
                         Total esperado
                       </th>
                     )}
                     {isAdmin && (
-                      <th className="text-right p-3 border-b">U. Bruta</th>
+                      <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                        U. Bruta
+                      </th>
                     )}
                     {isAdmin && (
-                      <th className="text-right p-3 border-b">Gastos</th>
+                      <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
+                        Gastos
+                      </th>
                     )}
-                    <th className="text-right p-3 border-b">Trasl. Salida</th>
-                    <th className="text-right p-3 border-b">Trasl. Entrada</th>
-                    <th className="text-left p-3 border-b">Acciones</th>
+                    <th className="border-b border-slate-200 p-2.5 text-center font-semibold text-slate-700">
+                      Acciones
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4401,16 +4613,11 @@ export default function VendorCandyOrders({
                     const grossProfitVal = Number(
                       o.grossProfitActive ?? o.grossProfit ?? 0,
                     );
-                    const vendorProfitVal = Number(
-                      o.vendorProfitActive ?? o.vendorProfit ?? 0,
-                    );
-                    const transferredOutVal = Number(o.transferredOut || 0);
-                    const transferredInVal = Number(o.transferredIn || 0);
 
                     return (
                       <tr
                         key={o.orderKey}
-                        className="cursor-pointer border-b border-slate-100 transition-colors odd:bg-white even:bg-slate-50/80 hover:bg-slate-100/80"
+                        className="cursor-pointer whitespace-nowrap border-b border-slate-100 transition-colors hover:bg-slate-50/90"
                         role="button"
                         tabIndex={0}
                         onClick={() => openVendorOrderDrawer(o)}
@@ -4421,60 +4628,47 @@ export default function VendorCandyOrders({
                           }
                         }}
                       >
-                        <td
-                          className="p-3 border-b max-w-[240px] whitespace-nowrap truncate"
-                          title={o.orderName || undefined}
-                        >
+                        <td className="p-2.5 text-slate-600">{o.date}</td>
+                        <td className="p-2.5 font-medium text-slate-900">
                           {o.orderName || "—"}
                         </td>
-                        <td className="p-3 border-b text-sm text-gray-600">
-                          {o.date}
+                        <td className="p-2.5 text-slate-800">
+                          {o.sellerName}
                         </td>
-                        <td className="p-3 border-b">{o.sellerName}</td>
-                        <td className="p-3 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-slate-800">
                           <span className={zeroClass(o.totalPackages)}>
                             {o.totalPackages}
                           </span>
                         </td>
-                        <td className="p-3 border-b text-right">
+                        <td className="p-2.5 text-right tabular-nums text-slate-800">
                           <span className={zeroClass(o.totalRemainingPackages)}>
                             {o.totalRemainingPackages}
                           </span>
                         </td>
                         {isAdmin && (
-                          <td className="p-3 border-b text-right">
+                          <td className="p-2.5 text-right tabular-nums text-sky-900">
                             <span className={zeroClass(totalExpectedVal)}>
                               {money(totalExpectedVal)}
                             </span>
                           </td>
                         )}
                         {isAdmin && (
-                          <td className="p-3 border-b text-right">
+                          <td className="p-2.5 text-right tabular-nums font-medium text-emerald-800">
                             <span className={zeroClass(grossProfitVal)}>
                               {money(grossProfitVal)}
                             </span>
                           </td>
                         )}
                         {isAdmin && (
-                          <td className="p-3 border-b text-right">
+                          <td className="p-2.5 text-right tabular-nums text-slate-800">
                             {money((o.gastosActive ?? o.gastos) || 0)}
                           </td>
                         )}
-                        <td className="p-3 border-b text-right">
-                          <span className={zeroClass(transferredOutVal)}>
-                            {o.transferredOut}
-                          </span>
-                        </td>
-                        <td className="p-3 border-b text-right">
-                          <span className={zeroClass(transferredInVal)}>
-                            {o.transferredIn}
-                          </span>
-                        </td>
-                        <td className="p-3 border-b">
+                        <td className="p-2.5 text-center align-middle">
                           <ActionMenuTrigger
-                            className="!h-8 !w-8"
+                            className="!h-8 !w-8 rounded-lg border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                             aria-label="Acciones del pedido"
-                            iconClassName="h-5 w-5 text-gray-700"
+                            iconClassName="h-5 w-5 text-slate-700"
                             onClick={(e) => {
                               e.stopPropagation();
                               setOrderRowMenu({
@@ -4568,11 +4762,14 @@ export default function VendorCandyOrders({
                       PV
                     </div>
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-900">
-                        {o.sellerName}
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                        {o.date}
                       </div>
-                      <div className="text-xs text-slate-600">
-                        {o.orderName || "—"} • {o.date}
+                      <div className="font-semibold leading-snug text-slate-900">
+                        {o.orderName || "—"}
+                      </div>
+                      <div className="mt-0.5 text-xs text-slate-600">
+                        {o.sellerName}
                       </div>
                     </div>
                   </div>
@@ -4918,7 +5115,7 @@ export default function VendorCandyOrders({
 
                 <div className="shrink-0">
                   <ActionMenuTrigger
-                    className="!h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                    className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                     aria-label="Acciones del pedido"
                     iconClassName="h-[22px] w-[22px] text-slate-700"
                     onClick={(e) =>
@@ -4967,8 +5164,14 @@ export default function VendorCandyOrders({
                 className={`${mobileMetaOpen ? "block" : "hidden"} md:block space-y-3`}
               >
                 {/* Top selectors */}
-                <div className="grid md:grid-cols-3 gap-2">
-                  <div className="md:col-span-3">
+                <div
+                  className={`grid gap-2 ${editingOrderKey ? "md:grid-cols-3" : "md:grid-cols-4"}`}
+                >
+                  <div
+                    className={
+                      editingOrderKey ? "md:col-span-3" : "md:col-span-4"
+                    }
+                  >
                     <label className="text-xs font-medium text-slate-600">
                       Nombre
                     </label>
@@ -4980,6 +5183,19 @@ export default function VendorCandyOrders({
                       disabled={isReadOnly}
                     />
                   </div>
+                  {!editingOrderKey && (
+                    <div>
+                      <MobileHtmlSelect
+                        label="Orden maestra"
+                        value={selectedMasterOrderId}
+                        onChange={setSelectedMasterOrderId}
+                        options={masterOrderHtmlSelectOptions}
+                        sheetTitle="Orden maestra"
+                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
+                      />
+                    </div>
+                  )}
                   <div>
                     <MobileHtmlSelect
                       label="Vendedor"
@@ -5159,17 +5375,33 @@ export default function VendorCandyOrders({
                       />
                     </div>
 
-                    <div className="flex items-end">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                       <Button
                         type="button"
                         variant="primary"
                         size="sm"
-                        className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500"
+                        className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500 sm:flex-1"
                         onClick={addItemToOrder}
                         disabled={!selectedProduct}
                       >
                         Agregar Paquetes
                       </Button>
+                      {!editingOrderKey && (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500 sm:w-auto sm:shrink-0"
+                          onClick={addAllProductsFromMasterOrder}
+                          disabled={
+                            !selectedMasterOrderId.trim() ||
+                            !sellerId ||
+                            !date
+                          }
+                        >
+                          Agregar OM
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -5267,14 +5499,14 @@ export default function VendorCandyOrders({
                         </th>
                         {isAdmin && (
                           <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                            Precio Costo
+                          Costo
                           </th>
                         )}
                         <th className="min-w-[6.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Precio Venta
+                          Venta
                         </th>
                         <th className="min-w-[8rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Monto Esperado
+                        Esperado
                         </th>
                         {isAdmin && (
                           <>
@@ -5403,34 +5635,19 @@ export default function VendorCandyOrders({
                                     autoFocus
                                   />
                                 ) : (
-                                  <div className="flex items-center justify-end gap-1">
+                                  <div className="flex items-center justify-end gap-2">
                                     <span className={zeroClass(it.packages)}>
                                       {it.packages}
                                     </span>
                                     <Button
                                       type="button"
-                                      variant="primary"
-                                      size="sm"
-                                      className="h-6 w-6 rounded p-0 shadow-none !text-sm"
+                                      variant="ghost"
+                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                       onClick={() => openPackageEdit(it.id)}
                                       aria-label="Editar paquetes"
                                       title="Editar paquetes"
                                     >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="shrink-0"
-                                        width={14}
-                                        height={14}
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth={2}
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                        <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                                      </svg>
+                                      ✏️
                                     </Button>
                                   </div>
                                 )
@@ -5479,7 +5696,7 @@ export default function VendorCandyOrders({
                                     )}
                                   </div>
                                 ) : (
-                                  <div className="flex items-center justify-end gap-1">
+                                  <div className="flex items-center justify-end gap-2">
                                     <span
                                       className={zeroClass(
                                         it.remainingPackages,
@@ -5489,28 +5706,13 @@ export default function VendorCandyOrders({
                                     </span>
                                     <Button
                                       type="button"
-                                      variant="primary"
-                                      size="sm"
-                                      className="h-6 w-6 rounded p-0 shadow-none !text-sm"
+                                      variant="ghost"
+                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
                                       onClick={() => openRemainingEdit(it.id)}
                                       aria-label="Editar restantes"
                                       title="Editar restantes"
                                     >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="shrink-0"
-                                        width={14}
-                                        height={14}
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth={2}
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                        <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                                      </svg>
+                                      ✏️
                                     </Button>
                                   </div>
                                 )
@@ -5546,58 +5748,62 @@ export default function VendorCandyOrders({
                             </td>
 
                             <td className="min-w-[8rem] border-b px-2 py-2 text-right align-middle">
-                              <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1">
-                                <span
-                                  className={`shrink-0 tabular-nums ${zeroClass(totalExpected)}`}
-                                >
-                                  {money(totalExpected)}
-                                </span>
-                                {isAdmin && (
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                    onClick={async () => recalcItem(it.id)}
-                                    aria-label="Recalcular total esperado"
+                              <div className="flex w-full min-w-0 justify-end">
+                                <div className="inline-flex max-w-full flex-nowrap items-center gap-1">
+                                  {isAdmin && (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                      onClick={async () => recalcItem(it.id)}
+                                      aria-label="Recalcular total esperado"
+                                    >
+                                      🔁
+                                    </Button>
+                                  )}
+                                  <span
+                                    className={`shrink-0 tabular-nums ${zeroClass(totalExpected)}`}
                                   >
-                                    🔁
-                                  </Button>
-                                )}
-                                {savingCalcMap[it.id] && (
-                                  <span className="shrink-0 text-[10px] text-gray-500">
-                                    Calc…
+                                    {money(totalExpected)}
                                   </span>
-                                )}
+                                  {savingCalcMap[it.id] && (
+                                    <span className="shrink-0 text-[10px] text-gray-500">
+                                      Calc…
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </td>
 
                             {isAdmin && (
                               <>
                                 <td className="min-w-[8rem] border-b px-2 py-2 text-right align-middle">
-                                  <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1">
-                                    <span
-                                      className={`shrink-0 tabular-nums ${zeroClass(grossProfitBase)}`}
-                                    >
-                                      {money(grossProfitBase)}
-                                    </span>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="sm"
-                                      className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                      onClick={async () =>
-                                        await recalcItem(it.id)
-                                      }
-                                      aria-label="Recalcular U. Bruta"
-                                    >
-                                      🔁
-                                    </Button>
-                                    {savingCalcMap[it.id] && (
-                                      <span className="shrink-0 text-[10px] text-gray-500">
-                                        Calc…
+                                  <div className="flex w-full min-w-0 justify-end">
+                                    <div className="inline-flex max-w-full flex-nowrap items-center gap-1">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                        onClick={async () =>
+                                          await recalcItem(it.id)
+                                        }
+                                        aria-label="Recalcular U. Bruta"
+                                      >
+                                        🔁
+                                      </Button>
+                                      <span
+                                        className={`shrink-0 tabular-nums ${zeroClass(grossProfitBase)}`}
+                                      >
+                                        {money(grossProfitBase)}
                                       </span>
-                                    )}
+                                      {savingCalcMap[it.id] && (
+                                        <span className="shrink-0 text-[10px] text-gray-500">
+                                          Calc…
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                 </td>
 
@@ -5681,46 +5887,33 @@ export default function VendorCandyOrders({
                                     autoFocus
                                   />
                                 ) : (
-                                  <div className="flex items-center justify-end gap-1">
-                                    <span
-                                      className={zeroClass(
-                                        Number(
+                                  <div className="flex w-full justify-end">
+                                    <div className="inline-flex items-center gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                        onClick={() => openMarginEdit(it.id)}
+                                        aria-label="Editar margen"
+                                        title="Editar margen"
+                                      >
+                                        ✏️
+                                      </Button>
+                                      <span
+                                        className={zeroClass(
+                                          Number(
+                                            it.vendorMarginPercent ??
+                                              getSellerMarginPercent(sellerId),
+                                          ),
+                                        )}
+                                      >
+                                        {Number(
                                           it.vendorMarginPercent ??
                                             getSellerMarginPercent(sellerId),
-                                        ),
-                                      )}
-                                    >
-                                      {Number(
-                                        it.vendorMarginPercent ??
-                                          getSellerMarginPercent(sellerId),
-                                      ).toFixed(3)}
-                                      %
-                                    </span>
-                                    <Button
-                                      type="button"
-                                      variant="primary"
-                                      size="sm"
-                                      className="hidden h-6 w-6 rounded p-0 shadow-none !text-sm md:inline-flex"
-                                      onClick={() => openMarginEdit(it.id)}
-                                      aria-label="Editar margen"
-                                      title="Editar margen"
-                                    >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="shrink-0"
-                                        width={14}
-                                        height={14}
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth={2}
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
-                                        <path d="M20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-                                      </svg>
-                                    </Button>
+                                        ).toFixed(3)}
+                                        %
+                                      </span>
+                                    </div>
                                   </div>
                                 )
                               ) : (
@@ -5902,6 +6095,17 @@ export default function VendorCandyOrders({
                                             >
                                               {it.packages}
                                             </span>
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                              onClick={() =>
+                                                openPackageEdit(it.id)
+                                              }
+                                              aria-label="Editar paquetes"
+                                            >
+                                              ✏️
+                                            </Button>
                                           </div>
                                         )
                                       ) : (
@@ -5964,6 +6168,17 @@ export default function VendorCandyOrders({
                                               >
                                                 {it.remainingPackages}
                                               </span>
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                                onClick={() =>
+                                                  openRemainingEdit(it.id)
+                                                }
+                                                aria-label="Editar restantes"
+                                              >
+                                                ✏️
+                                              </Button>
                                             </div>
                                           )
                                         ) : (
@@ -5989,32 +6204,34 @@ export default function VendorCandyOrders({
                                       <div className="text-gray-600">
                                         Total esperado
                                       </div>
-                                      <div className="mt-0.5 flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap">
-                                        <div
-                                          className={`font-semibold tabular-nums ${zeroClass(totalExpected)}`}
-                                        >
-                                          {money(totalExpected)}
-                                        </div>
-                                        {isAdmin && (
-                                          <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                            onClick={async (e) => {
-                                              e.stopPropagation();
-                                              await recalcItem(it.id);
-                                            }}
-                                            aria-label="Recalcular total esperado"
+                                      <div className="mt-0.5 flex w-full justify-end">
+                                        <div className="inline-flex max-w-full flex-nowrap items-center gap-1 whitespace-nowrap">
+                                          {isAdmin && (
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                await recalcItem(it.id);
+                                              }}
+                                              aria-label="Recalcular total esperado"
+                                            >
+                                              🔁
+                                            </Button>
+                                          )}
+                                          <div
+                                            className={`font-semibold tabular-nums ${zeroClass(totalExpected)}`}
                                           >
-                                            🔁
-                                          </Button>
-                                        )}
-                                        {savingCalcMap[it.id] && (
-                                          <span className="shrink-0 text-[10px] text-gray-500">
-                                            Calc…
-                                          </span>
-                                        )}
+                                            {money(totalExpected)}
+                                          </div>
+                                          {savingCalcMap[it.id] && (
+                                            <span className="shrink-0 text-[10px] text-gray-500">
+                                              Calc…
+                                            </span>
+                                          )}
+                                        </div>
                                       </div>
                                     </div>
                                     {isAdmin && (
@@ -6023,36 +6240,38 @@ export default function VendorCandyOrders({
                                           <div className="text-gray-600">
                                             U. Bruta
                                           </div>
-                                          <div className="mt-0.5 flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap">
-                                            <div
-                                              className={`font-semibold tabular-nums ${zeroClass(
-                                                Number(grossProfitBase || 0),
-                                              )}`}
-                                            >
-                                              {money(
-                                                Number(grossProfitBase || 0),
+                                          <div className="mt-0.5 flex w-full justify-end">
+                                            <div className="inline-flex max-w-full flex-nowrap items-center gap-1 whitespace-nowrap">
+                                              {isAdmin && (
+                                                <Button
+                                                  type="button"
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                                  onClick={async (e) => {
+                                                    e.stopPropagation();
+                                                    await recalcItem(it.id);
+                                                  }}
+                                                  aria-label="Recalcular U. Bruta"
+                                                >
+                                                  🔁
+                                                </Button>
+                                              )}
+                                              <div
+                                                className={`font-semibold tabular-nums ${zeroClass(
+                                                  Number(grossProfitBase || 0),
+                                                )}`}
+                                              >
+                                                {money(
+                                                  Number(grossProfitBase || 0),
+                                                )}
+                                              </div>
+                                              {savingCalcMap[it.id] && (
+                                                <span className="shrink-0 text-[10px] text-gray-500">
+                                                  Calc…
+                                                </span>
                                               )}
                                             </div>
-                                            {isAdmin && (
-                                              <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="sm"
-                                                className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                                onClick={async (e) => {
-                                                  e.stopPropagation();
-                                                  await recalcItem(it.id);
-                                                }}
-                                                aria-label="Recalcular U. Bruta"
-                                              >
-                                                🔁
-                                              </Button>
-                                            )}
-                                            {savingCalcMap[it.id] && (
-                                              <span className="shrink-0 text-[10px] text-gray-500">
-                                                Calc…
-                                              </span>
-                                            )}
                                           </div>
                                         </div>
                                         <div>
@@ -6174,25 +6393,38 @@ export default function VendorCandyOrders({
                                             autoFocus
                                           />
                                         ) : (
-                                          <div className="flex items-center justify-end gap-2">
-                                            <span
-                                              className={`font-semibold ${zeroClass(
-                                                Number(
+                                          <div className="flex w-full justify-end">
+                                            <div className="inline-flex items-center gap-2">
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                                onClick={() =>
+                                                  openMarginEdit(it.id)
+                                                }
+                                                aria-label="Editar margen"
+                                              >
+                                                ✏️
+                                              </Button>
+                                              <span
+                                                className={`font-semibold ${zeroClass(
+                                                  Number(
+                                                    it.vendorMarginPercent ??
+                                                      getSellerMarginPercent(
+                                                        sellerId,
+                                                      ),
+                                                  ),
+                                                )}`}
+                                              >
+                                                {Number(
                                                   it.vendorMarginPercent ??
                                                     getSellerMarginPercent(
                                                       sellerId,
                                                     ),
-                                                ),
-                                              )}`}
-                                            >
-                                              {Number(
-                                                it.vendorMarginPercent ??
-                                                  getSellerMarginPercent(
-                                                    sellerId,
-                                                  ),
-                                              ).toFixed(3)}
-                                              %
-                                            </span>
+                                                ).toFixed(3)}
+                                                %
+                                              </span>
+                                            </div>
                                           </div>
                                         )
                                       ) : (

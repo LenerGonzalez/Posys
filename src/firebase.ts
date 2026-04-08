@@ -23,8 +23,24 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
-/** Bucket: `posys-103de.firebasestorage.app` — subir fotos y guardar la URL en Firestore (p. ej. current_prices.imageUrl). */
-const storage = getStorage(app);
+/**
+ * Storage: el nombre debe coincidir con Firebase Console → Storage (archivos).
+ * CORS en el bucket (localhost / hosting) — una vez por proyecto:
+ *   gcloud storage buckets update gs://posys-103de.firebasestorage.app --cors-file=scripts/storage-cors.json
+ *   gsutil cors set scripts/storage-cors.json gs://posys-103de.firebasestorage.app
+ * Si el bucket real es el clásico *.appspot.com, definí en .env.local:
+ *   VITE_FIREBASE_STORAGE_BUCKET=gs://posys-103de.appspot.com
+ */
+const storageBucketGs =
+  typeof import.meta.env.VITE_FIREBASE_STORAGE_BUCKET === "string" &&
+  import.meta.env.VITE_FIREBASE_STORAGE_BUCKET.trim().length > 0
+    ? import.meta.env.VITE_FIREBASE_STORAGE_BUCKET.trim().startsWith("gs://")
+      ? import.meta.env.VITE_FIREBASE_STORAGE_BUCKET.trim()
+      : `gs://${import.meta.env.VITE_FIREBASE_STORAGE_BUCKET.trim()}`
+    : undefined;
+const storage = storageBucketGs
+  ? getStorage(app, storageBucketGs)
+  : getStorage(app);
 
 // Intentar forzar persistencia local por defecto (mantener sesión al cerrar la app)
 // Exportamos la promesa para que la app pueda esperar a que la persistencia

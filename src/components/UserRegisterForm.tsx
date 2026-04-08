@@ -1,6 +1,8 @@
 // src/components/UserRegisterForm.tsx
 import React, { useEffect, useState } from "react";
 import { getAuth, signOut, sendPasswordResetEmail } from "firebase/auth";
+import Button from "./common/Button";
+import ActionMenu, { ActionMenuTrigger } from "./common/ActionMenu";
 import { getApp, initializeApp, deleteApp } from "firebase/app";
 
 import { db } from "../firebase";
@@ -62,6 +64,11 @@ export default function UserRegisterForm() {
 
   // modal crear
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  const [userRowMenu, setUserRowMenu] = useState<{
+    userId: string;
+    rect: DOMRect;
+  } | null>(null);
 
   // catálogo de vendedores de dulces
   const [sellersCandy, setSellersCandy] = useState<SellerCandy[]>([]);
@@ -168,7 +175,9 @@ export default function UserRegisterForm() {
           ? editRoles
           : (["vendedor_pollo"] as Role[]);
         const sellerCandyIdToSave = finalRoles.includes("vendedor_dulces")
-          ? editSellerCandyId || sellerCandyIdCreate || ""
+          ? String(
+              editingId ? editSellerCandyId : sellerCandyIdCreate,
+            ).trim()
           : "";
 
         await updateDoc(ref, {
@@ -341,40 +350,79 @@ export default function UserRegisterForm() {
     } — ${s.commissionPercent.toFixed(2)}%`;
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="mx-auto max-w-6xl p-3 md:p-6">
       {/* Botón abrir modal crear */}
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-bold">Usuarios</h2>
-        <button
-          className="px-3 py-2 rounded bg-purple-600 text-white hover:bg-purple-700"
-          onClick={() => setShowCreateModal(true)}
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-lg font-bold tracking-tight text-slate-900 md:text-2xl">
+            Usuarios
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-500 md:text-sm">
+            Alta y edición de cuentas, roles y vendedor de dulces.
+          </p>
+        </div>
+        <Button
           type="button"
+          variant="primary"
+          size="sm"
+          className="!rounded-lg bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800"
+          onClick={() => {
+            setEditingId(null);
+            setEditRoles(["vendedor_pollo"] as Role[]);
+            setEditSellerCandyId("");
+            setOrigEmail("");
+            resetCreateForm();
+            setShowCreateModal(true);
+          }}
         >
           Crear usuario
-        </button>
+        </Button>
       </div>
 
       {/* Tabla */}
-      <div className="bg-white p-2 rounded shadow border overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="p-2 border">Nombre</th>
-              <th className="p-2 border">Email</th>
-              <th className="p-2 border">Rol</th>
-              <th className="p-2 border">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/[0.04]">
+        <div className="border-b border-slate-200/90 bg-gradient-to-r from-slate-50 to-white px-4 py-3">
+          <div className="text-sm text-slate-700">
+            <span className="font-semibold text-slate-900">
+              {loadingList ? "…" : users.length}
+            </span>{" "}
+            usuario{users.length === 1 ? "" : "s"}
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
+              <tr className="whitespace-nowrap">
+                <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                  Nombre
+                </th>
+                <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                  Email
+                </th>
+                <th className="border-b border-slate-200 p-2.5 text-left font-semibold text-slate-700">
+                  Rol
+                </th>
+                <th className="border-b border-slate-200 p-2.5 text-center font-semibold text-slate-700">
+                  Acciones
+                </th>
+              </tr>
+            </thead>
+            <tbody>
             {loadingList ? (
               <tr>
-                <td colSpan={4} className="p-4 text-center">
+                <td
+                  colSpan={4}
+                  className="p-10 text-center text-sm text-slate-500"
+                >
                   Cargando…
                 </td>
               </tr>
             ) : users.length === 0 ? (
               <tr>
-                <td colSpan={4} className="p-4 text-center">
+                <td
+                  colSpan={4}
+                  className="p-10 text-center text-sm text-slate-500"
+                >
                   Sin usuarios
                 </td>
               </tr>
@@ -386,10 +434,15 @@ export default function UserRegisterForm() {
                 ).includes("vendedor_dulces");
 
                 return (
-                  <tr key={u.id} className="text-center">
-                    <td className="p-2 border">{u.name || "—"}</td>
-                    <td className="p-2 border">{u.email}</td>
-                    <td className="p-2 border">
+                  <tr
+                    key={u.id}
+                    className="border-b border-slate-100 transition-colors hover:bg-slate-50/90"
+                  >
+                    <td className="p-2.5 text-left font-medium text-slate-900">
+                      {u.name || "—"}
+                    </td>
+                    <td className="p-2.5 text-left text-slate-600">{u.email}</td>
+                    <td className="p-2.5 text-left">
                       {isEditing ? (
                         <div className="space-y-2 text-left">
                           {[
@@ -421,7 +474,7 @@ export default function UserRegisterForm() {
 
                           {editRoles.includes("vendedor_dulces") && (
                             <select
-                              className="w-full border p-1 rounded text-xs mt-1"
+                              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                               value={editSellerCandyId}
                               onChange={(e) =>
                                 setEditSellerCandyId(e.target.value)
@@ -446,28 +499,27 @@ export default function UserRegisterForm() {
                             ))}
                           </div>
                           {isVendDulcesRow && u.sellerCandyId && (
-                            <div className="mt-1 text-[11px] text-gray-500">
+                            <div className="mt-1 text-[11px] text-slate-500">
                               Vendedor asignado
                             </div>
                           )}
                         </>
                       )}
                     </td>
-                    <td className="p-2 border space-x-2">
-                      <>
-                        <button
-                          className="px-2 py-1 rounded text-white bg-yellow-600 hover:bg-yellow-700"
-                          onClick={() => startEdit(u)}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          className="px-2 py-1 rounded text-white bg-red-600 hover:bg-red-700"
-                          onClick={() => deleteUserDoc(u.id)}
-                        >
-                          Eliminar
-                        </button>
-                      </>
+                    <td className="p-2.5 text-center align-middle">
+                      <ActionMenuTrigger
+                        className="!h-8 !w-8 rounded-lg border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                        aria-label="Acciones del usuario"
+                        iconClassName="h-5 w-5 text-slate-700"
+                        onClick={(e) =>
+                          setUserRowMenu({
+                            userId: u.id,
+                            rect: (
+                              e.currentTarget as HTMLElement
+                            ).getBoundingClientRect(),
+                          })
+                        }
+                      />
                     </td>
                   </tr>
                 );
@@ -475,39 +527,93 @@ export default function UserRegisterForm() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
-      {message && <p className="text-sm mt-2">{message}</p>}
+      <ActionMenu
+        anchorRect={userRowMenu?.rect ?? null}
+        isOpen={!!userRowMenu}
+        onClose={() => setUserRowMenu(null)}
+        width={200}
+      >
+        {userRowMenu && (
+          <div className="py-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100"
+              onClick={() => {
+                const u = users.find((x) => x.id === userRowMenu.userId);
+                setUserRowMenu(null);
+                if (u) startEdit(u);
+              }}
+            >
+              Editar
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
+              onClick={() => {
+                const id = userRowMenu.userId;
+                setUserRowMenu(null);
+                void deleteUserDoc(id);
+              }}
+            >
+              Eliminar
+            </Button>
+          </div>
+        )}
+      </ActionMenu>
+
+      {message && (
+        <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+          {message}
+        </p>
+      )}
 
       {/* ===== Modal: Crear usuario ===== */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-2 backdrop-blur-[3px] md:p-6"
+          role="presentation"
+        >
           <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setShowCreateModal(false)}
+            className="absolute inset-0"
+            onClick={cancelEdit}
+            aria-hidden
           />
-          <div className="relative bg-white rounded-lg shadow-2xl border w-[96%] max-w-lg max-h-[92vh] overflow-auto p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">
+          <div
+            className="relative max-h-[92vh] w-[96%] max-w-lg overflow-auto rounded-2xl border border-slate-200/80 bg-white p-4 shadow-2xl shadow-slate-900/12 ring-1 ring-slate-900/[0.04] md:p-6"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200/90 pb-3">
+              <h3 className="text-base font-bold tracking-tight text-slate-900 md:text-lg">
                 {editingId ? "Editar usuario" : "Registrar nuevo usuario"}
               </h3>
-              <button
-                className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
-                onClick={cancelEdit}
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
+                className="!rounded-lg border-slate-200 shadow-sm"
+                onClick={cancelEdit}
               >
                 Cerrar
-              </button>
+              </Button>
             </div>
 
             <form onSubmit={handleRegister} className="space-y-4">
               <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
+                <label className="block text-sm font-semibold text-slate-700">
                   Nombre completo
                 </label>
                 <input
                   type="text"
-                  className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-purple-400"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
@@ -515,33 +621,33 @@ export default function UserRegisterForm() {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
+                <label className="block text-sm font-semibold text-slate-700">
                   Correo electrónico
                 </label>
                 <input
                   type="email"
-                  className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-purple-400"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
                 />
               </div>
 
-              <div className="space-y-1 relative">
-                <label className="block text-sm font-semibold text-gray-700">
+              <div className="relative space-y-1">
+                <label className="block text-sm font-semibold text-slate-700">
                   Contraseña (mínimo 6 caracteres)
                 </label>
                 <input
                   type={showPassword ? "text" : "password"}
                   minLength={6}
-                  className="w-full border border-gray-300 p-2 rounded focus:ring-2 focus:ring-purple-400 pr-10"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required={!editingId}
                 />
                 <button
                   type="button"
-                  className="absolute right-2 top-8 text-sm text-gray-600 hover:text-gray-800"
+                  className="absolute right-2 top-[2.125rem] text-sm text-slate-600 hover:text-slate-900"
                   onClick={() => setShowPassword((v) => !v)}
                 >
                   {showPassword ? "🙈" : "👁️"}
@@ -549,7 +655,7 @@ export default function UserRegisterForm() {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-sm font-semibold text-gray-700">
+                <label className="block text-sm font-semibold text-slate-700">
                   Roles
                 </label>
                 <div className="flex flex-wrap gap-2">
@@ -561,10 +667,13 @@ export default function UserRegisterForm() {
                     "vendedor_ropa",
                     "vendedor_dulces",
                   ].map((opt) => (
-                    <label key={opt} className="inline-flex items-center mr-3">
+                    <label
+                      key={opt}
+                      className="mr-3 inline-flex items-center text-sm text-slate-700"
+                    >
                       <input
                         type="checkbox"
-                        className="mr-2"
+                        className="mr-2 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/30"
                         checked={
                           editingId
                             ? editRoles.includes(opt as Role)
@@ -586,7 +695,7 @@ export default function UserRegisterForm() {
                           }
                         }}
                       />
-                      <span className="text-sm">{opt}</span>
+                      <span>{opt}</span>
                     </label>
                   ))}
                 </div>
@@ -596,13 +705,19 @@ export default function UserRegisterForm() {
                 ? editRoles.includes("vendedor_dulces")
                 : roles.includes("vendedor_dulces")) && (
                 <div className="space-y-1">
-                  <label className="block text-sm font-semibold text-gray-700">
+                  <label className="block text-sm font-semibold text-slate-700">
                     Vendedor (dulces)
                   </label>
                   <select
-                    className="w-full border p-2 rounded text-sm"
-                    value={sellerCandyIdCreate}
-                    onChange={(e) => setSellerCandyIdCreate(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                    value={
+                      editingId ? editSellerCandyId : sellerCandyIdCreate
+                    }
+                    onChange={(e) =>
+                      editingId
+                        ? setEditSellerCandyId(e.target.value)
+                        : setSellerCandyIdCreate(e.target.value)
+                    }
                   >
                     <option value="">
                       Selecciona vendedor de dulces asignado
@@ -616,21 +731,30 @@ export default function UserRegisterForm() {
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
+              <div className="flex justify-end gap-2 border-t border-slate-200/90 pt-4">
+                <Button
                   type="button"
-                  className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300"
+                  variant="outline"
+                  size="sm"
+                  className="!rounded-lg border-slate-200 shadow-sm"
                   onClick={cancelEdit}
                 >
                   Cancelar
-                </button>
-                <button className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  className="!rounded-lg bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800"
+                >
                   {editingId ? "Guardar cambios" : "Crear usuario"}
-                </button>
+                </Button>
               </div>
             </form>
 
-            {message && <p className="text-sm mt-2">{message}</p>}
+            {message && (
+              <p className="mt-3 text-sm text-slate-700">{message}</p>
+            )}
           </div>
         </div>
       )}

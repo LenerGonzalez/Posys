@@ -695,7 +695,6 @@ export default function CandyMainOrders() {
     setRefreshingSalePrices(false);
     setEditingOrderId(null);
     setOrderName("");
-    setOrderDate("");
     setOrderItems([]);
     setEditingPackagesMap({});
     setEditingUnitsMap({});
@@ -709,9 +708,15 @@ export default function CandyMainOrders() {
     setOrderPackages("0");
     setOrderUnitsPerPackage("1");
 
-    setMarginRivas("20");
-    setMarginSanJorge("15"); // legacy
-    setMarginIsla("30");
+    setMarginRivas("0");
+    setMarginSanJorge("0"); // legacy
+    setMarginIsla("0");
+
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    setOrderDate(`${yyyy}-${mm}-${dd}`);
 
     setLogisticsCost("0");
     // previously set vendor/investor defaults — removed
@@ -1640,6 +1645,18 @@ export default function CandyMainOrders() {
     setMsg("");
     setSavingOrder(true);
 
+    const nameTrim = String(orderName || "").trim();
+    if (!nameTrim) {
+      setMsg("Ingresá el nombre de la orden.");
+      setSavingOrder(false);
+      return;
+    }
+    if (!String(orderDate || "").trim()) {
+      setMsg("Ingresá la fecha del pedido.");
+      setSavingOrder(false);
+      return;
+    }
+
     if (!orderItems.length) {
       setMsg("Agrega al menos un producto a la orden.");
       setSavingOrder(false);
@@ -1647,8 +1664,7 @@ export default function CandyMainOrders() {
     }
 
     try {
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const dateStr = orderDate || todayStr;
+      const dateStr = String(orderDate || "").trim();
 
       const marginR = Number(marginRivas || 0);
       const marginSJ = Number(marginSanJorge || 0); // legacy
@@ -1738,7 +1754,7 @@ export default function CandyMainOrders() {
       const header: Omit<CandyMainOrderDoc, "createdAt"> & {
         createdAt?: Timestamp;
       } = {
-        name: orderName || `Pedido ${dateStr}`,
+        name: nameTrim,
         date: dateStr,
 
         totalPackages: summary.totalPackages,
@@ -4002,15 +4018,7 @@ export default function CandyMainOrders() {
                     </div>
                   </div>
 
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                    <div className="rounded-lg border border-sky-200/70 bg-sky-50/90 p-2.5">
-                      <div className="font-medium text-sky-900/80">
-                        Esperado Rivas
-                      </div>
-                      <div className="font-semibold tabular-nums text-sky-950">
-                        {Number(o.totalRivas || 0).toFixed(2)}
-                      </div>
-                    </div>
+                  <div className="mt-2 text-xs">
                     <div className="rounded-lg border border-sky-200/70 bg-sky-50/90 p-2.5">
                       <div className="font-medium text-sky-900/80">
                         Esperado Isla
@@ -4190,9 +4198,6 @@ export default function CandyMainOrders() {
                     Subtotal
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    Esp. Rivas
-                  </th>
-                  <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
                     Esp. Isla
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
@@ -4210,7 +4215,7 @@ export default function CandyMainOrders() {
                 {loading ? (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={10}
                       className="p-10 text-center text-sm text-slate-500"
                     >
                       Cargando…
@@ -4219,7 +4224,7 @@ export default function CandyMainOrders() {
                 ) : orders.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={10}
                       className="p-10 text-center text-sm text-slate-500"
                     >
                       Sin órdenes maestras.
@@ -4268,9 +4273,6 @@ export default function CandyMainOrders() {
                         </td>
                         <td className="p-2.5 text-right tabular-nums text-slate-800">
                           {Number(o.subtotal || 0).toFixed(2)}
-                        </td>
-                        <td className="p-2.5 text-right tabular-nums text-sky-900">
-                          {Number(o.totalRivas || 0).toFixed(2)}
                         </td>
                         <td className="p-2.5 text-right tabular-nums text-sky-900">
                           {Number(o.totalIsla || 0).toFixed(2)}

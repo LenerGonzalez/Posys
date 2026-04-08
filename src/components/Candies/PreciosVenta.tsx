@@ -27,6 +27,12 @@ import useManualRefresh from "../../hooks/useManualRefresh";
 import ImportModal from "../common/ImportModal";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Button from "../common/Button";
+import SlideOverDrawer from "../common/SlideOverDrawer";
+import {
+  DrawerDetailDlCard,
+  DrawerSectionTitle,
+  DrawerStatGrid,
+} from "../common/DrawerContentCards";
 import * as XLSX from "xlsx";
 
 const EMPAQUE_TYPE_OPTIONS: { value: string; label: string }[] = [
@@ -132,6 +138,17 @@ function buildMergedPriceRows(
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+
+/** Oculta imagen si la URL falló al cargar (Storage sin doc o archivo borrado). */
+function effectivePriceImageUrl(
+  productId: string,
+  urlFromDoc: string | undefined,
+  failed: Record<string, true>,
+): string {
+  const u = String(urlFromDoc || "").trim();
+  if (!u || failed[productId]) return "";
+  return u;
+}
 
 function norm(s: any) {
   return String(s ?? "")
@@ -676,8 +693,17 @@ export default function PrecioVentas({
   const [newPriceImageUrl, setNewPriceImageUrl] = useState<string>("");
   const [removePriceImage, setRemovePriceImage] = useState(false);
   const [priceImageUploading, setPriceImageUploading] = useState(false);
-  /** Móvil: overlay para ver foto a tamaño cómodo */
-  const [mobilePriceImagePreviewUrl, setMobilePriceImagePreviewUrl] = useState<
+  /** Overlay ver foto (web y móvil); incluye productId para marcar URL rota */
+  const [priceImagePreview, setPriceImagePreview] = useState<{
+    url: string;
+    productId: string;
+  } | null>(null);
+  /** URLs que fallaron al cargar (p. ej. archivo borrado en Storage sin actualizar Firestore) */
+  const [imageLoadFailedByProductId, setImageLoadFailedByProductId] = useState<
+    Record<string, true>
+  >({});
+  /** Web: drawer con detalle completo del precio */
+  const [webPriceDrawerProductId, setWebPriceDrawerProductId] = useState<
     string | null
   >(null);
   const [searchNewProduct, setSearchNewProduct] = useState<string>("");
@@ -790,7 +816,7 @@ export default function PrecioVentas({
     } catch (err) {
       console.error(err);
       setMsg(
-        "❌ No se pudo subir la imagen. Revisá Storage en Firebase (reglas para usuarios autenticados).",
+        "❌ No se pudo subir la imagen. Revisá reglas de Storage y sesión. Si en consola ves CORS o OPTIONS con error: aplicá CORS al bucket (scripts/storage-cors.json + gsutil cors set — ver firebase.ts).",
       );
     } finally {
       setPriceImageUploading(false);
@@ -884,6 +910,37 @@ export default function PrecioVentas({
       }
 
       await setDoc(priceRef, payload, { merge: true });
+
+      if (removePriceImage) {
+        setPriceDocsById((prev) => {
+          const d = prev[newPriceProductId];
+          if (!d) return prev;
+          const nextDoc = { ...d };
+          delete nextDoc.imageUrl;
+          return { ...prev, [newPriceProductId]: nextDoc };
+        });
+        setImageLoadFailedByProductId((prev) => {
+          const n = { ...prev };
+          delete n[newPriceProductId];
+          return n;
+        });
+      } else if (String(newPriceImageUrl || "").trim()) {
+        setPriceDocsById((prev) => {
+          const d = prev[newPriceProductId] || {};
+          return {
+            ...prev,
+            [newPriceProductId]: {
+              ...d,
+              imageUrl: String(newPriceImageUrl).trim(),
+            },
+          };
+        });
+        setImageLoadFailedByProductId((prev) => {
+          const n = { ...prev };
+          delete n[newPriceProductId];
+          return n;
+        });
+      }
 
       await updateDoc(doc(collection(db, "products_candies"), newPriceProductId), {
         packaging: String(newPricePackaging || "").trim(),
@@ -1980,7 +2037,8 @@ export default function PrecioVentas({
     }
   };
 
-  const webColCount = isAdmin ? 14 : 13;
+  /** Tabla web: columnas visibles (detalle extra va al drawer) */
+  const webColCount = isAdminEditable ? 9 : 8;
 
   const packsStockDisplay = (productId: string) =>
     String(Math.max(0, Math.floor(masterStockByProductId[productId] ?? 0)));
@@ -2338,11 +2396,11 @@ export default function PrecioVentas({
                             ? money(uvAvg)
                             : "--";
                         })();
-                        const priceImageUrl = String(
-                          priceDocsById[r.productId]?.imageUrl ||
-                            r.imageUrl ||
-                            "",
-                        ).trim();
+                        const priceImageUrl = effectivePriceImageUrl(
+                          r.productId,
+                          priceDocsById[r.productId]?.imageUrl || r.imageUrl,
+                          imageLoadFailedByProductId,
+                        );
                         return (
                           <div
                             key={r.productId}
@@ -2711,9 +2769,10 @@ export default function PrecioVentas({
                                               }
                                               onClick={() => {
                                                 if (priceImageUrl)
-                                                  setMobilePriceImagePreviewUrl(
-                                                    priceImageUrl,
-                                                  );
+                                                  setPriceImagePreview({
+                                                    url: priceImageUrl,
+                                                    productId: r.productId,
+                                                  });
                                               }}
                                             >
                                               <FiImage className="w-5 h-5" />
@@ -2752,9 +2811,10 @@ export default function PrecioVentas({
                                             }
                                             onClick={() => {
                                               if (priceImageUrl)
-                                                setMobilePriceImagePreviewUrl(
-                                                  priceImageUrl,
-                                                );
+                                                setPriceImagePreview({
+                                                  url: priceImageUrl,
+                                                  productId: r.productId,
+                                                });
                                             }}
                                           >
                                             <FiImage className="w-5 h-5" />
@@ -2970,6 +3030,19 @@ export default function PrecioVentas({
                             src={previewUrl}
                             alt=""
                             className="mb-2 max-h-36 w-full rounded-lg border border-slate-200 bg-white object-contain"
+                            onError={() => {
+                              if (newPriceProductId) {
+                                setImageLoadFailedByProductId((prev) => ({
+                                  ...prev,
+                                  [newPriceProductId]: true,
+                                }));
+                              }
+                              setNewPriceImageUrl("");
+                              setRemovePriceImage(true);
+                              setMsg(
+                                "La imagen no está disponible (p. ej. borrada en Storage). Se quitará la URL al guardar; podés subir otra foto.",
+                              );
+                            }}
                           />
                         ) : null}
                         <div className="flex flex-wrap items-center gap-2">
@@ -3136,19 +3209,30 @@ export default function PrecioVentas({
         </div>
       )}
 
-      {mobilePriceImagePreviewUrl && (
+      {priceImagePreview && (
         <div
           className="fixed inset-0 z-[85] flex items-center justify-center bg-black/60 p-4"
           role="dialog"
           aria-modal="true"
           aria-label="Foto del producto"
-          onClick={() => setMobilePriceImagePreviewUrl(null)}
+          onClick={() => setPriceImagePreview(null)}
         >
           <img
-            src={mobilePriceImagePreviewUrl}
+            src={priceImagePreview.url}
             alt=""
             className="max-h-[min(85vh,36rem)] w-auto max-w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-white/20 object-contain shadow-2xl md:max-w-[min(40rem,calc(100vw-3rem))]"
             onClick={(e) => e.stopPropagation()}
+            onError={() => {
+              setImageLoadFailedByProductId((prev) => ({
+                ...prev,
+                [priceImagePreview.productId]: true,
+              }));
+              setPriceImagePreview(null);
+              setMsg(
+                "No se pudo cargar la imagen (¿fue borrada en Storage?). Podés quitar la foto en Editar precio y guardar.",
+              );
+              setTimeout(() => setMsg(""), 5000);
+            }}
           />
         </div>
       )}
@@ -3429,30 +3513,27 @@ export default function PrecioVentas({
           })()}
       </ActionMenu>
 
-      {/* ===== WEB: tabla ===== */}
+      {/* ===== WEB: tabla (columnas reducidas; el resto en drawer) ===== */}
       <div className="hidden md:block rounded-xl overflow-x-auto border border-slate-200 shadow-sm w-full">
-        <table className="min-w-[940px] w-full text-sm">
+        <table className="min-w-[720px] w-full text-sm">
           <thead className="bg-slate-100 sticky top-0 z-10">
             <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
               <th className="p-3 border-b text-left">Categoría</th>
               <th className="p-3 border-b text-left">Producto</th>
-              <th className="p-3 border-b text-center w-[3.25rem]">Foto</th>
+              <th className="p-3 border-b text-center w-[4rem]">Foto</th>
               <th className="p-3 border-b text-left">Empaque</th>
-              <th className="p-3 border-b text-right">Und x paquete</th>
               <th className="p-3 border-b text-right" title="Paquetes en órdenes maestras">
                 Stock
               </th>
-              <th className="p-3 border-b text-right" title="Tu subinventario (vendedor logueado)">
-                Mi inventario
+              <th className="p-3 border-b text-right whitespace-nowrap">
+                Precio x unidad
               </th>
-              <th className="p-3 border-b text-right" title="Otros vendedores">
-                Otro vendedor
+              {isAdminEditable && (
+                <th className="p-3 border-b text-right whitespace-nowrap">Costo</th>
+              )}
+              <th className="p-3 border-b text-right whitespace-nowrap">
+                Precio Isla
               </th>
-              <th className="p-3 border-b text-right">Precio x unidad</th>
-              {isAdmin && <th className="p-3 border-b text-right">Costo</th>}
-              <th className="p-3 border-b text-right">Precio Isla</th>
-              <th className="p-3 border-b text-right">Precio Rivas</th>
-              <th className="p-3 border-b text-right">UV x paquete</th>
               <th className="p-3 border-b text-right">Acciones</th>
             </tr>
           </thead>
@@ -3471,119 +3552,220 @@ export default function PrecioVentas({
               </tr>
             ) : (
               pagedWebRows.map((r) => {
-                const rowImgUrl = String(
-                  priceDocsById[r.productId]?.imageUrl || r.imageUrl || "",
-                ).trim();
+                const rowImgUrl = effectivePriceImageUrl(
+                  r.productId,
+                  priceDocsById[r.productId]?.imageUrl || r.imageUrl,
+                  imageLoadFailedByProductId,
+                );
                 return (
-                <tr key={r.productId} className="odd:bg-white even:bg-slate-50">
-                  <td className="p-3 border-b text-left">{r.category}</td>
-                  <td className="p-3 border-b text-left">{r.productName}</td>
-                  <td className="p-3 border-b text-center align-middle">
-                    {rowImgUrl ? (
+                  <tr key={r.productId} className="odd:bg-white even:bg-slate-50">
+                    <td className="p-3 border-b text-left align-middle max-w-[140px] truncate">
+                      {r.category}
+                    </td>
+                    <td className="p-3 border-b text-left align-middle max-w-[200px]">
                       <button
                         type="button"
-                        className="mx-auto flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm transition hover:ring-2 hover:ring-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                        title="Ver foto"
-                        aria-label="Ver foto del producto"
-                        onClick={() =>
-                          setMobilePriceImagePreviewUrl(rowImgUrl)
-                        }
+                        className="text-left text-sky-700 hover:underline font-medium w-full truncate"
+                        title="Ver detalle del precio"
+                        onClick={() => setWebPriceDrawerProductId(r.productId)}
                       >
-                        <img
-                          src={rowImgUrl}
-                          alt=""
-                          className="h-full w-full object-cover"
-                          loading="lazy"
-                        />
+                        {r.productName}
                       </button>
-                    ) : (
-                      <span className="text-slate-300 tabular-nums">—</span>
-                    )}
-                  </td>
-                  <td className="p-3 border-b text-left">
-                    {packagingMap[r.productId] || "—"}
-                  </td>
-                  <td className="p-3 border-b text-right tabular-nums">
-                    {String(r.unitsPerPackage || 1)}
-                  </td>
-                  <td className="p-3 border-b text-right tabular-nums text-slate-800">
-                    {packsStockDisplay(r.productId)}
-                  </td>
-                  <td className="p-3 border-b text-right tabular-nums text-indigo-800">
-                    {packsMiDisplay(r.productId)}
-                  </td>
-                  <td className="p-3 border-b text-right tabular-nums text-amber-700">
-                    {packsOtroDisplay(r.productId)}
-                  </td>
-                  <td className="p-3 border-b text-right tabular-nums">
-                    {money(r.priceIsla / (r.unitsPerPackage || 1))}
-                  </td>
-                  {isAdminEditable && (
-                    <td className="p-3 border-b text-right tabular-nums">
-                      {(() => {
-                        const rowProvider = Number.isFinite(
-                          Number(r.providerPrice),
-                        )
-                          ? (r.providerPrice as number)
-                          : providerPriceMap[r.productId] || 0;
-                        return money(rowProvider || 0);
-                      })()}
                     </td>
-                  )}
-                  <td className="p-3 border-b text-right tabular-nums">
-                    {money(r.priceIsla)}
-                  </td>
-                  <td className="p-3 border-b text-right tabular-nums">
-                    {money(r.priceRivas)}
-                  </td>
-                  <td className="p-3 border-b text-right tabular-nums">
-                    {(() => {
-                      const uvKey = normKey(r.productName || r.productId);
-                      const uvKeyPid = normKey(String(r.productId || ""));
-                      const uvXpaqVal =
-                        uvxpaqMap[uvKey] ??
-                        (uvKeyPid && uvKeyPid !== uvKey
-                          ? uvxpaqMap[uvKeyPid]
-                          : undefined);
-                      const uvAvg = uvxpaqAvgMap[uvKey];
-                      if (sellerCandyId) {
-                        return Number.isFinite(Number(uvXpaqVal))
-                          ? money(uvXpaqVal)
-                          : "--";
-                      }
-                      if (isAdmin) {
-                        return Number.isFinite(Number(uvAvg))
-                          ? money(uvAvg)
-                          : "--";
-                      }
-                      return Number.isFinite(Number(uvAvg))
-                        ? money(uvAvg)
-                        : "--";
-                    })()}
-                  </td>
-                  <td className="p-3 border-b text-right">
+                    <td className="p-3 border-b text-center align-middle">
+                      {rowImgUrl ? (
+                        <button
+                          type="button"
+                          className="text-sky-600 font-semibold hover:underline"
+                          title="Ver foto"
+                          onClick={() =>
+                            setPriceImagePreview({
+                              url: rowImgUrl,
+                              productId: r.productId,
+                            })
+                          }
+                        >
+                          Ver
+                        </button>
+                      ) : (
+                        <span className="text-slate-300 tabular-nums">—</span>
+                      )}
+                    </td>
+                    <td className="p-3 border-b text-left align-middle uppercase">
+                      {packagingMap[r.productId] || "—"}
+                    </td>
+                    <td className="p-3 border-b text-right tabular-nums text-slate-800 whitespace-nowrap align-middle">
+                      {packsStockDisplay(r.productId)}
+                    </td>
+                    <td className="p-3 border-b text-right tabular-nums whitespace-nowrap align-middle">
+                      {money(r.priceIsla / (r.unitsPerPackage || 1))}
+                    </td>
                     {isAdminEditable && (
-                      <ActionMenuTrigger
-                        className="!h-8 !w-8"
-                        aria-label="Acciones"
-                        iconClassName="h-4 w-4 text-gray-700"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRowActionMenu({
-                            productId: r.productId,
-                            rect: e.currentTarget.getBoundingClientRect(),
-                          });
-                        }}
-                      />
+                      <td className="p-3 border-b text-right tabular-nums whitespace-nowrap align-middle">
+                        {(() => {
+                          const rowProvider = Number.isFinite(
+                            Number(r.providerPrice),
+                          )
+                            ? (r.providerPrice as number)
+                            : providerPriceMap[r.productId] || 0;
+                          return money(rowProvider || 0);
+                        })()}
+                      </td>
                     )}
-                  </td>
-                </tr>
+                    <td className="p-3 border-b text-right tabular-nums whitespace-nowrap align-middle">
+                      {money(r.priceIsla)}
+                    </td>
+                    <td className="p-3 border-b text-right align-middle">
+                      {isAdminEditable && (
+                        <ActionMenuTrigger
+                          className="!h-8 !w-8"
+                          aria-label="Acciones"
+                          iconClassName="h-4 w-4 text-gray-700"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRowActionMenu({
+                              productId: r.productId,
+                              rect: e.currentTarget.getBoundingClientRect(),
+                            });
+                          }}
+                        />
+                      )}
+                    </td>
+                  </tr>
                 );
               })
             )}
           </tbody>
         </table>
       </div>
+
+      {(() => {
+        const dr = webPriceDrawerProductId
+          ? rows.find((x) => x.productId === webPriceDrawerProductId)
+          : null;
+        if (!dr) return null;
+        const pid = dr.productId;
+        const p = priceDocsById[pid];
+        const uvKey = normKey(dr.productName || dr.productId);
+        const uvKeyPid = normKey(String(dr.productId || ""));
+        const uvXpaqVal =
+          uvxpaqMap[uvKey] ??
+          (uvKeyPid && uvKeyPid !== uvKey ? uvxpaqMap[uvKeyPid] : undefined);
+        const uvAvg = uvxpaqAvgMap[uvKey];
+        const uvDrawer =
+          sellerCandyId && Number.isFinite(Number(uvXpaqVal))
+            ? money(uvXpaqVal)
+            : Number.isFinite(Number(uvAvg))
+              ? money(uvAvg)
+              : "--";
+        const rowProvider = Number.isFinite(Number(dr.providerPrice))
+          ? (dr.providerPrice as number)
+          : providerPriceMap[pid] || 0;
+        return (
+            <SlideOverDrawer
+              open
+              onClose={() => setWebPriceDrawerProductId(null)}
+              title={dr.productName}
+              subtitle={dr.category}
+              titleId="precios-web-drawer-title"
+            >
+              <div className="flex-1 overflow-y-auto px-4 pb-4 text-sm">
+                <DrawerStatGrid
+                  items={[
+                    {
+                      label: "Precio Isla (paq)",
+                      value: money(dr.priceIsla),
+                      tone: "emerald",
+                    },
+                    {
+                      label: "Precio Rivas (paq)",
+                      value: money(dr.priceRivas),
+                      tone: "sky",
+                    },
+                    {
+                      label: "Precio x unidad",
+                      value: money(dr.priceIsla / (dr.unitsPerPackage || 1)),
+                      tone: "slate",
+                    },
+                    ...(isAdminEditable
+                      ? [
+                          {
+                            label: "Costo (paq)",
+                            value: money(rowProvider || 0),
+                            tone: "slate" as const,
+                          },
+                        ]
+                      : []),
+                    {
+                      label: "Und x paquete",
+                      value: String(dr.unitsPerPackage || 1),
+                      tone: "slate",
+                    },
+                    {
+                      label: "Stock (órdenes maestras)",
+                      value: packsStockDisplay(pid),
+                      tone: "slate",
+                    },
+                    {
+                      label: "Mi inventario",
+                      value: packsMiDisplay(pid),
+                      tone: "indigo",
+                    },
+                    {
+                      label: "Otro vendedor",
+                      value: packsOtroDisplay(pid),
+                      tone: "amber",
+                    },
+                    {
+                      label: "UV x paquete",
+                      value: uvDrawer,
+                      tone: "violet",
+                    },
+                  ]}
+                />
+                <DrawerSectionTitle>Más datos</DrawerSectionTitle>
+                <DrawerDetailDlCard
+                  title="Catálogo y código"
+                  rows={[
+                    {
+                      label: "Empaque",
+                      value: (
+                        <span className="uppercase">
+                          {packagingMap[pid] || "—"}
+                        </span>
+                      ),
+                      ddClassName: "text-sm font-semibold text-gray-900 uppercase",
+                    },
+                    {
+                      label: "Código EAN",
+                      value: barcodeMap[pid] || "—",
+                      ddClassName: "text-sm font-semibold text-gray-900",
+                    },
+                  ]}
+                />
+                {p && (
+                  <DrawerDetailDlCard
+                    title="Auditoría (current_prices)"
+                    className="mt-3"
+                    rows={[
+                      {
+                        label: "Actualizado",
+                        value: formatFirestoreTimestamp(p?.updatedAt),
+                        ddClassName: "text-sm font-semibold text-gray-900",
+                      },
+                      {
+                        label: "Por",
+                        value:
+                          String(p?.updatedByDisplayName || p?.updatedByEmail || "—"),
+                        ddClassName: "text-sm font-semibold text-gray-900",
+                      },
+                    ]}
+                  />
+                )}
+              </div>
+            </SlideOverDrawer>
+        );
+      })()}
 
       <div className="hidden md:block">
         {!loading && filtered.length > 0 && renderWebPager()}

@@ -289,6 +289,11 @@ function packsFromUnits(units: number, upp: number) {
 export async function allocateVendorCandyPacks(params: {
   productId: string;
   packagesToAllocate: number;
+  /**
+   * Si se indica, solo se consumen lotes de `inventory_candies` cuyo `orderId`
+   * coincide (pedido vendedor creado asociado a esa orden maestra).
+   */
+  preferredMasterOrderId?: string;
 }): Promise<{ allocations: MasterAllocation[] }> {
   const productId = String(params.productId || "");
   let packsNeeded = floor(params.packagesToAllocate);
@@ -305,7 +310,7 @@ export async function allocateVendorCandyPacks(params: {
     throw new Error("No hay inventario para este producto.");
   }
 
-  const docsSorted = snap.docs
+  let docsSorted = snap.docs
     .map((d) => ({ id: d.id, data: d.data() as any }))
     .sort((a, b) => {
       const da = String(a.data.date || "");
@@ -315,6 +320,18 @@ export async function allocateVendorCandyPacks(params: {
       const cb = b.data.createdAt?.seconds ?? 0;
       return ca - cb;
     });
+
+  const pref = String(params.preferredMasterOrderId || "").trim();
+  if (pref) {
+    docsSorted = docsSorted.filter(
+      (row) => String(row.data.orderId || "") === pref,
+    );
+    if (docsSorted.length === 0) {
+      throw new Error(
+        "No hay inventario en la orden maestra seleccionada para este producto.",
+      );
+    }
+  }
 
   const refs = docsSorted.map((d) => doc(db, "inventory_candies", d.id));
   const allocations: MasterAllocation[] = [];

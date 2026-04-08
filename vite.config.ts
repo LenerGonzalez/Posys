@@ -9,7 +9,8 @@ export default defineConfig({
       /** `prompt` para que `useRegisterSW().needRefresh` solo sea true con SW en espera (nueva build). */
       registerType: "prompt",
       injectRegister: "auto",
-      devOptions: { enabled: true },
+      /** En dev, desactivado: el SW puede interferir con subidas a Firebase Storage (XHR/fetch a googleapis.com). */
+      devOptions: { enabled: false },
 
       includeAssets: [
         "favicon.ico",

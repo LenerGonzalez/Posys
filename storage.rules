@@ -1,0 +1,28 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && (
+          (userDoc().data.roles is list && userDoc().data.roles.hasAny(['admin']))
+          || userDoc().data.role == 'admin'
+        );
+    }
+
+    match /precios_venta/{productId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
