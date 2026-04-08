@@ -14,11 +14,13 @@ import {
   serverTimestamp,
   deleteDoc,
   setDoc,
+  deleteField,
 } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { onAuthStateChanged } from "firebase/auth";
-import { FiEdit2, FiInfo, FiTrash2 } from "react-icons/fi";
+import { FiEdit2, FiImage, FiInfo, FiTrash2 } from "react-icons/fi";
 import ActionMenu, { ActionMenuTrigger } from "../common/ActionMenu";
-import { auth, db } from "../../firebase";
+import { auth, db, storage } from "../../firebase";
 import { hasRole } from "../../utils/roles";
 import RefreshButton from "../common/RefreshButton";
 import useManualRefresh from "../../hooks/useManualRefresh";
@@ -55,6 +57,8 @@ type PriceRow = {
   priceRivas: number;
   unitsPerPackage?: number;
   providerPrice?: number;
+  /** URL en Firebase Storage guardada en current_prices.imageUrl */
+  imageUrl?: string;
   _sortKey: number;
 };
 
@@ -109,6 +113,7 @@ function buildMergedPriceRows(
       pkgRivas = Number.isFinite(u) ? u * units : 0;
     }
 
+    const img = String(p?.imageUrl || "").trim();
     list.push({
       productId,
       category: c?.category ?? "",
@@ -117,6 +122,7 @@ function buildMergedPriceRows(
       priceRivas: pkgRivas,
       unitsPerPackage: units,
       providerPrice: providerPriceMap[productId],
+      imageUrl: img || undefined,
       _sortKey: 0,
     });
   }
@@ -160,6 +166,24 @@ function normKey(s: any) {
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
+
+/** Paquetes restantes desde lotes de orden maestra (inventory_candies). Misma idea que OrdenVendedor. */
+function remainingPacksFromInventoryCandiesDoc(x: any): number {
+  const upp = Math.max(1, Math.floor(Number(x?.unitsPerPackage || 1)));
+  const remainingUnits = Number(x?.remaining ?? 0);
+  if (Number.isFinite(remainingUnits) && remainingUnits > 0) {
+    return Math.floor(remainingUnits / upp);
+  }
+  const rp = Number(x?.remainingPackages ?? 0);
+  if (Number.isFinite(rp) && rp > 0) return Math.floor(rp);
+  return 0;
+}
+
+function remainingPacksFromVendorDoc(x: any): number {
+  const rp = Number(x?.remainingPackages ?? 0);
+  if (Number.isFinite(rp) && rp > 0) return Math.floor(rp);
+  return 0;
 }
 
 function pkgPricesFromDoc(p: any, units: number): { isla: number; rivas: number } {
@@ -243,7 +267,7 @@ function buildCurrentPricePayloadFields(
     Number.isFinite(pkgPriceRivas) && pkgPriceRivas > 0
       ? deriveMarginPercentFromSubtotalAndTotal(cost, pkgPriceRivas)
       : 0;
-  return {
+  const out: Record<string, any> = {
     productId,
     productName,
     category,
@@ -260,6 +284,9 @@ function buildCurrentPricePayloadFields(
     updatedByEmail: user?.email || "",
     updatedByDisplayName: user?.displayName || "",
   };
+  const prevImg = String(existing?.imageUrl || "").trim();
+  if (prevImg) out.imageUrl = prevImg;
+  return out;
 }
 
 // ============================
@@ -439,6 +466,17 @@ export default function PrecioVentas({
   const [uvxpaqMap, setUvxpaqMap] = useState<Record<string, number>>({});
   const [uvxpaqAvgMap, setUvxpaqAvgMap] = useState<Record<string, number>>({});
   const [sellerCandyId, setSellerCandyId] = useState<string>("");
+  /** Paquetes disponibles en inventario de órdenes maestras (inventory_candies) por productId */
+  const [masterStockByProductId, setMasterStockByProductId] = useState<
+    Record<string, number>
+  >({});
+  /** Paquetes restantes en subinventario del vendedor logueado (inventory_candies_sellers) */
+  const [myVendorPacksByProductId, setMyVendorPacksByProductId] = useState<
+    Record<string, number>
+  >({});
+  /** Paquetes restantes de otros vendedores (misma colección, sellerId distinto) */
+  const [otherVendorPacksByProductId, setOtherVendorPacksByProductId] =
+    useState<Record<string, number>>({});
 
   // filtros
   const [searchProduct, setSearchProduct] = useState("");
@@ -634,6 +672,14 @@ export default function PrecioVentas({
   const [newPriceUnits, setNewPriceUnits] = useState<string>("");
   const [newPriceBarcode, setNewPriceBarcode] = useState<string>("");
   const [newPricePackaging, setNewPricePackaging] = useState<string>("");
+  /** URL pública (Storage) guardada en current_prices.imageUrl */
+  const [newPriceImageUrl, setNewPriceImageUrl] = useState<string>("");
+  const [removePriceImage, setRemovePriceImage] = useState(false);
+  const [priceImageUploading, setPriceImageUploading] = useState(false);
+  /** Móvil: overlay para ver foto a tamaño cómodo */
+  const [mobilePriceImagePreviewUrl, setMobilePriceImagePreviewUrl] = useState<
+    string | null
+  >(null);
   const [searchNewProduct, setSearchNewProduct] = useState<string>("");
   const [successPriceOverlay, setSuccessPriceOverlay] = useState<{
     category: string;
@@ -709,6 +755,47 @@ export default function PrecioVentas({
     barcodeMap,
     packagingMap,
   ]);
+
+  /** Sube a Firebase Storage y deja la URL lista para guardarla en current_prices.imageUrl */
+  const handlePickPriceImage = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !newPriceProductId) return;
+    if (!file.type.startsWith("image/")) {
+      setMsg("Seleccioná un archivo de imagen.");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setMsg("La imagen debe pesar menos de 4 MB.");
+      return;
+    }
+    setPriceImageUploading(true);
+    setRemovePriceImage(false);
+    try {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const safe = ["jpg", "jpeg", "png", "webp", "gif"].includes(ext)
+        ? ext
+        : "jpg";
+      const path = `precios_venta/${newPriceProductId}/${Date.now()}.${safe}`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, file, {
+        contentType: file.type || "image/jpeg",
+      });
+      const url = await getDownloadURL(storageRef);
+      setNewPriceImageUrl(url);
+      setMsg("✅ Imagen lista. Guardá los cambios para aplicarla al precio.");
+      setTimeout(() => setMsg(""), 3000);
+    } catch (err) {
+      console.error(err);
+      setMsg(
+        "❌ No se pudo subir la imagen. Revisá Storage en Firebase (reglas para usuarios autenticados).",
+      );
+    } finally {
+      setPriceImageUploading(false);
+    }
+  };
 
   const createManualPrice = async () => {
     const modeAtStart = priceModalMode;
@@ -790,6 +877,11 @@ export default function PrecioVentas({
         category,
         providerPrice,
       );
+      if (removePriceImage) {
+        payload.imageUrl = deleteField();
+      } else if (String(newPriceImageUrl || "").trim()) {
+        payload.imageUrl = String(newPriceImageUrl).trim();
+      }
 
       await setDoc(priceRef, payload, { merge: true });
 
@@ -825,6 +917,8 @@ export default function PrecioVentas({
       setNewPriceUnits("");
       setNewPriceBarcode("");
       setNewPricePackaging("");
+      setNewPriceImageUrl("");
+      setRemovePriceImage(false);
       setSearchNewProduct("");
       setPriceModalMode("create");
     } catch (e) {
@@ -847,6 +941,8 @@ export default function PrecioVentas({
     setNewPriceUnits("");
     setNewPriceBarcode("");
     setNewPricePackaging("");
+    setNewPriceImageUrl("");
+    setRemovePriceImage(false);
     setSearchNewProduct("");
     setNewPriceOpen(true);
   };
@@ -859,7 +955,9 @@ export default function PrecioVentas({
     setNewPriceIsla(String(r.priceIsla ?? ""));
     setNewPriceRivas(String(r.priceRivas ?? ""));
     setSearchNewProduct("");
+    setRemovePriceImage(false);
     const pd = priceDocsById[r.productId];
+    setNewPriceImageUrl(String(pd?.imageUrl || r.imageUrl || "").trim());
     const u =
       Number(pd?.unitsPerPackage ?? pd?.unitsPerPack) ||
       r.unitsPerPackage ||
@@ -1674,6 +1772,67 @@ export default function PrecioVentas({
     return () => unsub();
   }, []);
 
+  // Stock maestro (órdenes maestras): visible también en vista pública
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, "inventory_candies"),
+      (snap) => {
+        const acc: Record<string, number> = {};
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          const pid = String(x.productId || "").trim();
+          if (!pid) return;
+          const packs = remainingPacksFromInventoryCandiesDoc(x);
+          if (packs <= 0) return;
+          acc[pid] = (acc[pid] || 0) + packs;
+        });
+        setMasterStockByProductId(acc);
+      },
+      (err) => {
+        console.error("inventory_candies snapshot (PreciosVenta):", err);
+        setMasterStockByProductId({});
+      },
+    );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (isPublicView) {
+      setMyVendorPacksByProductId({});
+      setOtherVendorPacksByProductId({});
+      return;
+    }
+    const unsub = onSnapshot(
+      collection(db, "inventory_candies_sellers"),
+      (snap) => {
+        const my: Record<string, number> = {};
+        const other: Record<string, number> = {};
+        const sid = String(sellerCandyId || "").trim();
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          const pid = String(x.productId || "").trim();
+          if (!pid) return;
+          const packs = remainingPacksFromVendorDoc(x);
+          if (packs <= 0) return;
+          const seller = String(x.sellerId || "").trim();
+          if (sid && seller === sid) {
+            my[pid] = (my[pid] || 0) + packs;
+          } else if (sid && seller && seller !== sid) {
+            other[pid] = (other[pid] || 0) + packs;
+          }
+        });
+        setMyVendorPacksByProductId(my);
+        setOtherVendorPacksByProductId(other);
+      },
+      (err) => {
+        console.error("inventory_candies_sellers snapshot (PreciosVenta):", err);
+        setMyVendorPacksByProductId({});
+        setOtherVendorPacksByProductId({});
+      },
+    );
+    return () => unsub();
+  }, [isPublicView, sellerCandyId]);
+
   const onDetected = async (code: string) => {
     if (scanTarget === "search") {
       setSearchCode(code);
@@ -1821,7 +1980,20 @@ export default function PrecioVentas({
     }
   };
 
-  const webColCount = isAdmin ? 10 : 9;
+  const webColCount = isAdmin ? 14 : 13;
+
+  const packsStockDisplay = (productId: string) =>
+    String(Math.max(0, Math.floor(masterStockByProductId[productId] ?? 0)));
+  const packsMiDisplay = (productId: string) =>
+    sellerCandyId
+      ? String(Math.max(0, Math.floor(myVendorPacksByProductId[productId] ?? 0)))
+      : "—";
+  const packsOtroDisplay = (productId: string) =>
+    sellerCandyId
+      ? String(
+          Math.max(0, Math.floor(otherVendorPacksByProductId[productId] ?? 0)),
+        )
+      : "—";
 
   return (
     <div
@@ -2166,6 +2338,11 @@ export default function PrecioVentas({
                             ? money(uvAvg)
                             : "--";
                         })();
+                        const priceImageUrl = String(
+                          priceDocsById[r.productId]?.imageUrl ||
+                            r.imageUrl ||
+                            "",
+                        ).trim();
                         return (
                           <div
                             key={r.productId}
@@ -2203,38 +2380,172 @@ export default function PrecioVentas({
                             {expanded && (
                               <div className="px-3 pb-3 border-t">
                                 <div className="pt-3 space-y-2 text-sm">
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <div>
+                                  <div className="grid grid-cols-2 gap-x-3 gap-y-3 items-start">
+                                    {/* fila 1 */}
+                                    <div className="min-w-0">
                                       <div className="text-[12px] text-gray-600">
                                         Categoría
                                       </div>
                                       <div className="text-sm font-semibold">
                                         {r.category}
                                       </div>
+                                    </div>
+                                    <div className="min-w-0">
+                                      {isAdminEditable ? (
+                                        <>
+                                          <div className="text-[12px] text-gray-600">
+                                            Utilidad Bruta
+                                          </div>
+                                          <div className="text-sm tabular-nums">
+                                            {money(utilidad)}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="text-[12px] text-gray-600">
+                                            Comision x Paquete Vendido
+                                          </div>
+                                          <div className="text-sm tabular-nums">
+                                            {uvLabel}
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
 
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-emerald-800/80">
-                                          Precio Isla (paq)
-                                        </div>
-                                        <div className="text-sm font-bold tabular-nums text-emerald-600">
-                                          {money(r.priceIsla)}
-                                        </div>
+                                    {/* fila 2 */}
+                                    <div className="min-w-0">
+                                      <div className="text-[12px] text-emerald-800/80">
+                                        Precio Isla (paq)
                                       </div>
-
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-emerald-800/80">
-                                          Precio x Unidad
-                                        </div>
-                                        <div className="text-sm font-bold tabular-nums text-emerald-600">
-                                          {money(
-                                            r.priceIsla /
-                                              (r.unitsPerPackage || 1),
+                                      <div className="text-sm font-bold tabular-nums text-emerald-600">
+                                        {money(r.priceIsla)}
+                                      </div>
+                                    </div>
+                                    <div className="min-w-0">
+                                      {isAdminEditable ? (
+                                        <>
+                                          <div className="text-[12px] text-gray-600">
+                                            Comision x Paquete Vendido
+                                          </div>
+                                          <div className="text-sm tabular-nums">
+                                            {uvLabel}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="text-[12px] text-gray-600">
+                                            Código EAN
+                                          </div>
+                                          {isEditingCatalog ? (
+                                            <div className="flex gap-2">
+                                              <input
+                                                className="flex-1 border rounded px-2 py-2 min-w-0"
+                                                value={editBarcode}
+                                                onChange={(e) =>
+                                                  setEditBarcode(e.target.value)
+                                                }
+                                                placeholder="EAN"
+                                              />
+                                              <Button
+                                                type="button"
+                                                variant="primary"
+                                                size="sm"
+                                                className="!rounded-md px-3 py-2 text-sm shrink-0"
+                                                onClick={() => {
+                                                  setScanTarget("edit");
+                                                  setScanBarcodeProductId(
+                                                    r.productId,
+                                                  );
+                                                  setScanOpen(true);
+                                                }}
+                                              >
+                                                Escanear
+                                              </Button>
+                                            </div>
+                                          ) : (
+                                            <div>
+                                              {barcodeMap[r.productId] || "—"}
+                                            </div>
                                           )}
-                                        </div>
-                                      </div>
+                                        </>
+                                      )}
+                                    </div>
 
-                                      {isAdminEditable && (
-                                        <div className="mt-2">
+                                    {/* fila 3 */}
+                                    <div className="min-w-0">
+                                      <div className="text-[12px] text-emerald-800/80">
+                                        Precio x Unidad
+                                      </div>
+                                      <div className="text-sm font-bold tabular-nums text-emerald-600">
+                                        {money(
+                                          r.priceIsla /
+                                            (r.unitsPerPackage || 1),
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="min-w-0">
+                                      {isAdminEditable ? (
+                                        <>
+                                          <div className="text-[12px] text-gray-600">
+                                            Código EAN
+                                          </div>
+                                          {isEditingCatalog ? (
+                                            <div className="flex gap-2">
+                                              <input
+                                                className="flex-1 border rounded px-2 py-2 min-w-0"
+                                                value={editBarcode}
+                                                onChange={(e) =>
+                                                  setEditBarcode(e.target.value)
+                                                }
+                                                placeholder="EAN"
+                                              />
+                                              <Button
+                                                type="button"
+                                                variant="primary"
+                                                size="sm"
+                                                className="!rounded-md px-3 py-2 text-sm shrink-0"
+                                                onClick={() => {
+                                                  setScanTarget("edit");
+                                                  setScanBarcodeProductId(
+                                                    r.productId,
+                                                  );
+                                                  setScanOpen(true);
+                                                }}
+                                              >
+                                                Escanear
+                                              </Button>
+                                            </div>
+                                          ) : (
+                                            <div>
+                                              {barcodeMap[r.productId] || "—"}
+                                            </div>
+                                          )}
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="text-[12px] text-gray-600">
+                                            Tipo Empaque
+                                          </div>
+                                          {isEditingCatalog ? (
+                                            <MobileHtmlSelect
+                                              value={editPackaging}
+                                              onChange={setEditPackaging}
+                                              options={EMPAQUE_EDIT_OPTIONS}
+                                              selectClassName="w-full border rounded px-2 py-2"
+                                              sheetTitle="Tipo empaque"
+                                            />
+                                          ) : (
+                                            <div className="text-sm">
+                                              {packagingMap[r.productId] || "—"}
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+
+                                    {isAdminEditable && (
+                                      <>
+                                        <div className="min-w-0">
                                           <div className="text-[12px] text-gray-600">
                                             Costo Paq
                                           </div>
@@ -2242,94 +2553,74 @@ export default function PrecioVentas({
                                             {money(providerPrice || 0)}
                                           </div>
                                         </div>
-                                      )}
+                                        <div className="min-w-0">
+                                          <div className="text-[12px] text-gray-600">
+                                            Tipo Empaque
+                                          </div>
+                                          {isEditingCatalog ? (
+                                            <MobileHtmlSelect
+                                              value={editPackaging}
+                                              onChange={setEditPackaging}
+                                              options={EMPAQUE_EDIT_OPTIONS}
+                                              selectClassName="w-full border rounded px-2 py-2"
+                                              sheetTitle="Tipo empaque"
+                                            />
+                                          ) : (
+                                            <div className="text-sm">
+                                              {packagingMap[r.productId] || "—"}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </>
+                                    )}
 
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
-                                          Unidades x paquete
-                                        </div>
-                                        <div className="text-sm font-semibold">
-                                          {String(r.unitsPerPackage || 1)}
-                                        </div>
+                                    {/* Unidades | Mi inventario */}
+                                    <div className="min-w-0">
+                                      <div className="text-[12px] text-gray-600">
+                                        Unidades x paquete
+                                      </div>
+                                      <div className="text-sm font-semibold">
+                                        {String(r.unitsPerPackage || 1)}
                                       </div>
                                     </div>
-
-                                    <div>
-                                      {isAdminEditable && (
-                                        <div>
-                                          <div className="text-[12px] text-gray-600">
-                                            Utilidad Bruta
-                                          </div>
-                                          <div className="text-sm tabular-nums">
-                                            {money(utilidad)}
-                                          </div>
-                                        </div>
-                                      )}
-
-                                      <div className="mt-1">
-                                        <div className="text-[12px] text-gray-600">
-                                          Comision x Paquete Vendido
-                                        </div>
-                                        <div className="text-sm tabular-nums">
-                                          {uvLabel}
-                                        </div>
+                                    <div className="min-w-0">
+                                      <div className="text-[12px] text-gray-600">
+                                        Mi inventario
                                       </div>
-
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
-                                          Código EAN
-                                        </div>
-                                        {isEditingCatalog ? (
-                                          <div className="flex gap-2">
-                                            <input
-                                              className="flex-1 border rounded px-2 py-2"
-                                              value={editBarcode}
-                                              onChange={(e) =>
-                                                setEditBarcode(e.target.value)
-                                              }
-                                              placeholder="EAN"
-                                            />
-                                            <Button
-                                              type="button"
-                                              variant="primary"
-                                              size="sm"
-                                              className="!rounded-md px-3 py-2 text-sm"
-                                              onClick={() => {
-                                                setScanTarget("edit");
-                                                setScanBarcodeProductId(
-                                                  r.productId,
-                                                );
-                                                setScanOpen(true);
-                                              }}
-                                            >
-                                              Escanear
-                                            </Button>
-                                          </div>
-                                        ) : (
-                                          <div>
-                                            {barcodeMap[r.productId] || "—"}
-                                          </div>
-                                        )}
+                                      <div className="text-sm font-semibold tabular-nums text-indigo-800">
+                                        {packsMiDisplay(r.productId)}
                                       </div>
-
-                                      <div className="mt-2">
-                                        <div className="text-[12px] text-gray-600">
-                                          Tipo Empaque
-                                        </div>
-                                        {isEditingCatalog ? (
-                                          <MobileHtmlSelect
-                                            value={editPackaging}
-                                            onChange={setEditPackaging}
-                                            options={EMPAQUE_EDIT_OPTIONS}
-                                            selectClassName="w-full border rounded px-2 py-2"
-                                            sheetTitle="Tipo empaque"
-                                          />
-                                        ) : (
-                                          <div className="text-sm">
-                                            {packagingMap[r.productId] || "—"}
-                                          </div>
-                                        )}
+                                      <div className="text-[10px] text-gray-500">
+                                        {sellerCandyId
+                                          ? "Tu pedido vendedor"
+                                          : "Asigná vendedor en tu usuario"}
                                       </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-slate-200 bg-slate-50/90 px-2 py-2">
+                                    <div className="text-[12px] text-slate-700/90">
+                                      Stock
+                                    </div>
+                                    <div className="text-sm font-semibold tabular-nums text-slate-900">
+                                      {packsStockDisplay(r.productId)}
+                                    </div>
+                                    <div className="text-[10px] text-slate-600/90">
+                                      Paq. en órdenes maestras
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-amber-100 bg-amber-50/80 px-2 py-2">
+                                    <div className="text-[12px] text-amber-900/80">
+                                      Otro vendedor
+                                    </div>
+                                    <div className="text-sm font-semibold tabular-nums text-amber-900">
+                                      {packsOtroDisplay(r.productId)}
+                                    </div>
+                                    <div className="text-[10px] text-amber-800/80">
+                                      {sellerCandyId
+                                        ? "Paquetes en otros vendedores"
+                                        : "Iniciá sesión como vendedor para ver reparto"}
                                     </div>
                                   </div>
 
@@ -2372,46 +2663,104 @@ export default function PrecioVentas({
                                         </Button>
                                       </>
                                     ) : (
-                                      isAdminEditable && (
-                                        <>
+                                      <>
+                                        {isAdminEditable && (
+                                          <>
+                                            <Button
+                                              type="button"
+                                              variant="primary"
+                                              size="sm"
+                                              className="!rounded-md px-3 py-2 text-sm shrink-0 !bg-slate-600 hover:!bg-slate-700 shadow-none"
+                                              aria-label="Información de precio"
+                                              onClick={() =>
+                                                setPriceInfoProductId(
+                                                  r.productId,
+                                                )
+                                              }
+                                            >
+                                              <FiInfo className="w-4 h-4" />
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              variant="primary"
+                                              size="sm"
+                                              className="inline-flex items-center justify-center w-10 h-10 !rounded-md !bg-green-600 hover:!bg-green-700 shrink-0 shadow-green-600/15 !p-0"
+                                              aria-label="Editar precio y empaque"
+                                              title="Editar precio, empaque y EAN"
+                                              onClick={() =>
+                                                openPriceModalEdit(r)
+                                              }
+                                            >
+                                              <FiEdit2 className="w-5 h-5" />
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              variant="primary"
+                                              size="sm"
+                                              disabled={!priceImageUrl}
+                                              className="inline-flex items-center justify-center w-10 h-10 !rounded-md !bg-sky-600 hover:!bg-sky-700 shrink-0 !p-0 disabled:!bg-slate-300 disabled:hover:!bg-slate-300"
+                                              aria-label={
+                                                priceImageUrl
+                                                  ? "Ver foto del producto"
+                                                  : "Sin foto cargada"
+                                              }
+                                              title={
+                                                priceImageUrl
+                                                  ? "Ver foto"
+                                                  : "Sin foto (solo administración puede subirla)"
+                                              }
+                                              onClick={() => {
+                                                if (priceImageUrl)
+                                                  setMobilePriceImagePreviewUrl(
+                                                    priceImageUrl,
+                                                  );
+                                              }}
+                                            >
+                                              <FiImage className="w-5 h-5" />
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              variant="danger"
+                                              size="sm"
+                                              className="inline-flex items-center justify-center w-10 h-10 !rounded-md shrink-0 !p-0"
+                                              aria-label="Eliminar precio"
+                                              title="Eliminar precio"
+                                              onClick={() =>
+                                                deleteCurrentPrice(r.productId)
+                                              }
+                                            >
+                                              <FiTrash2 className="w-5 h-5" />
+                                            </Button>
+                                          </>
+                                        )}
+                                        {!isAdminEditable && (
                                           <Button
                                             type="button"
                                             variant="primary"
                                             size="sm"
-                                            className="!rounded-md px-3 py-2 text-sm shrink-0 !bg-slate-600 hover:!bg-slate-700 shadow-none"
-                                            aria-label="Información de precio"
-                                            onClick={() =>
-                                              setPriceInfoProductId(r.productId)
+                                            disabled={!priceImageUrl}
+                                            className="inline-flex items-center justify-center w-10 h-10 !rounded-md !bg-sky-600 hover:!bg-sky-700 shrink-0 !p-0 disabled:!bg-slate-300 disabled:hover:!bg-slate-300"
+                                            aria-label={
+                                              priceImageUrl
+                                                ? "Ver foto del producto"
+                                                : "Sin foto cargada"
                                             }
-                                          >
-                                            <FiInfo className="w-4 h-4" />
-                                          </Button>
-                                          <Button
-                                            type="button"
-                                            variant="primary"
-                                            size="sm"
-                                            className="inline-flex items-center justify-center w-10 h-10 !rounded-md !bg-green-600 hover:!bg-green-700 shrink-0 shadow-green-600/15 !p-0"
-                                            aria-label="Editar precio y empaque"
-                                            title="Editar precio, empaque y EAN"
-                                            onClick={() => openPriceModalEdit(r)}
-                                          >
-                                            <FiEdit2 className="w-5 h-5" />
-                                          </Button>
-                                          <Button
-                                            type="button"
-                                            variant="danger"
-                                            size="sm"
-                                            className="inline-flex items-center justify-center w-10 h-10 !rounded-md shrink-0 !p-0"
-                                            aria-label="Eliminar precio"
-                                            title="Eliminar precio"
-                                            onClick={() =>
-                                              deleteCurrentPrice(r.productId)
+                                            title={
+                                              priceImageUrl
+                                                ? "Ver foto"
+                                                : "Sin foto (solo administración puede subirla)"
                                             }
+                                            onClick={() => {
+                                              if (priceImageUrl)
+                                                setMobilePriceImagePreviewUrl(
+                                                  priceImageUrl,
+                                                );
+                                            }}
                                           >
-                                            <FiTrash2 className="w-5 h-5" />
+                                            <FiImage className="w-5 h-5" />
                                           </Button>
-                                        </>
-                                      )
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 </div>
@@ -2458,6 +2807,8 @@ export default function PrecioVentas({
                   setNewPriceUnits("");
                   setNewPriceBarcode("");
                   setNewPricePackaging("");
+                  setNewPriceImageUrl("");
+                  setRemovePriceImage(false);
                 }}
               >
                 Cerrar
@@ -2587,6 +2938,89 @@ export default function PrecioVentas({
                 />
               </div>
 
+              {isAdminEditable && !isPublicView && newPriceProductId ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/90 px-3 py-2">
+                  <div className="font-semibold text-slate-800">
+                    Foto del producto (opcional)
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5 mb-2">
+                    Archivo en{" "}
+                    <span className="font-mono text-[11px]">
+                      Firebase Storage
+                    </span>
+                    ; la URL pública queda en el documento{" "}
+                    <span className="font-mono text-[11px]">
+                      current_prices/{newPriceProductId}
+                    </span>{" "}
+                    campo <span className="font-mono text-[11px]">imageUrl</span>
+                    .
+                  </p>
+                  {(() => {
+                    const previewUrl = removePriceImage
+                      ? ""
+                      : String(
+                          newPriceImageUrl ||
+                            priceDocsById[newPriceProductId]?.imageUrl ||
+                            "",
+                        ).trim();
+                    return (
+                      <>
+                        {previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt=""
+                            className="mb-2 max-h-36 w-full rounded-lg border border-slate-200 bg-white object-contain"
+                          />
+                        ) : null}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            id="precio-venta-modal-img"
+                            onChange={handlePickPriceImage}
+                            disabled={priceImageUploading}
+                          />
+                          <label
+                            htmlFor="precio-venta-modal-img"
+                            className={`inline-flex cursor-pointer items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm ${
+                              priceImageUploading
+                                ? "pointer-events-none opacity-50"
+                                : ""
+                            }`}
+                          >
+                            {priceImageUploading
+                              ? "Subiendo…"
+                              : previewUrl
+                                ? "Cambiar imagen"
+                                : "Subir imagen"}
+                          </label>
+                          {!removePriceImage &&
+                          (String(newPriceImageUrl).trim() ||
+                            String(
+                              priceDocsById[newPriceProductId]?.imageUrl || "",
+                            ).trim()) ? (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              className="!rounded-md"
+                              disabled={priceImageUploading}
+                              onClick={() => {
+                                setRemovePriceImage(true);
+                                setNewPriceImageUrl("");
+                              }}
+                            >
+                              Quitar foto
+                            </Button>
+                          ) : null}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : null}
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block font-semibold">
@@ -2635,6 +3069,8 @@ export default function PrecioVentas({
                     setNewPriceUnits("");
                     setNewPriceBarcode("");
                     setNewPricePackaging("");
+                    setNewPriceImageUrl("");
+                    setRemovePriceImage(false);
                   }}
                 >
                   Cancelar
@@ -2697,6 +3133,23 @@ export default function PrecioVentas({
               Aceptar
             </Button>
           </div>
+        </div>
+      )}
+
+      {mobilePriceImagePreviewUrl && (
+        <div
+          className="fixed inset-0 z-[85] flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Foto del producto"
+          onClick={() => setMobilePriceImagePreviewUrl(null)}
+        >
+          <img
+            src={mobilePriceImagePreviewUrl}
+            alt=""
+            className="max-h-[min(85vh,36rem)] w-auto max-w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-white/20 object-contain shadow-2xl md:max-w-[min(40rem,calc(100vw-3rem))]"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 
@@ -2978,13 +3431,23 @@ export default function PrecioVentas({
 
       {/* ===== WEB: tabla ===== */}
       <div className="hidden md:block rounded-xl overflow-x-auto border border-slate-200 shadow-sm w-full">
-        <table className="min-w-[900px] w-full text-sm">
+        <table className="min-w-[940px] w-full text-sm">
           <thead className="bg-slate-100 sticky top-0 z-10">
             <tr className="whitespace-nowrap text-[11px] uppercase tracking-wider text-slate-600">
               <th className="p-3 border-b text-left">Categoría</th>
               <th className="p-3 border-b text-left">Producto</th>
+              <th className="p-3 border-b text-center w-[3.25rem]">Foto</th>
               <th className="p-3 border-b text-left">Empaque</th>
               <th className="p-3 border-b text-right">Und x paquete</th>
+              <th className="p-3 border-b text-right" title="Paquetes en órdenes maestras">
+                Stock
+              </th>
+              <th className="p-3 border-b text-right" title="Tu subinventario (vendedor logueado)">
+                Mi inventario
+              </th>
+              <th className="p-3 border-b text-right" title="Otros vendedores">
+                Otro vendedor
+              </th>
               <th className="p-3 border-b text-right">Precio x unidad</th>
               {isAdmin && <th className="p-3 border-b text-right">Costo</th>}
               <th className="p-3 border-b text-right">Precio Isla</th>
@@ -3007,15 +3470,50 @@ export default function PrecioVentas({
                 </td>
               </tr>
             ) : (
-              pagedWebRows.map((r) => (
+              pagedWebRows.map((r) => {
+                const rowImgUrl = String(
+                  priceDocsById[r.productId]?.imageUrl || r.imageUrl || "",
+                ).trim();
+                return (
                 <tr key={r.productId} className="odd:bg-white even:bg-slate-50">
                   <td className="p-3 border-b text-left">{r.category}</td>
                   <td className="p-3 border-b text-left">{r.productName}</td>
+                  <td className="p-3 border-b text-center align-middle">
+                    {rowImgUrl ? (
+                      <button
+                        type="button"
+                        className="mx-auto flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm transition hover:ring-2 hover:ring-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        title="Ver foto"
+                        aria-label="Ver foto del producto"
+                        onClick={() =>
+                          setMobilePriceImagePreviewUrl(rowImgUrl)
+                        }
+                      >
+                        <img
+                          src={rowImgUrl}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                      </button>
+                    ) : (
+                      <span className="text-slate-300 tabular-nums">—</span>
+                    )}
+                  </td>
                   <td className="p-3 border-b text-left">
                     {packagingMap[r.productId] || "—"}
                   </td>
                   <td className="p-3 border-b text-right tabular-nums">
                     {String(r.unitsPerPackage || 1)}
+                  </td>
+                  <td className="p-3 border-b text-right tabular-nums text-slate-800">
+                    {packsStockDisplay(r.productId)}
+                  </td>
+                  <td className="p-3 border-b text-right tabular-nums text-indigo-800">
+                    {packsMiDisplay(r.productId)}
+                  </td>
+                  <td className="p-3 border-b text-right tabular-nums text-amber-700">
+                    {packsOtroDisplay(r.productId)}
                   </td>
                   <td className="p-3 border-b text-right tabular-nums">
                     {money(r.priceIsla / (r.unitsPerPackage || 1))}
@@ -3080,7 +3578,8 @@ export default function PrecioVentas({
                     )}
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

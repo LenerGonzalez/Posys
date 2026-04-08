@@ -466,6 +466,8 @@ export default function CandyMainOrders() {
 
   // auto-llenados desde catálogo (solo lectura)
   const [orderProviderPrice, setOrderProviderPrice] = useState<string>("");
+  /** Precio venta Isla por paquete desde current_prices (solo lectura en el formulario). */
+  const [orderSalePricePkgIsla, setOrderSalePricePkgIsla] = useState<string>("");
   const [orderUnitsPerPackage, setOrderUnitsPerPackage] = useState<string>("1");
   const [orderPackages, setOrderPackages] = useState<string>("0");
 
@@ -648,6 +650,46 @@ export default function CandyMainOrders() {
     setOrderUnitsPerPackage(String(p.unitsPerPackage ?? 1));
   }, [orderProductId, catalog]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!orderProductId) {
+      setOrderSalePricePkgIsla("");
+      return;
+    }
+    const p = catalog.find((x) => x.id === orderProductId);
+    if (!p) {
+      setOrderSalePricePkgIsla("");
+      return;
+    }
+    const units = Math.max(1, safeInt(p.unitsPerPackage));
+    (async () => {
+      try {
+        const priceSnap = await getDoc(
+          doc(db, "current_prices", orderProductId),
+        );
+        if (cancelled) return;
+        if (!priceSnap.exists()) {
+          setOrderSalePricePkgIsla("—");
+          return;
+        }
+        const { isla } = pkgPricesFromCurrentPricesDoc(
+          priceSnap.data() as Record<string, any>,
+          units,
+        );
+        if (!Number.isFinite(isla) || isla <= 0) {
+          setOrderSalePricePkgIsla("—");
+          return;
+        }
+        setOrderSalePricePkgIsla(isla.toFixed(2));
+      } catch {
+        if (!cancelled) setOrderSalePricePkgIsla("—");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderProductId, catalog]);
+
   // Reset form
   const resetOrderForm = () => {
     setRefreshingSalePrices(false);
@@ -663,6 +705,7 @@ export default function CandyMainOrders() {
     setOrderCategory("Todas");
     setOrderProductId("");
     setOrderProviderPrice("");
+    setOrderSalePricePkgIsla("");
     setOrderPackages("0");
     setOrderUnitsPerPackage("1");
 
@@ -1077,12 +1120,12 @@ export default function CandyMainOrders() {
       return;
     }
 
-    // Sheet Productos: solo nombre y paquetes; precios y márgenes vienen de current_prices al importar
+    // Sheet Productos: id + nombre + paquetes; precios y márgenes vienen de current_prices al importar
     const rows = catalog
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name, "es"))
       .map((p) => ({
-
+        "Producto id": p.id,
         Producto: p.name,
         Paquetes: "",
       }));
@@ -1120,6 +1163,7 @@ export default function CandyMainOrders() {
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name, "es"))
       .map((it) => ({
+        "Producto id": it.id,
         Categoría: it.category,
         Producto: it.name,
         Paquetes: safeInt(it.packages),
@@ -1253,9 +1297,13 @@ export default function CandyMainOrders() {
       // aplicar a UI
       setLogisticsCost(String(cfgLogistics || 0));
 
-      // index por nombre (catálogo)
+      // index por nombre e id (catálogo)
       const catalogByName = new Map<string, CatalogCandyProduct>();
-      for (const p of catalog) catalogByName.set(norm(p.name), p);
+      const catalogById = new Map<string, CatalogCandyProduct>();
+      for (const p of catalog) {
+        catalogByName.set(norm(p.name), p);
+        catalogById.set(String(p.id || "").trim(), p);
+      }
 
       const errors: string[] = [];
 
@@ -1265,6 +1313,16 @@ export default function CandyMainOrders() {
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
 
+        const productIdCell = getRowValue(r, [
+          "Producto id",
+          "Producto ID",
+          "productId",
+          "Product ID",
+          "ID producto",
+        ]);
+        const pidRaw =
+          productIdCell != null ? String(productIdCell).trim() : "";
+
         const productName = getRowValue(r, [
           "Producto",
           "Product",
@@ -1273,15 +1331,26 @@ export default function CandyMainOrders() {
         ]);
         const packagesVal = getRowValue(r, ["Paquetes", "Packages"]);
 
-        const prodKey = norm(productName);
-        if (!prodKey) continue;
+        let catProd: CatalogCandyProduct | undefined;
+        if (pidRaw) {
+          catProd = catalogById.get(pidRaw);
+          if (!catProd) {
+            errors.push(
+              `Fila ${i + 2}: Producto id no está en catálogo: "${pidRaw}".`,
+            );
+            continue;
+          }
+        } else {
+          const prodKey = norm(productName);
+          if (!prodKey) continue;
 
-        const catProd = catalogByName.get(prodKey);
-        if (!catProd) {
-          errors.push(
-            `Fila ${i + 2}: Producto no existe en catálogo: "${String(productName).trim()}".`,
-          );
-          continue;
+          catProd = catalogByName.get(prodKey);
+          if (!catProd) {
+            errors.push(
+              `Fila ${i + 2}: Producto no existe en catálogo: "${String(productName).trim()}".`,
+            );
+            continue;
+          }
         }
 
         const packagesNum = Math.floor(num(packagesVal));
@@ -2693,6 +2762,15 @@ export default function CandyMainOrders() {
                         value={orderProviderPrice}
                         readOnly
                       />
+                      <label className="mt-2 block text-sm font-semibold text-slate-700">
+                        Precio venta Isla (paq)
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
+                        value={orderSalePricePkgIsla || "—"}
+                      />
                     </div>
 
                     <div>
@@ -3658,6 +3736,20 @@ export default function CandyMainOrders() {
                       ? "Actualizando…"
                       : "Actualizar precios"}
                   </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
+                      catalogLoading ? "text-gray-400 cursor-not-allowed" : ""
+                    }`}
+                    disabled={catalogLoading}
+                    onClick={() => {
+                      setMasterModalHeaderMenu(null);
+                      void loadCatalog();
+                    }}
+                  >
+                    {catalogLoading ? "Cargando catálogo…" : "Actualizar productos"}
+                  </Button>
                   {editingOrderId ? (
                     <Button
                       type="button"
@@ -4379,6 +4471,14 @@ export default function CandyMainOrders() {
                       }
                       rows={[
                         { label: "Categoría", value: it.category || "—" },
+                        {
+                          label: "Precio costo (paq)",
+                          value: `C$ ${Number(it.providerPrice || 0).toFixed(2)}`,
+                        },
+                        {
+                          label: "Precio venta Isla (paq)",
+                          value: `C$ ${Number(it.unitPriceIsla || 0).toFixed(2)}`,
+                        },
                         {
                           label: "Paquetes",
                           value: String(it.packages ?? 0),

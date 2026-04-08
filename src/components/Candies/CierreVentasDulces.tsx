@@ -31,6 +31,8 @@ import ActionMenu, {
 } from "../common/ActionMenu";
 import RefreshButton from "../common/RefreshButton";
 import CommissionAbonoHelpButton from "../common/CommissionAbonoHelpModal";
+import { DrawerDetailDlCard } from "../common/DrawerContentCards";
+import SlideOverDrawer from "../common/SlideOverDrawer";
 
 type FireTimestamp = { toDate?: () => Date } | undefined;
 
@@ -281,6 +283,18 @@ interface AbonoRow {
   }[];
 }
 
+/** Agrupa filas normalizadas (`saleId#idx`) por documento de venta para la vista móvil. */
+function groupCierreRowsBySaleId<T extends { id: string }>(rows: T[]): T[][] {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const base = row.id.includes("#") ? row.id.split("#")[0]! : row.id;
+    const prev = map.get(base);
+    if (prev) prev.push(row);
+    else map.set(base, [row]);
+  }
+  return Array.from(map.values());
+}
+
 async function deleteARMovesBySaleId(saleId: string) {
   if (!saleId) return;
   const qMov = query(
@@ -310,7 +324,7 @@ const normalizeMany = (
   function extractRegisteredAt(obj: any): string {
     const cand =
       obj?.registeredAt || obj?.createdAt || obj?.timestamp || obj?.processedAt;
-    if (!cand) return format(new Date(), "yyyy-MM-dd HH:mm");
+    if (!cand) return "";
     try {
       let d: any = cand;
       if (typeof d === "object" && typeof d.toDate === "function")
@@ -323,10 +337,10 @@ const normalizeMany = (
       }
       if (d instanceof Date && !isNaN(d.getTime()))
         return format(d, "yyyy-MM-dd HH:mm");
-    } catch (e) {
-      return format(new Date(), "yyyy-MM-dd HH:mm");
+    } catch {
+      return "";
     }
-    return format(new Date(), "yyyy-MM-dd HH:mm");
+    return "";
   }
 
   const sellerEmail = raw.userEmail ?? ""; // email real del usuario
@@ -473,7 +487,8 @@ const normalizeMany = (
       }
       return {
         id: `${id}#${idx}`,
-        registeredAt: extractRegisteredAt(it) || extractRegisteredAt(raw),
+        registeredAt:
+          extractRegisteredAt(raw) || extractRegisteredAt(it) || "—",
         productName: String(it?.productName ?? "(sin nombre)"),
         quantity: qtyPacks,
         amount: round2(lineFinal),
@@ -531,7 +546,7 @@ const normalizeMany = (
   return [
     {
       id,
-      registeredAt: extractRegisteredAt(raw),
+      registeredAt: extractRegisteredAt(raw) || "—",
       productName: raw.productName ?? "(sin nombre)",
       quantity: qtyPacksFallback,
       amount: amountFallback,
@@ -616,6 +631,18 @@ export default function CierreVentasDulces({
   const [isBackfillingLegacy, setIsBackfillingLegacy] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  /** Móvil: venta multi‑ítem → drawer con todo el detalle */
+  const [mobileSaleDrawer, setMobileSaleDrawer] = useState<{
+    kind: "cash" | "credit";
+    lines: SaleData[];
+  } | null>(null);
+  /** Solo una card expandida a la vez (ventas de 1 línea) */
+  const [mobileExpandedCashKey, setMobileExpandedCashKey] = useState<
+    string | null
+  >(null);
+  const [mobileExpandedCreditKey, setMobileExpandedCreditKey] = useState<
+    string | null
+  >(null);
   // bulk revert preview state
   const [bulkPreviewOpen, setBulkPreviewOpen] = useState(false);
   const [bulkPreviewItems, setBulkPreviewItems] = useState<SaleData[]>([]);
@@ -3323,12 +3350,12 @@ export default function CierreVentasDulces({
                 Saldo por cobrar en ventas crédito, abonos del período y
                 comisión total de esas ventas.
               </p>
-              <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
+              <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 md:grid-cols-3 md:gap-4">
                 <div className="text-center min-w-0 px-1">
                   <div className="text-[11px] text-emerald-600 mb-1.5">
                     Pendiente
                   </div>
-                  <div className="text-sm md:text-base font-bold text-emerald-900 tabular-nums leading-tight break-words">
+                  <div className="text-sm md:text-base font-bold text-emerald-900 tabular-nums leading-tight whitespace-nowrap">
                     C${money(totalPendienteCredito)}
                   </div>
                 </div>
@@ -3336,15 +3363,15 @@ export default function CierreVentasDulces({
                   <div className="text-[11px] text-emerald-600 mb-1.5">
                     Abonos (período)
                   </div>
-                  <div className="text-sm md:text-base font-semibold text-emerald-800 tabular-nums leading-tight break-words">
+                  <div className="text-sm md:text-base font-semibold text-emerald-800 tabular-nums leading-tight whitespace-nowrap">
                     C${money(totalAbonos)}
                   </div>
                 </div>
-                <div className="text-center min-w-0 px-1">
+                <div className="text-center min-w-0 px-1 col-span-2 md:col-span-1">
                   <div className="text-[11px] text-emerald-600 mb-1.5">
                     Comisión crédito
                   </div>
-                  <div className="text-sm md:text-base font-semibold text-emerald-900 tabular-nums leading-tight break-words">
+                  <div className="text-sm md:text-base font-semibold text-emerald-900 tabular-nums leading-tight whitespace-nowrap">
                     C${money(totalCommissionCredito)}
                   </div>
                 </div>
@@ -3502,7 +3529,7 @@ export default function CierreVentasDulces({
                         return (
                           <tr
                             key={s.id}
-                            className="text-center odd:bg-white even:bg-slate-50/50"
+                            className="text-center odd:bg-white even:bg-slate-50/50 whitespace-nowrap"
                           >
                             <td className="px-3 py-2">
                               <span
@@ -3547,7 +3574,10 @@ export default function CierreVentasDulces({
                             <td className="px-3 py-2">
                               {s.registeredAt || "—"}
                             </td>
-                            <td className="px-3 py-2 text-left text-slate-700">
+                            <td
+                              className="px-3 py-2 text-left text-slate-700 max-w-[14rem] truncate"
+                              title={s.productName}
+                            >
                               {s.productName}
                             </td>
                             <td className="px-3 py-2">Cash</td>
@@ -3624,7 +3654,10 @@ export default function CierreVentasDulces({
                               </td>
                             )}
 
-                            <td className="px-3 py-2 text-left">
+                            <td
+                              className="px-3 py-2 text-left max-w-[12rem] truncate"
+                              title={getSellerDisplayName(s)}
+                            >
                               {getSellerDisplayName(s)}
                             </td>
                             <td className="px-3 py-2 text-center align-middle">
@@ -3670,7 +3703,7 @@ export default function CierreVentasDulces({
                             {qty3(cashSalesTableTotals.packs)}
                           </td>
                           <td className="px-3 py-2">—</td>
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-2 text-emerald-700">
                             C${money(cashSalesTableTotals.amount)}
                           </td>
                           {isAdmin && (
@@ -3685,13 +3718,13 @@ export default function CierreVentasDulces({
                               ? `C$${money(round2(cashSalesTableTotals.uvTotal))}`
                               : "—"}
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-2 text-emerald-700">
                             {cashSalesTableTotals.comm > 0
                               ? `C$${money(round2(cashSalesTableTotals.comm))}`
                               : "—"}
                           </td>
                           {isAdmin && (
-                            <td className="px-3 py-2">
+                            <td className="px-3 py-2 text-emerald-700">
                               {cashSalesTableTotals.uNeta > 0
                                 ? `C$${money(round2(cashSalesTableTotals.uNeta))}`
                                 : "—"}
@@ -3707,108 +3740,150 @@ export default function CierreVentasDulces({
               </div>
 
               <div className="pdf-mobile md:hidden space-y-3 mb-4">
-                {cashSales.map((s) => {
-                  const commission = getCommissionAmount(s);
-                  const vendUtil = getVendorUtility(s);
-                  const processDate = (s.processedDate || "").trim();
+                {groupCierreRowsBySaleId(cashSales).map((group) => {
+                  const s = group[0]!;
+                  const totalAmount = round2(
+                    group.reduce(
+                      (acc, x) => acc + Number(x.amount || 0),
+                      0,
+                    ),
+                  );
+                  const saleKey = s.id.split("#")[0] ?? s.id;
 
-                  return (
-                    <details
-                      key={s.id}
-                      className="border border-slate-200 rounded-xl bg-white shadow-sm"
-                    >
-                      <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold truncate">
-                            {s.productName}
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            Cash • {s.date}
-                          </div>
+                  const summaryInner = (
+                    <>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate">
+                          {group.length > 1
+                            ? `${group.length} productos`
+                            : s.productName}
                         </div>
-
-                        <div className="text-right shrink-0 ml-3">
-                          <div className="font-bold">C${money(s.amount)}</div>
-                          <span
-                            className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ring-inset ${
-                              s.status === "PROCESADA"
-                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                                : "bg-amber-50 text-amber-700 ring-amber-200"
-                            }`}
-                          >
-                            {s.status}
-                          </span>
-                        </div>
-                      </summary>
-
-                      <div className="px-4 pb-4 pt-2 text-sm space-y-2">
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Paquetes</span>
-                          <strong>{Math.trunc(Number(s.quantity || 0))}</strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Precio</span>
-                          <strong>{getSalePriceLabel(s)}</strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Uv x Paquete</span>
-                          <strong>{getSaleCommissionLabel(s)}</strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Comision</span>
-                          <strong className="text-amber-800 font-bold">
-                            {getVendorGainLabel(s)}
-                          </strong>
-                        </div>
-
-                        {/* <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">U. Vendedor</span>
-                          <strong>
-                            {getCommissionFromItems(s) > 0
-                              ? `C$${money(getCommissionFromItems(s))}`
-                              : "—"}
-                          </strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">U. Neta</span>
-                          <strong>
-                            {getVendorNetUtility(s) > 0
-                              ? `C$${money(getVendorNetUtility(s))}`
-                              : "—"}
-                          </strong>
-                        </div> */}
-
-                        {/* Se oculta detalle 'Comisión' en vista móvil */}
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Vendedor</span>
-                          <strong className="text-right break-all">
-                            {getSellerDisplayName(s)}
-                          </strong>
-                        </div>
-
-                        <div className="pt-2 flex justify-end">
-                          <ActionMenuTrigger
-                            className="!h-8 !w-8"
-                            iconClassName="h-5 w-5 text-gray-700"
-                            aria-label="Acciones"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCierreSaleMenu({
-                                id: s.id,
-                                rect: (
-                                  e.currentTarget as HTMLElement
-                                ).getBoundingClientRect(),
-                              });
-                            }}
-                          />
+                        <div className="text-xs text-slate-500">
+                          Cash • {s.date}
                         </div>
                       </div>
-                    </details>
+                      <div className="shrink-0 text-right ml-3">
+                        <div className="font-bold">C${money(totalAmount)}</div>
+                        <span
+                          className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ring-inset ${
+                            s.status === "PROCESADA"
+                              ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                              : "bg-amber-50 text-amber-700 ring-amber-200"
+                          }`}
+                        >
+                          {s.status}
+                        </span>
+                      </div>
+                    </>
+                  );
+
+                  const inlineDetail = (
+                    <div className="px-4 pb-4 pt-2 text-sm space-y-3 border-t border-slate-100">
+                      {group.map((line) => (
+                        <DrawerDetailDlCard
+                          key={line.id}
+                          title={
+                            <span className="leading-snug">
+                              {line.productName}
+                            </span>
+                          }
+                          rows={[
+                            {
+                              label: "Paquetes",
+                              value: String(
+                                Math.trunc(Number(line.quantity || 0)),
+                              ),
+                            },
+                            {
+                              label: "Precio",
+                              value: getSalePriceLabel(line),
+                            },
+                            {
+                              label: "Uv x Paquete",
+                              value: getSaleCommissionLabel(line),
+                            },
+                            {
+                              label: "Comisión",
+                              value: (
+                                <span className="text-amber-800 font-bold">
+                                  {getVendorGainLabel(line)}
+                                </span>
+                              ),
+                              ddClassName:
+                                "text-sm font-semibold tabular-nums text-gray-900",
+                            },
+                          ]}
+                        />
+                      ))}
+
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-600">Vendedor</span>
+                        <strong className="text-right break-all">
+                          {getSellerDisplayName(s)}
+                        </strong>
+                      </div>
+
+                      <div className="pt-2 flex justify-end">
+                        <ActionMenuTrigger
+                          className="!h-8 !w-8"
+                          iconClassName="h-5 w-5 text-gray-700"
+                          aria-label="Acciones"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCierreSaleMenu({
+                              id: s.id,
+                              rect: (
+                                e.currentTarget as HTMLElement
+                              ).getBoundingClientRect(),
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+
+                  if (group.length > 1) {
+                    return (
+                      <button
+                        key={saleKey}
+                        type="button"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm shadow-slate-900/5 transition hover:bg-slate-50/90 active:scale-[0.99]"
+                        onClick={() => {
+                          setMobileExpandedCashKey(null);
+                          setMobileExpandedCreditKey(null);
+                          setMobileSaleDrawer({ kind: "cash", lines: group });
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          {summaryInner}
+                        </div>
+                        <div className="mt-3 text-center text-xs font-medium text-indigo-600">
+                          Ver detalle de la venta
+                        </div>
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={saleKey}
+                      className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition hover:bg-slate-50/90"
+                        onClick={() => {
+                          setMobileSaleDrawer(null);
+                          setMobileExpandedCreditKey(null);
+                          setMobileExpandedCashKey((prev) =>
+                            prev === saleKey ? null : saleKey,
+                          );
+                        }}
+                      >
+                        {summaryInner}
+                      </button>
+                      {mobileExpandedCashKey === saleKey && inlineDetail}
+                    </div>
                   );
                 })}
 
@@ -3908,7 +3983,7 @@ export default function CierreVentasDulces({
                         return (
                           <tr
                             key={s.id}
-                            className="text-center odd:bg-white even:bg-slate-50/50"
+                            className="text-center odd:bg-white even:bg-slate-50/50 whitespace-nowrap"
                           >
                             <td className="px-3 py-2">
                               <span
@@ -3953,7 +4028,10 @@ export default function CierreVentasDulces({
                             <td className="px-3 py-2">
                               {s.registeredAt || "—"}
                             </td>
-                            <td className="px-3 py-2 text-left text-slate-700">
+                            <td
+                              className="px-3 py-2 text-left text-slate-700 max-w-[14rem] truncate"
+                              title={s.productName}
+                            >
                               {s.productName}
                             </td>
                             <td className="px-3 py-2">Crédito</td>
@@ -4027,7 +4105,10 @@ export default function CierreVentasDulces({
                               </td>
                             )}
 
-                            <td className="px-3 py-2 text-left">
+                            <td
+                              className="px-3 py-2 text-left max-w-[12rem] truncate"
+                              title={getSellerDisplayName(s)}
+                            >
                               {getSellerDisplayName(s)}
                             </td>
                             <td className="px-3 py-2 text-center align-middle">
@@ -4073,7 +4154,7 @@ export default function CierreVentasDulces({
                             {qty3(creditSalesTableTotals.packs)}
                           </td>
                           <td className="px-3 py-2">—</td>
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-2 text-emerald-700">
                             C${money(creditSalesTableTotals.amount)}
                           </td>
                           {isAdmin && (
@@ -4088,13 +4169,13 @@ export default function CierreVentasDulces({
                               ? `C$${money(round2(creditSalesTableTotals.uvTotal))}`
                               : "—"}
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-2 text-emerald-700">
                             {creditSalesTableTotals.comm > 0
                               ? `C$${money(round2(creditSalesTableTotals.comm))}`
                               : "—"}
                           </td>
                           {isAdmin && (
-                            <td className="px-3 py-2">
+                            <td className="px-3 py-2 text-emerald-700">
                               {creditSalesTableTotals.uNeta > 0
                                 ? `C$${money(round2(creditSalesTableTotals.uNeta))}`
                                 : "—"}
@@ -4110,88 +4191,153 @@ export default function CierreVentasDulces({
               </div>
 
               <div className="pdf-mobile md:hidden space-y-3 mb-4">
-                {creditSales.map((s) => {
-                  const commission = getCommissionAmount(s);
-                  const vendUtil = getVendorUtility(s);
-                  const processDate = (s.processedDate || "").trim();
+                {groupCierreRowsBySaleId(creditSales).map((group) => {
+                  const s = group[0]!;
+                  const totalAmount = round2(
+                    group.reduce(
+                      (acc, x) => acc + Number(x.amount || 0),
+                      0,
+                    ),
+                  );
+                  const saleKey = s.id.split("#")[0] ?? s.id;
 
-                  return (
-                    <details
-                      key={s.id}
-                      className="border border-slate-200 rounded-xl bg-white shadow-sm"
-                    >
-                      <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold truncate">
-                            {s.productName}
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            Crédito • {s.date}
-                          </div>
+                  const summaryInner = (
+                    <>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate">
+                          {group.length > 1
+                            ? `${group.length} productos`
+                            : s.productName}
                         </div>
-
-                        <div className="text-right shrink-0 ml-3">
-                          <div className="font-bold">C${money(s.amount)}</div>
-                          <span
-                            className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ring-inset ${
-                              s.status === "PROCESADA"
-                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                                : "bg-amber-50 text-amber-700 ring-amber-200"
-                            }`}
-                          >
-                            {s.status}
-                          </span>
-                        </div>
-                      </summary>
-
-                      <div className="px-4 pb-4 pt-2 text-sm space-y-2">
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Paquetes</span>
-                          <strong>{Math.trunc(Number(s.quantity || 0))}</strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Precio</span>
-                          <strong>{getSalePriceLabel(s)}</strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Uv x Paquete</span>
-                          <strong>{getSaleCommissionLabel(s)}</strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Comision</span>
-                          <strong className="text-amber-800 font-bold">
-                            {getVendorGainLabel(s)}
-                          </strong>
-                        </div>
-
-                        <div className="flex justify-between gap-3">
-                          <span className="text-slate-600">Vendedor</span>
-                          <strong className="text-right break-all">
-                            {getSellerDisplayName(s)}
-                          </strong>
-                        </div>
-
-                        <div className="pt-2 flex justify-end">
-                          <ActionMenuTrigger
-                            className="!h-8 !w-8"
-                            iconClassName="h-5 w-5 text-gray-700"
-                            aria-label="Acciones"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCierreSaleMenu({
-                                id: s.id,
-                                rect: (
-                                  e.currentTarget as HTMLElement
-                                ).getBoundingClientRect(),
-                              });
-                            }}
-                          />
+                        <div className="text-xs text-slate-500">
+                          Crédito • {s.date}
                         </div>
                       </div>
-                    </details>
+                      <div className="shrink-0 text-right ml-3">
+                        <div className="font-bold">C${money(totalAmount)}</div>
+                        <span
+                          className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ring-inset ${
+                            s.status === "PROCESADA"
+                              ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                              : "bg-amber-50 text-amber-700 ring-amber-200"
+                          }`}
+                        >
+                          {s.status}
+                        </span>
+                      </div>
+                    </>
+                  );
+
+                  const inlineDetail = (
+                    <div className="px-4 pb-4 pt-2 text-sm space-y-3 border-t border-slate-100">
+                      {group.map((line) => (
+                        <DrawerDetailDlCard
+                          key={line.id}
+                          title={
+                            <span className="leading-snug">
+                              {line.productName}
+                            </span>
+                          }
+                          rows={[
+                            {
+                              label: "Paquetes",
+                              value: String(
+                                Math.trunc(Number(line.quantity || 0)),
+                              ),
+                            },
+                            {
+                              label: "Precio",
+                              value: getSalePriceLabel(line),
+                            },
+                            {
+                              label: "Uv x Paquete",
+                              value: getSaleCommissionLabel(line),
+                            },
+                            {
+                              label: "Comisión",
+                              value: (
+                                <span className="text-amber-800 font-bold">
+                                  {getVendorGainLabel(line)}
+                                </span>
+                              ),
+                              ddClassName:
+                                "text-sm font-semibold tabular-nums text-gray-900",
+                            },
+                          ]}
+                        />
+                      ))}
+
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-600">Vendedor</span>
+                        <strong className="text-right break-all">
+                          {getSellerDisplayName(s)}
+                        </strong>
+                      </div>
+
+                      <div className="pt-2 flex justify-end">
+                        <ActionMenuTrigger
+                          className="!h-8 !w-8"
+                          iconClassName="h-5 w-5 text-gray-700"
+                          aria-label="Acciones"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCierreSaleMenu({
+                              id: s.id,
+                              rect: (
+                                e.currentTarget as HTMLElement
+                              ).getBoundingClientRect(),
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+
+                  if (group.length > 1) {
+                    return (
+                      <button
+                        key={saleKey}
+                        type="button"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm shadow-slate-900/5 transition hover:bg-slate-50/90 active:scale-[0.99]"
+                        onClick={() => {
+                          setMobileExpandedCashKey(null);
+                          setMobileExpandedCreditKey(null);
+                          setMobileSaleDrawer({
+                            kind: "credit",
+                            lines: group,
+                          });
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          {summaryInner}
+                        </div>
+                        <div className="mt-3 text-center text-xs font-medium text-indigo-600">
+                          Ver detalle de la venta
+                        </div>
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={saleKey}
+                      className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition hover:bg-slate-50/90"
+                        onClick={() => {
+                          setMobileSaleDrawer(null);
+                          setMobileExpandedCashKey(null);
+                          setMobileExpandedCreditKey((prev) =>
+                            prev === saleKey ? null : saleKey,
+                          );
+                        }}
+                      >
+                        {summaryInner}
+                      </button>
+                      {mobileExpandedCreditKey === saleKey && inlineDetail}
+                    </div>
                   );
                 })}
 
@@ -5009,6 +5155,100 @@ export default function CierreVentasDulces({
           </div>
         </div>
       )}
+
+      <SlideOverDrawer
+        open={!!mobileSaleDrawer}
+        onClose={() => setMobileSaleDrawer(null)}
+        titleId="cierre-mobile-sale-drawer-title"
+        title={
+          mobileSaleDrawer
+            ? `${mobileSaleDrawer.lines.length} productos`
+            : ""
+        }
+        subtitle={
+          mobileSaleDrawer
+            ? `${mobileSaleDrawer.kind === "cash" ? "Cash" : "Crédito"} • ${mobileSaleDrawer.lines[0]?.date ?? ""}`
+            : undefined
+        }
+        badge={
+          mobileSaleDrawer ? (
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${
+                mobileSaleDrawer.lines[0]?.status === "PROCESADA"
+                  ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                  : "bg-amber-50 text-amber-700 ring-amber-200"
+              }`}
+            >
+              {mobileSaleDrawer.lines[0]?.status}
+            </span>
+          ) : null
+        }
+        footer={
+          mobileSaleDrawer ? (
+            <div className="flex w-full justify-end">
+              <ActionMenuTrigger
+                className="!h-9 !w-9"
+                iconClassName="h-5 w-5 text-gray-700"
+                aria-label="Acciones de la venta"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const first = mobileSaleDrawer.lines[0];
+                  if (!first) return;
+                  setCierreSaleMenu({
+                    id: first.id,
+                    rect: (
+                      e.currentTarget as HTMLElement
+                    ).getBoundingClientRect(),
+                  });
+                }}
+              />
+            </div>
+          ) : undefined
+        }
+      >
+        {mobileSaleDrawer && (
+          <div className="space-y-3">
+            {mobileSaleDrawer.lines.map((line) => (
+              <DrawerDetailDlCard
+                key={line.id}
+                title={
+                  <span className="leading-snug">{line.productName}</span>
+                }
+                rows={[
+                  {
+                    label: "Paquetes",
+                    value: String(Math.trunc(Number(line.quantity || 0))),
+                  },
+                  {
+                    label: "Precio",
+                    value: getSalePriceLabel(line),
+                  },
+                  {
+                    label: "Uv x Paquete",
+                    value: getSaleCommissionLabel(line),
+                  },
+                  {
+                    label: "Comisión",
+                    value: (
+                      <span className="text-amber-800 font-bold">
+                        {getVendorGainLabel(line)}
+                      </span>
+                    ),
+                    ddClassName:
+                      "text-sm font-semibold tabular-nums text-gray-900",
+                  },
+                ]}
+              />
+            ))}
+            <div className="flex justify-between gap-3 border-t border-slate-200 pt-3">
+              <span className="text-slate-600">Vendedor</span>
+              <strong className="max-w-[70%] text-right break-words">
+                {getSellerDisplayName(mobileSaleDrawer.lines[0]!)}
+              </strong>
+            </div>
+          </div>
+        )}
+      </SlideOverDrawer>
 
       <ActionMenu
         anchorRect={cierreSaleMenu?.rect ?? null}

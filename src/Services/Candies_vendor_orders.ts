@@ -14,6 +14,11 @@ import {
 
 const floor = (n: any) => Math.max(0, Math.floor(Number(n || 0)));
 
+/** Ítems de candy_main_orders pueden usar `id` o solo `productId` (datos viejos). */
+function mainOrderItemProductId(it: any): string {
+  return String(it?.id ?? it?.productId ?? "").trim();
+}
+
 function getUnitsPerPackage(x: any) {
   return Math.max(1, floor(x.unitsPerPackage || 1));
 }
@@ -226,7 +231,7 @@ async function restoreToCandyMainOrder(params: {
     let changed = false;
 
     const newItems = items.map((it: any) => {
-      if (String(it?.id || "") !== String(productId)) return it;
+      if (mainOrderItemProductId(it) !== String(productId)) return it;
 
       changed = true;
       return {
@@ -430,7 +435,7 @@ export async function allocateVendorCandyPacks(params: {
 
       let changed = false;
       const newItems = items.map((it: any) => {
-        if (String(it?.id || "") !== productId) return it;
+        if (mainOrderItemProductId(it) !== productId) return it;
         changed = true;
         const nextRemaining =
           remainingByOrderProduct[targetOrderId]?.[productId] ??
@@ -636,7 +641,7 @@ export async function restoreVendorCandyPacks(params: {
       let changed = false;
 
       const newItems = items.map((it: any) => {
-        if (String(it?.id || "") !== String(productIdTx)) return it;
+        if (mainOrderItemProductId(it) !== String(productIdTx)) return it;
         changed = true;
         return {
           ...it,
@@ -874,7 +879,7 @@ export async function deleteVendorCandyOrderAndRestore(
       let changed = false;
 
       const newItems = items.map((it: any) => {
-        if (String(it?.id || "") !== String(productId)) return it;
+        if (mainOrderItemProductId(it) !== String(productId)) return it;
         changed = true;
         return {
           ...it,

@@ -1,6 +1,7 @@
 // firebase.ts
 import { initializeApp } from "firebase/app";
 import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 import {
   getAuth,
   setPersistence,
@@ -22,6 +23,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+/** Bucket: `posys-103de.firebasestorage.app` — subir fotos y guardar la URL en Firestore (p. ej. current_prices.imageUrl). */
+const storage = getStorage(app);
 
 // Intentar forzar persistencia local por defecto (mantener sesión al cerrar la app)
 // Exportamos la promesa para que la app pueda esperar a que la persistencia
@@ -79,4 +82,4 @@ enableIndexedDbPersistence(db).catch((err) => {
   }
 });
 
-export { db, auth };
+export { db, auth, storage };

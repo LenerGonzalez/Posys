@@ -42,6 +42,64 @@ import {
 // Helper: redondeo a 2 decimales (consistente con otros componentes)
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
+/** Misma lógica que PreciosVenta: precio por paquete desde current_prices. */
+function pkgPricesFromCurrentPricesDoc(
+  doc: any,
+  units: number,
+): { isla: number; rivas: number } {
+  const u = Math.max(1, Number(units) || 1);
+  let pkgIsla = Number(doc?.packagePriceIsla ?? NaN);
+  let pkgRivas = Number(doc?.packagePriceRivas ?? NaN);
+  if (!Number.isFinite(pkgIsla)) {
+    const x = Number(doc?.unitPriceIsla ?? NaN);
+    pkgIsla = Number.isFinite(x) ? x * u : 0;
+  }
+  if (!Number.isFinite(pkgRivas)) {
+    const x = Number(doc?.unitPriceRivas ?? NaN);
+    pkgRivas = Number.isFinite(x) ? x * u : 0;
+  }
+  return { isla: pkgIsla, rivas: pkgRivas };
+}
+
+/**
+ * Los precios de venta viven en current_prices; candy_main_orders puede quedar
+ * desactualizado. Al armar el catálogo para pedidos vendedor, pisa precios y
+ * recalcula U. bruta / U. aprox. por paquete.
+ */
+function applyCurrentPricesToProductList(
+  pList: ProductCandyFromMain[],
+  priceById: Record<string, any>,
+): ProductCandyFromMain[] {
+  return pList.map((p) => {
+    const doc = priceById[p.id];
+    if (!doc) return p;
+    const u = Math.max(
+      1,
+      Number(
+        doc.unitsPerPackage ?? doc.unitsPerPack ?? p.unitsPerPackage ?? 1,
+      ) || 1,
+    );
+    const { isla, rivas } = pkgPricesFromCurrentPricesDoc(doc, u);
+    const prov = Number(p.providerPrice || 0);
+    const log = Number(p.logisticAllocatedPerPack || 0);
+    const gpI = Math.max(0, isla - prov);
+    const gpR = Math.max(0, rivas - prov);
+    const gpSJ = Math.max(0, Number(p.unitPriceSanJorge || 0) - prov);
+    return {
+      ...p,
+      unitsPerPackage: u,
+      unitPriceIsla: isla,
+      unitPriceRivas: rivas,
+      grossProfitPerPackIsla: gpI,
+      grossProfitPerPackRivas: gpR,
+      grossProfitPerPackSanJorge: gpSJ,
+      uApproxPerPackIsla: Math.max(0, gpI - log),
+      uApproxPerPackRivas: Math.max(0, gpR - log),
+      uApproxPerPackSanJorge: Math.max(0, gpSJ - log),
+    };
+  });
+}
+
 // ===== Tipos base =====
 type Branch = "RIVAS" | "SAN_JORGE" | "ISLA";
 
@@ -93,6 +151,44 @@ interface ProductCandyFromMain {
 
   // Última orden maestra que contiene este producto
   masterOrderId?: string;
+}
+
+/** Coincidencia import Excel ↔ catálogo: acentos, NBSP, espacios múltiples. */
+function normalizeProductNameForImport(raw: string): string {
+  return String(raw ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u00a0/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/**
+ * Busca por nombre solo, luego por "Categoría - Nombre" / "Categoría Nombre"
+ * (como en muchos listados de la app).
+ */
+function findProductByImportedName(
+  products: ProductCandyFromMain[],
+  nameRaw: string,
+): ProductCandyFromMain | null {
+  const q = normalizeProductNameForImport(nameRaw);
+  if (!q) return null;
+  const byName = products.find(
+    (x) => normalizeProductNameForImport(x.name) === q,
+  );
+  if (byName) return byName;
+  const byCatDash = products.find(
+    (x) =>
+      normalizeProductNameForImport(`${x.category} - ${x.name}`) === q,
+  );
+  if (byCatDash) return byCatDash;
+  return (
+    products.find(
+      (x) =>
+        normalizeProductNameForImport(`${x.category} ${x.name}`) === q,
+    ) || null
+  );
 }
 
 // Sub-inventario por vendedor (cada doc = 1 producto de 1 pedido)
@@ -894,7 +990,12 @@ export default function VendorCandyOrders({
             `${a.category} ${a.name}`.localeCompare(`${b.category} ${b.name}`),
           );
 
-        setProductsAll(pList);
+        const pricesSnap = await getDocs(collection(db, "current_prices"));
+        const priceById: Record<string, any> = {};
+        pricesSnap.forEach((d) => {
+          priceById[d.id] = d.data();
+        });
+        setProductsAll(applyCurrentPricesToProductList(pList, priceById));
 
         const invList: VendorCandyRow[] = [];
         invSnap.forEach((d) => {
@@ -1073,16 +1174,20 @@ export default function VendorCandyOrders({
         p.grossProfitPerPackRivas != null ||
         p.grossProfitPerPackSanJorge != null),
     );
+    const computed = pricePerPackage - providerPricePerPack;
+    // Si hay precio de catálogo (p. ej. ya fusionado con current_prices), no usar
+    // U. bruta guardada en orden maestra (puede estar desactualizada).
     if (
       hasExplicitGross &&
       p &&
       candidatePriceFromItem <= 0 &&
-      candidateProviderFromItem <= 0
+      candidateProviderFromItem <= 0 &&
+      (!Number.isFinite(pricePerPackage) || pricePerPackage <= 0)
     ) {
       return getGrossProfitPerPack(p, b);
     }
 
-    return pricePerPackage - providerPricePerPack;
+    return computed;
   };
 
   const getUApproxPerPack = (p: ProductCandyFromMain, b?: Branch) => {
@@ -3302,10 +3407,11 @@ export default function VendorCandyOrders({
   };
 
   const downloadTemplateFromMainOrders = () => {
-    const headers = ["Producto", "Paquetes"];
+    const headers = ["Producto id", "Producto", "Paquetes"];
 
     const list = productsAll
       .map((p) => ({
+        id: p.id,
         name: p.name,
         category: p.category,
         existentes: Number(p.existingPacks || 0),
@@ -3317,7 +3423,7 @@ export default function VendorCandyOrders({
 
     const rows: (string | number)[][] = [
       headers,
-      ...list.map((x) => [x.name, ""]),
+      ...list.map((x) => [x.id, x.name, ""]),
     ];
 
     downloadExcelFile("plantilla_orden_vendedor.xlsx", rows, "Plantilla");
@@ -3351,7 +3457,11 @@ export default function VendorCandyOrders({
           h === "producto" ||
           h === "productname" ||
           h === "nombre" ||
-          h === "nombre producto",
+          h === "nombre producto" ||
+          h === "nombre del producto" ||
+          h === "nombre paquete" ||
+          h === "nombre del paquete" ||
+          h === "nombre de producto",
       );
       const idxProductId = header.findIndex(
         (h: string) => h === "productid" || h === "producto id" || h === "id",
@@ -3399,21 +3509,29 @@ export default function VendorCandyOrders({
         let pid = idxProductId >= 0 ? String(r[idxProductId] || "").trim() : "";
         let p = pid ? productsAll.find((x) => x.id === pid) || null : null;
 
-        if (!p && idxProductName >= 0) {
-          const nameRaw = String(r[idxProductName] || "").trim().toLowerCase();
-          if (!nameRaw) continue;
-          p = productsAll.find(
-            (x) => x.name.trim().toLowerCase() === nameRaw,
-          ) || null;
+        // Si pegaron nombres en la columna "Producto id" (muy común al copiar solo
+        // la columna Producto del Excel de orden maestra), el id no matchea:
+        // intentar esa celda como nombre.
+        if (!p && pid) {
+          p = findProductByImportedName(productsAll, pid);
           if (p) pid = p.id;
         }
 
-        if (!pid || !p) {
+        if (!p && idxProductName >= 0) {
+          const nameRaw = String(r[idxProductName] || "").trim();
+          if (nameRaw) {
+            p = findProductByImportedName(productsAll, nameRaw);
+            if (p) pid = p.id;
+          }
+        }
+
+        if (!p || !pid) {
           const label =
             idxProductName >= 0
               ? String(r[idxProductName] || "").trim()
-              : pid;
-          if (label) skippedNames.push(label);
+              : "";
+          const fallback = [label, pid].filter(Boolean).join(" · ");
+          if (fallback) skippedNames.push(fallback);
           continue;
         }
 
@@ -3556,6 +3674,8 @@ export default function VendorCandyOrders({
           continue;
         }
 
+        if (packs <= 0) continue;
+
         const item: OrderItem = {
           id: `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
           productId: p?.id || pid,
@@ -3593,16 +3713,60 @@ export default function VendorCandyOrders({
         toAdd.push(item);
       }
 
-      if (!toAdd.length && skippedNames.length === 0)
+      const mergeImportedNewItems = (list: OrderItem[]): OrderItem[] => {
+        const m = new Map<string, OrderItem>();
+        for (const it of list) {
+          const prev = m.get(it.productId);
+          if (!prev) {
+            m.set(it.productId, it);
+            continue;
+          }
+          const mergedPacks = floor(prev.packages + it.packages);
+          const pr = productsAll.find((x) => x.id === it.productId) || null;
+          const pricePerPackageM = pr
+            ? getPricePerPack(pr, br)
+            : it.pricePerPackage;
+          const grossPerPackM = computeGrossPerPack(pr, undefined, br);
+          const grossProfitM = grossPerPackM * mergedPacks;
+          const totalExpectedM = pricePerPackageM * mergedPacks;
+          const logisticAllocatedM = pr
+            ? pr.logisticAllocatedPerPack * mergedPacks
+            : 0;
+          const uApproxPerPackM = pr ? getUApproxPerPack(pr, br) : 0;
+          const uAproximadaM = uApproxPerPackM * mergedPacks;
+          const vendorMarginPercentM = clampPercent(prev.vendorMarginPercent);
+          const splitM = calcSplitFromGross(grossProfitM, vendorMarginPercentM);
+          m.set(it.productId, {
+            ...prev,
+            packages: mergedPacks,
+            totalExpected: totalExpectedM,
+            grossProfit: grossProfitM,
+            logisticAllocated: logisticAllocatedM,
+            uAproximada: uAproximadaM,
+            uVendor: splitM.uVendor,
+            uInvestor: splitM.uInvestor,
+            vendorMarginPercent: splitM.vendorMarginPercent,
+            totalRivas: (pr?.unitPriceRivas || 0) * mergedPacks,
+            totalSanJorge: (pr?.unitPriceSanJorge || 0) * mergedPacks,
+            totalIsla: (pr?.unitPriceIsla || 0) * mergedPacks,
+            remainingPackages: mergedPacks,
+          });
+        }
+        return [...m.values()];
+      };
+
+      const toAddMerged = mergeImportedNewItems(toAdd);
+
+      if (!toAddMerged.length && skippedNames.length === 0)
         return setMsg("⚠️ No se encontraron filas con Paquetes > 0.");
 
-      if (toAdd.length > 0) {
-        setOrderItems((prev) => [...toAdd, ...prev]);
+      if (toAddMerged.length > 0) {
+        setOrderItems((prev) => [...toAddMerged, ...prev]);
         setItemsPage(1);
       }
 
-      let resultMsg = toAdd.length > 0
-        ? `✅ Importados ${toAdd.length} productos desde plantilla.`
+      let resultMsg = toAddMerged.length > 0
+        ? `✅ Importados ${toAddMerged.length} productos desde plantilla.`
         : "⚠️ No se agregaron productos nuevos.";
       if (skippedNames.length > 0) {
         resultMsg += ` ⚠️ No encontrados (${skippedNames.length}): ${skippedNames.slice(0, 5).join(", ")}${skippedNames.length > 5 ? "..." : ""}`;
@@ -4257,7 +4421,10 @@ export default function VendorCandyOrders({
                           }
                         }}
                       >
-                        <td className="p-3 border-b max-w-[240px] whitespace-normal break-words">
+                        <td
+                          className="p-3 border-b max-w-[240px] whitespace-nowrap truncate"
+                          title={o.orderName || undefined}
+                        >
                           {o.orderName || "—"}
                         </td>
                         <td className="p-3 border-b text-sm text-gray-600">
@@ -5081,63 +5248,63 @@ export default function VendorCandyOrders({
                   </div>
                 </div>
 
-                {/* Desktop table */}
+                {/* Desktop table: table-auto evita que table-fixed reparta mal el ancho y desalinee encabezados vs celdas */}
                 <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full min-w-[1100px] table-fixed divide-y divide-slate-100 text-xs">
+                  <table className="w-max min-w-full border-collapse divide-y divide-slate-100 text-xs">
                     <thead className="border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
                       <tr className="sticky top-0 z-10 whitespace-nowrap">
-                        <th className="w-[4.5rem] border-b border-slate-200 p-2 text-left font-semibold text-slate-700">
+                        <th className="min-w-[4.5rem] max-w-[4.5rem] border-b border-slate-200 px-2 py-2 text-left font-semibold text-slate-700">
                           Tipo
                         </th>
-                        <th className="min-w-[8rem] w-[11rem] border-b border-slate-200 p-2 text-left font-semibold text-slate-700">
+                        <th className="min-w-[11rem] max-w-[13rem] border-b border-slate-200 px-2 py-2 text-left font-semibold text-slate-700">
                           Producto
                         </th>
-                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                        <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                           Agregados
                         </th>
-                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                        <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                           Restantes
                         </th>
                         {isAdmin && (
-                          <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                          <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                             Precio Costo
                           </th>
                         )}
-                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                        <th className="min-w-[6.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                           Precio Venta
                         </th>
-                        <th className="w-[6.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                        <th className="min-w-[8rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                           Monto Esperado
                         </th>
                         {isAdmin && (
                           <>
-                            <th className="w-[6.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                            <th className="min-w-[8rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                               U.Bruta
                             </th>
-                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                               Gastos
                             </th>
-                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                               U x paq
                             </th>
-                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                               UN x Paq
                             </th>
-                            <th className="w-[5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                               UV x Paq
                             </th>
-                            <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                            <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                               U Vendor
                             </th>
-                            <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                            <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                               U. Neta
                             </th>
                           </>
                         )}
-                        <th className="w-[5.5rem] border-b border-slate-200 p-2 text-right font-semibold text-slate-700">
+                        <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
                           Margen (%)
                         </th>
-                        <th className="w-10 border-b border-slate-200 p-2 text-left font-semibold text-slate-700">
+                        <th className="min-w-[2.5rem] w-10 border-b border-slate-200 px-1 py-2 text-center font-semibold text-slate-700">
                           X
                         </th>
                       </tr>
@@ -5197,11 +5364,14 @@ export default function VendorCandyOrders({
                             key={it.id}
                             className="whitespace-nowrap align-middle transition-colors hover:bg-slate-50/90"
                           >
-                            <td className="p-2 border-b align-middle">
+                            <td
+                              className="border-b px-2 py-2 align-middle max-w-[4.5rem] truncate"
+                              title={it.category}
+                            >
                               {it.category}
                             </td>
-                            <td className="p-2 border-b align-middle">
-                              <div className="min-w-0 max-w-[11rem]">
+                            <td className="border-b px-2 py-2 align-middle max-w-[13rem] overflow-hidden">
+                              <div className="min-w-0">
                                 <span
                                   className="block truncate text-left"
                                   title={it.productName}
@@ -5211,7 +5381,7 @@ export default function VendorCandyOrders({
                               </div>
                             </td>
 
-                            <td className="p-2 border-b text-right align-middle">
+                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                               {!isReadOnly ? (
                                 editingPackagesMap[it.id] ? (
                                   <input
@@ -5270,7 +5440,7 @@ export default function VendorCandyOrders({
                                 </span>
                               )}
                             </td>
-                            <td className="p-2 border-b text-right align-middle">
+                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                               {isAdmin ? (
                                 editingRemainingMap[it.id] ? (
                                   <div className="flex items-center justify-end gap-2">
@@ -5354,7 +5524,7 @@ export default function VendorCandyOrders({
                             </td>
 
                             {isAdmin && (
-                              <td className="p-2 border-b text-right">
+                              <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                                 <span
                                   className={zeroClass(
                                     Number((it as any).providerPrice || 0),
@@ -5365,7 +5535,7 @@ export default function VendorCandyOrders({
                               </td>
                             )}
 
-                            <td className="p-2 border-b text-right">
+                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                               <span
                                 className={zeroClass(
                                   Number(it.pricePerPackage || 0),
@@ -5375,83 +5545,73 @@ export default function VendorCandyOrders({
                               </span>
                             </td>
 
-                            <td className="p-2 border-b text-right align-middle">
-                              <div className="flex flex-col items-end gap-1">
+                            <td className="min-w-[8rem] border-b px-2 py-2 text-right align-middle">
+                              <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1">
                                 <span
-                                  className={`tabular-nums ${zeroClass(totalExpected)}`}
+                                  className={`shrink-0 tabular-nums ${zeroClass(totalExpected)}`}
                                 >
                                   {money(totalExpected)}
                                 </span>
-                                {(isAdmin || savingCalcMap[it.id]) && (
-                                  <div className="flex items-center justify-end gap-1">
-                                    {isAdmin && (
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                        onClick={async () => recalcItem(it.id)}
-                                        aria-label="Recalcular total esperado"
-                                      >
-                                        🔁
-                                      </Button>
-                                    )}
-                                    {savingCalcMap[it.id] && (
-                                      <div className="text-[10px] text-gray-500">
-                                        Calc…
-                                      </div>
-                                    )}
-                                  </div>
+                                {isAdmin && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                    onClick={async () => recalcItem(it.id)}
+                                    aria-label="Recalcular total esperado"
+                                  >
+                                    🔁
+                                  </Button>
+                                )}
+                                {savingCalcMap[it.id] && (
+                                  <span className="shrink-0 text-[10px] text-gray-500">
+                                    Calc…
+                                  </span>
                                 )}
                               </div>
                             </td>
 
                             {isAdmin && (
                               <>
-                                <td className="p-2 border-b text-right align-middle">
-                                  <div className="flex flex-col items-end gap-1">
+                                <td className="min-w-[8rem] border-b px-2 py-2 text-right align-middle">
+                                  <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1">
                                     <span
-                                      className={`tabular-nums ${zeroClass(grossProfitBase)}`}
+                                      className={`shrink-0 tabular-nums ${zeroClass(grossProfitBase)}`}
                                     >
                                       {money(grossProfitBase)}
                                     </span>
-                                    {(isAdmin || savingCalcMap[it.id]) && (
-                                      <div className="flex items-center justify-end gap-1">
-                                        {isAdmin && (
-                                          <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                            onClick={async () =>
-                                              await recalcItem(it.id)
-                                            }
-                                            aria-label="Recalcular U. Bruta"
-                                          >
-                                            🔁
-                                          </Button>
-                                        )}
-                                        {savingCalcMap[it.id] && (
-                                          <div className="text-[10px] text-gray-500">
-                                            Calc…
-                                          </div>
-                                        )}
-                                      </div>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                      onClick={async () =>
+                                        await recalcItem(it.id)
+                                      }
+                                      aria-label="Recalcular U. Bruta"
+                                    >
+                                      🔁
+                                    </Button>
+                                    {savingCalcMap[it.id] && (
+                                      <span className="shrink-0 text-[10px] text-gray-500">
+                                        Calc…
+                                      </span>
                                     )}
                                   </div>
                                 </td>
 
-                                <td className="p-2 border-b text-right">
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                                   {money(gastos)}
                                 </td>
 
-                                <td className="p-2 border-b text-right">
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                                   <span className={zeroClass(uXpaq)}>
                                     {money(uXpaq)}
                                   </span>
                                 </td>
 
-                                <td className="p-2 border-b text-right">
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                                   <span
                                     className={zeroClass(uNetaDisplay && packs)}
                                   >
@@ -5460,12 +5620,12 @@ export default function VendorCandyOrders({
                                       : "-"}
                                   </span>
                                 </td>
-                                <td className="p-2 border-b text-right">
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                                   <span className={zeroClass(uvXpaq)}>
                                     {money(round2(Number(uvXpaq || 0)))}
                                   </span>
                                 </td>
-                                <td className="p-2 border-b text-right">
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                                   <span
                                     className={zeroClass(uVendorDisplay)}
                                   >
@@ -5474,7 +5634,7 @@ export default function VendorCandyOrders({
                                     )}
                                   </span>
                                 </td>
-                                <td className="p-2 border-b text-right">
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                                   <span
                                     className={`${zeroClass(uNetaDisplay)} ${
                                       uNetaDisplay === uVendorDisplay
@@ -5490,14 +5650,14 @@ export default function VendorCandyOrders({
                               </>
                             )}
 
-                            <td className="p-2 border-b text-right">
+                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
                               {!isReadOnly ? (
                                 editingMarginMap[it.id] ? (
                                   <input
                                     type="number"
                                     step="0.001"
                                     min={0}
-                                    className="w-20 border rounded p-1 text-right"
+                                    className="w-full max-w-[5rem] border rounded p-1 text-right"
                                     value={String(
                                       it.vendorMarginPercent ??
                                         getSellerMarginPercent(sellerId),
@@ -5581,7 +5741,7 @@ export default function VendorCandyOrders({
                               )}
                             </td>
 
-                            <td className="p-2 border-b">
+                            <td className="border-b px-1 py-2 text-center align-middle">
                               {!isReadOnly && (
                                 <ActionMenuTrigger
                                   className="!h-8 !w-8"
@@ -5829,35 +5989,31 @@ export default function VendorCandyOrders({
                                       <div className="text-gray-600">
                                         Total esperado
                                       </div>
-                                      <div className="mt-0.5 flex flex-col items-end gap-1">
+                                      <div className="mt-0.5 flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap">
                                         <div
                                           className={`font-semibold tabular-nums ${zeroClass(totalExpected)}`}
                                         >
                                           {money(totalExpected)}
                                         </div>
-                                        {(isAdmin || savingCalcMap[it.id]) && (
-                                          <div className="flex items-center gap-1">
-                                            {isAdmin && (
-                                              <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="sm"
-                                                className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                                onClick={async (e) => {
-                                                  e.stopPropagation();
-                                                  await recalcItem(it.id);
-                                                }}
-                                                aria-label="Recalcular total esperado"
-                                              >
-                                                🔁
-                                              </Button>
-                                            )}
-                                            {savingCalcMap[it.id] && (
-                                              <div className="text-[10px] text-gray-500">
-                                                Calc…
-                                              </div>
-                                            )}
-                                          </div>
+                                        {isAdmin && (
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                            onClick={async (e) => {
+                                              e.stopPropagation();
+                                              await recalcItem(it.id);
+                                            }}
+                                            aria-label="Recalcular total esperado"
+                                          >
+                                            🔁
+                                          </Button>
+                                        )}
+                                        {savingCalcMap[it.id] && (
+                                          <span className="shrink-0 text-[10px] text-gray-500">
+                                            Calc…
+                                          </span>
                                         )}
                                       </div>
                                     </div>
@@ -5867,7 +6023,7 @@ export default function VendorCandyOrders({
                                           <div className="text-gray-600">
                                             U. Bruta
                                           </div>
-                                          <div className="mt-0.5 flex flex-col items-end gap-1">
+                                          <div className="mt-0.5 flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap">
                                             <div
                                               className={`font-semibold tabular-nums ${zeroClass(
                                                 Number(grossProfitBase || 0),
@@ -5877,30 +6033,25 @@ export default function VendorCandyOrders({
                                                 Number(grossProfitBase || 0),
                                               )}
                                             </div>
-                                            {(isAdmin ||
-                                              savingCalcMap[it.id]) && (
-                                              <div className="flex items-center gap-1">
-                                                {isAdmin && (
-                                                  <Button
-                                                    type="button"
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="min-h-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                                    onClick={async (e) => {
-                                                      e.stopPropagation();
-                                                      await recalcItem(it.id);
-                                                    }}
-                                                    aria-label="Recalcular U. Bruta"
-                                                  >
-                                                    🔁
-                                                  </Button>
-                                                )}
-                                                {savingCalcMap[it.id] && (
-                                                  <div className="text-[10px] text-gray-500">
-                                                    Calc…
-                                                  </div>
-                                                )}
-                                              </div>
+                                            {isAdmin && (
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                                onClick={async (e) => {
+                                                  e.stopPropagation();
+                                                  await recalcItem(it.id);
+                                                }}
+                                                aria-label="Recalcular U. Bruta"
+                                              >
+                                                🔁
+                                              </Button>
+                                            )}
+                                            {savingCalcMap[it.id] && (
+                                              <span className="shrink-0 text-[10px] text-gray-500">
+                                                Calc…
+                                              </span>
                                             )}
                                           </div>
                                         </div>

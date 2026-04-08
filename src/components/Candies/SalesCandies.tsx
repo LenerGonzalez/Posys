@@ -395,6 +395,21 @@ function generateCandyVoucherPDF(args: {
   doc.save(`venta_dulces_${saleId}.pdf`);
 }
 
+/**
+ * Unidades restantes en una línea de inventory_candies_sellers (pedido vendedor).
+ * Debe coincidir con allocateSaleFIFOCandyFromVendor y con reloadVendorStock.
+ */
+function getSellerLineRemainingUnits(x: any): number {
+  const upp = Math.max(1, Math.floor(Number(x?.unitsPerPackage || 1)));
+  const ru = Number(x?.remainingUnits ?? NaN);
+  if (Number.isFinite(ru) && ru > 0) return Math.floor(ru);
+  const rLegacy = Number(x?.remaining ?? 0);
+  if (Number.isFinite(rLegacy) && rLegacy > 0) return Math.floor(rLegacy);
+  const rp = Number(x?.remainingPackages ?? 0);
+  if (Number.isFinite(rp) && rp > 0) return Math.floor(rp * upp);
+  return 0;
+}
+
 // Helpers: AHORA lee stock desde el PEDIDO DEL VENDEDOR de forma más tolerante
 async function getAvailableUnitsForCandyFromVendor(
   productId: string,
@@ -414,8 +429,7 @@ async function getAvailableUnitsForCandyFromVendor(
 
   snap.forEach((d) => {
     const x = d.data() as any;
-    // Tomamos el campo correcto según exista
-    const rem = Number(x.remainingUnits ?? x.remaining ?? x.totalUnits ?? 0);
+    const rem = getSellerLineRemainingUnits(x);
     if (rem > 0) {
       available += rem;
     }
@@ -464,17 +478,25 @@ async function allocateSaleFIFOCandyFromVendor(args: {
     collection(db, "inventory_candies_sellers"),
     where("sellerId", "==", vendorId),
     where("productId", "==", productId),
-    where("remainingUnits", ">", 0),
-    orderBy("date", "asc"),
-    orderBy("createdAt", "asc"),
   );
 
   const snap = await getDocs(qRef);
 
-  for (const d of snap.docs) {
+  const docsSorted = snap.docs
+    .map((d) => ({ id: d.id, ref: d.ref, data: d.data() as any }))
+    .sort((a, b) => {
+      const da = String(a.data.date || "");
+      const dbs = String(b.data.date || "");
+      if (da !== dbs) return da < dbs ? -1 : 1;
+      const ca = a.data.createdAt?.seconds ?? 0;
+      const cb = b.data.createdAt?.seconds ?? 0;
+      return ca - cb;
+    });
+
+  for (const d of docsSorted) {
     if (remaining <= 0) break;
-    const data = d.data() as any;
-    const remUnits = Number(data.remainingUnits || 0);
+    const data = d.data;
+    const remUnits = getSellerLineRemainingUnits(data);
     if (remUnits <= 0) continue;
 
     const take = Math.min(remUnits, remaining);
@@ -488,6 +510,7 @@ async function allocateSaleFIFOCandyFromVendor(args: {
     await updateDoc(d.ref, {
       remainingUnits: newRemUnits,
       remainingPackages: newRemPacks,
+      remaining: newRemUnits,
     });
 
     allocations.push({
@@ -1134,7 +1157,7 @@ export default function SalesCandiesPOS({
       const pid = b.productId || "";
       if (!pid) return;
 
-      const rem = Number(b.remainingUnits ?? b.remaining ?? b.totalUnits ?? 0);
+      const rem = getSellerLineRemainingUnits(b);
       if (rem <= 0) return; // ✅ mejora: no guardamos ceros
 
       map[pid] = (map[pid] || 0) + rem;
@@ -2501,14 +2524,14 @@ export default function SalesCandiesPOS({
               <div className="border rounded overflow-hidden min-w-[860px]">
                 <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-semibold border-b">
                   <div className="col-span-4">Producto</div>
-                  <div className="col-span-2 text-right">Precio (paq.)</div>
+                  <div className="col-span-2 text-right">Precio</div>
                   <div className="col-span-2 text-right">
-                    Existencias (paq.)
+                    Existencias
                   </div>
-                  <div className="col-span-1 text-right">Cantidad (paq.)</div>
+                  <div className="col-span-1 text-right">Cantidad</div>
                   <div className="col-span-1 text-right">Descuento</div>
                   <div className="col-span-1 text-right">Monto</div>
-                  <div className="col-span-1 text-center">Quitar</div>
+                  <div className="col-span-1 text-center">Borrar</div>
                 </div>
 
                 {items.length === 0 ? (
