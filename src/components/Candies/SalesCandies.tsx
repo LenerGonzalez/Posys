@@ -21,6 +21,7 @@ import { syncAbonoCommissionsForCustomer } from "../../Services/commissionAbonoC
 import { hasRole } from "../../utils/roles";
 import LoadingOverlay from "../common/LoadingOverlay";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
+import Toast from "../common/Toast";
 import Button from "../common/Button";
 import SlideOverDrawer from "../common/SlideOverDrawer";
 import jsPDF from "jspdf";
@@ -617,8 +618,13 @@ export default function SalesCandiesPOS({
   const [items, setItems] = useState<SelectedItem[]>([]);
 
   // ===== MOBILE UI (colapsables) =====
-  const [openSaleInfo, setOpenSaleInfo] = useState(true);
-  const [openItems, setOpenItems] = useState(false);
+  /** Móvil: un solo panel abierto a la vez (acordeón); null = todos colapsados */
+  const [mobileOpenCard, setMobileOpenCard] = useState<
+    "sale" | "items" | null
+  >(null);
+  const toggleMobileCard = (id: "sale" | "items") => {
+    setMobileOpenCard((prev) => (prev === id ? null : id));
+  };
   const [abonoDrawerOpen, setAbonoDrawerOpen] = useState(false);
 
   // Totales
@@ -695,10 +701,8 @@ export default function SalesCandiesPOS({
     if (found) {
       await addProductToList(found.id);
       setMsg("✅ Producto agregado desde escáner.");
-      setTimeout(() => setMsg(""), 2500);
     } else {
       setMsg("⚠️ Código no corresponde a ningún producto disponible.");
-      setTimeout(() => setMsg(""), 2500);
     }
   };
 
@@ -1265,7 +1269,7 @@ export default function SalesCandiesPOS({
   const addProductToList = async (pid: string) => {
     if (!pid) return;
     if (!vendorId) {
-      setMsg("Selecciona primero el vendedor para usar su inventario.");
+      setMsg("⚠️ Selecciona primero el vendedor para usar su inventario.");
       setProductId("");
       return;
     }
@@ -1394,7 +1398,6 @@ export default function SalesCandiesPOS({
         if (n > availablePackages) {
           finalQty = availablePackages;
           setMsg(`⚠️ Solo hay ${availablePackages} paquetes disponibles.`);
-          setTimeout(() => setMsg(""), 2500);
         }
 
         const monto = Number(it.pricePerPackage || 0) * finalQty;
@@ -1885,19 +1888,19 @@ export default function SalesCandiesPOS({
     setMsg("");
     const amt = Number(abonoAmount || 0);
     if (!abonoCustomerId) {
-      setMsg("Selecciona el cliente del abono.");
+      setMsg("⚠️ Selecciona el cliente del abono.");
       return;
     }
     if (!(amt > 0)) {
-      setMsg("Ingresa un monto de abono mayor a 0.");
+      setMsg("⚠️ Ingresa un monto de abono mayor a 0.");
       return;
     }
     if (amt > maxAbonoForCustomer) {
-      setMsg("El abono no puede superar el saldo actual del cliente.");
+      setMsg("⚠️ El abono no puede superar el saldo actual del cliente.");
       return;
     }
     if (!abonoDate) {
-      setMsg("Selecciona la fecha del abono.");
+      setMsg("⚠️ Selecciona la fecha del abono.");
       return;
     }
 
@@ -2176,8 +2179,8 @@ export default function SalesCandiesPOS({
                               priceDocsById[p.id],
                             ),
                           )}{" "}
-                          por paquete ({branchLabel(vendorBranchForPrice)})
-                          {already ? " · Ya en lista" : ""}
+                          {/* por paquete ({branchLabel(vendorBranchForPrice)})
+                          {already ? " · Ya en lista" : ""} */}
                         </div>
                       </Button>
                     );
@@ -2740,14 +2743,22 @@ export default function SalesCandiesPOS({
             <Button
               type="button"
               variant="ghost"
-              onClick={() => setOpenSaleInfo((v) => !v)}
+              onClick={() => toggleMobileCard("sale")}
               className="w-full flex justify-between items-center p-3 font-semibold rounded-none rounded-t-xl h-auto min-h-0"
             >
-              Datos de venta
-              <span className="text-lg">{openSaleInfo ? "−" : "+"}</span>
+              Fecha y Cliente
+              <span
+                className={`text-sm font-medium transition-colors ${
+                  mobileOpenCard === "sale"
+                    ? "text-red-600/75"
+                    : "text-green-600/85"
+                }`}
+              >
+                {mobileOpenCard === "sale" ? "Cerrar" : "Abrir"}
+              </span>
             </Button>
 
-            {openSaleInfo && (
+            {mobileOpenCard === "sale" && (
               <div className="p-3 space-y-3">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -2785,11 +2796,11 @@ export default function SalesCandiesPOS({
                 {clientType === "CONTADO" ? (
                   <div>
                     <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Cliente (contado)
+                      Nombre del cliente
                     </label>
                     <input
                       className={`${inpBase} mt-1`}
-                      placeholder="Ej: Mario Bergoglio"
+                      placeholder="Ej: Mario Bergoglio(al contado)"
                       value={customerNameCash}
                       onChange={(e) => setCustomerNameCash(e.target.value)}
                     />
@@ -2966,18 +2977,26 @@ export default function SalesCandiesPOS({
             <Button
               type="button"
               variant="ghost"
-              onClick={() => setOpenItems((v) => !v)}
+              onClick={() => toggleMobileCard("items")}
               className="w-full flex justify-between items-center p-3 font-semibold rounded-none rounded-t-xl h-auto min-h-0"
             >
               Agrega Productos
-              <span className="text-lg">{openItems ? "−" : "+"}</span>
+              <span
+                className={`text-sm font-medium transition-colors ${
+                  mobileOpenCard === "items"
+                    ? "text-red-600/75"
+                    : "text-green-600/85"
+                }`}
+              >
+                {mobileOpenCard === "items" ? "Cerrar" : "Abrir"}
+              </span>
             </Button>
 
-            {openItems && (
+            {mobileOpenCard === "items" && (
               <div className="p-3 space-y-3">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Productos
+                    Buscar producto
                   </label>
                   <div className="mt-1 mb-2 flex gap-2 items-center min-w-0">
                     <input
@@ -3034,7 +3053,7 @@ export default function SalesCandiesPOS({
                   >
                     <span className="truncate text-sm text-slate-600">
                       {vendorId
-                        ? "Elegir producto (lista)"
+                        ? "Seleccionar producto"
                         : "Selecciona un vendedor primero"}
                     </span>
                     <span className="text-slate-400 shrink-0">▼</span>
@@ -3082,7 +3101,7 @@ export default function SalesCandiesPOS({
                           <div className="grid grid-cols-2 gap-2 text-sm">
                             <div className="p-2 rounded border bg-white">
                               <div className="text-xs text-gray-600">
-                                Precio x Paquete
+                                Precio
                               </div>
                               <div className="font-bold">
                                 {money(it.pricePerPackage)}
@@ -3093,7 +3112,7 @@ export default function SalesCandiesPOS({
                                 Existencias
                               </div>
                               <div className="font-bold">
-                                {visualStock} paq.
+                                {visualStock} paquetes
                               </div>
                             </div>
                           </div>
@@ -3101,7 +3120,7 @@ export default function SalesCandiesPOS({
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <label className="block text-xs text-gray-600">
-                                Cantidad Paquetes
+                                Cuantos Paquetes
                               </label>
                               <input
                                 type="number"
@@ -3223,7 +3242,7 @@ export default function SalesCandiesPOS({
                     onClick={() => setAbonoDrawerOpen(true)}
                     className="w-full flex items-center justify-between font-semibold rounded-xl h-auto min-h-0 py-3 border-amber-300 bg-white"
                   >
-                    <span>Abonos (panel lateral)</span>
+                    <span>Abonar</span>
                     <span className="text-sm text-amber-800">
                       {money(abonoTotalPending)} →
                     </span>
@@ -3392,7 +3411,7 @@ export default function SalesCandiesPOS({
         </div>
       </SlideOverDrawer>
 
-      {msg && <p className="mt-2 text-sm">{msg}</p>}
+      {msg && <Toast message={msg} onClose={() => setMsg("")} />}
 
       {/* Modal: Crear cliente rápido */}
       {showModal && (
@@ -3516,13 +3535,13 @@ export default function SalesCandiesPOS({
                     : mSellerId;
 
                   if (!sellerIdToSave) {
-                    setMsg("Selecciona el vendedor para asociar este cliente.");
+                    setMsg("⚠️ Selecciona el vendedor para asociar este cliente.");
                     return;
                   }
 
                   setMsg("");
                   if (!mName.trim()) {
-                    setMsg("Ingresa el nombre del nuevo cliente.");
+                    setMsg("⚠️ Ingresa el nombre del nuevo cliente.");
                     return;
                   }
 

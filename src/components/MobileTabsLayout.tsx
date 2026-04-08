@@ -237,6 +237,11 @@ export default function MobileTabsLayout({
         if (isAdmin) {
           built = [
             {
+              key: "venta",
+              label: "Venta",
+              to: `${base}/salesCandies`,
+            },
+            {
               key: "cier",
               label: "Ventas diarias",
               to: `${base}/cierreVentasCandies`,

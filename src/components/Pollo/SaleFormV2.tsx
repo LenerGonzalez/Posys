@@ -160,7 +160,7 @@ export default function SaleForm({
 
       if (changes.length > 0) {
         const note = `Precios actualizados: ${changes.join("; ")}`;
-        setMessage(note);
+        setMessage(`ℹ️ ${note}`);
       }
     } catch (e) {
       // no bloquear la UX por errores de precio

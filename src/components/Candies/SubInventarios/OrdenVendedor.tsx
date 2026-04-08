@@ -5290,7 +5290,7 @@ export default function VendorCandyOrders({
 
                   <div className="rounded-xl border border-emerald-200/90 bg-emerald-50/90 p-2.5 shadow-sm ring-1 ring-emerald-900/[0.04]">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-900/70">
-                      Utilidad. Vendedor
+                      Utilidad Vendedor
                     </div>
                     <div
                       className={`text-lg font-semibold ${zeroClass(
@@ -5304,7 +5304,7 @@ export default function VendorCandyOrders({
                   {isAdmin && (
                     <div className="rounded-xl border border-indigo-200/90 bg-indigo-50/90 p-2.5 shadow-sm ring-1 ring-indigo-900/[0.04]">
                       <div className="text-[11px] font-medium uppercase tracking-wide text-indigo-900/70">
-                        Utilidad Neta
+                        Utilidad Negocio
                       </div>
                       <div
                         className={`text-lg font-semibold ${zeroClass(
@@ -5517,24 +5517,24 @@ export default function VendorCandyOrders({
                               Gastos
                             </th>
                             <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              U x paq
+                              U.Paq
                             </th>
                             <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              UN x Paq
+                              UN.Paq
                             </th>
                             <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              UV x Paq
+                              UV.Paq
                             </th>
                             <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              U Vendor
+                              U.Ruta
                             </th>
                             <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              U. Neta
+                              U.Neta
                             </th>
                           </>
                         )}
                         <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Margen (%)
+                          Margen
                         </th>
                         <th className="min-w-[2.5rem] w-10 border-b border-slate-200 px-1 py-2 text-center font-semibold text-slate-700">
                           X
@@ -5910,7 +5910,7 @@ export default function VendorCandyOrders({
                                         {Number(
                                           it.vendorMarginPercent ??
                                             getSellerMarginPercent(sellerId),
-                                        ).toFixed(3)}
+                                        ).toFixed(0)}
                                         %
                                       </span>
                                     </div>
@@ -6284,7 +6284,7 @@ export default function VendorCandyOrders({
                                         </div>
                                         <div>
                                           <div className="text-gray-600">
-                                            U x paq
+                                            U.Paq
                                           </div>
                                           <div
                                             className={`font-semibold ${zeroClass(
@@ -6296,7 +6296,7 @@ export default function VendorCandyOrders({
                                         </div>
                                         <div>
                                           <div className="text-gray-600">
-                                            UN x Paq
+                                            UN.Paq
                                           </div>
                                           <div
                                             className={`font-semibold ${zeroClass(
@@ -6310,7 +6310,7 @@ export default function VendorCandyOrders({
                                         </div>
                                         <div>
                                           <div className="text-gray-600">
-                                            UV x Paq
+                                            UV.Paq
                                           </div>
                                           <div
                                             className={`font-semibold ${zeroClass(
@@ -6324,7 +6324,7 @@ export default function VendorCandyOrders({
                                         </div>
                                         <div>
                                           <div className="text-gray-600">
-                                            U Vendor
+                                            U.Ruta
                                           </div>
                                           <div
                                             className={`font-semibold ${zeroClass(
@@ -6340,7 +6340,7 @@ export default function VendorCandyOrders({
                                         </div>
                                         <div>
                                           <div className="text-gray-600">
-                                            U. Neta
+                                            U.Neta
                                           </div>
                                           <div
                                             className={`font-semibold ${zeroClass(
@@ -6357,7 +6357,7 @@ export default function VendorCandyOrders({
                                   <div className="flex items-center gap-2">
                                     <div className="flex-1">
                                       <div className="text-gray-600">
-                                        Margen (%)
+                                        Margen
                                       </div>
                                       {!isReadOnly ? (
                                         editingMarginMap[it.id] ? (

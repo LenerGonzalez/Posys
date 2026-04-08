@@ -2427,7 +2427,7 @@ export default function CandyMainOrders() {
     <div className="p-3 md:p-6">
       {/* Header / acciones */}
       <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-3">
-        <div className="flex-1">
+        {/* <div className="flex-1">
           <h2 className="text-lg md:text-2xl font-semibold">
             Ordenes Maestras
           </h2>
@@ -2435,29 +2435,8 @@ export default function CandyMainOrders() {
             Listado de pedidos de compra con costos, totales y gastos
             prorrateados.
           </p>
-        </div>
+        </div> */}
 
-        <div className="flex flex-wrap gap-2">
-          <RefreshButton
-            onClick={refresh}
-            loading={loading || catalogLoading}
-          />
-
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            className="!rounded-md shadow-none"
-            onClick={() => {
-              resetOrderForm();
-              setOpenOrderModal(true);
-            }}
-            aria-label="Nueva orden"
-            title="Nueva orden"
-          >
-            +
-          </Button>
-        </div>
       </div>
 
       {msg && <Toast message={msg} onClose={() => setMsg("")} />}
@@ -2686,7 +2665,7 @@ export default function CandyMainOrders() {
                     />
                   </div>
 
-                  <div>
+                  {/* <div>
                     <label className="block text-sm font-semibold text-slate-700">
                       % Ganancia Rivas
                     </label>
@@ -2696,7 +2675,7 @@ export default function CandyMainOrders() {
                       value={marginRivas}
                       onChange={(e) => setMarginRivas(e.target.value)}
                     />
-                  </div>
+                  </div> */}
 
                   {/* San Jorge legacy: lo mantenemos oculto en UI */}
                   <input type="hidden" value={marginSanJorge} readOnly />
@@ -2929,7 +2908,7 @@ export default function CandyMainOrders() {
                               Unidades
                             </th>
                             <th className="p-2 text-right font-semibold text-slate-700">
-                              Precio prov
+                              Precio Proveedor
                             </th>
 
                             <th className="p-2 text-right font-semibold text-slate-700">
@@ -2941,7 +2920,7 @@ export default function CandyMainOrders() {
                               Precio Rivas
                             </th> */}
                             <th className="p-2 text-right font-semibold text-slate-700">
-                              Precio
+                              Venta
                             </th>
 
                             {/* <th className="p-2 text-right font-semibold text-slate-700">
@@ -3908,9 +3887,31 @@ export default function CandyMainOrders() {
       {/* LISTADO */}
       <div className="mt-6">
         <div className="mb-3 md:mb-4">
-          <h2 className="text-base font-bold tracking-tight text-slate-900 md:text-lg">
-            Órdenes maestras
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="min-w-0 text-base font-bold tracking-tight text-slate-900 md:text-lg">
+              Órdenes Maestras
+            </h2>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <RefreshButton
+                onClick={refresh}
+                loading={loading || catalogLoading}
+              />
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                className="!rounded-md shadow-none"
+                onClick={() => {
+                  resetOrderForm();
+                  setOpenOrderModal(true);
+                }}
+                aria-label="Nueva orden"
+                title="Nueva orden"
+              >
+                +
+              </Button>
+            </div>
+          </div>
           <p className="mt-0.5 text-xs text-slate-500 md:text-sm">
             Toca una orden para ver el detalle o usa el menú para editar.
           </p>
@@ -4186,25 +4187,25 @@ export default function CandyMainOrders() {
                     Nombre
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    P. totales
+                    P. Agregados
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    P. restantes
+                    P. Restantes
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    P. proveedor
+                    Costo
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    Subtotal
+                    Facturado
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    Esp. Isla
+                    Esperado
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    Gastos log.
+                    Gastos
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-right font-semibold text-slate-700">
-                    U. bruta (est.)
+                    U. bruta
                   </th>
                   <th className="border-b border-slate-200 p-2.5 text-center font-semibold text-slate-700">
                     Acciones
