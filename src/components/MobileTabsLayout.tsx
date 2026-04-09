@@ -242,6 +242,11 @@ export default function MobileTabsLayout({
               to: `${base}/salesCandies`,
             },
             {
+              key: "precios",
+              label: "Precio Ventas",
+              to: `${base}/productsPricesCandies`,
+            },
+            {
               key: "cier",
               label: "Ventas diarias",
               to: `${base}/cierreVentasCandies`,
@@ -289,11 +294,6 @@ export default function MobileTabsLayout({
               to: `${base}/cashDeliveries`,
             },
             { key: "items", label: "Productos", to: `${base}/productsCandies` },
-            {
-              key: "precios",
-              label: "Precio Ventas",
-              to: `${base}/productsPricesCandies`,
-            },
 
             {
               key: "dc",
@@ -309,13 +309,13 @@ export default function MobileTabsLayout({
         } else if (isVendDulces) {
           built = [
             { key: "venta", label: "Vender", to: `${base}/salesCandies` },
-            { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
-            { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
             {
               key: "precios",
               label: "Precios",
               to: `${base}/productsPricesCandies`,
             },
+            { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
+            { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
 
             {
               key: "ped",
@@ -350,6 +350,13 @@ export default function MobileTabsLayout({
               key: "venta",
               label: "Ventas",
               to: `${base}/salesCandies`,
+            });
+          }
+          if (canPath(subject, "productsPricesCandies", "view")) {
+            dulcesTabs.push({
+              key: "precios",
+              label: "Precios ventas",
+              to: `${base}/productsPricesCandies`,
             });
           }
           if (canPath(subject, "productsVendorsCandies", "view")) {
@@ -399,13 +406,6 @@ export default function MobileTabsLayout({
               key: "maes",
               label: "Orden maestra",
               to: `${base}/mainordersCandies`,
-            });
-          }
-          if (canPath(subject, "productsPricesCandies", "view")) {
-            dulcesTabs.push({
-              key: "precios",
-              label: "Precios ventas",
-              to: `${base}/productsPricesCandies`,
             });
           }
           if (canPath(subject, "reporteCierresCandies", "view")) {
@@ -495,6 +495,11 @@ export default function MobileTabsLayout({
         built = [
           { key: "venta", label: "Vender", to: `${base}/salesCandies` },
           {
+            key: "precios",
+            label: "Precios",
+            to: `${base}/productsPricesCandies`,
+          },
+          {
             key: "cier",
             label: "Ventas diarias",
             to: `${base}/cierreVentasCandies`,
@@ -505,11 +510,6 @@ export default function MobileTabsLayout({
             to: `${base}/transactionCandies`,
           },
 
-          {
-            key: "precios",
-            label: "Precios",
-            to: `${base}/productsPricesCandies`,
-          },
           {
             key: "stockPedidos",
             label: "Stock - Pedidos",

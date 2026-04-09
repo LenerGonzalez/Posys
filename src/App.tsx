@@ -68,6 +68,7 @@ import PreciosVenta from "./components/Candies/PreciosVenta";
 import EstadoCuentaCandies from "./components/Candies/EstadoCuentaCandies";
 import CandyStockPedidosPage from "./components/Candies/CandyStockPedidosPage";
 import PublicConsultLayout from "./components/common/PublicConsultLayout";
+import OfflineOverlay from "./components/common/OfflineOverlay";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
 import ArqueoProducto from "./components/Pollo/ArqueoProducto";
@@ -264,6 +265,7 @@ export default function App() {
 
   return (
     <Router>
+      <OfflineOverlay />
       <PwaUpdatePrompt />
       <Routes>
         <Route path="/" element={<Login />} />

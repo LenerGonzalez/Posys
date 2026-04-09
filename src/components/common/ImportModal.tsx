@@ -26,7 +26,7 @@ export default function ImportModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]">
       <div className="bg-white w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl shadow-lg border border-slate-200 p-5 text-sm">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xl font-bold">{title}</h3>
