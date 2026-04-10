@@ -2,6 +2,18 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
+/**
+ * Textos de la PWA (instalación y etiqueta bajo el icono en la pantalla de inicio).
+ * - `shortName`: lo que suele verse debajo del icono (mejor ≤12 caracteres).
+ * - `name`: nombre largo en el diálogo “Añadir a la pantalla de inicio”.
+ * Mantener coherente con `apple-mobile-web-app-title` en index.html.
+ */
+const PWA_DISPLAY = {
+  name: "FideTech",
+  shortName: "FideTech",
+  description: "Sistema POS — FideTech",
+} as const;
+
 export default defineConfig({
   plugins: [
     react(),
@@ -22,9 +34,9 @@ export default defineConfig({
       ],
 
       manifest: {
-        name: "Posys",
-        short_name: "Posys",
-        description: "Sistema POS (Posys)",
+        name: PWA_DISPLAY.name,
+        short_name: PWA_DISPLAY.shortName,
+        description: PWA_DISPLAY.description,
         start_url: "/",
         scope: "/",
         display: "standalone",

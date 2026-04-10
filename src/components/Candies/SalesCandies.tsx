@@ -897,6 +897,19 @@ export default function SalesCandiesPOS({
     );
   }, [pendingAbonos]);
 
+  /** Filas del listado de abonos (misma lógica que la tabla / cards). */
+  const pendingAbonoDisplayRows = useMemo(() => {
+    const running: Record<string, number> = {};
+    return pendingAbonos.map((a) => {
+      const base = customerBalanceById[a.customerId] || 0;
+      const next =
+        (running[a.customerId] || 0) + Number(a.amount || 0);
+      running[a.customerId] = next;
+      const saldoPend = round2(Math.max(0, base - next));
+      return { row: a, base, saldoPend };
+    });
+  }, [pendingAbonos, customerBalanceById]);
+
   const abonoCustomerBalance = useMemo(() => {
     return Math.max(0, Number(selectedAbonoCustomer?.balance || 0));
   }, [selectedAbonoCustomer]);
@@ -3350,62 +3363,72 @@ export default function SalesCandiesPOS({
             </Button>
           </div>
 
-          <div className="w-full overflow-x-auto rounded-lg border border-slate-200 bg-white">
-            <div className="grid grid-cols-12 bg-slate-100 px-3 py-2 text-xs font-semibold border-b border-slate-200">
-              <div className="col-span-3">Cliente</div>
-              <div className="col-span-2">Fecha</div>
-              <div className="col-span-2 text-right">Saldo</div>
-              <div className="col-span-2 text-right">Abono</div>
-              <div className="col-span-2 text-right">Saldo pend.</div>
-              <div className="col-span-1 text-center">—</div>
-            </div>
+          <div className="space-y-3">
             {pendingAbonos.length === 0 ? (
-              <div className="px-3 py-6 text-sm text-slate-500">
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-6 text-sm text-slate-500">
                 Sin abonos agregados.
               </div>
             ) : (
-              (() => {
-                const running: Record<string, number> = {};
-                return pendingAbonos.map((a) => {
-                  const base = customerBalanceById[a.customerId] || 0;
-                  const next =
-                    (running[a.customerId] || 0) + Number(a.amount || 0);
-                  running[a.customerId] = next;
-                  const saldoPend = round2(Math.max(0, base - next));
-                  return (
-                    <div
-                      key={a.id}
-                      className="grid grid-cols-12 items-center px-3 py-2 border-b border-slate-100 text-sm gap-x-1"
+              pendingAbonoDisplayRows.map(({ row: a, base, saldoPend }) => (
+                <div
+                  key={a.id}
+                  className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 text-sm font-semibold text-slate-900 truncate">
+                      {a.customerName || "—"}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      className="shrink-0 rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 shadow-none"
+                      onClick={() => removePendingAbono(a.id)}
+                      title="Quitar abono"
                     >
-                      <div className="col-span-3 truncate">
-                        {a.customerName || "—"}
+                      ✕
+                    </Button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-x-4 sm:gap-x-6 text-sm">
+                    <div className="flex flex-col gap-4 text-left min-w-0">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Fecha
+                        </div>
+                        <div className="mt-0.5 tabular-nums text-sm font-semibold text-sky-700">
+                          {a.date}
+                        </div>
                       </div>
-                      <div className="col-span-2">{a.date}</div>
-                      <div className="col-span-2 text-right tabular-nums">
-                        {money(base)}
-                      </div>
-                      <div className="col-span-2 text-right tabular-nums">
-                        {money(a.amount)}
-                      </div>
-                      <div className="col-span-2 text-right tabular-nums">
-                        {money(saldoPend)}
-                      </div>
-                      <div className="col-span-1 text-center">
-                        <Button
-                          type="button"
-                          variant="danger"
-                          size="sm"
-                          className="rounded-md !bg-red-100 !text-red-800 hover:!bg-red-200 shadow-none"
-                          onClick={() => removePendingAbono(a.id)}
-                          title="Quitar abono"
-                        >
-                          ✕
-                        </Button>
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Abono
+                        </div>
+                        <div className="mt-0.5 tabular-nums text-sm font-semibold text-amber-700">
+                          {money(a.amount)}
+                        </div>
                       </div>
                     </div>
-                  );
-                });
-              })()
+                    <div className="flex flex-col gap-4 text-right min-w-0">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Saldo actual
+                        </div>
+                        <div className="mt-0.5 tabular-nums text-sm font-semibold text-emerald-700">
+                          {money(base)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Saldo final
+                        </div>
+                        <div className="mt-0.5 tabular-nums text-sm font-semibold text-violet-700">
+                          {money(saldoPend)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
             )}
           </div>
         </div>

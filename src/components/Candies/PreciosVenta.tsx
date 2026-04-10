@@ -2775,15 +2775,15 @@ export default function PrecioVentas({
                                   {r.category}
                                 </div>
                                 <div className="grid grid-cols-2 gap-x-2 items-center w-full min-w-0">
-                                  <div className="text-[12px] text-emerald-800/80">
+                                  <div className="text-[15px] text-emerald-800/80">
                                     Precio
                                   </div>
                                   <div className="min-w-0 flex justify-end">
                                     <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
-                                      <span className="text-[11px] font-semibold text-emerald-700/90">
+                                      <span className="text-[15px] font-semibold text-emerald-700/90">
                                         C$
                                       </span>
-                                      <span className="text-sm font-bold tabular-nums text-emerald-600">
+                                      <span className="text-[15px] font-bold tabular-nums text-emerald-600">
                                         {priceStr}
                                       </span>
                                     </span>
@@ -2797,7 +2797,7 @@ export default function PrecioVentas({
                                       aria-label="Ver foto del producto"
                                       onClick={openPhoto}
                                     >
-                                      <FiImage className="w-5 h-5" />
+                                      <FiImage className="w-7 h-7" />
                                     </button>
                                   </div>
                                 ) : null}
@@ -3077,7 +3077,7 @@ export default function PrecioVentas({
                     Precio
                   </label>
                   <input
-                    className="w-full border rounded px-2 py-2 text-right"
+                    className="w-full border rounded-lg px-2 py-2 text-right"
                     inputMode="decimal"
                     value={newPriceIsla}
                     onChange={(e) =>
@@ -3088,7 +3088,7 @@ export default function PrecioVentas({
                     placeholder="0"
                   />
                 </div>
-                <div>
+                {/* <div>
                   <label className="block font-semibold">
                     Precio Rivas (paq)
                   </label>
@@ -3103,7 +3103,7 @@ export default function PrecioVentas({
                     }
                     placeholder="0"
                   />
-                </div>
+                </div> */}
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2 sm:justify-end">
@@ -3195,6 +3195,7 @@ export default function PrecioVentas({
         }
         panelClassName="max-h-[min(92vh,720px)] md:max-h-[min(92vh,720px)]"
         zIndexClassName="z-[88]"
+        contentClassName="max-md:pl-4 max-md:pr-3"
       >
         {mobileSheetProductId
           ? (() => {
@@ -3217,10 +3218,10 @@ export default function PrecioVentas({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="min-w-0 flex-1 pr-2">
-              <div className="text-sm font-semibold leading-snug text-white truncate">
+              <div className="text-[20px] font-semibold leading-snug text-white truncate">
                 {priceImagePreview.productName}
               </div>
-              <div className="mt-1 text-base font-bold tabular-nums text-emerald-300">
+              <div className="mt-1 text-[20px] font-bold tabular-nums text-emerald-300">
                 {priceImagePreview.priceLine}
               </div>
             </div>

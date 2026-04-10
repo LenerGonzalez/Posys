@@ -18,6 +18,8 @@ export type BottomSheetProps = {
   zIndexClassName?: string;
   /** Clases extra del panel blanco */
   panelClassName?: string;
+  /** Área de scroll del contenido (padding horizontal, etc.) */
+  contentClassName?: string;
   /**
    * En md+ el panel se comporta como modal centrado (redondeado en todos los lados).
    * En móvil queda anclado abajo con solo esquinas superiores redondeadas.
@@ -41,6 +43,7 @@ export default function BottomSheet({
   backdropClassName = "bg-black/45",
   zIndexClassName = "z-[200]",
   panelClassName = "",
+  contentClassName = "",
   centerOnDesktop = true,
   container,
 }: BottomSheetProps) {
@@ -83,7 +86,9 @@ export default function BottomSheet({
             {closeText}
           </button>
         </div>
-        <div className="overflow-y-auto overscroll-contain px-2 pb-4 flex-1 min-h-0">
+        <div
+          className={`overflow-y-auto overscroll-contain px-2 pb-4 flex-1 min-h-0 ${contentClassName}`.trim()}
+        >
           {children}
         </div>
       </div>

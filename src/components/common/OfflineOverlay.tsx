@@ -1,34 +1,42 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { enableNetwork } from "firebase/firestore";
 import { db } from "../../firebase";
+import {
+  OFFLINE_REQUEST_FAILED,
+  dispatchOfflineRequestFailed,
+} from "../../utils/networkOffline";
 
 /**
- * Pantalla completa cuando el navegador reporta sin conexión.
- * "Re intentar" reactiva Firestore y comprueba conectividad hacia el origen de la app.
+ * Pantalla cuando no hay red o cuando falla una consulta al servidor.
+ * "Re intentar" reactiva Firestore y comprueba conectividad hacia el origen.
  */
 export default function OfflineOverlay() {
-  const [browserOffline, setBrowserOffline] = useState(() => !navigator.onLine);
-  const [connectivityOk, setConnectivityOk] = useState(false);
+  const [online, setOnline] = useState(() => navigator.onLine);
+  /** true si hubo fallo de red en una petición (aunque el navegador diga online). */
+  const [requestFailed, setRequestFailed] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     const onOnline = () => {
-      setBrowserOffline(false);
-      setConnectivityOk(false);
+      setOnline(true);
+      setRequestFailed(false);
     };
     const onOffline = () => {
-      setBrowserOffline(true);
-      setConnectivityOk(false);
+      setOnline(false);
+      setRequestFailed(false);
     };
+    const onRequestFailed = () => setRequestFailed(true);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
+    window.addEventListener(OFFLINE_REQUEST_FAILED, onRequestFailed);
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
+      window.removeEventListener(OFFLINE_REQUEST_FAILED, onRequestFailed);
     };
   }, []);
 
-  const visible = browserOffline && !connectivityOk;
+  const visible = !online || requestFailed;
 
   const handleRetry = useCallback(async () => {
     setRetrying(true);
@@ -42,9 +50,14 @@ export default function OfflineOverlay() {
         cache: "no-store",
         method: "GET",
       });
-      if (res.ok) setConnectivityOk(true);
+      if (res.ok) {
+        setRequestFailed(false);
+        if (navigator.onLine) setOnline(true);
+      } else {
+        dispatchOfflineRequestFailed();
+      }
     } catch {
-      /* sigue sin red */
+      dispatchOfflineRequestFailed();
     } finally {
       setRetrying(false);
     }

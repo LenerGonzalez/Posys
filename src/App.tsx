@@ -111,26 +111,51 @@ function PwaUpdatePrompt(): React.ReactElement | null {
     },
   });
 
+  /**
+   * Tras cerrar y reabrir la app, `needRefresh` puede no activarse aunque el SW
+   * nuevo siga en `registration.waiting` (registerType: prompt).
+   */
+  const [hasWaitingWorker, setHasWaitingWorker] = useState(false);
+
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
+
+    const syncWaiting = async () => {
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        setHasWaitingWorker(!!registration?.waiting);
+      } catch {
+        setHasWaitingWorker(false);
+      }
+    };
 
     const checkForUpdates = async () => {
       try {
         const registration = await navigator.serviceWorker.getRegistration();
         await registration?.update();
+        await syncWaiting();
       } catch (error) {
         console.warn("No se pudo buscar una nueva version de la app:", error);
       }
     };
 
-    checkForUpdates();
+    void checkForUpdates();
     const intervalId = window.setInterval(checkForUpdates, 60_000);
+    const pollWaiting = window.setInterval(syncWaiting, 15_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void checkForUpdates();
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
-    return () => window.clearInterval(intervalId);
+    return () => {
+      clearInterval(intervalId);
+      clearInterval(pollWaiting);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
-  /** Solo cuando el SW detecta un build nuevo en espera (vite-plugin-pwa / workbox). */
-  if (!needRefresh) return null;
+  const showUpdatePrompt = needRefresh || hasWaitingWorker;
+  if (!showUpdatePrompt) return null;
 
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/75 px-4 backdrop-blur-sm">
@@ -138,10 +163,10 @@ function PwaUpdatePrompt(): React.ReactElement | null {
         <div className="bg-gradient-to-r from-sky-50 via-white to-blue-50 px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold text-white">
-              P
+              F
             </div>
             <div>
-              <div className="text-sm font-semibold text-slate-900">Posys</div>
+              <div className="text-sm font-semibold text-slate-900">FideTech</div>
               <div className="text-xs text-slate-500">
                 Actualizacion disponible
               </div>
