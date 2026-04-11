@@ -1,8 +1,15 @@
 /** Evento global: fallo de red al consultar el servidor (fetch u otra acción). */
 export const OFFLINE_REQUEST_FAILED = "posys-offline-request-failed";
 
+/** Solo mostrar avisos de red cuando la app está visible (evita falsos en background). */
+export function isAppInForeground(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState === "visible";
+}
+
 export function dispatchOfflineRequestFailed(): void {
   if (typeof window === "undefined") return;
+  if (!isAppInForeground()) return;
   window.dispatchEvent(new CustomEvent(OFFLINE_REQUEST_FAILED));
 }
 
@@ -18,7 +25,7 @@ export function installFetchFailureOfflineHint(): void {
 
   const orig = window.fetch.bind(window);
   window.fetch = async (input, init) => {
-    if (!navigator.onLine) {
+    if (!navigator.onLine && isAppInForeground()) {
       dispatchOfflineRequestFailed();
     }
     try {
@@ -32,7 +39,9 @@ export function installFetchFailureOfflineHint(): void {
           msg.includes("Load failed") ||
           msg.includes("NetworkError") ||
           msg.includes("network"));
-      if (isNetworkFailure) dispatchOfflineRequestFailed();
+      if (isNetworkFailure && isAppInForeground()) {
+        dispatchOfflineRequestFailed();
+      }
       throw e;
     }
   };

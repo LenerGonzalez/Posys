@@ -15,6 +15,10 @@ export default function OfflineOverlay() {
   /** true si hubo fallo de red en una petición (aunque el navegador diga online). */
   const [requestFailed, setRequestFailed] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  /** No mostrar overlay si la PWA está en segundo plano (evita falsos al cambiar de app). */
+  const [appForeground, setAppForeground] = useState(
+    () => typeof document === "undefined" || document.visibilityState === "visible",
+  );
 
   useEffect(() => {
     const onOnline = () => {
@@ -22,21 +26,40 @@ export default function OfflineOverlay() {
       setRequestFailed(false);
     };
     const onOffline = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
       setOnline(false);
       setRequestFailed(false);
     };
-    const onRequestFailed = () => setRequestFailed(true);
+    const onRequestFailed = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      setRequestFailed(true);
+    };
+    const onVisibility = () => {
+      const fg = document.visibilityState === "visible";
+      setAppForeground(fg);
+      if (fg) {
+        setOnline(navigator.onLine);
+        if (navigator.onLine) setRequestFailed(false);
+      }
+    };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     window.addEventListener(OFFLINE_REQUEST_FAILED, onRequestFailed);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener(OFFLINE_REQUEST_FAILED, onRequestFailed);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 
-  const visible = !online || requestFailed;
+  const showProblem = !online || requestFailed;
+  const visible = appForeground && showProblem;
 
   const handleRetry = useCallback(async () => {
     setRetrying(true);
