@@ -9,6 +9,7 @@ import {
   serverTimestamp,
   where,
   deleteDoc,
+  deleteField,
   doc,
   updateDoc,
 } from "firebase/firestore";
@@ -26,6 +27,11 @@ import {
 } from "../common/polloSelectStyles";
 import Toast from "../common/Toast";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import ActionMenu, {
+  ActionMenuTrigger,
+  actionMenuItemClass,
+  actionMenuItemClassDestructive,
+} from "../common/ActionMenu";
 import {
   fetchBaseSummaryPollo,
   type BaseSummary,
@@ -290,6 +296,30 @@ function aggregateCashSaleLinesForDrawer(lines: CashSaleLine[]) {
   };
 }
 
+/** Une líneas cash de ventas por día entre `desde` y `hasta` (inclusive, yyyy-MM-dd). */
+function collectCashSaleLinesInRange(
+  desde: string,
+  hasta: string,
+  byDay: Record<string, CashSaleLine[]>,
+): CashSaleLine[] {
+  const a = String(desde || "")
+    .trim()
+    .slice(0, 10);
+  const b = String(hasta || "")
+    .trim()
+    .slice(0, 10);
+  if (!a || !b || a > b) return [];
+  const out: CashSaleLine[] = [];
+  let cur = a;
+  while (cur <= b) {
+    out.push(...(byDay[cur] ?? []));
+    const d = new Date(`${cur}T12:00:00`);
+    d.setDate(d.getDate() + 1);
+    cur = format(d, "yyyy-MM-dd");
+  }
+  return out;
+}
+
 /** Expande una venta CONTADO en líneas para el drawer (producto / precio / cantidad / monto / U.B.). */
 function appendCashSaleLinesForDoc(
   docId: string,
@@ -422,6 +452,11 @@ type LedgerRow = {
   reference?: string;
   inAmount: number; // entrada +
   outAmount: number; // salida -
+  /** DEPÓSITO: día (yyyy-MM-dd) cuyo resumen “Ventas del día” se asocia (opcional). */
+  associatedVentasDia?: string | null;
+  /** CORTE: rango de fechas de ventas cash incluidas en el corte (yyyy-MM-dd). */
+  corteDesde?: string | null;
+  corteHasta?: string | null;
   createdAt?: any;
   createdBy?: { uid?: string | null; email?: string | null } | null;
 };
@@ -486,12 +521,20 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const [reference, setReference] = useState("");
   const [inAmount, setInAmount] = useState<string>("");
   const [outAmount, setOutAmount] = useState<string>("");
+  /** DEPÓSITO: opcional, fecha del resumen “Ventas del día” (mismo día que `date` o el elegido). */
+  const [associatedVentasDia, setAssociatedVentasDia] = useState<string>("");
+  /** CORTE: ventas cash desde / hasta (inclusive). */
+  const [corteDesde, setCorteDesde] = useState<string>("");
+  const [corteHasta, setCorteHasta] = useState<string>("");
 
   const { refreshKey, refresh } = useManualRefresh();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [actionOpenId, setActionOpenId] = useState<string | null>(null);
+  const [ledgerRowActionMenu, setLedgerRowActionMenu] = useState<{
+    rect: DOMRect;
+    row: any;
+  } | null>(null);
   const [collapseLibras, setCollapseLibras] = useState(true);
   const [collapseUnidades, setCollapseUnidades] = useState(true);
   const [collapseVentas, setCollapseVentas] = useState(true);
@@ -505,7 +548,6 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     setCollapseUnidades(next);
     setCollapseVentas(next);
   };
-  const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const [movementTypeFilter, setMovementTypeFilter] = useState<string>("ALL");
   const [toastMsg, setToastMsg] = useState("");
 
@@ -999,6 +1041,21 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     [movementTypes],
   );
 
+  /** Selector “Asociar ventas” en DEPÓSITO: solo el resumen del día elegido en Fecha. */
+  const asociarVentasDelDiaOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [
+      { value: "", label: "— Sin asociar —" },
+    ];
+    const d = String(date || "").trim().slice(0, 10);
+    if (!d) return opts;
+    const total = round2(cashSalesTotalByDay[d] ?? 0);
+    opts.push({
+      value: d,
+      label: `Ventas del día: ${money(total)}`,
+    });
+    return opts;
+  }, [date, cashSalesTotalByDay]);
+
   const modalMovementTypeOptions = useMemo(
     () => [
       { value: "GASTO", label: "Gasto" },
@@ -1007,7 +1064,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         label: "Reabastecimiento (pagado con caja)",
       },
       { value: "RETIRO", label: "Retiro" },
-      { value: "DEPOSITO", label: "Deposito a Carmen Ortiz" },
+      { value: "DEPOSITO", label: "Deposito" },
       { value: "CORTE", label: "Corte de caja (retiro total/parcial)" },
       { value: "PERDIDA", label: "Perdida por robo" },
       {
@@ -1124,15 +1181,15 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       );
 
     for (const d of allDates) {
-      const dayEntries = byDay.get(d) ?? [];
-      for (const { row, origIndex } of dayEntries) {
-        out.push({ kind: "mov", row, origIndex });
-      }
       const cashTotal = round2(cashSalesTotalByDay[d] ?? 0);
       out.push({ kind: "cash_sales", date: d, cashTotal });
       const dayGross = round2(grossProfitByDay[d] ?? 0);
       const cumUb = cumUbThroughDate(d);
       out.push({ kind: "ub", date: d, dayGross, cumUb });
+      const dayEntries = byDay.get(d) ?? [];
+      for (const { row, origIndex } of dayEntries) {
+        out.push({ kind: "mov", row, origIndex });
+      }
     }
     return out;
   }, [
@@ -1175,6 +1232,59 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const cashSalesDrawerKpis = useMemo(
     () => aggregateCashSaleLinesForDrawer(cashLinesForDrawer),
     [cashLinesForDrawer],
+  );
+
+  const depositoAssocVentasDate = useMemo(() => {
+    if (!movimientoDrawerRow || movimientoDrawerRow.type !== "DEPOSITO")
+      return null;
+    const a = String(
+      (movimientoDrawerRow as { associatedVentasDia?: string | null })
+        .associatedVentasDia || "",
+    )
+      .trim()
+      .slice(0, 10);
+    return a || null;
+  }, [movimientoDrawerRow]);
+
+  const depositoDrawerLines = useMemo(() => {
+    if (!depositoAssocVentasDate) return [];
+    return cashSaleLinesByDay[depositoAssocVentasDate] ?? [];
+  }, [depositoAssocVentasDate, cashSaleLinesByDay]);
+
+  const depositoDrawerKpis = useMemo(
+    () => aggregateCashSaleLinesForDrawer(depositoDrawerLines),
+    [depositoDrawerLines],
+  );
+
+  const corteAssocRange = useMemo(() => {
+    if (!movimientoDrawerRow || movimientoDrawerRow.type !== "CORTE")
+      return null;
+    const desde = String(
+      (movimientoDrawerRow as LedgerRow).corteDesde || "",
+    )
+      .trim()
+      .slice(0, 10);
+    const hasta = String(
+      (movimientoDrawerRow as LedgerRow).corteHasta || "",
+    )
+      .trim()
+      .slice(0, 10);
+    if (!desde || !hasta || desde > hasta) return null;
+    return { desde, hasta };
+  }, [movimientoDrawerRow]);
+
+  const corteDrawerLines = useMemo(() => {
+    if (!corteAssocRange) return [];
+    return collectCashSaleLinesInRange(
+      corteAssocRange.desde,
+      corteAssocRange.hasta,
+      cashSaleLinesByDay,
+    );
+  }, [corteAssocRange, cashSaleLinesByDay]);
+
+  const corteDrawerKpis = useMemo(
+    () => aggregateCashSaleLinesForDrawer(corteDrawerLines),
+    [corteDrawerLines],
   );
 
   useEffect(() => {
@@ -1390,6 +1500,19 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       return;
     }
 
+    const corteDTrim = corteDesde.trim().slice(0, 10);
+    const corteHTrim = corteHasta.trim().slice(0, 10);
+    if (type === "CORTE") {
+      if (!corteDTrim || !corteHTrim) {
+        setToastMsg("⚠️ Poné Desde y Hasta para el corte de caja.");
+        return;
+      }
+      if (corteDTrim > corteHTrim) {
+        setToastMsg("⚠️ La fecha Desde no puede ser posterior a Hasta.");
+        return;
+      }
+    }
+
     if (isOnlyIn) {
       if (inVal <= 0) {
         setToastMsg("⚠️ Poné una entrada para este tipo.");
@@ -1413,7 +1536,9 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
     const user = auth.currentUser;
 
-    const payload = {
+    const assocTrim = associatedVentasDia.trim().slice(0, 10);
+
+    const basePayload = {
       date,
       type,
       description: description.trim(),
@@ -1427,8 +1552,21 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     };
 
     if (editingId) {
+      const up: Record<string, unknown> = { ...basePayload };
+      if (type === "DEPOSITO") {
+        up.associatedVentasDia = assocTrim || null;
+      } else {
+        up.associatedVentasDia = deleteField();
+      }
+      if (type === "CORTE") {
+        up.corteDesde = corteDTrim;
+        up.corteHasta = corteHTrim;
+      } else {
+        up.corteDesde = deleteField();
+        up.corteHasta = deleteField();
+      }
       try {
-        await updateDoc(doc(db, "cash_ledger_pollo", editingId), payload);
+        await updateDoc(doc(db, "cash_ledger_pollo", editingId), up);
         setToastMsg("✅ Movimiento actualizado.");
       } catch (e) {
         console.error("Error updating movement:", e);
@@ -1436,7 +1574,15 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         return;
       }
     } else {
-      await addDoc(collection(db, "cash_ledger_pollo"), payload);
+      const add: Record<string, unknown> = { ...basePayload };
+      if (type === "DEPOSITO") {
+        add.associatedVentasDia = assocTrim || null;
+      }
+      if (type === "CORTE") {
+        add.corteDesde = corteDTrim;
+        add.corteHasta = corteHTrim;
+      }
+      await addDoc(collection(db, "cash_ledger_pollo"), add);
       setToastMsg("✅ Movimiento guardado.");
     }
 
@@ -1444,6 +1590,9 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     setReference("");
     setInAmount("");
     setOutAmount("");
+    setAssociatedVentasDia("");
+    setCorteDesde("");
+    setCorteHasta("");
 
     refresh();
     setModalOpen(false);
@@ -1473,6 +1622,35 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     if (isOnlyIn) setOutAmount("");
   }, [type]);
 
+  useEffect(() => {
+    if (type !== "DEPOSITO") setAssociatedVentasDia("");
+  }, [type]);
+
+  useEffect(() => {
+    if (type !== "CORTE") {
+      setCorteDesde("");
+      setCorteHasta("");
+    }
+  }, [type]);
+
+  /** CORTE: si faltan fechas, usar la fecha del movimiento como valor inicial. */
+  useEffect(() => {
+    if (type !== "CORTE") return;
+    const d = String(date || "").trim().slice(0, 10);
+    if (!d) return;
+    setCorteDesde((prev) => prev || d);
+    setCorteHasta((prev) => prev || d);
+  }, [type, date]);
+
+  /** Si cambia la fecha del formulario, quitar asociación que ya no coincide con ese día. */
+  useEffect(() => {
+    const d = String(date || "").trim().slice(0, 10);
+    setAssociatedVentasDia((prev) => {
+      if (!prev || !d) return prev;
+      return prev !== d ? "" : prev;
+    });
+  }, [date]);
+
   // close modal/menu on outside click or Escape
   useEffect(() => {
     const onDocMouseDown = (ev: MouseEvent) => {
@@ -1483,16 +1661,10 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           setEditingId(null);
         }
       }
-      if (actionOpenId) {
-        if (actionMenuRef.current && !actionMenuRef.current.contains(target)) {
-          setActionOpenId(null);
-        }
-      }
     };
 
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
-        setActionOpenId(null);
         setModalOpen(false);
         setEditingId(null);
       }
@@ -1504,7 +1676,28 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       document.removeEventListener("mousedown", onDocMouseDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [modalOpen, actionOpenId]);
+  }, [modalOpen]);
+
+  const openLedgerEditModal = (r: any) => {
+    setEditingId(r.id);
+    setDate(r.date);
+    setType(r.type as LedgerType);
+    setDescription(r.description || "");
+    setReference(r.reference || "");
+    setAssociatedVentasDia(
+      String((r as LedgerRow).associatedVentasDia || "").slice(0, 10),
+    );
+    setCorteDesde(String((r as LedgerRow).corteDesde || "").slice(0, 10));
+    setCorteHasta(String((r as LedgerRow).corteHasta || "").slice(0, 10));
+    const inStr =
+      Number(r.inAmount || 0) === 0 ? "" : String(Number(r.inAmount));
+    const outStr =
+      Number(r.outAmount || 0) === 0 ? "" : String(Number(r.outAmount));
+    setInAmount(inStr);
+    setOutAmount(outStr);
+    setModalOpen(true);
+    setLedgerRowActionMenu(null);
+  };
 
   return (
     <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
@@ -1913,7 +2106,13 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           type="button"
           variant="primary"
           size="sm"
-          onClick={() => setModalOpen(true)}
+          onClick={() => {
+            setEditingId(null);
+            setAssociatedVentasDia("");
+            setCorteDesde("");
+            setCorteHasta("");
+            setModalOpen(true);
+          }}
           className="!rounded-xl w-full sm:w-auto"
         >
           Agregar movimiento
@@ -1961,7 +2160,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               <div>
                 <label className="block text-sm text-gray-600 mb-1">
-                  Fecha
+                  {type === "CORTE" ? "Fecha de corte" : "Fecha"}
                 </label>
                 <input
                   type="date"
@@ -1997,6 +2196,56 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     </div>
                   )}
               </div>
+
+              {type === "DEPOSITO" && (
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <MobileHtmlSelect
+                    label="Asociar ventas"
+                    value={associatedVentasDia}
+                    onChange={setAssociatedVentasDia}
+                    options={asociarVentasDelDiaOptions}
+                    sheetTitle="Asociar ventas del día"
+                    triggerIcon="menu"
+                    selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                    buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Opcional. Solo se lista el resumen &quot;Ventas del día&quot; del
+                    mismo día indicado arriba en Fecha.
+                  </p>
+                </div>
+              )}
+
+              {type === "CORTE" && (
+                <div className="sm:col-span-2 lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">
+                      Desde (ventas incluidas)
+                    </label>
+                    <input
+                      type="date"
+                      className="border rounded px-3 py-2 w-full"
+                      value={corteDesde}
+                      onChange={(e) => setCorteDesde(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">
+                      Hasta (ventas incluidas)
+                    </label>
+                    <input
+                      type="date"
+                      className="border rounded px-3 py-2 w-full"
+                      value={corteHasta}
+                      onChange={(e) => setCorteHasta(e.target.value)}
+                    />
+                  </div>
+                  <p className="sm:col-span-2 text-xs text-gray-500">
+                    El detalle del movimiento mostrará las ventas cash (CONTADO) con
+                    fecha de venta entre Desde y Hasta, según el periodo cargado.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm text-gray-600 mb-1">
@@ -2290,88 +2539,21 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                 <td className={`border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle font-bold tabular-nums ${Number(r.balance) < 0 ? "text-red-700" : "text-gray-900"}`}>{money(r.balance)}</td>
                 <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-300 bg-violet-50/20">—</td>
                 <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-300 bg-violet-50/20">—</td>
-                <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle relative">
+                <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">
                   {r.source === "expenses" ? (
                     <div className="text-xs text-gray-400">
                       Gasto registrado
                     </div>
                   ) : (
-                    <div className="inline-block">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() =>
-                          setActionOpenId(actionOpenId === r.id ? null : r.id)
-                        }
-                        className="!rounded-lg !px-2 !py-1"
-                        aria-label="Acciones"
-                      >
-                        ⋯
-                      </Button>
-
-                      {actionOpenId === r.id && (
-                        <div
-                          ref={(el) => {
-                            actionMenuRef.current = el as HTMLDivElement | null;
-                          }}
-                          className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm"
-                        >
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="!rounded-none block w-full !justify-start text-left !px-3 !py-2 !font-normal hover:!bg-gray-100"
-                            onClick={() => {
-                              setEditingId(r.id);
-                              setDate(r.date);
-                              setType(r.type as LedgerType);
-                              setDescription(r.description || "");
-                              setReference(r.reference || "");
-                              const inStr =
-                                Number(r.inAmount || 0) === 0
-                                  ? ""
-                                  : String(Number(r.inAmount));
-                              const outStr =
-                                Number(r.outAmount || 0) === 0
-                                  ? ""
-                                  : String(Number(r.outAmount));
-                              setInAmount(inStr);
-                              setOutAmount(outStr);
-                              setModalOpen(true);
-                              setActionOpenId(null);
-                            }}
-                          >
-                            Editar
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="!rounded-none block w-full !justify-start text-left !px-3 !py-2 !font-normal !text-red-600 hover:!bg-gray-100"
-                            onClick={async () => {
-                              setActionOpenId(null);
-                              if (!window.confirm("Eliminar este movimiento?"))
-                                return;
-                              try {
-                                await deleteDoc(
-                                  doc(db, "cash_ledger_pollo", r.id),
-                                );
-                                refresh();
-                                setToastMsg("✅ Movimiento eliminado.");
-                              } catch (e) {
-                                console.error(
-                                  "Error eliminando movimiento:",
-                                  e,
-                                );
-                                setToastMsg(
-                                  "❌ No se pudo eliminar el movimiento. Revisa la consola.",
-                                );
-                              }
-                            }}
-                          >
-                            Eliminar
-                          </Button>
-                        </div>
-                      )}
+                    <div className="flex justify-center">
+                      <ActionMenuTrigger
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect =
+                            e.currentTarget.getBoundingClientRect();
+                          setLedgerRowActionMenu({ rect, row: r });
+                        }}
+                      />
                     </div>
                   )}
                 </td>
@@ -2499,27 +2681,40 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               key={r.id}
               className={`rounded-xl p-3 bg-white shadow-sm ${borderByType(r.type)}`}
             >
-              <div className="flex justify-between items-start">
-                <div>
+              <div className="flex justify-between items-start gap-2">
+                <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{r.description}</div>
                   <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
                     <span>{r.date}</span>
                     {typeBadgeButton(r.type, () => setMovimientoDrawerRow(r))}
                   </div>
                 </div>
-                <div className="text-right space-y-0.5">
-                  {Number(r.inAmount || 0) > 0 && (
-                    <div>
-                      <div className="text-sm font-semibold text-green-700 tabular-nums">+{money(r.inAmount)}</div>
-                      <div className="text-[10px] text-gray-400">Entrada</div>
-                    </div>
-                  )}
-                  {Number(r.outAmount || 0) > 0 && (
-                    <div>
-                      <div className="text-sm font-semibold text-red-700 tabular-nums">-{money(r.outAmount)}</div>
-                      <div className="text-[10px] text-gray-400">Salida</div>
-                    </div>
-                  )}
+                <div className="flex items-start gap-1 shrink-0">
+                  {r.source !== "expenses" ? (
+                    <ActionMenuTrigger
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLedgerRowActionMenu({
+                          rect: e.currentTarget.getBoundingClientRect(),
+                          row: r,
+                        });
+                      }}
+                    />
+                  ) : null}
+                  <div className="text-right space-y-0.5">
+                    {Number(r.inAmount || 0) > 0 && (
+                      <div>
+                        <div className="text-sm font-semibold text-green-700 tabular-nums">+{money(r.inAmount)}</div>
+                        <div className="text-[10px] text-gray-400">Entrada</div>
+                      </div>
+                    )}
+                    {Number(r.outAmount || 0) > 0 && (
+                      <div>
+                        <div className="text-sm font-semibold text-red-700 tabular-nums">-{money(r.outAmount)}</div>
+                        <div className="text-[10px] text-gray-400">Salida</div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2566,61 +2761,6 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     r.createdBy?.uid ||
                     "—"}
                 </div>
-              </div>
-
-              <div className="mt-3 flex justify-end gap-2">
-                {r.source === "expenses" ? null : (
-                  <>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setEditingId(r.id);
-                        setDate(r.date);
-                        setType(r.type as LedgerType);
-                        setDescription(r.description || "");
-                        setReference(r.reference || "");
-                        const inStr =
-                          Number(r.inAmount || 0) === 0
-                            ? ""
-                            : String(Number(r.inAmount));
-                        const outStr =
-                          Number(r.outAmount || 0) === 0
-                            ? ""
-                            : String(Number(r.outAmount));
-                        setInAmount(inStr);
-                        setOutAmount(outStr);
-                        setModalOpen(true);
-                      }}
-                      className="!rounded-xl text-sm"
-                    >
-                      Editar
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="danger"
-                      size="sm"
-                      onClick={async () => {
-                        if (!window.confirm("Eliminar este movimiento?"))
-                          return;
-                        try {
-                          await deleteDoc(doc(db, "cash_ledger_pollo", r.id));
-                          refresh();
-                          setToastMsg("✅ Movimiento eliminado.");
-                        } catch (e) {
-                          console.error("Error eliminando movimiento:", e);
-                          setToastMsg(
-                            "❌ No se pudo eliminar el movimiento. Revisa la consola.",
-                          );
-                        }
-                      }}
-                      className="!rounded-xl text-sm"
-                    >
-                      Eliminar
-                    </Button>
-                  </>
-                )}
               </div>
             </div>
             );
@@ -2915,60 +3055,277 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         panelMaxWidthClassName="max-w-2xl"
       >
         {movimientoDrawerRow ? (
-          <DrawerDetailDlCard
-            title={String(movimientoDrawerRow.type || "—")}
-            rows={[
-              { label: "Fecha", value: String(movimientoDrawerRow.date || "—") },
-              {
-                label: "Descripción",
-                value: String(movimientoDrawerRow.description || "—"),
-                ddClassName: "text-sm text-gray-800",
-              },
-              {
-                label: "Referencia",
-                value: String(movimientoDrawerRow.reference || "—"),
-              },
-              {
-                label: "Entrada",
-                value: money(movimientoDrawerRow.inAmount),
-                ddClassName: "tabular-nums text-emerald-800 font-semibold",
-              },
-              {
-                label: "Salida",
-                value: money(movimientoDrawerRow.outAmount),
-                ddClassName: "tabular-nums text-red-800 font-semibold",
-              },
-              {
-                label: "Saldo (CAJA)",
-                value: money(movimientoDrawerRow.balance),
-                ddClassName: "tabular-nums font-bold",
-              },
-              {
-                label: "Saldo contable",
-                value: money(movimientoDrawerRow.accountingBalance),
-                ddClassName: "tabular-nums",
-              },
-              {
-                label: "Fuente",
-                value: String(movimientoDrawerRow.source || "ledger"),
-              },
-              {
-                label: "Usuario",
-                value:
-                  movimientoDrawerRow.createdBy?.displayName ||
-                  movimientoDrawerRow.createdBy?.name ||
-                  movimientoDrawerRow.createdBy?.email ||
-                  movimientoDrawerRow.createdBy?.uid ||
-                  "—",
-                ddClassName: "text-sm",
-              },
-              {
-                label: "ID",
-                value: String(movimientoDrawerRow.id || "—"),
-                ddClassName: "font-mono text-xs",
-              },
-            ]}
-          />
+          <div className="space-y-0">
+            <DrawerDetailDlCard
+              title={String(movimientoDrawerRow.type || "—")}
+              rows={[
+                {
+                  label:
+                    movimientoDrawerRow.type === "CORTE"
+                      ? "Fecha de corte"
+                      : "Fecha",
+                  value: String(movimientoDrawerRow.date || "—"),
+                },
+                {
+                  label: "Descripción",
+                  value: String(movimientoDrawerRow.description || "—"),
+                  ddClassName: "text-sm text-gray-800",
+                },
+                {
+                  label: "Referencia",
+                  value: String(movimientoDrawerRow.reference || "—"),
+                },
+                ...(movimientoDrawerRow.type === "DEPOSITO"
+                  ? [
+                      {
+                        label: "Asociar ventas (día)",
+                        value: String(
+                          (movimientoDrawerRow as LedgerRow).associatedVentasDia ||
+                            "—",
+                        ),
+                        ddClassName: "text-sm font-medium text-emerald-800",
+                      },
+                    ]
+                  : []),
+                ...(movimientoDrawerRow.type === "CORTE"
+                  ? [
+                      {
+                        label: "Ventas incluidas desde",
+                        value: String(
+                          (movimientoDrawerRow as LedgerRow).corteDesde || "—",
+                        ),
+                        ddClassName: "text-sm font-medium text-purple-900",
+                      },
+                      {
+                        label: "Ventas incluidas hasta",
+                        value: String(
+                          (movimientoDrawerRow as LedgerRow).corteHasta || "—",
+                        ),
+                        ddClassName: "text-sm font-medium text-purple-900",
+                      },
+                    ]
+                  : []),
+                {
+                  label: "Entrada",
+                  value: money(movimientoDrawerRow.inAmount),
+                  ddClassName: "tabular-nums text-emerald-800 font-semibold",
+                },
+                {
+                  label: "Salida",
+                  value: money(movimientoDrawerRow.outAmount),
+                  ddClassName: "tabular-nums text-red-800 font-semibold",
+                },
+                {
+                  label: "Saldo (CAJA)",
+                  value: money(movimientoDrawerRow.balance),
+                  ddClassName: "tabular-nums font-bold",
+                },
+                {
+                  label: "Saldo contable",
+                  value: money(movimientoDrawerRow.accountingBalance),
+                  ddClassName: "tabular-nums",
+                },
+                {
+                  label: "Fuente",
+                  value: String(movimientoDrawerRow.source || "ledger"),
+                },
+                {
+                  label: "Usuario",
+                  value:
+                    movimientoDrawerRow.createdBy?.displayName ||
+                    movimientoDrawerRow.createdBy?.name ||
+                    movimientoDrawerRow.createdBy?.email ||
+                    movimientoDrawerRow.createdBy?.uid ||
+                    "—",
+                  ddClassName: "text-sm",
+                },
+                {
+                  label: "ID",
+                  value: String(movimientoDrawerRow.id || "—"),
+                  ddClassName: "font-mono text-xs",
+                },
+              ]}
+            />
+            {movimientoDrawerRow.type === "DEPOSITO" && depositoAssocVentasDate ? (
+              <>
+                <DrawerSectionTitle className="mt-4 mb-2">
+                  Ventas asociadas · {depositoAssocVentasDate}
+                </DrawerSectionTitle>
+                {depositoDrawerLines.length === 0 ? (
+                  <p className="text-sm text-gray-500 px-1">
+                    Sin ventas CONTADO para esta fecha en el periodo cargado.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    <DrawerStatGrid
+                      items={[
+                        {
+                          label: "Cant. productos (distintos)",
+                          value: depositoDrawerKpis.productCount,
+                          tone: "slate",
+                        },
+                        {
+                          label: "Líneas",
+                          value: depositoDrawerKpis.lineCount,
+                          tone: "sky",
+                        },
+                        {
+                          label: "Libras (tipo libra)",
+                          value: qty3(depositoDrawerKpis.lbs),
+                          tone: "amber",
+                        },
+                        {
+                          label: "Unidades (no libra)",
+                          value: qty3(depositoDrawerKpis.units),
+                          tone: "violet",
+                        },
+                        {
+                          label: "Monto",
+                          value: money(depositoDrawerKpis.amount),
+                          tone: "indigo",
+                        },
+                        {
+                          label: "Utilidad bruta",
+                          value: money(depositoDrawerKpis.grossProfit),
+                          tone: "emerald",
+                        },
+                      ]}
+                    />
+                    <DrawerSectionTitle className="mt-0">
+                      {depositoDrawerLines.length} línea(s) · solo cash (CONTADO)
+                    </DrawerSectionTitle>
+                    {depositoDrawerLines.map((line) => (
+                      <DrawerDetailDlCard
+                        key={line.id}
+                        title={line.productName}
+                        rows={[
+                          { label: "Fecha venta", value: line.date },
+                          {
+                            label: "Precio",
+                            value: money(line.unitPrice),
+                            ddClassName: "tabular-nums",
+                          },
+                          {
+                            label: "Cantidad",
+                            value: line.qtyLabel,
+                          },
+                          {
+                            label: "Monto",
+                            value: money(line.amount),
+                            ddClassName: "tabular-nums font-semibold",
+                          },
+                          {
+                            label: "U. bruta",
+                            value: money(line.grossProfit),
+                            ddClassName:
+                              "tabular-nums text-violet-800 font-semibold",
+                          },
+                          {
+                            label: "Vendedor",
+                            value: line.seller,
+                            ddClassName: "text-sm break-all",
+                          },
+                        ]}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : null}
+            {movimientoDrawerRow.type === "CORTE" && corteAssocRange ? (
+              <>
+                <DrawerSectionTitle className="mt-4 mb-2">
+                  Ventas del corte · {corteAssocRange.desde} →{" "}
+                  {corteAssocRange.hasta}
+                </DrawerSectionTitle>
+                {corteDrawerLines.length === 0 ? (
+                  <p className="text-sm text-gray-500 px-1">
+                    Sin ventas CONTADO en ese rango en el periodo cargado (ampliá
+                    Desde/Hasta en filtros o recargá).
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    <DrawerStatGrid
+                      items={[
+                        {
+                          label: "Cant. productos (distintos)",
+                          value: corteDrawerKpis.productCount,
+                          tone: "slate",
+                        },
+                        {
+                          label: "Líneas",
+                          value: corteDrawerKpis.lineCount,
+                          tone: "sky",
+                        },
+                        {
+                          label: "Libras (tipo libra)",
+                          value: qty3(corteDrawerKpis.lbs),
+                          tone: "amber",
+                        },
+                        {
+                          label: "Unidades (no libra)",
+                          value: qty3(corteDrawerKpis.units),
+                          tone: "violet",
+                        },
+                        {
+                          label: "Monto",
+                          value: money(corteDrawerKpis.amount),
+                          tone: "indigo",
+                        },
+                        {
+                          label: "Utilidad bruta",
+                          value: money(corteDrawerKpis.grossProfit),
+                          tone: "emerald",
+                        },
+                      ]}
+                    />
+                    <DrawerSectionTitle className="mt-0">
+                      {corteDrawerLines.length} línea(s) · solo cash (CONTADO)
+                    </DrawerSectionTitle>
+                    {corteDrawerLines.map((line, corteLineIdx) => (
+                      <DrawerDetailDlCard
+                        key={`${line.id}-${line.date}-${corteLineIdx}`}
+                        title={line.productName}
+                        rows={[
+                          { label: "Fecha venta", value: line.date },
+                          {
+                            label: "Precio",
+                            value: money(line.unitPrice),
+                            ddClassName: "tabular-nums",
+                          },
+                          {
+                            label: "Cantidad",
+                            value: line.qtyLabel,
+                          },
+                          {
+                            label: "Monto",
+                            value: money(line.amount),
+                            ddClassName: "tabular-nums font-semibold",
+                          },
+                          {
+                            label: "U. bruta",
+                            value: money(line.grossProfit),
+                            ddClassName:
+                              "tabular-nums text-violet-800 font-semibold",
+                          },
+                          {
+                            label: "Vendedor",
+                            value: line.seller,
+                            ddClassName: "text-sm break-all",
+                          },
+                        ]}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : movimientoDrawerRow.type === "CORTE" ? (
+              <p className="text-sm text-amber-800 px-1 mt-4">
+                Guardá Desde y Hasta válidos en el movimiento para listar las
+                ventas cortadas.
+              </p>
+            ) : null}
+          </div>
         ) : null}
       </SlideOverDrawer>
 
@@ -3059,6 +3416,50 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           </div>
         )}
       </SlideOverDrawer>
+
+      <ActionMenu
+        anchorRect={ledgerRowActionMenu?.rect ?? null}
+        isOpen={!!ledgerRowActionMenu}
+        onClose={() => setLedgerRowActionMenu(null)}
+        width={200}
+      >
+        {ledgerRowActionMenu && (
+          <div className="py-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClass}
+              onClick={() => openLedgerEditModal(ledgerRowActionMenu.row)}
+            >
+              Editar
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClassDestructive}
+              onClick={async () => {
+                const r = ledgerRowActionMenu.row;
+                setLedgerRowActionMenu(null);
+                if (!window.confirm("Eliminar este movimiento?")) return;
+                try {
+                  await deleteDoc(doc(db, "cash_ledger_pollo", r.id));
+                  refresh();
+                  setToastMsg("✅ Movimiento eliminado.");
+                } catch (e) {
+                  console.error("Error eliminando movimiento:", e);
+                  setToastMsg(
+                    "❌ No se pudo eliminar el movimiento. Revisa la consola.",
+                  );
+                }
+              }}
+            >
+              Eliminar
+            </Button>
+          </div>
+        )}
+      </ActionMenu>
 
       {toastMsg && (
         <Toast message={toastMsg} onClose={() => setToastMsg("")} />
