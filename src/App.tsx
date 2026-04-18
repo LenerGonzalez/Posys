@@ -68,7 +68,9 @@ import PreciosVenta from "./components/Candies/PreciosVenta";
 import EstadoCuentaCandies from "./components/Candies/EstadoCuentaCandies";
 import CandyStockPedidosPage from "./components/Candies/CandyStockPedidosPage";
 import PublicConsultLayout from "./components/common/PublicConsultLayout";
-import OfflineOverlay from "./components/common/OfflineOverlay";
+// Overlay “sin internet”: desactivado — navigator.offline + parche de fetch
+// disparaban avisos al salir de la pantalla o por fallos puntuales, no solo sin red.
+// import OfflineOverlay from "./components/common/OfflineOverlay";
 
 import GonperProductosPrices from "./components/Clothes/GonperProductosPrices";
 import ArqueoProducto from "./components/Pollo/ArqueoProducto";
@@ -290,7 +292,7 @@ export default function App() {
 
   return (
     <Router>
-      <OfflineOverlay />
+      {/* <OfflineOverlay /> */}
       <PwaUpdatePrompt />
       <Routes>
         <Route path="/" element={<Login />} />

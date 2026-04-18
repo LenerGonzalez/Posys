@@ -23,7 +23,10 @@ import RefreshButton from "../../components/common/RefreshButton";
 import Button from "../../components/common/Button";
 import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
 import Toast from "../../components/common/Toast";
+import { ImageWithFallback } from "../../components/common/ImageWithFallback";
 import useManualRefresh from "../../hooks/useManualRefresh";
+import { Calendar, CreditCard, Search, Trash2, Wallet } from "lucide-react";
+import { resolveProductImageSrc } from "./figmaSalePlaceholderImages";
 
 // --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
 async function fixBatchesProductIdByName(
@@ -53,6 +56,7 @@ interface Product {
   measurement: string;
   category: string;
   activeSalePrice?: number;
+  imageUrl?: string;
 }
 
 interface Users {
@@ -75,6 +79,16 @@ type CartItem = {
   discount: number; // entero C$ por línea
   discountInput?: string; // texto temporal para descuento
 };
+
+function isCajillaHuevoProductName(name: string): boolean {
+  const n = (name || "").toLowerCase();
+  return /cajilla/.test(n) && /huevo/.test(n);
+}
+
+function lineUsesIntegerQty(it: Pick<CartItem, "productName" | "measurement">) {
+  if (isCajillaHuevoProductName(it.productName)) return true;
+  return (it.measurement || "").toLowerCase() !== "lb";
+}
 
 // ===== Crédito / Clientes (Pollo) =====
 type ClientType = "CONTADO" | "CREDITO";
@@ -183,6 +197,22 @@ export default function SaleForm({
         category: x.category ?? "(sin categoría)",
         activeSalePrice:
           x.activeSalePrice != null ? Number(x.activeSalePrice) : undefined,
+        // Fotos del card: Firebase `products` → campos imageUrl | image | photo | picture | …
+        imageUrl: (() => {
+          const cands = [
+            x.imageUrl,
+            x.image,
+            x.photo,
+            x.picture,
+            x.thumbnail,
+            x.img,
+            x.imageURL,
+          ];
+          for (const v of cands) {
+            if (typeof v === "string" && v.trim()) return v.trim();
+          }
+          return undefined;
+        })(),
       });
     });
     setProducts(list);
@@ -544,30 +574,40 @@ export default function SaleForm({
     setItems((prev) =>
       prev.map((it) => {
         if (it.productId !== productId) return it;
-        const isUnit = (it.measurement || "").toLowerCase() !== "lb";
-        const txt = normalizeDecimalInput(raw);
+        const intQty = lineUsesIntegerQty(it);
+        let txt = normalizeDecimalInput(raw);
 
         if (txt.trim() === "") {
           return { ...it, qty: 0, qtyInput: "" };
         }
 
-        if (!isUnit && txt === ".") {
+        if (!intQty && txt === ".") {
           return { ...it, qty: 0, qtyInput: "0." };
+        }
+
+        if (!intQty && txt.includes(".")) {
+          const [whole, frac = ""] = txt.split(".", 2);
+          const digitsOnly = frac.replace(/\D/g, "").slice(0, 3);
+          if (txt.endsWith(".") && digitsOnly === "") {
+            txt = `${whole}.`;
+          } else {
+            txt = digitsOnly !== "" ? `${whole}.${digitsOnly}` : whole;
+          }
         }
 
         const parsed = Number(txt);
         const num = Number.isFinite(parsed) ? parsed : 0;
-        let qty = isUnit ? Math.max(0, Math.round(num)) : roundQty(num);
+        let qty = intQty ? Math.max(0, Math.round(num)) : roundQty(num);
 
         // Limitar qty a las existencias conocidas (stock)
-        const stockAvailable = isUnit
+        const stockAvailable = intQty
           ? Math.max(0, Math.floor(Number(it.stock || 0)))
           : roundQty(Number(it.stock || 0));
 
         if (qty > stockAvailable) {
           qty = stockAvailable;
           setMessage(`⚠️ Cantidad limitada a existencias (${stockAvailable})`);
-          const limitedInput = isUnit
+          const limitedInput = intQty
             ? String(qty)
             : qty === 0
               ? ""
@@ -578,7 +618,7 @@ export default function SaleForm({
         // Para medidas en peso (no unidad) preservamos el texto tal como lo
         // escribe el usuario (incluyendo ceros finales) para evitar que al
         // teclear '0' se elimine el punto decimal (ej. 1.080).
-        const nextInput = isUnit ? String(qty) : txt;
+        const nextInput = intQty ? String(qty) : txt;
 
         return { ...it, qty, qtyInput: nextInput };
       }),
@@ -641,6 +681,25 @@ export default function SaleForm({
       sum += net;
     }
     return round2(sum);
+  }, [items]);
+
+  /** Suma cantidades: líneas en lb (decimal) vs unidades enteras (resto). */
+  const cartQtyTotals = useMemo(() => {
+    let libras = 0;
+    let unidades = 0;
+    for (const it of items) {
+      const q = Number(it.qty || 0);
+      if (!Number.isFinite(q) || q <= 0) continue;
+      if (lineUsesIntegerQty(it)) {
+        unidades += Math.round(q);
+      } else {
+        libras = addQty(libras, q);
+      }
+    }
+    return {
+      librasTotal: roundQty(libras),
+      unidadesTotal: unidades,
+    };
   }, [items]);
 
   // Sincroniza total con tu campo amountCharged
@@ -987,22 +1046,6 @@ export default function SaleForm({
     );
   }, [customers, customerQuery]);
 
-  const productHtmlSelectOptions = useMemo(
-    () => [
-      {
-        value: "",
-        label: "Selecciona un producto",
-        disabled: true,
-      },
-      ...selectableProducts.map((p) => ({
-        value: p.id,
-        label: `${p.productName} — ${p.measurement} — Precio C$ ${latestPriceById[p.id] ?? p.price} (Existencia: ${qty3(stockById[p.id] || 0)})`,
-        disabled: chosenIds.has(p.id),
-      })),
-    ],
-    [selectableProducts, latestPriceById, stockById, chosenIds],
-  );
-
   const creditCustomerSelectOptions = useMemo(
     () => [
       { value: "", label: "Selecciona un cliente" },
@@ -1025,6 +1068,12 @@ export default function SaleForm({
 
   const inpBase =
     "w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 transition-colors";
+
+  /** Inputs / selects estilo panel Figma (web). */
+  const webFigmaInput =
+    "w-full border-2 border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors";
+  const webFigmaSelectBtn =
+    "w-full border-2 border-gray-300 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white hover:bg-blue-50/60 focus:outline-none focus:ring-2 focus:ring-blue-500";
 
   if (isMobile) {
     return (
@@ -1314,6 +1363,46 @@ export default function SaleForm({
               document.body,
             )}
 
+          <div className="flex gap-2 items-stretch w-full min-w-0">
+            <div className="flex-1 rounded-lg border border-slate-200 bg-gradient-to-br from-slate-50 to-white px-2.5 py-1.5 shadow-sm">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px] leading-tight text-slate-600">
+                <div className="flex items-baseline gap-1">
+                  <span className="font-semibold uppercase tracking-wide text-slate-500">
+                    Monto
+                  </span>
+                  <span className="tabular-nums font-semibold text-slate-900 text-sm">
+                    C$ {amountCharged.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <span className="font-semibold uppercase tracking-wide text-slate-500">
+                    Lb
+                  </span>
+                  <span className="tabular-nums font-medium text-slate-800">
+                    {qty3(cartQtyTotals.librasTotal)}
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <span className="font-semibold uppercase tracking-wide text-slate-500">
+                    Unid.
+                  </span>
+                  <span className="tabular-nums font-medium text-slate-800">
+                    {cartQtyTotals.unidadesTotal}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={handleSubmit as any}
+              disabled={items.length === 0 || saving || missingContadoClient}
+              className="shrink-0 self-stretch px-4 !rounded-lg !text-xs font-semibold min-w-[6rem] flex items-center justify-center !py-2"
+            >
+              {saving ? "Guardando..." : "Guardar"}
+            </Button>
+          </div>
+
           <div className="space-y-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Carrito
@@ -1332,24 +1421,36 @@ export default function SaleForm({
                     line - Math.max(0, Number(it.discount || 0)),
                   );
                   const isUnit = (it.measurement || "").toLowerCase() !== "lb";
+                  const shownExist = roundQty(
+                    Number(it.stock) - Number(it.qty || 0),
+                  );
                   return (
                     <div
                       key={it.productId}
                       className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
                     >
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="font-medium text-slate-900 text-sm leading-snug min-w-0">
+                      <div className="flex flex-wrap items-start gap-2">
+                        <div className="font-medium text-slate-900 text-sm leading-snug min-w-0 flex-1 basis-[8rem]">
                           {it.productName}
                         </div>
-                        <div className="text-xs font-medium text-slate-500 tabular-nums shrink-0">
-                          C$ {round2(unitApplied).toFixed(2)}
+                        <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700 shrink-0">
+                          {it.measurement}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-slate-800 shrink-0">
+                          Post: {shownExist.toFixed(3)}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-bold tabular-nums text-green-800 shrink-0">
+                          C$ {round2(it.price).toFixed(2)}
+                        </span>
+                        <div className="text-[11px] font-medium text-slate-500 tabular-nums shrink-0 w-full sm:w-auto sm:ml-auto">
+                          Aplicado: C$ {round2(unitApplied).toFixed(2)}
                         </div>
                       </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 items-center">
                         <input
                           className={`${inpBase} py-2 text-right text-sm`}
                           inputMode={isUnit ? "numeric" : "decimal"}
-                          step={isUnit ? 1 : 0.01}
+                          step={isUnit ? 1 : 0.001}
                           value={it.qtyInput ?? (it.qty === 0 ? "" : it.qty)}
                           onKeyDown={numberKeyGuard}
                           onChange={(e) =>
@@ -1385,15 +1486,7 @@ export default function SaleForm({
                           title="Precio sugerido (opcional)"
                         />
                       </div>
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <div className="text-xs text-slate-500">
-                          Exist. restante:{" "}
-                          <span className="tabular-nums font-medium text-slate-700">
-                            {roundQty(
-                              Number(it.stock) - Number(it.qty || 0),
-                            ).toFixed(3)}
-                          </span>
-                        </div>
+                      <div className="mt-2 flex items-center justify-end gap-2">
                         <div className="font-semibold tabular-nums text-slate-900">
                           C$ {round2(net).toFixed(2)}
                         </div>
@@ -1414,15 +1507,6 @@ export default function SaleForm({
                 })}
               </div>
             )}
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Monto total
-            </div>
-            <div className="text-2xl font-semibold tabular-nums text-slate-900 tracking-tight mt-1">
-              C$ {amountCharged.toFixed(2)}
-            </div>
           </div>
 
           {clientType === "CONTADO" && (
@@ -1454,16 +1538,6 @@ export default function SaleForm({
             </div>
           )}
 
-          <Button
-            type="button"
-            variant="primary"
-            onClick={handleSubmit as any}
-            disabled={items.length === 0 || saving || missingContadoClient}
-            className="w-full !py-3.5 !rounded-xl text-sm shadow-md shadow-blue-600/20 hover:!shadow-lg active:scale-[0.99] disabled:active:scale-100"
-          >
-            {saving ? "Guardando..." : "Guardar venta"}
-          </Button>
-
           {missingContadoClient && (
             <div
               role="alert"
@@ -1488,15 +1562,15 @@ export default function SaleForm({
     <div className="relative">
       <form
         onSubmit={handleSubmit}
-        className="w-full mx-auto max-w-5xl space-y-6 bg-white rounded-xl border border-slate-200/90 shadow-sm p-4 sm:p-6 md:p-8"
+        className="w-full mx-auto max-w-[1600px] space-y-5 bg-gray-50 rounded-xl border border-gray-200 shadow-sm p-4 sm:p-5 lg:p-6"
       >
-        <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-slate-100">
+        <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-gray-200">
           <div>
-            <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 tracking-tight">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
               Registrar venta
             </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Pollo — precio por libra o unidad según producto
+            <p className="text-sm text-gray-600 mt-1">
+              Elegí productos a la izquierda; completá líneas a la derecha.
             </p>
           </div>
           <div className="shrink-0">
@@ -1504,352 +1578,407 @@ export default function SaleForm({
           </div>
         </div>
 
-        {/* Selector de producto */}
-        <section className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 space-y-3">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Agregar al carrito
-          </label>
-          <div className="flex flex-col sm:flex-row gap-2 sm:items-stretch">
-            <div className="flex-1 min-w-0">
-              <MobileHtmlSelect
-                value={selectedProductId}
-                onChange={setSelectedProductId}
-                options={productHtmlSelectOptions}
-                sheetTitle="Producto"
-                selectClassName={`${inpBase} py-2.5`}
-                buttonClassName="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-              />
+        <div className="flex flex-col lg:flex-row gap-5 lg:items-stretch">
+          {/* —— Catálogo (Figma: grid con imagen) —— */}
+          <aside className="w-full lg:w-[min(42%,480px)] xl:w-[min(40%,520px)] shrink-0 flex flex-col rounded-xl border-2 border-gray-200 bg-white overflow-hidden shadow-sm max-h-[85vh] lg:max-h-[calc(100vh-8rem)]">
+            <div className="p-3 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white">
+              <h3 className="font-bold text-gray-900 text-sm mb-2">
+                Productos con existencia
+              </h3>
+              <div className="relative">
+                <Search
+                  className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none"
+                  aria-hidden
+                />
+                <input
+                  type="search"
+                  className={`${webFigmaInput} pl-10`}
+                  placeholder="Buscar por nombre…"
+                  value={productQuery}
+                  onChange={(e) => setProductQuery(e.target.value)}
+                />
+              </div>
             </div>
-            <Button
-              type="button"
-              variant="primary"
-              onClick={addSelectedProduct}
-              disabled={!selectedProductId || chosenIds.has(selectedProductId)}
-              className="shrink-0 !px-5 !py-2.5 !rounded-xl text-sm shadow-md shadow-blue-600/15"
-            >
-              Agregar
-            </Button>
-          </div>
-        </section>
-
-        {/* Fecha / Cliente */}
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Fecha de la venta
-            </label>
-            <input
-              type="date"
-              className={inpBase}
-              value={saleDate}
-              onChange={(e) => setSaleDate(e.target.value)}
-              max={todayStr}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <MobileHtmlSelect
-              label="Tipo de cliente"
-              value={clientType}
-              onChange={(v) => handleClientTypeChange(v as ClientType)}
-              options={clientTypeOptions}
-              selectClassName={`${inpBase} py-2.5`}
-              buttonClassName="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-              sheetTitle="Tipo de cliente"
-            />
-          </div>
-
-          {clientType === "CONTADO" ? (
-            <div className="md:col-span-2 space-y-1.5">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Cliente (Contado)
-              </label>
-              <input
-                className={inpBase}
-                value={clientName}
-                onChange={(e) => setClientName(e.target.value)}
-                placeholder="Ej: Cliente Mostrador"
-              />
+            <div className="flex-1 overflow-y-auto overscroll-contain p-3 min-h-[280px]">
+              {filteredProductsForPicker.length === 0 ? (
+                <p className="text-center text-gray-500 text-sm py-10">
+                  No hay productos con stock que coincidan.
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-2 gap-3">
+                  {filteredProductsForPicker.map((p) => {
+                    const inCart = chosenIds.has(p.id);
+                    const price = latestPriceById[p.id] ?? p.price;
+                    const stock = stockById[p.id] || 0;
+                    const imgSrc = resolveProductImageSrc(
+                      p.imageUrl,
+                      p.id,
+                      p.productName,
+                    );
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        disabled={inCart}
+                        onClick={() => void addProductById(p.id)}
+                        className={`bg-white rounded-xl border-2 text-left overflow-hidden transition-all ${
+                          inCart
+                            ? "border-gray-200 opacity-55 cursor-not-allowed"
+                            : "border-gray-200 hover:border-blue-500 hover:shadow-md"
+                        }`}
+                      >
+                        <div className="aspect-[4/3] bg-gray-100 relative">
+                          <ImageWithFallback
+                            src={imgSrc}
+                            alt=""
+                            className="w-full h-full object-cover"
+                          />
+                          {stock > 0 && stock < 20 && (
+                            <span className="absolute top-2 right-2 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-semibold">
+                              Bajo stock
+                            </span>
+                          )}
+                        </div>
+                        <div className="p-2.5">
+                          <div className="font-semibold text-xs text-gray-900 line-clamp-2 min-h-[2.25rem]">
+                            {p.productName}
+                          </div>
+                          <div className="mt-2 space-y-1 text-sm">
+                            <div className="flex justify-between gap-2 text-gray-700">
+                              <span className="font-semibold">Precio</span>
+                              <span className="font-bold text-green-600 tabular-nums text-base">
+                                {money(price)}
+                              </span>
+                            </div>
+                            <div className="flex justify-between gap-2 text-gray-700">
+                              <span className="font-semibold">Stock</span>
+                              <span
+                                className={`font-bold tabular-nums text-base ${
+                                  stock < 20 ? "text-red-600" : "text-gray-900"
+                                }`}
+                              >
+                                {qty3(stock)} {p.measurement}
+                              </span>
+                            </div>
+                          </div>
+                          {inCart ? (
+                            <p className="text-[10px] text-amber-700 font-medium mt-1">
+                              En carrito
+                            </p>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="md:col-span-2 space-y-4 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
-              <MobileHtmlSelect
-                label="Cliente (Crédito)"
-                value={customerId}
-                onChange={setCustomerId}
-                options={creditCustomerSelectOptions}
-                selectClassName={`${inpBase} py-2.5`}
-                buttonClassName="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-                sheetTitle="Cliente (crédito)"
-              />
+          </aside>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div
-                  className={`p-3 rounded-lg border ${
-                    clientType === "CREDITO"
-                      ? "bg-white border-slate-200 shadow-sm"
-                      : "bg-slate-100/80 border-slate-200"
-                  }`}
-                >
-                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
-                    Saldo actual
-                  </div>
-                  <div className="text-lg font-semibold tabular-nums text-slate-900 mt-0.5">
-                    {money(currentBalance)}
+          {/* —— Panel venta / carrito —— */}
+          <div className="flex-1 min-w-0 flex flex-col gap-4">
+            <div className="rounded-xl border-2 border-gray-200 bg-white p-4 shadow-sm space-y-4">
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="flex items-center gap-2 text-xs font-semibold text-gray-700 mb-1.5">
+                    <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+                    Fecha de la venta
+                  </label>
+                  <input
+                    type="date"
+                    className={webFigmaInput}
+                    value={saleDate}
+                    onChange={(e) => setSaleDate(e.target.value)}
+                    max={todayStr}
+                  />
+                </div>
+                <div>
+                  <label className="flex items-center gap-2 text-xs font-semibold text-gray-700 mb-1.5">
+                    {clientType === "CREDITO" ? (
+                      <CreditCard className="w-4 h-4 text-blue-600 shrink-0" />
+                    ) : (
+                      <Wallet className="w-4 h-4 text-green-600 shrink-0" />
+                    )}
+                    Tipo de cliente
+                  </label>
+                  <MobileHtmlSelect
+                    value={clientType}
+                    onChange={(v) => handleClientTypeChange(v as ClientType)}
+                    options={clientTypeOptions}
+                    selectClassName={`${webFigmaInput} py-2.5`}
+                    buttonClassName={webFigmaSelectBtn}
+                    sheetTitle="Tipo de cliente"
+                  />
+                </div>
+              </div>
+
+              {clientType === "CONTADO" ? (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                    Cliente (contado)
+                  </label>
+                  <input
+                    className={webFigmaInput}
+                    value={clientName}
+                    onChange={(e) => setClientName(e.target.value)}
+                    placeholder="Ej: Cliente mostrador"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-4 rounded-xl border-2 border-blue-100 bg-blue-50/40 p-4">
+                  <MobileHtmlSelect
+                    label="Cliente (crédito)"
+                    value={customerId}
+                    onChange={setCustomerId}
+                    options={creditCustomerSelectOptions}
+                    selectClassName={`${webFigmaInput} py-2.5`}
+                    buttonClassName={webFigmaSelectBtn}
+                    sheetTitle="Cliente (crédito)"
+                  />
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="p-3 rounded-lg border-2 border-blue-200 bg-white shadow-sm">
+                      <div className="text-[11px] font-semibold text-blue-800 uppercase tracking-wide">
+                        Saldo actual
+                      </div>
+                      <div className="text-lg font-bold tabular-nums text-gray-900 mt-0.5">
+                        {money(currentBalance)}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-semibold text-gray-700">
+                        Pago inicial
+                      </label>
+                      <p className="text-[11px] text-gray-500">
+                        Máx. {money(maxDownPayment)}
+                      </p>
+                      <input
+                        type="number"
+                        step="0.01"
+                        inputMode="decimal"
+                        max={maxDownPayment}
+                        className={webFigmaInput}
+                        value={downPayment === 0 ? "" : downPayment}
+                        onChange={(e) => {
+                          const v = Math.max(0, Number(e.target.value || 0));
+                          setDownPayment(Math.min(v, maxDownPayment));
+                        }}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div className="p-3 rounded-lg border-2 border-blue-200 bg-white shadow-sm">
+                      <div className="text-[11px] font-semibold text-blue-800 uppercase tracking-wide">
+                        Saldo proyectado
+                      </div>
+                      <div className="text-lg font-bold tabular-nums text-gray-900 mt-0.5">
+                        {money(projectedBalance)}
+                      </div>
+                    </div>
                   </div>
                 </div>
+              )}
+            </div>
 
-                <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-600">
-                    Pago inicial
-                  </label>
-                  <div className="text-[11px] text-slate-500">
-                    Máximo: {money(maxDownPayment)}
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-stretch">
+              <div className="flex-1 rounded-lg border border-green-300/90 bg-gradient-to-r from-green-50/90 to-green-100/70 px-2.5 py-1.5 shadow-sm">
+                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-[13px] leading-tight text-green-900/85">
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-bold uppercase tracking-wide text-green-800/90">
+                      Monto:
+                    </span>
+                    <span className="tabular-nums font-semibold text-green-950 text-sm">
+                      C$ {amountCharged.toFixed(2)}
+                    </span>
                   </div>
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-bold uppercase tracking-wide text-green-800/90">
+                      Libras totales:
+                    </span>
+                    <span className="tabular-nums font-semibold text-green-950">
+                      {qty3(cartQtyTotals.librasTotal)}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-bold uppercase tracking-wide text-green-800/90">
+                      Unidades totales:
+                    </span>
+                    <span className="tabular-nums font-semibold text-green-950">
+                      {cartQtyTotals.unidadesTotal}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={items.length === 0 || saving || missingContadoClient}
+                className="sm:self-stretch sm:min-w-[8.5rem] !py-2 !rounded-lg !text-xs !font-semibold !bg-green-600 hover:!bg-green-700 !shadow-sm disabled:!bg-gray-300 shrink-0 flex items-center justify-center"
+              >
+                {saving ? "Guardando..." : "Guardar"}
+              </Button>
+            </div>
+
+            <section>
+              <h2 className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">
+                Productos Agregados
+              </h2>
+              <div className="space-y-3 max-h-[min(52vh,560px)] overflow-y-auto pr-1">
+                {items.length === 0 ? (
+                  <div className="text-sm text-gray-500 border-2 border-dashed border-gray-300 rounded-xl py-10 px-4 text-center bg-white">
+                    Hacé clic en un producto de la izquierda para agregarlo.
+                  </div>
+                ) : (
+                  items.map((it) => {
+                    const unitApplied = getAppliedUnitPrice(it);
+                    const grossLine = round2(
+                      Number(unitApplied || 0) * Number(it.qty || 0),
+                    );
+                    const net = Math.max(
+                      0,
+                      grossLine - Math.max(0, Number(it.discount || 0)),
+                    );
+                    const intQtyLine = lineUsesIntegerQty(it);
+                    const shownExist = roundQty(
+                      Number(it.stock) - Number(it.qty || 0),
+                    );
+                    return (
+                      <div
+                        key={it.productId}
+                        className="rounded-xl border-2 border-gray-200 bg-white p-4 shadow-sm"
+                      >
+                        <div className="flex flex-wrap items-start gap-2 mb-3">
+                          <div className="font-semibold text-gray-900 text-sm leading-snug min-w-0 flex-1 basis-[10rem]">
+                            {it.productName}
+                          </div>
+                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-slate-700 shrink-0">
+                            {it.measurement}
+                          </span>
+                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-slate-800 shrink-0">
+                            Post-venta: {shownExist.toFixed(3)}
+                          </span>
+                          <span className="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 text-xs font-bold tabular-nums text-green-800 shrink-0">
+                            C$ {round2(it.price).toFixed(2)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeItem(it.productId)}
+                            className="shrink-0 p-2 rounded-lg text-red-600 hover:bg-red-50 border border-red-100 transition-colors sm:ml-auto"
+                            title="Quitar"
+                            aria-label="Quitar línea"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                          <div className="sm:col-span-1">
+                            <div className="text-gray-500 font-semibold mb-1">
+                              Precio especial
+                            </div>
+                            <input
+                              type="number"
+                              step="0.01"
+                              inputMode="decimal"
+                              className={`${webFigmaInput} py-1.5 text-right tabular-nums`}
+                              value={
+                                it.specialPrice === 0 ? "" : it.specialPrice
+                              }
+                              onKeyDown={numberKeyGuard}
+                              onChange={(e) =>
+                                setItemSpecialPrice(
+                                  it.productId,
+                                  e.target.value,
+                                )
+                              }
+                              placeholder="—"
+                            />
+                            <p className="text-[10px] text-gray-500 mt-0.5">
+                              Aplicado: C$ {round2(unitApplied).toFixed(2)}
+                            </p>
+                          </div>
+                          <div>
+                            <div className="text-gray-500 font-semibold mb-1">
+                              Cantidad
+                            </div>
+                            <input
+                              type="number"
+                              step={intQtyLine ? 1 : 0.001}
+                              inputMode={intQtyLine ? "numeric" : "decimal"}
+                              className={`${webFigmaInput} py-1.5 text-right tabular-nums`}
+                              value={
+                                it.qtyInput ?? (it.qty === 0 ? "" : it.qty)
+                              }
+                              onKeyDown={numberKeyGuard}
+                              onChange={(e) =>
+                                setItemQty(it.productId, e.target.value)
+                              }
+                              placeholder="0"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-gray-500 font-semibold mb-1">
+                              Descuento (C$)
+                            </div>
+                            <input
+                              type="number"
+                              step={1}
+                              min={0}
+                              className={`${webFigmaInput} py-1.5 text-right tabular-nums`}
+                              value={
+                                it.discount === 0 ? "" : it.discount
+                              }
+                              onChange={(e) =>
+                                setItemDiscount(it.productId, e.target.value)
+                              }
+                              inputMode="numeric"
+                              placeholder="0"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-gray-500 font-semibold mb-1">
+                              Monto
+                            </div>
+                            <div className="tabular-nums font-bold text-green-700 text-base">
+                              C$ {round2(net).toFixed(2)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+
+            {clientType === "CONTADO" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                    Monto recibido
+                  </label>
                   <input
                     type="number"
                     step="0.01"
                     inputMode="decimal"
-                    max={maxDownPayment}
-                    className={inpBase}
-                    value={downPayment === 0 ? "" : downPayment}
-                    onChange={(e) => {
-                      const v = Math.max(0, Number(e.target.value || 0));
-                      const capped = Math.min(v, maxDownPayment);
-                      setDownPayment(capped);
-                    }}
-                    placeholder="0.00"
+                    className={webFigmaInput}
+                    value={amountReceived === 0 ? "" : amountReceived}
+                    onChange={(e) =>
+                      setAmountReceived(Number(e.target.value || 0))
+                    }
                   />
                 </div>
-
-                <div
-                  className={`p-3 rounded-lg border ${
-                    clientType === "CREDITO"
-                      ? "bg-white border-slate-200 shadow-sm"
-                      : "bg-slate-100/80 border-slate-200"
-                  }`}
-                >
-                  <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
-                    Saldo proyectado
-                  </div>
-                  <div className="text-lg font-semibold tabular-nums text-slate-900 mt-0.5">
-                    {money(projectedBalance)}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                    Cambio
+                  </label>
+                  <div
+                    className={`${webFigmaInput} bg-gray-100 font-semibold tabular-nums cursor-default`}
+                  >
+                    C$ {amountChange}
                   </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Lista de ítems */}
-        <section className="space-y-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Líneas del carrito
-          </h3>
-          <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white shadow-sm">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-100/90 text-slate-700">
-              <tr className="text-center text-xs uppercase tracking-wide">
-                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
-                  Producto
-                </th>
-                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
-                  Precio
-                </th>
-
-                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
-                  Precio especial
-                </th>
-
-                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
-                  Existencias
-                </th>
-                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
-                  Cantidad
-                </th>
-                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
-                  Descuento
-                </th>
-                <th className="p-2.5 border-b border-slate-200 whitespace-nowrap font-semibold">
-                  Monto
-                </th>
-                <th className="p-2.5 border-b border-slate-200 w-12 font-semibold">
-                  —
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="p-4 text-center text-gray-500">
-                    Agrega productos al carrito.
-                  </td>
-                </tr>
-              ) : (
-                items.map((it) => {
-                  const unitApplied = getAppliedUnitPrice(it);
-                  const line = Number(unitApplied || 0) * Number(it.qty || 0);
-                  const net = Math.max(
-                    0,
-                    line - Math.max(0, Number(it.discount || 0)),
-                  );
-                  const isUnit = (it.measurement || "").toLowerCase() !== "lb";
-                  const shownExist = roundQty(
-                    Number(it.stock) - Number(it.qty || 0),
-                  );
-
-                  return (
-                    <tr
-                      key={it.productId}
-                      className="text-center border-b border-slate-100 last:border-0 hover:bg-slate-50/60 transition-colors"
-                    >
-                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap text-left text-slate-800">
-                        {it.productName} — {it.measurement}
-                      </td>
-
-                      {/* Precio normal */}
-                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap tabular-nums text-slate-700">
-                        C$ {round2(it.price).toFixed(2)}
-                      </td>
-
-                      {/* ✅ NUEVO: Precio especial */}
-                      <td className="p-2 border-r border-slate-100">
-                        <input
-                          type="number"
-                          step="0.01"
-                          inputMode="decimal"
-                          className="w-28 max-w-full border border-slate-200 rounded-md px-2 py-1.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-                          value={it.specialPrice === 0 ? "" : it.specialPrice}
-                          onKeyDown={numberKeyGuard}
-                          onChange={(e) =>
-                            setItemSpecialPrice(it.productId, e.target.value)
-                          }
-                          placeholder="—"
-                          title="Precio especial (si se deja vacío, se usa el precio normal)"
-                        />
-                        {/* opcional: mini hint del aplicado */}
-                        <div className="text-[11px] text-slate-500 mt-1">
-                          Aplicado: C$ {round2(unitApplied).toFixed(2)}
-                        </div>
-                      </td>
-
-                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap tabular-nums text-slate-700">
-                        {shownExist.toFixed(3)}
-                      </td>
-
-                      <td className="p-2 border-r border-slate-100">
-                        <input
-                          type="number"
-                          step={isUnit ? 1 : 0.01}
-                          inputMode={isUnit ? "numeric" : "decimal"}
-                          className="w-28 max-w-full border border-slate-200 rounded-md px-2 py-1.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-                          value={it.qtyInput ?? (it.qty === 0 ? "" : it.qty)}
-                          onKeyDown={numberKeyGuard}
-                          onChange={(e) =>
-                            setItemQty(it.productId, e.target.value)
-                          }
-                          placeholder="0"
-                          title="Cantidad"
-                        />
-                      </td>
-
-                      <td className="p-2 border-r border-slate-100">
-                        <input
-                          type="number"
-                          step={1}
-                          min={0}
-                          className="w-24 max-w-full border border-slate-200 rounded-md px-2 py-1.5 text-right text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-                          value={it.discount === 0 ? "" : it.discount}
-                          onChange={(e) =>
-                            setItemDiscount(it.productId, e.target.value)
-                          }
-                          inputMode="numeric"
-                          placeholder="0"
-                          title="Descuento (entero C$)"
-                        />
-                      </td>
-
-                      <td className="p-2.5 border-r border-slate-100 whitespace-nowrap font-medium tabular-nums text-slate-900">
-                        C$ {round2(net).toFixed(2)}
-                      </td>
-
-                      <td className="p-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="!h-8 !w-8 !min-h-0 !rounded-lg !p-0 !text-red-700 !border-red-100 !bg-red-50 hover:!bg-red-100"
-                          onClick={() => removeItem(it.productId)}
-                          title="Quitar"
-                          aria-label="Quitar"
-                        >
-                          ✕
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-        </section>
-
-        {/* Total de la venta (readOnly) */}
-        <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm space-y-1">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Monto total
-          </label>
-          <input
-            type="text"
-            className="w-full border-0 bg-transparent p-0 text-2xl font-semibold tabular-nums text-slate-900 focus:ring-0 cursor-default"
-            value={`C$ ${amountCharged.toFixed(2)}`}
-            readOnly
-            title="Suma de (precio aplicado × cantidad − descuento) de cada producto."
-          />
-        </div>
-
-        {/* Pago recibido / Cambio */}
-        {clientType === "CONTADO" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Monto recibido
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                inputMode="decimal"
-                className={inpBase}
-                value={amountReceived === 0 ? "" : amountReceived}
-                onChange={(e) =>
-                  setAmountReceived(Number(e.target.value || 0))
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Cambio
-              </label>
-              <input
-                type="text"
-                className={`${inpBase} bg-slate-100 font-medium tabular-nums cursor-default`}
-                value={`C$ ${amountChange}`}
-                readOnly
-              />
-            </div>
+            )}
           </div>
-        )}
-
-        {/* Guardar */}
-        <Button
-          type="submit"
-          variant="primary"
-          className="w-full !py-3.5 !rounded-xl text-sm shadow-md shadow-blue-600/20 hover:!shadow-lg active:scale-[0.99] disabled:active:scale-100"
-          disabled={items.length === 0 || saving || missingContadoClient}
-        >
-          {saving ? "Guardando..." : "Guardar venta"}
-        </Button>
+        </div>
 
         {missingContadoClient && (
           <p
