@@ -90,6 +90,33 @@ function lineUsesIntegerQty(it: Pick<CartItem, "productName" | "measurement">) {
   return (it.measurement || "").toLowerCase() !== "lb";
 }
 
+/** URL de imagen en documento `products` (varios alias + primer string de `images[]`). */
+function pickRawImageUrlFromProductDoc(x: Record<string, unknown>): string | undefined {
+  const images = x.images;
+  const firstFromArray =
+    Array.isArray(images) &&
+    images.length > 0 &&
+    typeof images[0] === "string"
+      ? (images[0] as string).trim()
+      : "";
+  const cands: unknown[] = [
+    x.imageUrl,
+    x.image,
+    x.photo,
+    x.picture,
+    x.thumbnail,
+    x.img,
+    x.imageURL,
+    x.displayImageUrl,
+    x.photoUrl,
+    firstFromArray || undefined,
+  ];
+  for (const v of cands) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
 // ===== Crédito / Clientes (Pollo) =====
 type ClientType = "CONTADO" | "CREDITO";
 type Status = "ACTIVO" | "BLOQUEADO";
@@ -197,22 +224,7 @@ export default function SaleForm({
         category: x.category ?? "(sin categoría)",
         activeSalePrice:
           x.activeSalePrice != null ? Number(x.activeSalePrice) : undefined,
-        // Fotos del card: Firebase `products` → campos imageUrl | image | photo | picture | …
-        imageUrl: (() => {
-          const cands = [
-            x.imageUrl,
-            x.image,
-            x.photo,
-            x.picture,
-            x.thumbnail,
-            x.img,
-            x.imageURL,
-          ];
-          for (const v of cands) {
-            if (typeof v === "string" && v.trim()) return v.trim();
-          }
-          return undefined;
-        })(),
+        imageUrl: pickRawImageUrlFromProductDoc(x as Record<string, unknown>),
       });
     });
     setProducts(list);
@@ -397,6 +409,14 @@ export default function SaleForm({
     const sp = Number(it.specialPrice || 0);
     return sp > 0 ? sp : Number(it.price || 0);
   };
+
+  /** Imagen de la línea = la del producto en catálogo (`productId`), no datos del ítem. */
+  const cartLineImageSrc = (it: CartItem) =>
+    resolveProductImageSrc(
+      products.find((p) => p.id === it.productId)?.imageUrl,
+      it.productId,
+      it.productName,
+    );
 
   // ---- helpers stock (a 3 decimales) ---------------------------------------
   const getDisponibleByProductId = async (productId: string) => {
@@ -1308,19 +1328,35 @@ export default function SaleForm({
                               type="button"
                               variant="ghost"
                               disabled={disabled}
-                              className="w-full !justify-start text-left !px-3 !py-3.5 border-b border-slate-100 last:border-b-0 !rounded-xl mx-1 active:!bg-blue-50/80 disabled:opacity-40 !font-normal"
+                              className="w-full !justify-start text-left !px-3 !py-3.5 border-b border-slate-100 last:border-b-0 !rounded-xl mx-1 transition-all duration-200 ease-out hover:!bg-slate-50 hover:!shadow-sm hover:translate-x-0.5 active:!bg-blue-50/80 disabled:opacity-40 !font-normal"
                               onClick={async () => {
                                 if (disabled) return;
                                 await addProductById(p.id);
                                 setMobileSheet(null);
                               }}
                             >
-                              <div className="font-medium text-sm text-slate-900 break-words">
-                                {p.productName}
-                              </div>
-                              <div className="text-xs text-slate-600 mt-1">
-                                Precio: C$ {price} · Existencia: {qty3(stock)} Lbs/Un
-                                {disabled ? " · Ya en carrito" : ""}
+                              <div className="flex gap-3 w-full items-start">
+                                <div className="w-12 h-12 shrink-0 rounded-lg overflow-hidden border border-slate-200 bg-slate-100">
+                                  <ImageWithFallback
+                                    src={resolveProductImageSrc(
+                                      p.imageUrl,
+                                      p.id,
+                                      p.productName,
+                                    )}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="min-w-0 flex-1 text-left">
+                                  <div className="font-medium text-sm text-slate-900 break-words">
+                                    {p.productName}
+                                  </div>
+                                  <div className="text-xs text-slate-600 mt-1">
+                                    Precio: C$ {price} · Existencia:{" "}
+                                    {qty3(stock)} Lbs/Un
+                                    {disabled ? " · Ya en carrito" : ""}
+                                  </div>
+                                </div>
                               </div>
                             </Button>
                           );
@@ -1429,6 +1465,15 @@ export default function SaleForm({
                       key={it.productId}
                       className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
                     >
+                      <div className="flex gap-3">
+                        <div className="w-14 h-14 shrink-0 rounded-lg overflow-hidden border border-slate-200 bg-slate-100">
+                          <ImageWithFallback
+                            src={cartLineImageSrc(it)}
+                            alt=""
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-start gap-2">
                         <div className="font-medium text-slate-900 text-sm leading-snug min-w-0 flex-1 basis-[8rem]">
                           {it.productName}
@@ -1501,6 +1546,8 @@ export default function SaleForm({
                         >
                           Quitar
                         </Button>
+                      </div>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1621,17 +1668,19 @@ export default function SaleForm({
                         type="button"
                         disabled={inCart}
                         onClick={() => void addProductById(p.id)}
-                        className={`bg-white rounded-xl border-2 text-left overflow-hidden transition-all ${
+                        className={`bg-white rounded-xl border-2 text-left overflow-hidden transition-all duration-200 ease-out ${
                           inCart
                             ? "border-gray-200 opacity-55 cursor-not-allowed"
-                            : "border-gray-200 hover:border-blue-500 hover:shadow-md"
+                            : "border-gray-200 shadow-sm hover:border-blue-400 hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-blue-400/25 active:translate-y-0 active:shadow-md group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                         }`}
                       >
-                        <div className="aspect-[4/3] bg-gray-100 relative">
+                        <div className="aspect-[4/3] bg-gray-100 relative overflow-hidden">
                           <ImageWithFallback
                             src={imgSrc}
                             alt=""
-                            className="w-full h-full object-cover"
+                            className={`w-full h-full object-cover transition-transform duration-300 ease-out ${
+                              inCart ? "" : "group-hover:scale-105"
+                            }`}
                           />
                           {stock > 0 && stock < 20 && (
                             <span className="absolute top-2 right-2 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-semibold">
@@ -1845,7 +1894,16 @@ export default function SaleForm({
                         key={it.productId}
                         className="rounded-xl border-2 border-gray-200 bg-white p-4 shadow-sm"
                       >
-                        <div className="flex flex-wrap items-start gap-2 mb-3">
+                        <div className="flex gap-3 mb-3">
+                          <div className="w-16 h-16 shrink-0 rounded-xl overflow-hidden border border-gray-200 bg-gray-100">
+                            <ImageWithFallback
+                              src={cartLineImageSrc(it)}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-start gap-2">
                           <div className="font-semibold text-gray-900 text-sm leading-snug min-w-0 flex-1 basis-[10rem]">
                             {it.productName}
                           </div>
@@ -1867,6 +1925,8 @@ export default function SaleForm({
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
+                        </div>
+                          </div>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                           <div className="sm:col-span-1">

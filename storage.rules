@@ -21,6 +21,12 @@ service firebase.storage {
       allow write: if isAdmin();
     }
 
+    /** Imágenes de catálogo Pollo (mismo bucket que Candies / precios_venta). */
+    match /productos_pollo/{productId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
     match /{path=**} {
       allow read, write: if false;
     }

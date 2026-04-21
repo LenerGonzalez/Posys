@@ -25,6 +25,7 @@ import UserRegisterForm from "./components/UserRegisterForm";
 import ProductForm from "../src/components/Pollo/ProductForm";
 import SaleFormV2 from "../src/components/Pollo/SaleFormV2";
 import InventoryBatches from "./components/Pollo/InventoryBatches";
+import InventoryCutoffsPage from "./components/Pollo/InventoryCutoffsPage";
 import Liquidaciones from "../src/components/Pollo/Liquidaciones";
 import FinancialDashboard from "../src/components/Pollo/FinancialDashboard";
 import ExpensesAdmin from "./components/Pollo/ExpensesAdmin";
@@ -448,6 +449,21 @@ export default function App() {
                 ]}
               >
                 <InventoryBatches role={role} roles={roles} />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="inventoryCutoffs"
+            element={
+              <PrivateRoute
+                allowedRoles={[
+                  "admin",
+                  "vendedor_pollo",
+                  "supervisor_pollo",
+                  "contador",
+                ]}
+              >
+                <InventoryCutoffsPage />
               </PrivateRoute>
             }
           />

@@ -386,6 +386,7 @@ export default function AdminLayout({
       addPollo("Evolutivo Libras", `${base}/statusInventory`, "Operaciones");
 
       addPollo("Inventario Pollo", `${base}/batches`, "Inventarios");
+      addPollo("Cortes de inventario", `${base}/inventoryCutoffs`, "Inventarios");
       addPollo("Inventarios Pagados", `${base}/paidBatches`, "Inventarios");
 
       addPollo("Dashboard", `${base}/financialDashboard`, "Finanzas");
@@ -479,6 +480,13 @@ export default function AdminLayout({
         module: "pollo",
         section: "Operaciones",
         pathLabel: "Pollos Bea > Operaciones > Inventario Pollo",
+      });
+      add(can("batches"), {
+        label: "Cortes de inventario",
+        to: `${base}/inventoryCutoffs`,
+        module: "pollo",
+        section: "Operaciones",
+        pathLabel: "Pollos Bea > Operaciones > Cortes de inventario",
       });
       add(can("bills"), {
         label: "Cierre Ventas",
@@ -973,6 +981,12 @@ export default function AdminLayout({
                                 Inventario Pollo
                               </NavLink>
                               <NavLink
+                                to={`${base}/inventoryCutoffs`}
+                                className={linkCls}
+                              >
+                                Cortes de inventario
+                              </NavLink>
+                              <NavLink
                                 to={`${base}/paidBatches`}
                                 className={linkCls}
                               >
@@ -1421,6 +1435,14 @@ export default function AdminLayout({
                         {canPath(subject, "batches") && (
                           <NavLink to={`${base}/batches`} className={linkCls}>
                             Inventario Pollo
+                          </NavLink>
+                        )}
+                        {canPath(subject, "batches") && (
+                          <NavLink
+                            to={`${base}/inventoryCutoffs`}
+                            className={linkCls}
+                          >
+                            Cortes de inventario
                           </NavLink>
                         )}
 

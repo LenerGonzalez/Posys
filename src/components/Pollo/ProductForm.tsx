@@ -1,9 +1,11 @@
 // src/components/Pollo/ProductForm.tsx
-import React, { useEffect, useState } from "react";
-import { db } from "../../firebase";
+import React, { useEffect, useRef, useState } from "react";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { db, storage } from "../../firebase";
 import {
   addDoc,
   collection,
+  deleteField,
   doc,
   getDocs,
   updateDoc,
@@ -17,8 +19,12 @@ import ActionMenu, {
   actionMenuItemClassGreen,
 } from "../common/ActionMenu";
 import { propagatePolloProductDisplayFields } from "../../Services/syncPolloProductDisplay";
+import { ImageWithFallback } from "../common/ImageWithFallback";
 
 const money = (n: number) => `C$${(Number(n) || 0).toFixed(2)}`;
+
+/** Mismo bucket que Candies (`precios_venta`); carpeta dedicada a catálogo Pollo. */
+const POLLO_PRODUCT_IMAGES_PREFIX = "productos_pollo";
 
 function normalizeCategory(s: string) {
   return String(s ?? "")
@@ -40,6 +46,33 @@ interface Product {
   measurement: string;
   providerPrice?: number;
   active?: boolean;
+  imageUrl?: string;
+}
+
+function pickProductImageUrlFromDoc(it: Record<string, unknown>): string | undefined {
+  const images = it.images;
+  const firstFromArray =
+    Array.isArray(images) &&
+    images.length > 0 &&
+    typeof images[0] === "string"
+      ? (images[0] as string).trim()
+      : "";
+  const cands: unknown[] = [
+    it.imageUrl,
+    it.image,
+    it.photo,
+    it.picture,
+    it.thumbnail,
+    it.img,
+    it.imageURL,
+    it.displayImageUrl,
+    it.photoUrl,
+    firstFromArray || undefined,
+  ];
+  for (const v of cands) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
 }
 
 export default function ProductForm() {
@@ -49,6 +82,9 @@ export default function ProductForm() {
   const [message, setMessage] = useState("");
   const [category, setCategory] = useState("");
   const [measurement, setMeasurement] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageUploading, setImageUploading] = useState(false);
+  const productImageInputRef = useRef<HTMLInputElement>(null);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -77,6 +113,7 @@ export default function ProductForm() {
         category: normalizeCategory(it.category ?? ""),
         measurement: normalizeMeasurement(it.measurement ?? ""),
         active: it.active !== false,
+        imageUrl: pickProductImageUrlFromDoc(it as Record<string, unknown>),
       });
     });
     setProducts(rows);
@@ -93,6 +130,8 @@ export default function ProductForm() {
     setProviderPrice(0);
     setCategory("");
     setMeasurement("");
+    setImageUrl("");
+    setImageUploading(false);
     setMessage("");
     setDrawerEditBase(null);
   };
@@ -109,6 +148,7 @@ export default function ProductForm() {
     setProviderPrice(p.providerPrice || 0);
     setCategory(p.category);
     setMeasurement(p.measurement);
+    setImageUrl(p.imageUrl ?? "");
     setMessage("");
     setDrawerOpen(true);
   };
@@ -117,6 +157,48 @@ export default function ProductForm() {
     setDrawerOpen(false);
     setDrawerEditBase(null);
     resetForm();
+  };
+
+  const handlePickProductImage = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setMessage("❌ Seleccioná un archivo de imagen.");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setMessage("❌ La imagen debe pesar menos de 4 MB.");
+      return;
+    }
+    const folderId = drawerEditBase?.id ?? "pending";
+    setImageUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const safe = ["jpg", "jpeg", "png", "webp", "gif"].includes(ext)
+        ? ext
+        : "jpg";
+      const path = `${POLLO_PRODUCT_IMAGES_PREFIX}/${folderId}/${Date.now()}.${safe}`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, file, {
+        contentType: file.type || "image/jpeg",
+      });
+      const url = await getDownloadURL(storageRef);
+      setImageUrl(url);
+      setMessage(
+        "✅ Imagen subida. Misma ubicación que Candies (Firebase Storage). Guardá el producto para confirmar.",
+      );
+      setTimeout(() => setMessage(""), 4000);
+    } catch (err) {
+      console.error(err);
+      setMessage(
+        "❌ No se pudo subir la imagen. Revisá que seas admin y las reglas de Storage. Si ves CORS: scripts/storage-cors.json en el bucket (ver firebase.ts).",
+      );
+    } finally {
+      setImageUploading(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -132,6 +214,7 @@ export default function ProductForm() {
     }
 
     try {
+      const trimmedImg = imageUrl.trim();
       if (drawerEditBase) {
         const ref = doc(db, "products", drawerEditBase.id);
         await updateDoc(ref, {
@@ -140,6 +223,9 @@ export default function ProductForm() {
           providerPrice: parseFloat((providerPrice || 0).toFixed(2)),
           category: cat,
           measurement: meas,
+          ...(trimmedImg
+            ? { imageUrl: trimmedImg }
+            : { imageUrl: deleteField() }),
         });
 
         const patch: {
@@ -167,6 +253,7 @@ export default function ProductForm() {
                   measurement: meas,
                   price: parseFloat(price.toFixed(2)),
                   providerPrice: parseFloat((providerPrice || 0).toFixed(2)),
+                  imageUrl: trimmedImg || undefined,
                 }
               : x,
           ),
@@ -179,6 +266,7 @@ export default function ProductForm() {
           category: cat,
           measurement: meas,
           active: true,
+          ...(trimmedImg ? { imageUrl: trimmedImg } : {}),
         };
         const newRef = await addDoc(collection(db, "products"), payload);
         setProducts((prev) => [{ id: newRef.id, ...payload }, ...prev]);
@@ -339,6 +427,79 @@ export default function ProductForm() {
                 e.target.value === "0" ? setPrice(NaN) : null
               }
             />
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-sm font-semibold text-gray-700">
+              Imagen del producto (opcional)
+            </label>
+            <p className="text-xs text-gray-500 -mt-1">
+              Se sube al mismo Storage que Candies (carpeta{" "}
+              <code className="text-[11px] bg-slate-100 px-1 rounded">
+                {POLLO_PRODUCT_IMAGES_PREFIX}/
+              </code>
+              ). La URL queda guardada en el documento del producto.
+            </p>
+            <input
+              ref={productImageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="hidden"
+              onChange={handlePickProductImage}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={imageUploading}
+                onClick={() => productImageInputRef.current?.click()}
+              >
+                {imageUploading ? "Subiendo…" : "Subir imagen"}
+              </Button>
+              {imageUrl ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={imageUploading}
+                  onClick={() => {
+                    setImageUrl("");
+                    setMessage("Imagen quitada del formulario. Guardá para borrarla del producto.");
+                    setTimeout(() => setMessage(""), 3000);
+                  }}
+                >
+                  Quitar imagen
+                </Button>
+              ) : null}
+            </div>
+            {imageUrl ? (
+              <div className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50/80 p-2">
+                <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden border border-slate-200 bg-white">
+                  <ImageWithFallback
+                    src={imageUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-600 break-all min-w-0 pt-1">
+                  {imageUrl}
+                </p>
+              </div>
+            ) : null}
+            <div className="space-y-1 pt-1 border-t border-slate-100">
+              <label className="block text-xs font-medium text-gray-600">
+                O pegar URL manualmente
+              </label>
+              <input
+                type="url"
+                inputMode="url"
+                className="w-full border p-2 rounded-lg text-sm"
+                placeholder="https://…"
+                value={imageUrl}
+                onChange={(e) => setImageUrl(e.target.value)}
+              />
+            </div>
           </div>
 
           {message ? <p className="text-sm text-gray-700">{message}</p> : null}

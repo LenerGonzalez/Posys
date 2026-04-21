@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   addDoc,
   collection,
   serverTimestamp,
   getDoc,
   doc as fsDoc,
+  type DocumentSnapshot,
 } from "firebase/firestore";
 import { format } from "date-fns";
 import { db, auth } from "../../firebase";
+import allocateFIFOAndUpdateBatches from "../../Services/allocateFIFO";
 import RefreshButton from "../common/RefreshButton";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import {
@@ -87,6 +90,62 @@ function KpiCard({
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 const today = () => format(new Date(), "yyyy-MM-dd");
 
+function batchesHrefForMermaAdj(
+  adjId: string | undefined,
+  productId: string | undefined,
+  detailById: Record<
+    string,
+    | {
+        fifoAllocations: { batchId: string }[];
+      }
+    | { error: string }
+  >,
+  fallback: string,
+): string {
+  if (!adjId?.trim() || !productId?.trim()) return fallback;
+  const det = detailById[adjId];
+  if (!det || "error" in det || !det.fifoAllocations?.[0]?.batchId)
+    return fallback;
+  return `../batches?productId=${encodeURIComponent(productId.trim())}&focusBatchId=${encodeURIComponent(det.fifoAllocations[0].batchId)}`;
+}
+
+type AdjFifoParsed =
+  | {
+      fifoAllocations: {
+        batchId: string;
+        qty: number;
+        unitCost: number;
+        lineCost: number;
+      }[];
+      cogsAmount: number;
+      avgUnitCost: number;
+    }
+  | { error: string };
+
+function parseAdjustmentDocumentSnap(snap: DocumentSnapshot): AdjFifoParsed {
+  if (!snap.exists()) {
+    return { error: "No se encontró el ajuste en inventario." };
+  }
+  const d = snap.data() as Record<string, unknown>;
+  const raw = Array.isArray(d.fifoAllocations)
+    ? (d.fifoAllocations as unknown[])
+    : [];
+  const fifoAllocations = raw.map((x) => {
+    const row = x as Record<string, unknown>;
+    return {
+      batchId: String(row.batchId ?? ""),
+      qty: Number(row.qty ?? 0),
+      unitCost: Number(row.unitCost ?? 0),
+      lineCost: Number(row.lineCost ?? 0),
+    };
+  });
+  return {
+    fifoAllocations,
+    cogsAmount: Number(d.cogsAmount ?? 0),
+    avgUnitCost: Number(d.avgUnitCost ?? 0),
+  };
+}
+
 type AdjType = "MERMA" | "ROBO";
 
 export default function EvolutivoInventarioPollo({
@@ -137,6 +196,7 @@ export default function EvolutivoInventarioPollo({
   // Manual movement form
   const [adjDate, setAdjDate] = useState(today());
   const [adjType, setAdjType] = useState<AdjType>("MERMA");
+  const [adjSaving, setAdjSaving] = useState(false);
   const [adjQty, setAdjQty] = useState<number>(0);
   const [adjDesc, setAdjDesc] = useState("");
   const [adjModalOpen, setAdjModalOpen] = useState(false);
@@ -152,6 +212,32 @@ export default function EvolutivoInventarioPollo({
     unknown
   > | null>(null);
   const [ingresoBatchLoading, setIngresoBatchLoading] = useState(false);
+
+  /** MERMA/ROBO: drawer con detalle fifoAllocations / cogsAmount */
+  const [mermaDrawerAdjId, setMermaDrawerAdjId] = useState<string | null>(null);
+  const [adjBatchMetaById, setAdjBatchMetaById] = useState<
+    Record<
+      string,
+      { orderName: string; productName: string; date: string }
+    >
+  >({});
+  const [adjFifoDetailById, setAdjFifoDetailById] = useState<
+    Record<
+      string,
+      | {
+          fifoAllocations: {
+            batchId: string;
+            qty: number;
+            unitCost: number;
+            lineCost: number;
+          }[];
+          cogsAmount: number;
+          avgUnitCost: number;
+        }
+      | { error: string }
+    >
+  >({});
+  const [adjFifoLoadingId, setAdjFifoLoadingId] = useState<string | null>(null);
 
   // =========================
   // 1) Cargar productos
@@ -296,6 +382,41 @@ export default function EvolutivoInventarioPollo({
         } catch (e) {
           // noop
         }
+
+        try {
+          const mermaIds = Array.from(
+            new Set(
+              (res.moves || [])
+                .filter(
+                  (m) =>
+                    (m.type === "MERMA" || m.type === "ROBO") && m.ref,
+                )
+                .map((m) => String(m.ref)),
+            ),
+          );
+          if (mermaIds.length) {
+            const entries = await Promise.all(
+              mermaIds.map(async (aid) => {
+                try {
+                  const snap = await getDoc(
+                    fsDoc(db, "inventory_adjustments_pollo", aid),
+                  );
+                  return [aid, parseAdjustmentDocumentSnap(snap)] as const;
+                } catch {
+                  return [
+                    aid,
+                    { error: "No se pudo cargar el detalle FIFO." },
+                  ] as const;
+                }
+              }),
+            );
+            const adjPartial: Record<string, AdjFifoParsed> =
+              Object.fromEntries(entries);
+            setAdjFifoDetailById((prev) => ({ ...prev, ...adjPartial }));
+          }
+        } catch {
+          /* noop */
+        }
       } catch (e) {
         console.error("Error product evolution:", e);
         setMoves([]);
@@ -344,6 +465,79 @@ export default function EvolutivoInventarioPollo({
       cancelled = true;
     };
   }, [ingresoBatchId]);
+
+  useEffect(() => {
+    if (!mermaDrawerAdjId) return;
+    const id = mermaDrawerAdjId;
+    if (adjFifoDetailById[id] !== undefined) return;
+
+    let cancelled = false;
+    setAdjFifoLoadingId(id);
+    (async () => {
+      try {
+        const snap = await getDoc(
+          fsDoc(db, "inventory_adjustments_pollo", id),
+        );
+        if (cancelled) return;
+        const parsed = parseAdjustmentDocumentSnap(snap);
+        setAdjFifoDetailById((prev) => ({ ...prev, [id]: parsed }));
+      } catch {
+        if (!cancelled) {
+          setAdjFifoDetailById((prev) => ({
+            ...prev,
+            [id]: { error: "No se pudo cargar el detalle FIFO." },
+          }));
+        }
+      } finally {
+        if (!cancelled) setAdjFifoLoadingId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mermaDrawerAdjId, adjFifoDetailById]);
+
+  useEffect(() => {
+    if (!mermaDrawerAdjId) return;
+    const det = adjFifoDetailById[mermaDrawerAdjId];
+    if (!det || "error" in det) return;
+    const ids = [
+      ...new Set(
+        det.fifoAllocations.map((a) => a.batchId).filter(Boolean),
+      ),
+    ];
+    let cancelled = false;
+    (async () => {
+      const next: Record<
+        string,
+        { orderName: string; productName: string; date: string }
+      > = {};
+      for (const bid of ids) {
+        if (cancelled) return;
+        try {
+          const s = await getDoc(fsDoc(db, "inventory_batches", bid));
+          if (!s.exists()) {
+            next[bid] = { orderName: "—", productName: "—", date: "—" };
+            continue;
+          }
+          const d = s.data() as Record<string, unknown>;
+          next[bid] = {
+            orderName: String(d.orderName ?? "").trim() || "—",
+            productName: String(d.productName ?? "").trim() || "—",
+            date: String(d.date ?? "").trim() || "—",
+          };
+        } catch {
+          next[bid] = { orderName: "—", productName: "—", date: "—" };
+        }
+      }
+      if (!cancelled) {
+        setAdjBatchMetaById((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mermaDrawerAdjId, adjFifoDetailById]);
 
   // Balance corrido (para la tabla del rango)
   const movesWithBalance = useMemo(() => {
@@ -517,46 +711,101 @@ export default function EvolutivoInventarioPollo({
     ];
   }, [products, productFilterQuery, selectedKey]);
 
+  const inventoryBatchesHref = useMemo(() => {
+    const pid = selected?.productId?.trim();
+    return pid
+      ? `../batches?productId=${encodeURIComponent(pid)}`
+      : "../batches";
+  }, [selected]);
+
+  const mermaDrawerTitle = useMemo(() => {
+    if (!mermaDrawerAdjId) return "";
+    const mm = (moves || []).find((x) => x.ref === mermaDrawerAdjId);
+    return mm
+      ? `${mm.type} · ${mm.date}`
+      : "Merma / pérdida";
+  }, [mermaDrawerAdjId, moves]);
+
+  const mermaDrawerBatchesHref = useMemo(() => {
+    const pid = selected?.productId?.trim();
+    if (!pid || !mermaDrawerAdjId) return inventoryBatchesHref;
+    const det = adjFifoDetailById[mermaDrawerAdjId];
+    if (!det || "error" in det || !det.fifoAllocations.length) {
+      return `../batches?productId=${encodeURIComponent(pid)}`;
+    }
+    const bid = det.fifoAllocations[0].batchId;
+    return `../batches?productId=${encodeURIComponent(pid)}&focusBatchId=${encodeURIComponent(bid)}`;
+  }, [
+    selected,
+    mermaDrawerAdjId,
+    adjFifoDetailById,
+    inventoryBatchesHref,
+  ]);
+
   // =========================
-  // Guardar ajuste manual
+  // Guardar ajuste: descuenta lotes por FIFO (igual que venta) + registro
   // =========================
-  const saveAdjustment = async () => {
+  const saveAdjustment = async (): Promise<boolean> => {
     if (!selected) {
       setToastMsg("⚠️ Seleccioná un producto primero.");
-      return;
+      return false;
     }
 
     const q = Number(adjQty || 0);
     if (q <= 0) {
       setToastMsg("⚠️ Ingresá una cantidad mayor a 0.");
-      return;
+      return false;
     }
     if (!adjDate) {
       setToastMsg("⚠️ Seleccioná fecha.");
-      return;
+      return false;
     }
 
     const user = auth.currentUser;
+    setAdjSaving(true);
+    try {
+      const alloc = await allocateFIFOAndUpdateBatches(
+        db,
+        selected.productName,
+        q,
+        false,
+      );
 
-    await addDoc(collection(db, "inventory_adjustments_pollo"), {
-      date: adjDate,
-      type: adjType, // MERMA / ROBO
-      qty: q,
-      productKey: selected.key,
-      productId: (selected as any).productId ?? null,
-      productName: selected.productName,
-      measurement: selected.measurement, // lb o unidad
-      description: adjDesc?.trim() || null,
-      createdAt: serverTimestamp(),
-      createdBy: user ? { uid: user.uid, email: user.email ?? null } : null,
-      periodFrom: from,
-      periodTo: to,
-    });
+      await addDoc(collection(db, "inventory_adjustments_pollo"), {
+        date: adjDate,
+        type: adjType,
+        qty: q,
+        productKey: selected.key,
+        productId: (selected as any).productId ?? null,
+        productName: selected.productName,
+        measurement: selected.measurement,
+        description: adjDesc?.trim() || null,
+        createdAt: serverTimestamp(),
+        createdBy: user ? { uid: user.uid, email: user.email ?? null } : null,
+        periodFrom: from,
+        periodTo: to,
+        fifoAllocations: alloc.allocations,
+        cogsAmount: alloc.cogsAmount,
+        avgUnitCost: alloc.avgUnitCost,
+      });
 
-    setAdjQty(0);
-    setAdjDesc("");
-    refresh();
-    setToastMsg("✅ Movimiento registrado.");
+      setAdjQty(0);
+      setAdjDesc("");
+      refresh();
+      setToastMsg(
+        `✅ Merma aplicada. Valor a costo retirado: C$ ${Number(alloc.cogsAmount || 0).toFixed(2)} (ver lotes en Inventario).`,
+      );
+      return true;
+    } catch (e) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : "No se pudo aplicar el ajuste (¿stock insuficiente?).";
+      setToastMsg(`❌ ${msg}`);
+      return false;
+    } finally {
+      setAdjSaving(false);
+    }
   };
 
   return (
@@ -828,18 +1077,27 @@ export default function EvolutivoInventarioPollo({
                   m.type === "INGRESO" && m.ref
                     ? () => setIngresoBatchId(String(m.ref))
                     : undefined;
+                const openMerma =
+                  (m.type === "MERMA" || m.type === "ROBO") && m.ref
+                    ? () => setMermaDrawerAdjId(String(m.ref))
+                    : undefined;
+                const cardInteractive = !!(openIngreso || openMerma);
+                const handleCardActivate = () => {
+                  if (openIngreso) openIngreso();
+                  else if (openMerma) openMerma();
+                };
                 return (
                   <div
                     key={`${m.ref || idx}-${m.date}`}
-                    role={openIngreso ? "button" : undefined}
-                    tabIndex={openIngreso ? 0 : undefined}
-                    onClick={openIngreso}
+                    role={cardInteractive ? "button" : undefined}
+                    tabIndex={cardInteractive ? 0 : undefined}
+                    onClick={cardInteractive ? handleCardActivate : undefined}
                     onKeyDown={
-                      openIngreso
+                      cardInteractive
                         ? (e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
-                              openIngreso();
+                              handleCardActivate();
                             }
                           }
                         : undefined
@@ -847,7 +1105,9 @@ export default function EvolutivoInventarioPollo({
                     className={`border rounded p-2 bg-white text-sm ${
                       openIngreso
                         ? "cursor-pointer hover:border-sky-300 hover:bg-sky-50/40"
-                        : ""
+                        : openMerma
+                          ? "cursor-pointer hover:border-rose-200 hover:bg-rose-50/30"
+                          : ""
                     }`}
                   >
                     <div className="flex justify-between items-start gap-2">
@@ -883,6 +1143,29 @@ export default function EvolutivoInventarioPollo({
                         Monto: C$ {total.toFixed(2)}
                       </div>
                     </div>
+                    {(m.type === "MERMA" || m.type === "ROBO") &&
+                    selected &&
+                    m.ref ? (
+                      <div
+                        className="mt-2 space-y-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <p className="text-[11px] text-rose-700/90">
+                          Tocá la tarjeta para ver el detalle FIFO (drawer).
+                        </p>
+                        <Link
+                          to={batchesHrefForMermaAdj(
+                            String(m.ref),
+                            (selected as { productId?: string }).productId,
+                            adjFifoDetailById,
+                            inventoryBatchesHref,
+                          )}
+                          className="inline-flex items-center rounded-full border border-green-600 bg-green-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-green-800 hover:bg-green-100"
+                        >
+                          Ver lotes (inventario)
+                        </Link>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })
@@ -1102,14 +1385,15 @@ export default function EvolutivoInventarioPollo({
                   <div className="flex items-end">
                     <Button
                       type="button"
+                      disabled={adjSaving}
                       onClick={async () => {
-                        await saveAdjustment();
-                        setAdjModalOpen(false);
+                        const ok = await saveAdjustment();
+                        if (ok) setAdjModalOpen(false);
                       }}
                       variant="primary"
                       className="w-full !rounded-lg text-sm"
                     >
-                      Guardar
+                      {adjSaving ? "Aplicando…" : "Guardar"}
                     </Button>
                   </div>
 
@@ -1125,6 +1409,15 @@ export default function EvolutivoInventarioPollo({
                     />
                   </div>
                 </div>
+
+                <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+                  Al guardar se <strong>descuenta el stock en los lotes</strong>{" "}
+                  (mismo criterio FIFO que una venta). En Firestore queda el
+                  detalle en <code className="text-[11px]">fifoAllocations</code>{" "}
+                  y <strong>cogsAmount</strong> = valor a costo de lo que sacaste
+                  (lo que habías facturado al proveedor y aún no vendías). No
+                  genera ingreso en caja.
+                </p>
 
                 <div className="mt-4 flex justify-end">
                   <Button
@@ -1157,94 +1450,126 @@ export default function EvolutivoInventarioPollo({
               <th className="border p-2">Precio</th>
               <th className="border p-2">Monto</th>
               <th className="border p-2">Balance (rango)</th>
+              <th className="border p-2">Inventario</th>
             </tr>
           </thead>
           <tbody>
             {!selected ? (
               <tr>
-                <td colSpan={8} className="p-4 text-center text-gray-500">
+                <td colSpan={9} className="p-4 text-center text-gray-500">
                   Seleccioná un producto para ver su evolutivo.
                 </td>
               </tr>
             ) : loading ? (
               <tr>
-                <td colSpan={8} className="p-4 text-center text-gray-500">
+                <td colSpan={9} className="p-4 text-center text-gray-500">
                   Cargando movimientos…
                 </td>
               </tr>
-            ) : movesWithBalance.length === 0 ? (
+            ) : displayedMoves.length === 0 ? (
               <tr>
-                <td colSpan={8} className="p-4 text-center text-gray-500">
+                <td colSpan={9} className="p-4 text-center text-gray-500">
                   No hay movimientos en el rango para este producto.
                 </td>
               </tr>
             ) : (
-              movesWithBalance.map((m, idx) => (
-                <tr
-                  key={`${m.ref || idx}-${m.date}`}
-                  className={`text-center ${
-                    m.type === "INGRESO" && m.ref
-                      ? "cursor-pointer hover:bg-sky-50/80"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    if (m.type === "INGRESO" && m.ref)
-                      setIngresoBatchId(String(m.ref));
-                  }}
-                >
-                  <td className="border p-1">{m.date}</td>
-                  <td className="border p-1">
-                    <div className="flex justify-center">
-                      <PolloChip variant={tipoMoveChipVariant(String(m.type))}>
-                        {m.type}
-                      </PolloChip>
-                    </div>
-                  </td>
-                  <td className="border p-1 text-left">{m.description}</td>
-                  <td className="border p-1">
-                    <span
-                      className={
-                        Number(m.qtyIn || 0) > 0
-                          ? "text-green-600 font-semibold"
-                          : "text-black"
-                      }
-                    >
-                      {qty3(m.qtyIn)}
-                    </span>
-                  </td>
-                  <td className="border p-1">
-                    <span
-                      className={
-                        Number(m.qtyOut || 0) > 0
-                          ? "text-red-600 font-semibold"
-                          : "text-black"
-                      }
-                    >
-                      {qty3(m.qtyOut)}
-                    </span>
-                  </td>
-                  <td className="border p-1 font-semibold text-black">
-                    {`C$ ${Number(
-                      salePrices[String(m.ref || "")] ??
-                        (m as any).price ??
-                        (m as any).unitPrice ??
-                        0,
-                    ).toFixed(2)}`}
-                  </td>
-                  <td className="border p-1 font-semibold text-black">
-                    {`C$ ${(
-                      Number(
+              displayedMoves.map((m, idx) => (
+                <React.Fragment key={`${m.ref || idx}-${m.date}`}>
+                  <tr
+                    className={`text-center ${
+                      m.type === "INGRESO" && m.ref
+                        ? "cursor-pointer hover:bg-sky-50/80"
+                        : (m.type === "MERMA" || m.type === "ROBO") && m.ref
+                          ? "cursor-pointer hover:bg-rose-50/35"
+                          : ""
+                    }`}
+                    onClick={() => {
+                      if (m.type === "INGRESO" && m.ref)
+                        setIngresoBatchId(String(m.ref));
+                      else if (
+                        (m.type === "MERMA" || m.type === "ROBO") &&
+                        m.ref
+                      )
+                        setMermaDrawerAdjId(String(m.ref));
+                    }}
+                  >
+                    <td className="border p-1">{m.date}</td>
+                    <td className="border p-1">
+                      <div className="flex justify-center">
+                        <PolloChip
+                          variant={tipoMoveChipVariant(String(m.type))}
+                        >
+                          {m.type}
+                        </PolloChip>
+                      </div>
+                    </td>
+                    <td className="border p-1 text-left">{m.description}</td>
+                    <td className="border p-1">
+                      <span
+                        className={
+                          Number(m.qtyIn || 0) > 0
+                            ? "text-green-600 font-semibold"
+                            : "text-black"
+                        }
+                      >
+                        {qty3(m.qtyIn)}
+                      </span>
+                    </td>
+                    <td className="border p-1">
+                      <span
+                        className={
+                          Number(m.qtyOut || 0) > 0
+                            ? "text-red-600 font-semibold"
+                            : "text-black"
+                        }
+                      >
+                        {qty3(m.qtyOut)}
+                      </span>
+                    </td>
+                    <td className="border p-1 font-semibold text-black">
+                      {`C$ ${Number(
                         salePrices[String(m.ref || "")] ??
                           (m as any).price ??
                           (m as any).unitPrice ??
                           0,
-                      ) * Number(m.qtyOut || 0)
-                    ).toFixed(2)}`}
-                  </td>
-                  <td className="border p-1 font-semibold">
-                    {qty3((m as any).balance)}
-                  </td>
-                </tr>
+                      ).toFixed(2)}`}
+                    </td>
+                    <td className="border p-1 font-semibold text-black">
+                      {`C$ ${(
+                        Number(
+                          salePrices[String(m.ref || "")] ??
+                            (m as any).price ??
+                            (m as any).unitPrice ??
+                            0,
+                        ) * Number(m.qtyOut || 0)
+                      ).toFixed(2)}`}
+                    </td>
+                    <td className="border p-1 font-semibold">
+                      {qty3((m as any).balance)}
+                    </td>
+                    <td
+                      className="border p-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {(m.type === "MERMA" || m.type === "ROBO") && m.ref ? (
+                        <Link
+                          to={batchesHrefForMermaAdj(
+                            String(m.ref),
+                            selected?.productId,
+                            adjFifoDetailById,
+                            inventoryBatchesHref,
+                          )}
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center rounded-full border border-green-600 bg-green-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green-800 hover:bg-green-100 whitespace-nowrap"
+                        >
+                          Lotes
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                </React.Fragment>
               ))
             )}
           </tbody>
@@ -1324,6 +1649,147 @@ export default function EvolutivoInventarioPollo({
             ]}
           />
         )}
+      </SlideOverDrawer>
+
+      <SlideOverDrawer
+        open={mermaDrawerAdjId !== null}
+        onClose={() => setMermaDrawerAdjId(null)}
+        title={mermaDrawerTitle}
+        subtitle={
+          selected
+            ? `${selected.productName} · ${unitLabel}`
+            : undefined
+        }
+        titleId="status-inv-merma-drawer-title"
+        panelMaxWidthClassName="max-w-2xl"
+        footer={
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end w-full">
+            <Link
+              to={mermaDrawerBatchesHref}
+              onClick={() => setMermaDrawerAdjId(null)}
+              className="inline-flex justify-center items-center rounded-xl border border-green-600 bg-green-50 px-4 py-2.5 text-sm font-semibold text-green-800 hover:bg-green-100"
+            >
+              Ir al lote (inventario)
+            </Link>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-xl shadow-none"
+              onClick={() => setMermaDrawerAdjId(null)}
+            >
+              Cerrar
+            </Button>
+          </div>
+        }
+      >
+        {!mermaDrawerAdjId ? null : adjFifoLoadingId === mermaDrawerAdjId ? (
+          <p className="text-sm text-gray-600">Cargando detalle FIFO…</p>
+        ) : (() => {
+            const det = adjFifoDetailById[mermaDrawerAdjId];
+            if (!det) {
+              return (
+                <p className="text-sm text-gray-500">Sin datos aún.</p>
+              );
+            }
+            if ("error" in det) {
+              return (
+                <p className="text-sm text-rose-700">{det.error}</p>
+              );
+            }
+            return (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Cada fila usa el <strong>precio de compra del lote</strong>{" "}
+                  (lo facturado al proveedor en ese ingreso), no un promedio del
+                  producto.
+                </p>
+                <div className="rounded-xl border border-rose-100 bg-rose-50/60 p-3 text-sm">
+                  <div className="font-semibold text-rose-900">
+                    Facturado a costo (Σ cantidad × precio costo del lote)
+                  </div>
+                  <div className="text-lg font-bold tabular-nums text-rose-950 mt-1">
+                    C$ {det.cogsAmount.toFixed(2)}
+                  </div>
+                  <p className="text-[11px] text-rose-800/80 mt-1">
+                    Coincide con el valor retirado del inventario (COGS de esta
+                    merma).
+                  </p>
+                </div>
+                <div className="overflow-x-auto rounded-lg border border-rose-200/80 bg-white">
+                  <table className="min-w-full text-xs sm:text-sm">
+                    <thead className="bg-rose-100/80 text-left">
+                      <tr>
+                        <th className="p-2 font-semibold">Nombre de lote</th>
+                        <th className="p-2 font-semibold">Fecha</th>
+                        <th className="p-2 font-semibold font-mono text-[10px]">
+                          Id
+                        </th>
+                        <th className="p-2 font-semibold text-right">
+                          Cantidad
+                        </th>
+                        <th className="p-2 font-semibold text-right">
+                          P. costo lote
+                        </th>
+                        <th className="p-2 font-semibold text-right">
+                          Facturado
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {det.fifoAllocations.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-2 text-gray-500">
+                            Sin líneas en fifoAllocations.
+                          </td>
+                        </tr>
+                      ) : (
+                        det.fifoAllocations.map((row, i) => {
+                          const meta = adjBatchMetaById[row.batchId];
+                          const lotTitle = meta
+                            ? `${meta.orderName} · ${meta.productName}`
+                            : row.batchId;
+                          return (
+                            <tr
+                              key={`${row.batchId}-${i}`}
+                              className="border-t border-rose-100"
+                            >
+                              <td className="p-2 text-gray-900 max-w-[10rem]">
+                                <span
+                                  className="line-clamp-2"
+                                  title={lotTitle}
+                                >
+                                  {lotTitle}
+                                </span>
+                              </td>
+                              <td className="p-2 tabular-nums whitespace-nowrap">
+                                {meta?.date ?? "—"}
+                              </td>
+                              <td
+                                className="p-2 font-mono text-[10px] text-slate-600 max-w-[5rem] truncate"
+                                title={row.batchId}
+                              >
+                                {row.batchId}
+                              </td>
+                              <td className="p-2 text-right tabular-nums">
+                                {qty3(row.qty)}
+                              </td>
+                              <td className="p-2 text-right tabular-nums">
+                                C$ {row.unitCost.toFixed(4)}
+                              </td>
+                              <td className="p-2 text-right tabular-nums font-medium">
+                                C$ {row.lineCost.toFixed(2)}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
       </SlideOverDrawer>
 
       {toastMsg && (

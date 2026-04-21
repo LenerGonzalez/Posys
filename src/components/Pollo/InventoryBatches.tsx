@@ -1,5 +1,6 @@
 // src/components/InventoryBatches.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { createPortal } from "react-dom";
 import {
   collection,
@@ -237,6 +238,119 @@ interface Batch {
   orderName?: string;
   /** Activo = vendible; Pendiente = no se debita en ventas */
   estadoStock: BatchStockStatus;
+
+  /** Opcional: snapshot al registrar corte de inventario (Firestore) */
+  cycleCutoffDate?: string;
+  cycleQtyAtClose?: number;
+  cycleQtyPostMerma?: number;
+}
+
+function batchCycleMermaLabels(b: Batch): {
+  created: string;
+  mermada: string;
+  atCycle: string;
+  postMerma: string;
+} {
+  const u = String(b.unit || "").toLowerCase().trim();
+  const isLb =
+    /(^|\s)(lb|lbs|libra|libras)(\s|$)/.test(u) || u === "lb";
+  if (isLb)
+    return {
+      created: "Libras creadas (ingreso del lote)",
+      mermada: "Libras mermadas",
+      atCycle: "Libras cerradas al ciclo",
+      postMerma: "Libras cerradas al ciclo (post-merma)",
+    };
+  if (u === "cajilla" || u === "cajillas")
+    return {
+      created: "Cajillas creadas (ingreso del lote)",
+      mermada: "Cajillas mermadas",
+      atCycle: "Cajillas cerradas al ciclo",
+      postMerma: "Cajillas cerradas al ciclo (post-merma)",
+    };
+  return {
+    created: "Unidades creadas (ingreso del lote)",
+    mermada: "Unidades mermadas",
+    atCycle: "Unidades cerradas al ciclo",
+    postMerma: "Unidades cerradas al ciclo (post-merma)",
+  };
+}
+
+function BatchLotTitleRow({
+  batch,
+  mermaQty,
+  onMermaClick,
+  showEstadoChip = true,
+}: {
+  batch: Batch;
+  mermaQty: number;
+  onMermaClick: () => void;
+  showEstadoChip?: boolean;
+}) {
+  const showMerma = mermaQty > 0.0005;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5 min-w-0">
+      <span className="truncate">{batch.productName}</span>
+      {showMerma ? (
+        <button
+          type="button"
+          className="shrink-0 rounded-full border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800 hover:bg-rose-100 cursor-pointer"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onMermaClick();
+          }}
+        >
+          Mermado
+        </button>
+      ) : null}
+      {showEstadoChip ? (
+        <span
+          className={`shrink-0 px-1.5 py-0.5 rounded-[6px] text-[10px] font-semibold ${groupStockBadgeClass(
+            batch.estadoStock === "ACTIVO" ? "activa" : "pendiente",
+          )}`}
+        >
+          {labelEstadoStock(batch.estadoStock)}
+        </span>
+      ) : null}
+      {batch.cycleCutoffDate ? (
+        <span className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-800 whitespace-nowrap">
+          Al ciclo: {batch.cycleCutoffDate}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Chip Mermado en tablas de listado de lotes (costo ponderado). */
+function WeightedLotMermaChip({
+  batchId,
+  allBatches,
+  mermaQtyByBatchId,
+  onOpen,
+}: {
+  batchId: string;
+  allBatches: Batch[];
+  mermaQtyByBatchId: Record<string, number>;
+  onOpen: (b: Batch) => void;
+}) {
+  const q = mermaQtyByBatchId[batchId] || 0;
+  if (q <= 0.0005) return null;
+  const b = allBatches.find((x) => x.id === batchId);
+  if (!b) return null;
+  return (
+    <button
+      type="button"
+      className="shrink-0 rounded-full border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800 hover:bg-rose-100"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onOpen(b);
+      }}
+    >
+      Mermado
+    </button>
+  );
 }
 
 type GroupRow = {
@@ -264,6 +378,49 @@ type GroupRow = {
 /** El pedido tiene al menos una línea con existencia &gt; 0 (lb, un o cajilla). */
 function groupHasStockRemaining(g: GroupRow): boolean {
   return g.lbsRem > 0 || g.udsRem > 0 || g.cajillasRem > 0;
+}
+
+/** Chips Mermado + Al ciclo en fila de pedido (listado principal). */
+function groupMermaAndCycleChips(
+  g: GroupRow,
+  mermaQtyByBatchId: Record<string, number>,
+  onMermaClick: (b: Batch) => void,
+): React.ReactNode {
+  const firstMerma = g.items.find(
+    (it) => (mermaQtyByBatchId[it.id] || 0) > 0.0005,
+  );
+  const cycleDates = [
+    ...new Set(
+      g.items
+        .map((it) => it.cycleCutoffDate?.trim())
+        .filter((x): x is string => Boolean(x)),
+    ),
+  ].sort();
+  return (
+    <>
+      {firstMerma ? (
+        <button
+          type="button"
+          className="shrink-0 rounded-full border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800 hover:bg-rose-100"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onMermaClick(firstMerma);
+          }}
+        >
+          Mermado
+        </button>
+      ) : null}
+      {cycleDates.map((d) => (
+        <span
+          key={d}
+          className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-800 whitespace-nowrap"
+        >
+          Al ciclo: {d}
+        </span>
+      ))}
+    </>
+  );
 }
 
 // ===== helpers =====
@@ -310,6 +467,8 @@ export default function InventoryBatches({
   const [toDate, setToDate] = useState<string>(
     format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
+
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // 🔵 Filtro por producto
   const [productFilterId, setProductFilterId] = useState<string>("");
@@ -406,6 +565,11 @@ export default function InventoryBatches({
     groupId: string;
     rect: DOMRect;
   } | null>(null);
+  /** Suma de qty FIFO en ajustes MERMA/ROBO por batchId */
+  const [mermaQtyByBatchId, setMermaQtyByBatchId] = useState<
+    Record<string, number>
+  >({});
+  const [mermaModalBatch, setMermaModalBatch] = useState<Batch | null>(null);
   const [mobileTypeOpen, setMobileTypeOpen] = useState<Record<string, boolean>>(
     {},
   );
@@ -544,6 +708,17 @@ export default function InventoryBatches({
           batchGroupId: b.batchGroupId,
           orderName: b.orderName,
           estadoStock: parseBatchStockStatus(b.estadoStock),
+
+          cycleCutoffDate:
+            b.cycleCutoffDate != null ? String(b.cycleCutoffDate) : undefined,
+          cycleQtyAtClose:
+            b.cycleQtyAtClose != null
+              ? roundQty(Number(b.cycleQtyAtClose))
+              : undefined,
+          cycleQtyPostMerma:
+            b.cycleQtyPostMerma != null
+              ? roundQty(Number(b.cycleQtyPostMerma))
+              : undefined,
         });
       });
 
@@ -552,12 +727,86 @@ export default function InventoryBatches({
     })();
   }, [refreshKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ids = [
+        ...new Set(
+          batches
+            .map((b) => String(b.productId || "").trim())
+            .filter(Boolean),
+        ),
+      ];
+      const map: Record<string, number> = {};
+      if (ids.length === 0) {
+        if (!cancelled) setMermaQtyByBatchId({});
+        return;
+      }
+      const CHUNK = 10;
+      try {
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          const slice = ids.slice(i, i + CHUNK);
+          const qa = query(
+            collection(db, "inventory_adjustments_pollo"),
+            where("productId", "in", slice),
+          );
+          const snap = await getDocs(qa);
+          if (cancelled) return;
+          snap.forEach((d) => {
+            const a = d.data() as {
+              fifoAllocations?: { batchId?: string; qty?: number }[];
+            };
+            const allocs = Array.isArray(a.fifoAllocations)
+              ? a.fifoAllocations
+              : [];
+            for (const row of allocs) {
+              const bid = String(row.batchId || "");
+              if (!bid) continue;
+              map[bid] = roundQty(
+                (map[bid] || 0) + Number(row.qty || 0),
+              );
+            }
+          });
+        }
+        if (!cancelled) setMermaQtyByBatchId(map);
+      } catch (e) {
+        console.error("mermaQtyByBatchId:", e);
+        if (!cancelled) setMermaQtyByBatchId({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [batches, refreshKey]);
+
+  const setProductFilterFromUi = useCallback(
+    (id: string) => {
+      setProductFilterId(id);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set("productId", id);
+          else next.delete("productId");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  /** Enlace desde Evolutivo (merma): ?productId= */
+  useEffect(() => {
+    const pid = searchParams.get("productId");
+    if (pid?.trim()) setProductFilterId(pid.trim());
+  }, [searchParams]);
+
   /** El filtro de producto solo lista activos; limpiar si quedó un inactivo seleccionado. */
   useEffect(() => {
     if (!productFilterId) return;
     const p = products.find((x) => x.id === productFilterId);
-    if (!p || p.active === false) setProductFilterId("");
-  }, [products, productFilterId]);
+    if (!p || p.active === false) setProductFilterFromUi("");
+  }, [products, productFilterId, setProductFilterFromUi]);
 
   // ===== Filtro en memoria =====
   const filteredBatches = useMemo(() => {
@@ -965,6 +1214,44 @@ export default function InventoryBatches({
     });
     return Array.from(map.entries()).map(([type, items]) => ({ type, items }));
   }, [groupedRowsMobile]);
+
+  const focusBatchIdParam = searchParams.get("focusBatchId")?.trim() ?? "";
+  const focusBatchHandledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!focusBatchIdParam) {
+      focusBatchHandledRef.current = null;
+      return;
+    }
+    if (!groupedRows.length || loading) return;
+    const g = groupedRows.find((gr) =>
+      gr.items.some((it) => it.id === focusBatchIdParam),
+    );
+    if (!g) return;
+    if (focusBatchHandledRef.current === focusBatchIdParam) return;
+    focusBatchHandledRef.current = focusBatchIdParam;
+
+    const isMd =
+      typeof window !== "undefined" &&
+      window.matchMedia("(min-width: 768px)").matches;
+    if (isMd) setDesktopDrawerGroup(g);
+    else setExpandedGroupId(g.groupId);
+
+    const t = window.setTimeout(() => {
+      document
+        .getElementById(`inv-focus-batch-${focusBatchIdParam}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("focusBatchId");
+          return next;
+        },
+        { replace: true },
+      );
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [focusBatchIdParam, groupedRows, loading, setSearchParams]);
 
   /** Productos que se pueden agregar a un pedido nuevo (excluye inactivos). */
   const productsOrderable = useMemo(
@@ -1939,7 +2226,7 @@ export default function InventoryBatches({
           onClick={() => {
             setFromDate("");
             setToDate("");
-            setProductFilterId("");
+            setProductFilterFromUi("");
           }}
         >
           Quitar filtro
@@ -1962,6 +2249,12 @@ export default function InventoryBatches({
             <FiInfo size={22} className="shrink-0" aria-hidden />
           </Button>
           <RefreshButton onClick={() => refresh()} loading={loading} />
+          <Link
+            to={`../inventoryCutoffs${productFilterId ? `?productId=${encodeURIComponent(productFilterId)}` : ""}`}
+            className="inline-flex h-10 items-center rounded-xl border border-green-700 bg-green-600 px-3 text-xs font-bold uppercase tracking-wide text-white shadow-sm hover:bg-green-700 hover:border-green-800 transition-colors shrink-0"
+          >
+            Cortes
+          </Link>
           <ActionMenuTrigger
             className="!h-10 !w-10 shrink-0"
             title="Más acciones"
@@ -2464,8 +2757,20 @@ export default function InventoryBatches({
                                       <td className="p-2 tabular-nums">
                                         {lot.date || "—"}
                                       </td>
-                                      <td className="p-2 max-w-[140px] truncate" title={lot.orderName}>
-                                        {lot.orderName || "—"}
+                                      <td className="p-2 max-w-[200px]" title={lot.orderName}>
+                                        <div className="flex flex-wrap items-center gap-1">
+                                          <span className="truncate">
+                                            {lot.orderName || "—"}
+                                          </span>
+                                          <WeightedLotMermaChip
+                                            batchId={lot.batchId}
+                                            allBatches={batches}
+                                            mermaQtyByBatchId={
+                                              mermaQtyByBatchId
+                                            }
+                                            onOpen={setMermaModalBatch}
+                                          />
+                                        </div>
                                       </td>
                                       <td
                                         className="p-2 font-mono text-[11px] text-slate-600 max-w-[120px] truncate"
@@ -2661,18 +2966,30 @@ export default function InventoryBatches({
                                           className={`border-t border-slate-100 ${idx === 0 ? "bg-amber-50/40" : ""}`}
                                         >
                                           <td className="p-2 tabular-nums">
-                                            {lot.date || "—"}
-                                            {idx === 0 && r.lotCount > 1 && (
-                                              <span className="ml-1 text-[10px] text-amber-700 font-semibold">
-                                                MÁS VIEJO
+                                            <div className="flex flex-wrap items-center gap-1 justify-end sm:justify-start">
+                                              <span>
+                                                {lot.date || "—"}
+                                                {idx === 0 && r.lotCount > 1 && (
+                                                  <span className="ml-1 text-[10px] text-amber-700 font-semibold">
+                                                    MÁS VIEJO
+                                                  </span>
+                                                )}
+                                                {idx === r.lotCount - 1 &&
+                                                  r.lotCount > 1 && (
+                                                    <span className="ml-1 text-[10px] text-blue-700 font-semibold">
+                                                      MÁS NUEVO
+                                                    </span>
+                                                  )}
                                               </span>
-                                            )}
-                                            {idx === r.lotCount - 1 &&
-                                              r.lotCount > 1 && (
-                                                <span className="ml-1 text-[10px] text-blue-700 font-semibold">
-                                                  MÁS NUEVO
-                                                </span>
-                                              )}
+                                              <WeightedLotMermaChip
+                                                batchId={lot.batchId}
+                                                allBatches={batches}
+                                                mermaQtyByBatchId={
+                                                  mermaQtyByBatchId
+                                                }
+                                                onOpen={setMermaModalBatch}
+                                              />
+                                            </div>
                                           </td>
                                           <td className="p-2 text-right tabular-nums">
                                             {lot.quantity.toFixed(3)}
@@ -2790,7 +3107,7 @@ export default function InventoryBatches({
           <MobileHtmlSelect
             label="Filtrar por producto"
             value={productFilterId}
-            onChange={setProductFilterId}
+            onChange={setProductFilterFromUi}
             options={productFilterSelectOptions}
             sheetTitle="Filtrar por producto"
             triggerIcon="menu"
@@ -2915,6 +3232,16 @@ export default function InventoryBatches({
                               >
                                 {groupStockBadgeLabel(g.stockStatusSummary)}
                               </span>
+                              <div
+                                className="flex flex-wrap justify-end gap-1 mt-1 max-w-[14rem]"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {groupMermaAndCycleChips(
+                                  g,
+                                  mermaQtyByBatchId,
+                                  setMermaModalBatch,
+                                )}
+                              </div>
                             </div>
                           </div>
                           <div className="pb-4 p-4 flex items-start justify-between gap-1 cursor-pointer">
@@ -2991,23 +3318,19 @@ export default function InventoryBatches({
                                       {g.items.map((item) => (
                                         <div
                                           key={item.id}
-                                          className="flex items-center text-xs justify-between gap-2"
+                                          id={`inv-focus-batch-${item.id}`}
+                                          className="flex items-center text-xs justify-between gap-2 scroll-mt-24"
                                         >
-                                          <div className="font-semibold text-gray-800 truncate flex items-center gap-1.5 min-w-0">
-                                            <span className="truncate">
-                                              {item.productName}
-                                            </span>
-                                            <span
-                                              className={`shrink-0 px-1.5 py-0.5 rounded-[6px] text-[10px] font-semibold ${groupStockBadgeClass(
-                                                item.estadoStock === "ACTIVO"
-                                                  ? "activa"
-                                                  : "pendiente",
-                                              )}`}
-                                            >
-                                              {labelEstadoStock(
-                                                item.estadoStock,
-                                              )}
-                                            </span>
+                                          <div className="font-semibold text-gray-800 min-w-0">
+                                            <BatchLotTitleRow
+                                              batch={item}
+                                              mermaQty={
+                                                mermaQtyByBatchId[item.id] || 0
+                                              }
+                                              onMermaClick={() =>
+                                                setMermaModalBatch(item)
+                                              }
+                                            />
                                           </div>
                                           <div className="text-gray-600 text-right">
                                             <div>
@@ -3076,7 +3399,7 @@ export default function InventoryBatches({
                 <MobileHtmlSelect
                   label="Filtrar por producto"
                   value={productFilterId}
-                  onChange={setProductFilterId}
+                  onChange={setProductFilterFromUi}
                   options={productFilterSelectOptions}
                   sheetTitle="Filtrar por producto"
                   triggerIcon="menu"
@@ -3134,6 +3457,12 @@ export default function InventoryBatches({
                 return (
                 <tr
                   key={g.groupId}
+                  id={
+                    focusBatchIdParam &&
+                    g.items.some((it) => it.id === focusBatchIdParam)
+                      ? `inv-focus-batch-${focusBatchIdParam}`
+                      : undefined
+                  }
                   role="button"
                   tabIndex={0}
                   className="hover:bg-gray-50 cursor-pointer transition-colors"
@@ -3161,6 +3490,11 @@ export default function InventoryBatches({
                       >
                         {groupStockBadgeLabel(g.stockStatusSummary)}
                       </span>
+                      {groupMermaAndCycleChips(
+                        g,
+                        mermaQtyByBatchId,
+                        setMermaModalBatch,
+                      )}
                     </div>
                     <div
                       className="text-xs text-gray-500 truncate mt-0.5"
@@ -3370,7 +3704,13 @@ export default function InventoryBatches({
                 return (
                   <DrawerDetailDlCard
                     key={b.id}
-                    title={b.productName}
+                    title={
+                      <BatchLotTitleRow
+                        batch={b}
+                        mermaQty={mermaQtyByBatchId[b.id] || 0}
+                        onMermaClick={() => setMermaModalBatch(b)}
+                      />
+                    }
                     rows={[
                       {
                         label: "Unidad",
@@ -3428,6 +3768,98 @@ export default function InventoryBatches({
       </SlideOverDrawer>
 
       {msg && <Toast message={msg} onClose={() => setMsg("")} />}
+
+      {mermaModalBatch &&
+        createPortal(
+          <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+            <button
+              type="button"
+              className="absolute inset-0 z-0 min-h-full w-full cursor-default border-0 bg-black/45 p-0 shadow-none hover:bg-black/50"
+              aria-label="Cerrar"
+              onClick={() => setMermaModalBatch(null)}
+            />
+            <div
+              className="relative z-10 bg-white rounded-2xl shadow-xl max-w-md w-full p-5 sm:p-6 border border-gray-200 max-h-[90vh] overflow-y-auto"
+              role="dialog"
+              aria-labelledby="merma-modal-title"
+            >
+              <h3
+                id="merma-modal-title"
+                className="text-lg font-bold text-gray-900 pr-8"
+              >
+                Detalle de merma (lote)
+              </h3>
+              <p
+                className="text-xs text-gray-500 font-mono truncate mt-1"
+                title={mermaModalBatch.id}
+              >
+                {mermaModalBatch.id}
+              </p>
+              {(() => {
+                const labels = batchCycleMermaLabels(mermaModalBatch);
+                const mq =
+                  mermaQtyByBatchId[mermaModalBatch.id] || 0;
+                const cyc = mermaModalBatch.cycleCutoffDate?.trim();
+                const qClose = mermaModalBatch.cycleQtyAtClose;
+                const qPost = mermaModalBatch.cycleQtyPostMerma;
+                return (
+                  <dl className="mt-4 space-y-3 text-sm text-gray-800">
+                    <div>
+                      <dt className="text-[11px] font-medium text-gray-500">
+                        {labels.created}
+                      </dt>
+                      <dd className="font-semibold tabular-nums">
+                        {mermaModalBatch.quantity.toFixed(3)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] font-medium text-gray-500">
+                        {labels.mermada}
+                      </dt>
+                      <dd className="font-semibold tabular-nums text-rose-800">
+                        {mq.toFixed(3)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] font-medium text-gray-500">
+                        Cierre de ciclo
+                      </dt>
+                      <dd className="font-medium">
+                        {cyc || "No registrado"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] font-medium text-gray-500">
+                        {labels.atCycle}
+                      </dt>
+                      <dd className="font-semibold tabular-nums">
+                        {qClose != null ? qClose.toFixed(3) : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] font-medium text-gray-500">
+                        {labels.postMerma}
+                      </dt>
+                      <dd className="font-semibold tabular-nums">
+                        {qPost != null ? qPost.toFixed(3) : "—"}
+                      </dd>
+                    </div>
+                  </dl>
+                );
+              })()}
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                className="mt-6 w-full rounded-xl shadow-none"
+                onClick={() => setMermaModalBatch(null)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          </div>,
+          document.body,
+        )}
 
       {ponderadoInfoOpen &&
         createPortal(
@@ -4326,8 +4758,13 @@ export default function InventoryBatches({
                           key={b.id}
                           className="text-center whitespace-nowrap"
                         >
-                          <td className="p-2 border text-left">
-                            {b.productName}
+                          <td className="p-2 border text-left whitespace-normal max-w-[14rem]">
+                            <BatchLotTitleRow
+                              batch={b}
+                              mermaQty={mermaQtyByBatchId[b.id] || 0}
+                              onMermaClick={() => setMermaModalBatch(b)}
+                              showEstadoChip={false}
+                            />
                           </td>
                           <td className="p-2 border">
                             {(b.unit || "").toUpperCase()}

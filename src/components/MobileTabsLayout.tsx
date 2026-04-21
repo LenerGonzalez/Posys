@@ -753,6 +753,7 @@ export default function MobileTabsLayout({
     (t) =>
       t.to.includes("salesV2") ||
       t.to.includes("batches") ||
+      t.to.includes("inventoryCutoffs") ||
       t.to.includes("customersPollo") ||
       t.to.includes("transactionsPollo") ||
       t.to.includes("bills"),

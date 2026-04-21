@@ -2376,19 +2376,36 @@ export default function CierreVentas({
               </>
             )}
             {rowActionMenu.sale.status === "PROCESADA" && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
-                onClick={() => {
-                  const id = rowActionMenu.sale.id;
-                  setRowActionMenu(null);
-                  handleRevert(id);
-                }}
-              >
-                Revertir a flotante
-              </Button>
+              <>
+                {canEditSale && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
+                    onClick={() => {
+                      openEdit(rowActionMenu.sale);
+                    }}
+                  >
+                    Editar venta
+                  </Button>
+                )}
+                {isAdmin && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal !text-red-700 hover:!bg-red-50"
+                    onClick={() => {
+                      const id = rowActionMenu.sale.id;
+                      setRowActionMenu(null);
+                      handleRevert(id);
+                    }}
+                  >
+                    Revertir a flotante
+                  </Button>
+                )}
+              </>
             )}
           </div>
         )}
