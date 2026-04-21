@@ -379,8 +379,8 @@ export default function InventoryBatches({
     setExpandedGroupId((prev) => (prev === groupId ? null : groupId));
 
   // estado para KPIs colapsable
-  /** Panel de KPIs (Resumen / Finanzas / Cobros): visible por defecto. */
-  const [kpisExpanded, setKpisExpanded] = useState<boolean>(true);
+  /** Panel de KPIs (Resumen / Finanzas / Cobros): colapsado por defecto. */
+  const [kpisExpanded, setKpisExpanded] = useState<boolean>(false);
 
   type AvailabilityFilter = "all" | "with" | "without";
   const [availabilityFilter, setAvailabilityFilter] =
@@ -394,10 +394,10 @@ export default function InventoryBatches({
   const [salePonderadoDetailKey, setSalePonderadoDetailKey] = useState<
     string | null
   >(null);
-  /** Paneles de costo/venta ponderados: visibles por defecto. */
+  /** Paneles de costo/venta ponderados: colapsados por defecto. */
   const [weightedCostPanelExpanded, setWeightedCostPanelExpanded] =
-    useState(true);
-  const [saleVsCostPanelExpanded, setSaleVsCostPanelExpanded] = useState(true);
+    useState(false);
+  const [saleVsCostPanelExpanded, setSaleVsCostPanelExpanded] = useState(false);
   /** Menú ⋮ junto a Refrescar (exportar / crear lote). */
   const [mainToolsMenuRect, setMainToolsMenuRect] =
     useState<DOMRect | null>(null);
@@ -551,6 +551,13 @@ export default function InventoryBatches({
       setLoading(false);
     })();
   }, [refreshKey]);
+
+  /** El filtro de producto solo lista activos; limpiar si quedó un inactivo seleccionado. */
+  useEffect(() => {
+    if (!productFilterId) return;
+    const p = products.find((x) => x.id === productFilterId);
+    if (!p || p.active === false) setProductFilterId("");
+  }, [products, productFilterId]);
 
   // ===== Filtro en memoria =====
   const filteredBatches = useMemo(() => {
@@ -981,11 +988,12 @@ export default function InventoryBatches({
 
   const productFilterSelectOptions = useMemo(() => {
     const { map, todosExistLine } = existenciasPeriodoPorProducto;
+    const activos = products.filter((p) => p.active !== false);
     return [
       { value: "", label: `Todos (exist. ${todosExistLine})` },
-      ...products.map((p) => ({
+      ...activos.map((p) => ({
         value: p.id,
-        label: `${p.name}${p.active === false ? " (inactivo)" : ""} ${p.price ? `(${money(p.price)})` : ""} — existencia: ${fmtExistRemQty(map.get(p.id) ?? 0)}`,
+        label: `${p.name} ${p.price ? `(${money(p.price)})` : ""} — existencia: ${fmtExistRemQty(map.get(p.id) ?? 0)}`,
       })),
     ];
   }, [products, existenciasPeriodoPorProducto]);
