@@ -2262,7 +2262,14 @@ export default function SalesCandiesPOS({
 
   // UI
   return (
-    <div className="max-w-6xl mx-auto">
+    <div
+      className={
+        "w-full min-w-0 md:max-w-6xl md:mx-auto " +
+        "max-md:max-w-[100vw] max-md:w-screen max-md:ml-[calc(50%-50vw)] max-md:mr-[calc(50%-50vw)] " +
+        "max-md:box-border max-md:overflow-x-hidden max-md:-mt-3 max-md:min-h-[calc(100dvh-5.75rem)] " +
+        "max-md:bg-white max-md:px-4 max-md:pt-4 max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      }
+    >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4 pb-4 border-b border-slate-100">
         <div>
           <h2 className="text-xl sm:text-2xl font-semibold text-slate-900 tracking-tight">
@@ -2284,7 +2291,7 @@ export default function SalesCandiesPOS({
 
       <form
         onSubmit={saveSale}
-        className="mb-6 w-full bg-white rounded-xl border border-slate-200/90 shadow-sm p-4 sm:p-6 md:p-8"
+        className="mb-6 w-full bg-white rounded-xl border border-slate-200/90 shadow-sm p-4 sm:p-6 md:p-8 max-md:rounded-none max-md:border-0 max-md:shadow-none max-md:bg-transparent max-md:p-0 max-md:mb-3"
       >
         {/* ===================== WEB (NO CAMBIAR) ===================== */}
         <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-4">

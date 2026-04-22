@@ -25,7 +25,15 @@ import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
 import Toast from "../../components/common/Toast";
 import { ImageWithFallback } from "../../components/common/ImageWithFallback";
 import useManualRefresh from "../../hooks/useManualRefresh";
-import { Calendar, CreditCard, Search, Trash2, Wallet } from "lucide-react";
+import {
+  Calendar,
+  CreditCard,
+  Loader2,
+  Save,
+  Search,
+  Trash2,
+  Wallet,
+} from "lucide-react";
 import { resolveProductImageSrc } from "./figmaSalePlaceholderImages";
 
 // --- FIX RÁPIDO: actualizar productId en lotes por NOMBRE (usar solo si hay desfasados)
@@ -576,7 +584,7 @@ export default function SaleForm({
     setSelectedProductId("");
   };
 
-  // Quitar producto
+  // Quitar producto (tras confirmar en diálogo)
   const removeItem = (productId: string) => {
     setItems((prev) => prev.filter((it) => it.productId !== productId));
   };
@@ -752,6 +760,9 @@ export default function SaleForm({
     return () => mq.removeEventListener?.("change", update);
   }, []);
 
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const [confirmSaveOpen, setConfirmSaveOpen] = useState(false);
+
   // ===== Cargar clientes (Pollo) + saldo desde CxC =====
   useEffect(() => {
     loadCustomers();
@@ -795,6 +806,12 @@ export default function SaleForm({
 
   const missingContadoClient = clientType === "CONTADO" && !clientName.trim();
 
+  const openSaveConfirm = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (saving || items.length === 0 || missingContadoClient) return;
+    setConfirmSaveOpen(true);
+  };
+
   // Validación rápida
   const validate = async (): Promise<string | null> => {
     if (items.length === 0) return "Agrega al menos un producto.";
@@ -822,9 +839,9 @@ export default function SaleForm({
     return null;
   };
 
-  // Guardar venta (multi-ítem)
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Guardar venta (multi-ítem) — se ejecuta tras confirmar en el diálogo
+  const executeSubmit = async () => {
+    setConfirmSaveOpen(false);
     setMessage("");
 
     const err = await validate();
@@ -1095,16 +1112,127 @@ export default function SaleForm({
   const webFigmaSelectBtn =
     "w-full border-2 border-gray-300 rounded-lg px-3 py-2.5 text-sm text-left flex items-center justify-between gap-2 bg-white hover:bg-blue-50/60 focus:outline-none focus:ring-2 focus:ring-blue-500";
 
-  if (isMobile) {
-    return (
-      <div className="w-full max-w-lg mx-auto p-3 overflow-x-hidden min-w-0">
-        <div className="bg-white rounded-xl border border-slate-200/90 shadow-sm p-4 space-y-4 min-w-0 max-w-full">
+  const confirmDialogClass =
+    "fixed inset-0 z-[400] flex items-end justify-center sm:items-center p-4 bg-slate-900/50 backdrop-blur-[2px]";
+  const confirmCardClass =
+    "w-full max-w-sm rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xl shadow-slate-900/10";
+
+  /** Ancho a todo el viewport (rompe el padding del <main> sin depender del ancho del padre; útil también en /salesV2). */
+  const mobilePageShell =
+      "min-w-0 max-w-[100vw] w-screen box-border overflow-x-hidden " +
+      "ml-[calc(50%-50vw)] mr-[calc(50%-50vw)] " +
+      "-mt-3 " +
+      "min-h-[calc(100dvh-5.75rem)] sm:min-h-0 " +
+      "bg-white " +
+      "px-4 pt-4 " +
+      "pb-[max(0.5rem,env(safe-area-inset-bottom))] " +
+      "space-y-4";
+
+  const confirmPortals = (
+    <>
+      {confirmRemoveId ? (
+        <div
+          className={confirmDialogClass}
+          role="presentation"
+          onClick={() => setConfirmRemoveId(null)}
+        >
+          <div
+            className={confirmCardClass}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-remove-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="confirm-remove-title"
+              className="text-base font-semibold text-slate-900"
+            >
+              Confirmar
+            </h2>
+            <p className="mt-2 text-sm text-slate-600 leading-relaxed">
+              ¿Estás seguro de eliminar el producto del carrito?
+            </p>
+            <div className="mt-5 flex gap-2 justify-end">
+              <Button
+                type="button"
+                variant="secondary"
+                className="!rounded-xl"
+                onClick={() => setConfirmRemoveId(null)}
+              >
+                NO
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                className="!rounded-xl !bg-red-600 hover:!bg-red-700"
+                onClick={() => {
+                  if (confirmRemoveId) removeItem(confirmRemoveId);
+                  setConfirmRemoveId(null);
+                }}
+              >
+                Sí
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {confirmSaveOpen ? (
+        <div
+          className={confirmDialogClass}
+          role="presentation"
+          onClick={() => setConfirmSaveOpen(false)}
+        >
+          <div
+            className={confirmCardClass}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-save-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="confirm-save-title"
+              className="text-base font-semibold text-slate-900"
+            >
+              Confirmar
+            </h2>
+            <p className="mt-2 text-sm text-slate-600 leading-relaxed">
+              ¿Está seguro de guardar la venta?
+            </p>
+            <div className="mt-5 flex gap-2 justify-end">
+              <Button
+                type="button"
+                variant="secondary"
+                className="!rounded-xl"
+                onClick={() => setConfirmSaveOpen(false)}
+              >
+                NO
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                className="!rounded-xl"
+                onClick={() => void executeSubmit()}
+                disabled={saving}
+              >
+                Sí
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+
+  return (
+    <>
+      {isMobile ? (
+      <div className={mobilePageShell}>
           <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
             <div>
               <h2 className="font-semibold text-lg text-slate-900 tracking-tight">
-                Registrar venta
+                Venta
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">Pollo — venta en mostrador</p>
+              <p className="text-xs text-slate-500 mt-0.5">Registre su venta</p>
             </div>
             <input
               type="date"
@@ -1115,6 +1243,21 @@ export default function SaleForm({
               aria-label="Fecha de la venta"
             />
           </div>
+          {missingContadoClient && (
+            <div
+              role="alert"
+              className="text-xs text-amber-900 bg-amber-50 border border-amber-200/80 rounded-lg p-3 flex gap-2 items-start"
+            >
+              <span className="shrink-0" aria-hidden>
+                ⚠️
+              </span>
+              <span>Nombre Cliente requerido.</span>
+            </div>
+          )}
+
+          {message && (
+            <Toast message={message} onClose={() => setMessage("")} />
+          )}
           <MobileHtmlSelect
             label="Tipo de cliente"
             value={clientType}
@@ -1128,13 +1271,13 @@ export default function SaleForm({
           {clientType === "CONTADO" ? (
             <div className="space-y-1.5">
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Cliente (Contado)
+                Cliente (Debe ingresar un nombre)
               </label>
               <input
                 className={inpBase}
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
-                placeholder="Ej: Cliente Mostrador"
+                placeholder="Ej: Nombre del cliente"
               />
             </div>
           ) : (
@@ -1400,29 +1543,29 @@ export default function SaleForm({
             )}
 
           <div className="flex gap-2 items-stretch w-full min-w-0">
-            <div className="flex-1 rounded-lg border border-slate-200 bg-gradient-to-br from-slate-50 to-white px-2.5 py-1.5 shadow-sm">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px] leading-tight text-slate-600">
+            <div className="flex-1 rounded-lg border border-green-300/90 bg-gradient-to-r from-green-50/90 to-green-100/70 px-2.5 py-1.5 shadow-sm">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px] leading-tight text-green-900/85">
                 <div className="flex items-baseline gap-1">
-                  <span className="font-semibold uppercase tracking-wide text-slate-500">
+                  <span className="font-semibold uppercase tracking-wide text-green-800/90">
                     Monto
                   </span>
-                  <span className="tabular-nums font-semibold text-slate-900 text-sm">
+                  <span className="tabular-nums font-semibold text-green-950 text-sm">
                     C$ {amountCharged.toFixed(2)}
                   </span>
                 </div>
                 <div className="flex items-baseline gap-1">
-                  <span className="font-semibold uppercase tracking-wide text-slate-500">
+                  <span className="font-semibold uppercase tracking-wide text-green-800/90">
                     Lb
                   </span>
-                  <span className="tabular-nums font-medium text-slate-800">
+                  <span className="tabular-nums font-medium text-green-950">
                     {qty3(cartQtyTotals.librasTotal)}
                   </span>
                 </div>
                 <div className="flex items-baseline gap-1">
-                  <span className="font-semibold uppercase tracking-wide text-slate-500">
+                  <span className="font-semibold uppercase tracking-wide text-green-800/90">
                     Unid.
                   </span>
-                  <span className="tabular-nums font-medium text-slate-800">
+                  <span className="tabular-nums font-medium text-green-950">
                     {cartQtyTotals.unidadesTotal}
                   </span>
                 </div>
@@ -1431,11 +1574,17 @@ export default function SaleForm({
             <Button
               type="button"
               variant="primary"
-              onClick={handleSubmit as any}
+              onClick={openSaveConfirm}
               disabled={items.length === 0 || saving || missingContadoClient}
-              className="shrink-0 self-stretch px-4 !rounded-lg !text-xs font-semibold min-w-[6rem] flex items-center justify-center !py-2"
+              className="shrink-0 self-stretch !min-w-11 !w-11 !h-auto !p-0 !rounded-lg !bg-green-600 hover:!bg-green-700 flex items-center justify-center !py-2 disabled:!bg-gray-300"
+              title={saving ? "Guardando" : "Guardar venta"}
+              aria-label={saving ? "Guardando venta" : "Guardar venta"}
             >
-              {saving ? "Guardando..." : "Guardar"}
+              {saving ? (
+                <Loader2 className="w-5 h-5 animate-spin" aria-hidden />
+              ) : (
+                <Save className="w-5 h-5" aria-hidden />
+              )}
             </Button>
           </div>
 
@@ -1463,7 +1612,7 @@ export default function SaleForm({
                   return (
                     <div
                       key={it.productId}
-                      className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                      className="rounded-lg border border-sky-500 bg-white p-3 shadow-sm ring-1 ring-sky-500/20"
                     >
                       <div className="flex gap-3">
                         <div className="w-14 h-14 shrink-0 rounded-lg overflow-hidden border border-slate-200 bg-slate-100">
@@ -1473,27 +1622,40 @@ export default function SaleForm({
                             className="w-full h-full object-cover"
                           />
                         </div>
-                        <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-start gap-2">
-                        <div className="font-medium text-slate-900 text-sm leading-snug min-w-0 flex-1 basis-[8rem]">
+                        <div className="min-w-0 flex-1 w-full">
+                      <div className="flex items-start justify-between gap-2 w-full min-w-0">
+                        <div className="font-medium text-slate-900 text-sm leading-snug min-w-0 flex-1 pr-1">
                           {it.productName}
                         </div>
-                        <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700 shrink-0">
-                          {it.measurement}
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                            {it.measurement}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRemoveId(it.productId)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 active:scale-95 transition-transform"
+                            title="Quitar del carrito"
+                            aria-label="Quitar del carrito"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-start gap-2 w-full min-w-0">
                         <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-slate-800 shrink-0">
-                          Post: {shownExist.toFixed(3)}
+                          Disp: {shownExist.toFixed(3)}
                         </span>
                         <span className="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-bold tabular-nums text-green-800 shrink-0">
                           C$ {round2(it.price).toFixed(2)}
                         </span>
-                        <div className="text-[11px] font-medium text-slate-500 tabular-nums shrink-0 w-full sm:w-auto sm:ml-auto">
-                          Aplicado: C$ {round2(unitApplied).toFixed(2)}
+                        <div className="text-[11px] font-medium text-slate-500 tabular-nums shrink-0 w-full min-w-0 sm:w-auto sm:ml-auto">
+                          Precio aplicado: C$ {round2(unitApplied).toFixed(2)}
                         </div>
                       </div>
-                      <div className="mt-2 grid grid-cols-3 gap-2 items-center">
+                      <div className="mt-2 grid grid-cols-1 gap-2 w-full min-w-0">
                         <input
-                          className={`${inpBase} py-2 text-right text-sm`}
+                          className={`${inpBase} py-2.5 text-right text-sm w-full min-w-0 block`}
                           inputMode={isUnit ? "numeric" : "decimal"}
                           step={isUnit ? 1 : 0.001}
                           value={it.qtyInput ?? (it.qty === 0 ? "" : it.qty)}
@@ -1501,11 +1663,11 @@ export default function SaleForm({
                           onChange={(e) =>
                             setItemQty(it.productId, e.target.value)
                           }
-                          placeholder={isUnit ? "Unid" : "Libras"}
+                          placeholder={isUnit ? "Ingrese unidades" : "Ingrese libras"}
                           title={isUnit ? "Unidades" : "Libras"}
                         />
                         <input
-                          className={`${inpBase} py-2 text-right text-sm px-2`}
+                          className={`${inpBase} py-2.5 text-right text-sm w-full min-w-0 block`}
                           inputMode="numeric"
                           value={
                             it.discountInput ??
@@ -1514,11 +1676,11 @@ export default function SaleForm({
                           onChange={(e) =>
                             setItemDiscount(it.productId, e.target.value)
                           }
-                          placeholder="Desc."
+                          placeholder="Ingrese descuento"
                           title="Descuento (C$)"
                         />
                         <input
-                          className={`${inpBase} py-2 text-right text-sm`}
+                          className={`${inpBase} py-2.5 text-right text-sm w-full min-w-0 block`}
                           inputMode="decimal"
                           value={
                             it.specialPriceInput ??
@@ -1527,7 +1689,7 @@ export default function SaleForm({
                           onChange={(e) =>
                             setItemSpecialPrice(it.productId, e.target.value)
                           }
-                          placeholder="Sugerido"
+                          placeholder="Precio Especial (opcional)"
                           title="Precio sugerido (opcional)"
                         />
                       </div>
@@ -1535,17 +1697,6 @@ export default function SaleForm({
                         <div className="font-semibold tabular-nums text-slate-900">
                           C$ {round2(net).toFixed(2)}
                         </div>
-                      </div>
-                      <div className="mt-2 flex justify-end">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="!rounded-xl !text-xs !font-medium !text-red-700 !border-red-100 !bg-red-50 hover:!bg-red-100/80"
-                          onClick={() => removeItem(it.productId)}
-                        >
-                          Quitar
-                        </Button>
                       </div>
                         </div>
                       </div>
@@ -1585,7 +1736,7 @@ export default function SaleForm({
             </div>
           )}
 
-          {missingContadoClient && (
+          {/* {missingContadoClient && (
             <div
               role="alert"
               className="text-sm text-amber-900 bg-amber-50 border border-amber-200/80 rounded-lg p-3 flex gap-2 items-start"
@@ -1593,22 +1744,18 @@ export default function SaleForm({
               <span className="shrink-0" aria-hidden>
                 ⚠️
               </span>
-              <span>Debe ingresar un cliente contado para registrar venta.</span>
+              <span>Escriba un cliente para vender.</span>
             </div>
           )}
 
           {message && (
             <Toast message={message} onClose={() => setMessage("")} />
-          )}
-        </div>
+          )} */}
       </div>
-    );
-  }
-
-  return (
+      ) : (
     <div className="relative">
       <form
-        onSubmit={handleSubmit}
+        onSubmit={openSaveConfirm}
         className="w-full mx-auto max-w-[1600px] space-y-5 bg-gray-50 rounded-xl border border-gray-200 shadow-sm p-4 sm:p-5 lg:p-6"
       >
         <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-gray-200">
@@ -1892,8 +2039,8 @@ export default function SaleForm({
                     return (
                       <div
                         key={it.productId}
-                        className="rounded-xl border-2 border-gray-200 bg-white p-4 shadow-sm"
-                      >
+                        className="rounded-lg border border-sky-500 bg-white p-3 shadow-sm ring-1 ring-sky-500/20"
+                        >
                         <div className="flex gap-3 mb-3">
                           <div className="w-16 h-16 shrink-0 rounded-xl overflow-hidden border border-gray-200 bg-gray-100">
                             <ImageWithFallback
@@ -1918,7 +2065,7 @@ export default function SaleForm({
                           </span>
                           <button
                             type="button"
-                            onClick={() => removeItem(it.productId)}
+                            onClick={() => setConfirmRemoveId(it.productId)}
                             className="shrink-0 p-2 rounded-lg text-red-600 hover:bg-red-50 border border-red-100 transition-colors sm:ml-auto"
                             title="Quitar"
                             aria-label="Quitar línea"
@@ -2087,5 +2234,8 @@ export default function SaleForm({
         </div>
       )}
     </div>
+      )}
+      {createPortal(confirmPortals, document.body)}
+    </>
   );
 }

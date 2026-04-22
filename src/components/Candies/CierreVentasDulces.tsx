@@ -2505,7 +2505,15 @@ export default function CierreVentasDulces({
   const creditSalesTableTotals = aggregateSaleTotals(creditSales);
 
   return (
-    <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
+    <div
+      className={
+        "w-full min-w-0 md:max-w-7xl md:mx-auto bg-white md:p-6 md:rounded-2xl md:shadow-2xl " +
+        "max-md:max-w-[100vw] max-md:w-screen max-md:ml-[calc(50%-50vw)] max-md:mr-[calc(50%-50vw)] " +
+        "max-md:box-border max-md:overflow-x-hidden max-md:-mt-3 max-md:min-h-[calc(100dvh-5.75rem)] " +
+        "max-md:rounded-none max-md:shadow-none max-md:border-0 max-md:px-4 max-md:pt-4 " +
+        "max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      }
+    >
       {/* ✅ CSS interno SOLO para alternar vista en PDF (sin tocar tu data) */}
       <style>{`
         .pdf-print-mode .pdf-desktop { display: block !important; }
