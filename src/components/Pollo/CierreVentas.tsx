@@ -47,6 +47,12 @@ interface SaleDataRaw {
   userEmail?: string;
   vendor?: string;
   clientName?: string;
+  /** Crédito: nombre en SaleFormV2 va aquí; `clientName` suele ir vacío. */
+  customerName?: string;
+  customerId?: string;
+  /** Alias legacy / importaciones */
+  customer?: string;
+  nombreCliente?: string;
   amountReceived?: number;
   change?: string | number;
   status?: "FLOTANTE" | "PROCESADA";
@@ -96,6 +102,37 @@ interface SaleData {
   grossProfit?: number;
   unitPrice?: number;
   edited?: boolean;
+  /** Crédito: para resolver nombre si solo hay ID en Firestore. */
+  customerId?: string;
+}
+
+/** Texto de cliente persistido en el doc (cualquier campo conocido). */
+function pickClientLabelFromSaleRaw(raw: SaleDataRaw): string {
+  const r = raw as Record<string, unknown>;
+  const candidates = [
+    r.clientName,
+    r.customerName,
+    r.customer,
+    r.nombreCliente,
+    r.client,
+  ];
+  for (const v of candidates) {
+    const s = String(v ?? "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+/** Nombre para UI/edición: doc + lookup por customerId en customers_pollo. */
+function resolvedSaleClientName(
+  s: Pick<SaleData, "clientName" | "customerId">,
+  customerNameById: Record<string, string>,
+): string {
+  const direct = String(s.clientName ?? "").trim();
+  if (direct) return direct;
+  const cid = String(s.customerId ?? "").trim();
+  if (cid && customerNameById[cid]) return customerNameById[cid];
+  return "";
 }
 
 interface ClosureData {
@@ -125,6 +162,17 @@ interface CombinedDailyRow {
   /** Suma U.Bruta del día+producto en el periodo. */
   totalGross: number;
   product?: string;
+}
+
+/** Abonos AR (`ar_movements_pollo`) filtrados por fecha de abono en el periodo del calendario. */
+interface AbonoPeriodRow {
+  id: string;
+  registroFmt: string;
+  fechaAbono: string;
+  clienteNombre: string;
+  saldoAnterior: number;
+  abonoMonto: number;
+  saldoActual: number;
 }
 
 // helpers
@@ -194,7 +242,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
         date,
         createdAt: createdAtDt,
         userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
-        clientName: raw.clientName ?? "",
+        clientName: pickClientLabelFromSaleRaw(raw) || "",
+        customerId: String(raw.customerId ?? "").trim() || undefined,
         amountReceived: Number(raw.amountReceived ?? 0),
         change: String(raw.change ?? "0"),
         status: (raw.status as any) ?? "FLOTANTE",
@@ -229,7 +278,8 @@ const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
       date,
       createdAt: createdAtDt,
       userEmail: raw.userEmail ?? raw.vendor ?? "(sin usuario)",
-      clientName: raw.clientName ?? "",
+      clientName: pickClientLabelFromSaleRaw(raw) || "",
+      customerId: String(raw.customerId ?? "").trim() || undefined,
       amountReceived: Number(raw.amountReceived ?? 0),
       change: String(raw.change ?? "0"),
       status: (raw.status as any) ?? "FLOTANTE",
@@ -286,6 +336,9 @@ export default function CierreVentas({
   const [userNameByEmail, setUserNameByEmail] = useState<
     Record<string, string>
   >({});
+  const [customerNameById, setCustomerNameById] = useState<
+    Record<string, string>
+  >({});
 
   const [editing, setEditing] = useState<null | SaleData>(null);
   const [editDate, setEditDate] = useState<string>("");
@@ -328,6 +381,10 @@ export default function CierreVentas({
   const [cashTableOpen, setCashTableOpen] = useState(false);
   const [creditTableOpen, setCreditTableOpen] = useState(false);
   const [combinedTableOpen, setCombinedTableOpen] = useState(false);
+  const [abonoTableOpen, setAbonoTableOpen] = useState(false);
+
+  const [abonoPeriodRows, setAbonoPeriodRows] = useState<AbonoPeriodRow[]>([]);
+  const [abonoLoading, setAbonoLoading] = useState(false);
 
   const pdfRef = useRef<HTMLDivElement>(null);
   const { refreshKey, refresh } = useManualRefresh();
@@ -448,6 +505,180 @@ export default function CierreVentas({
       }
     })();
   }, []);
+
+  /** Nombres de clientes Pollo (para ventas crédito con solo customerId). */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "customers_pollo"));
+        const map: Record<string, string> = {};
+        snap.forEach((d) => {
+          const x = d.data() as Record<string, unknown>;
+          const name = String(x.name ?? "").trim();
+          map[d.id] = name || d.id;
+        });
+        if (!cancelled) setCustomerNameById(map);
+      } catch (e) {
+        console.error("Error cargando clientes Pollo:", e);
+        if (!cancelled) setCustomerNameById({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
+  /** Abonos del periodo (CxC) + saldos antes/después por cliente. */
+  useEffect(() => {
+    if (!startDate || !endDate || startDate > endDate) {
+      setAbonoPeriodRows([]);
+      return;
+    }
+    let cancelled = false;
+    setAbonoLoading(true);
+    (async () => {
+      try {
+        const q = query(
+          collection(db, "ar_movements_pollo"),
+          where("date", ">=", startDate),
+          where("date", "<=", endDate),
+        );
+        const snap = await getDocs(q);
+        type Mov = {
+          id: string;
+          customerId?: string;
+          date?: string;
+          amount?: number;
+          type?: string;
+          createdAt?: FireTimestamp | Timestamp;
+        };
+        const inPeriod = snap.docs
+          .map((d) => ({ ...(d.data() as Mov), id: d.id }))
+          .filter(
+            (x) => String(x.type || "").trim().toUpperCase() === "ABONO",
+          );
+
+        const byCid = new Map<string, Mov[]>();
+        for (const m of inPeriod) {
+          const cid = String(m.customerId || "").trim();
+          if (!cid) continue;
+          if (!byCid.has(cid)) byCid.set(cid, []);
+          byCid.get(cid)!.push(m);
+        }
+
+        const names = new Map<string, string>();
+        const initialDebt = new Map<string, number>();
+
+        await Promise.all(
+          [...byCid.keys()].map(async (cid) => {
+            try {
+              const cd = await getDoc(doc(db, "customers_pollo", cid));
+              if (cd.exists()) {
+                const x = cd.data() as Record<string, unknown>;
+                names.set(cid, String(x.name || "").trim() || cid);
+                initialDebt.set(cid, Number(x.initialDebt ?? 0));
+              } else {
+                names.set(cid, "—");
+                initialDebt.set(cid, 0);
+              }
+            } catch {
+              names.set(cid, "—");
+              initialDebt.set(cid, 0);
+            }
+          }),
+        );
+
+        const out: AbonoPeriodRow[] = [];
+
+        for (const [cid, periodDocs] of byCid) {
+          const qAll = query(
+            collection(db, "ar_movements_pollo"),
+            where("customerId", "==", cid),
+          );
+          const allSnap = await getDocs(qAll);
+          const all = allSnap.docs.map((d) => ({
+            ...(d.data() as Mov),
+            id: d.id,
+          }));
+          const createdMs = (m: Mov & { id: string }) => {
+            const ca = m.createdAt as
+              | Timestamp
+              | FireTimestamp
+              | { seconds?: number }
+              | undefined;
+            if (!ca) return 0;
+            if (typeof (ca as Timestamp).toDate === "function") {
+              return (ca as Timestamp).toDate().getTime();
+            }
+            const ft = ca as FireTimestamp;
+            if (typeof ft?.toDate === "function") return ft.toDate!().getTime();
+            if (typeof (ca as { seconds?: number }).seconds === "number") {
+              return (ca as { seconds: number }).seconds * 1000;
+            }
+            return 0;
+          };
+          all.sort((a, b) => {
+            const da = String(a.date || "").slice(0, 10);
+            const db = String(b.date || "").slice(0, 10);
+            if (da !== db) return da.localeCompare(db);
+            return createdMs(a) - createdMs(b);
+          });
+
+          let bal = round2(initialDebt.get(cid) ?? 0);
+          const atId = new Map<
+            string,
+            { saldoAnterior: number; saldoActual: number }
+          >();
+          for (const m of all) {
+            const prev = bal;
+            bal = round2(bal + Number(m.amount ?? 0));
+            atId.set(m.id, { saldoAnterior: prev, saldoActual: bal });
+          }
+
+          for (const m of periodDocs) {
+            const st = atId.get(m.id);
+            if (!st) continue;
+            const ms = createdMs(m);
+            const registroFmt = ms
+              ? format(new Date(ms), "yyyy-MM-dd HH:mm")
+              : "—";
+            out.push({
+              id: m.id,
+              registroFmt,
+              fechaAbono: String(m.date || "").slice(0, 10),
+              clienteNombre: names.get(cid) || "—",
+              saldoAnterior: st.saldoAnterior,
+              abonoMonto: Math.abs(Number(m.amount ?? 0)),
+              saldoActual: st.saldoActual,
+            });
+          }
+        }
+
+        out.sort((a, b) => {
+          const c = a.fechaAbono.localeCompare(b.fechaAbono);
+          if (c !== 0) return c;
+          return a.registroFmt.localeCompare(b.registroFmt);
+        });
+
+        if (!cancelled) setAbonoPeriodRows(out);
+      } catch (e) {
+        console.error("Error cargando abonos del periodo:", e);
+        if (!cancelled) setAbonoPeriodRows([]);
+      } finally {
+        if (!cancelled) setAbonoLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [startDate, endDate, refreshKey]);
+
+  const totalAbonosPeriodo = React.useMemo(
+    () =>
+      round2(abonoPeriodRows.reduce((s, r) => s + Number(r.abonoMonto || 0), 0)),
+    [abonoPeriodRows],
+  );
 
   const displaySeller = (email?: string) => {
     const key = String(email || "")
@@ -586,15 +817,16 @@ export default function CierreVentas({
         to: `C$${money(newAmount)}`,
       });
     }
-    if (editClient !== editing.clientName) {
+    const prevClient = resolvedSaleClientName(editing, customerNameById);
+    if (editClient.trim() !== prevClient.trim()) {
       changes.push({
         label: "Cliente",
-        from: editing.clientName || "—",
-        to: editClient || "—",
+        from: prevClient || "—",
+        to: editClient.trim() || "—",
       });
     }
     return changes;
-  }, [editing, editDate, editQty, editPrice, editClient]);
+  }, [editing, editDate, editQty, editPrice, editClient, customerNameById]);
 
   const isUnitMeasure = (m?: string) =>
     String(m || "")
@@ -643,6 +875,7 @@ export default function CierreVentas({
   const cashOpenEffective = pdfMode ? true : cashTableOpen;
   const creditOpenEffective = pdfMode ? true : creditTableOpen;
   const combinedOpenEffective = pdfMode ? true : combinedTableOpen;
+  const abonoOpenEffective = pdfMode ? true : abonoTableOpen;
 
   const cashRowsForTable = pdfMode ? cashSales : pagedCashSales;
   const creditRowsForTable = pdfMode ? creditSales : pagedCreditSales;
@@ -688,6 +921,10 @@ export default function CierreVentas({
   const totalUnitsAll = round3(totalUnitsCash + totalUnitsCredit);
   const totalLbsAll = round3(totalLbsCash + totalLbsCredit);
   const totalSalesAll = round2(totalSalesCash + totalSalesCredit);
+  /** KPI «Ventas total»: ventas CONTADO del periodo + abonos AR en el mismo rango (sin ventas a crédito). */
+  const ventasCashMasAbonosKpi = round2(
+    totalSalesCash + totalAbonosPeriodo,
+  );
 
   const combinedDailyRows = React.useMemo(() => {
     const map: Record<string, CombinedDailyRow> = {};
@@ -738,6 +975,38 @@ export default function CierreVentas({
   useEffect(() => {
     setCombinedPage((p) => Math.min(p, combinedTotalPages));
   }, [combinedTotalPages]);
+
+  /** Totales completos (como pie de tabla) para mostrar en cabecera cuando la tabla está colapsada. */
+  const combinedCollapsedSummary = React.useMemo(() => {
+    const rows = combinedDailyRows;
+    if (!rows.length) return null;
+    return {
+      lbs: round3(rows.reduce((s, r) => s + r.totalLbs, 0)),
+      units: round3(rows.reduce((s, r) => s + r.totalUnits, 0)),
+      amount: round2(rows.reduce((s, r) => s + r.totalAmount, 0)),
+      gross: round2(rows.reduce((s, r) => s + r.totalGross, 0)),
+    };
+  }, [combinedDailyRows]);
+
+  const cashCollapsedSummary = React.useMemo(() => {
+    if (!cashSales.length) return null;
+    return {
+      amount: round2(cashSales.reduce((s, x) => s + (x.amount || 0), 0)),
+      gross: round2(
+        cashSales.reduce((s, x) => s + saleGrossProfit(x), 0),
+      ),
+    };
+  }, [cashSales]);
+
+  const creditCollapsedSummary = React.useMemo(() => {
+    if (!creditSales.length) return null;
+    return {
+      amount: round2(creditSales.reduce((s, x) => s + (x.amount || 0), 0)),
+      gross: round2(
+        creditSales.reduce((s, x) => s + saleGrossProfit(x), 0),
+      ),
+    };
+  }, [creditSales]);
 
   // Consolidado por producto
   const productMap: Record<
@@ -829,7 +1098,7 @@ export default function CierreVentas({
           amount: s.amount,
           amountSuggested: s.amountSuggested,
           userEmail: s.userEmail,
-          clientName: s.clientName,
+          clientName: resolvedSaleClientName(s, customerNameById),
           amountReceived: s.amountReceived,
           change: s.change,
           status: s.status,
@@ -918,7 +1187,7 @@ export default function CierreVentas({
           ? s.amount / s.quantity
           : 0;
     setEditPrice(String(price));
-    setEditClient(s.clientName);
+    setEditClient(resolvedSaleClientName(s, customerNameById));
     setEditConfirm(false);
     setEditSaving(false);
     setEditMinDate("");
@@ -944,6 +1213,14 @@ export default function CierreVentas({
     })();
   };
 
+  /** Si `customers_pollo` termina de cargar después de abrir el modal, rellenar cliente sin pisar texto ya editado. */
+  React.useEffect(() => {
+    if (!editing) return;
+    const resolved = resolvedSaleClientName(editing, customerNameById).trim();
+    if (!resolved) return;
+    setEditClient((prev) => (prev.trim() ? prev : resolved));
+  }, [editing?.id, customerNameById]);
+
   const saveEdit = async () => {
     if (!canEditSale || !editing) return;
 
@@ -957,12 +1234,6 @@ export default function CierreVentas({
       setMessage("❌ El precio debe ser mayor a 0.");
       return;
     }
-    if (editMinDate && editDate < editMinDate) {
-      setMessage(
-        `❌ La fecha no puede ser anterior a ${editMinDate} (fecha del lote).`,
-      );
-      return;
-    }
 
     const newAmount = round2(qty * price);
     const docId = editing.id.split("#")[0];
@@ -970,6 +1241,20 @@ export default function CierreVentas({
       ? parseInt(editing.id.split("#")[1])
       : null;
     const qtyChanged = round3(qty) !== round3(editing.quantity);
+
+    /** Solo al reasignar cantidad/lotes importa la fecha mínima del inventario. */
+    if (qtyChanged && editMinDate && editDate < editMinDate) {
+      setMessage(
+        `❌ La fecha no puede ser anterior a ${editMinDate} (fecha del lote).`,
+      );
+      return;
+    }
+
+    const trimClient = editClient.trim();
+    const clientFields =
+      editing.type === "CREDITO"
+        ? { customerName: trimClient, clientName: "" }
+        : { clientName: trimClient, customerName: trimClient };
 
     setEditSaving(true);
     try {
@@ -1144,7 +1429,7 @@ export default function CierreVentas({
               amount: round2(totalAmt),
               amountCharged: round2(totalAmt),
               grossProfitTotal,
-              clientName: editClient,
+              ...clientFields,
               date: editDate,
               edited: true,
               editedAt: Timestamp.now(),
@@ -1156,7 +1441,7 @@ export default function CierreVentas({
               unitPrice: price,
               amount: newAmount,
               amountCharged: newAmount,
-              clientName: editClient,
+              ...clientFields,
               date: editDate,
               allocations: newAllocs,
               cogsAmount,
@@ -1203,7 +1488,7 @@ export default function CierreVentas({
             amount: round2(totalAmt),
             amountCharged: round2(totalAmt),
             grossProfitTotal,
-            clientName: editClient,
+            ...clientFields,
             date: editDate,
             edited: true,
             editedAt: Timestamp.now(),
@@ -1219,7 +1504,7 @@ export default function CierreVentas({
             amount: newAmount,
             amountCharged: newAmount,
             grossProfit: round2(newAmount - prevCogs),
-            clientName: editClient,
+            ...clientFields,
             date: editDate,
             edited: true,
             editedAt: Timestamp.now(),
@@ -1329,6 +1614,7 @@ export default function CierreVentas({
         Fecha_ingreso: s.createdAt || "",
         Fecha_venta: s.date,
         Tipo: s.type === "CREDITO" ? "Crédito" : "Cash",
+        Cliente: resolvedSaleClientName(s, customerNameById) || "—",
         Producto: s.productName,
         "Libras - Unidad": s.quantity,
         Monto: s.amount,
@@ -1453,17 +1739,18 @@ export default function CierreVentas({
         <table className="min-w-full w-full text-sm">
           <thead className="bg-slate-100 sticky top-0 z-10">
             <tr className="text-[11px] uppercase tracking-wider text-slate-600">
-              <th className="p-3 border-b text-left">Estado</th>
-              <th className="p-3 border-b text-left">Fecha ingreso</th>
-              <th className="p-3 border-b text-left">Fecha venta</th>
-              <th className="p-3 border-b text-left">Tipo</th>
-              <th className="p-3 border-b text-left">Producto</th>
-              <th className="p-3 border-b text-right">Precio</th>
-              <th className="p-3 border-b text-right">Lbs/Und</th>
-              <th className="p-3 border-b text-right">Monto</th>
-              <th className="p-3 border-b text-right">U.Bruta</th>
-              <th className="p-3 border-b text-left">Vendedor</th>
-              <th className="p-3 border-b text-center w-10"></th>
+              <th className="p-3 border-b text-left whitespace-nowrap">Estado</th>
+              <th className="p-3 border-b text-left whitespace-nowrap">Fecha ingreso</th>
+              <th className="p-3 border-b text-left whitespace-nowrap">Fecha venta</th>
+              <th className="p-3 border-b text-left whitespace-nowrap">Tipo</th>
+              <th className="p-3 border-b text-left whitespace-nowrap max-w-[10rem]">Cliente</th>
+              <th className="p-3 border-b text-left whitespace-nowrap">Producto</th>
+              <th className="p-3 border-b text-right whitespace-nowrap">Precio</th>
+              <th className="p-3 border-b text-right whitespace-nowrap">Lbs/Und</th>
+              <th className="p-3 border-b text-right whitespace-nowrap">Monto</th>
+              <th className="p-3 border-b text-right whitespace-nowrap">U.Bruta</th>
+              <th className="p-3 border-b text-left whitespace-nowrap">Vendedor</th>
+              <th className="p-3 border-b text-center w-10 whitespace-nowrap"></th>
             </tr>
           </thead>
           <tbody>
@@ -1473,7 +1760,7 @@ export default function CierreVentas({
                 className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
               >
                 <td className="p-3 border-b text-left">
-                  <div className="flex items-center gap-1 flex-wrap">
+                  <div className="flex items-center gap-1 flex-nowrap">
                     <span
                       className={`px-2 py-0.5 rounded text-xs ${
                         s.status === "PROCESADA"
@@ -1500,21 +1787,26 @@ export default function CierreVentas({
                     )}
                   </div>
                 </td>
-                <td className="p-3 border-b text-left">{s.createdAt || "—"}</td>
-                <td className="p-3 border-b text-left">{s.date}</td>
-                <td className="p-3 border-b text-left">
+                <td className="p-3 border-b text-left whitespace-nowrap">{s.createdAt || "—"}</td>
+                <td className="p-3 border-b text-left whitespace-nowrap">{s.date}</td>
+                <td className="p-3 border-b text-left whitespace-nowrap">
                   {s.type === "CREDITO" ? "Crédito" : "Cash"}
                 </td>
-                <td className="p-3 border-b text-left">{s.productName}</td>
-                <td className="p-3 border-b text-right">
+                <td className="p-3 border-b text-left max-w-[10rem] truncate whitespace-nowrap" title={resolvedSaleClientName(s, customerNameById) || "—"}>
+                  {resolvedSaleClientName(s, customerNameById) || "—"}
+                </td>
+                <td className="p-3 border-b text-left max-w-[14rem] truncate whitespace-nowrap" title={s.productName}>
+                  {s.productName}
+                </td>
+                <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">
                   C${money(s.unitPrice && s.unitPrice > 0 ? s.unitPrice : s.quantity > 0 ? s.amount / s.quantity : 0)}
                 </td>
-                <td className="p-3 border-b text-right">{qty3(s.quantity)}</td>
-                <td className="p-3 border-b text-right">C${money(s.amount)}</td>
-                <td className="p-3 border-b text-right tabular-nums">
+                <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">{qty3(s.quantity)}</td>
+                <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">C${money(s.amount)}</td>
+                <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">
                   C${money(saleGrossProfit(s))}
                 </td>
-                <td className="p-3 border-b text-left">
+                <td className="p-3 border-b text-left max-w-[11rem] truncate whitespace-nowrap" title={displaySeller(s.userEmail)}>
                   {displaySeller(s.userEmail)}
                 </td>
                 <td className="p-3 border-b text-center">
@@ -1536,7 +1828,7 @@ export default function CierreVentas({
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={11} className="p-3 text-center text-gray-500">
+                <td colSpan={12} className="p-3 text-center text-gray-500">
                   Sin ventas para mostrar.
                 </td>
               </tr>
@@ -1545,23 +1837,23 @@ export default function CierreVentas({
             {rows.length > 0 && (
               <tr className="text-center bg-slate-100/70">
                 <td
-                  colSpan={6}
-                  className="p-3 border-b text-left font-semibold"
+                  colSpan={7}
+                  className="p-3 border-b text-left font-semibold whitespace-nowrap"
                 >
                   <span>Totales</span>
                   {showAllPagesHint ? (
-                    <span className="block text-[10px] font-normal text-slate-500 mt-0.5">
-                      Incluye todas las páginas
+                    <span className="text-[10px] font-normal text-slate-500 ml-1.5">
+                      · Incluye todas las páginas
                     </span>
                   ) : null}
                 </td>
-                <td className="p-3 border-b text-right font-semibold">
+                <td className="p-3 border-b text-right font-semibold whitespace-nowrap tabular-nums">
                   {qty3(totalQty)}
                 </td>
-                <td className="p-3 border-b text-right font-semibold">
+                <td className="p-3 border-b text-right font-semibold whitespace-nowrap tabular-nums">
                   C${money(totalAmount)}
                 </td>
-                <td className="p-3 border-b text-right font-semibold tabular-nums">
+                <td className="p-3 border-b text-right font-semibold tabular-nums whitespace-nowrap">
                   C${money(totalGross)}
                 </td>
                 <td colSpan={2} />
@@ -1586,12 +1878,12 @@ export default function CierreVentas({
       <table className="min-w-full w-full text-sm">
         <thead className="bg-slate-100 sticky top-0 z-10">
           <tr className="text-[11px] uppercase tracking-wider text-slate-600">
-            <th className="p-3 border-b text-left">Fecha venta</th>
-            <th className="p-3 border-b text-left">Producto</th>
-            <th className="p-3 border-b text-right">Libras</th>
-            <th className="p-3 border-b text-right">Unidades</th>
-            <th className="p-3 border-b text-right">Monto</th>
-            <th className="p-3 border-b text-right">U.Bruta</th>
+            <th className="p-3 border-b text-left whitespace-nowrap">Fecha venta</th>
+            <th className="p-3 border-b text-left whitespace-nowrap">Producto</th>
+            <th className="p-3 border-b text-right whitespace-nowrap">Libras</th>
+            <th className="p-3 border-b text-right whitespace-nowrap">Unidades</th>
+            <th className="p-3 border-b text-right whitespace-nowrap">Monto</th>
+            <th className="p-3 border-b text-right whitespace-nowrap">U.Bruta</th>
           </tr>
         </thead>
         <tbody>
@@ -1600,16 +1892,16 @@ export default function CierreVentas({
               key={`${r.date}||${r.product}`}
               className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
             >
-              <td className="p-3 border-b text-left">{r.date}</td>
-              <td className="p-3 border-b text-left">
+              <td className="p-3 border-b text-left whitespace-nowrap">{r.date}</td>
+              <td className="p-3 border-b text-left max-w-[14rem] truncate whitespace-nowrap" title={r.product || "(sin nombre)"}>
                 {r.product || "(sin nombre)"}
               </td>
-              <td className="p-3 border-b text-right">{qty3(r.totalLbs)}</td>
-              <td className="p-3 border-b text-right">{qty3(r.totalUnits)}</td>
-              <td className="p-3 border-b text-right">
+              <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">{qty3(r.totalLbs)}</td>
+              <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">{qty3(r.totalUnits)}</td>
+              <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">
                 C${money(r.totalAmount)}
               </td>
-              <td className="p-3 border-b text-right tabular-nums">
+              <td className="p-3 border-b text-right tabular-nums whitespace-nowrap">
                 C${money(r.totalGross)}
               </td>
             </tr>
@@ -1617,24 +1909,24 @@ export default function CierreVentas({
 
           {rows.length > 0 && (
             <tr className="text-center bg-slate-100/70">
-              <td colSpan={2} className="p-3 border-b text-left font-semibold">
+              <td colSpan={2} className="p-3 border-b text-left font-semibold whitespace-nowrap">
                 <span>Totales</span>
                 {showAllPagesHint ? (
-                  <span className="block text-[10px] font-normal text-slate-500 mt-0.5">
-                    Incluye todas las páginas
+                  <span className="text-[10px] font-normal text-slate-500 ml-1.5">
+                    · Incluye todas las páginas
                   </span>
                 ) : null}
               </td>
-              <td className="p-3 border-b text-right font-semibold">
+              <td className="p-3 border-b text-right font-semibold whitespace-nowrap tabular-nums">
                 {qty3(totalsSrc.reduce((sum, r) => sum + r.totalLbs, 0))}
               </td>
-              <td className="p-3 border-b text-right font-semibold">
+              <td className="p-3 border-b text-right font-semibold whitespace-nowrap tabular-nums">
                 {qty3(totalsSrc.reduce((sum, r) => sum + r.totalUnits, 0))}
               </td>
-              <td className="p-3 border-b text-right font-semibold">
+              <td className="p-3 border-b text-right font-semibold whitespace-nowrap tabular-nums">
                 C${money(totalsSrc.reduce((sum, r) => sum + r.totalAmount, 0))}
               </td>
-              <td className="p-3 border-b text-right font-semibold tabular-nums">
+              <td className="p-3 border-b text-right font-semibold tabular-nums whitespace-nowrap">
                 C${money(totalsSrc.reduce((sum, r) => sum + r.totalGross, 0))}
               </td>
             </tr>
@@ -1823,7 +2115,7 @@ export default function CierreVentas({
                       onToggle={() => setIndicadoresOpen((v) => !v)}
                       right={
                         <span className="ml-1">
-                          Ventas C${money(totalSalesAll)} • U.B. C$
+                          Ventas C${money(ventasCashMasAbonosKpi)} • U.B. C$
                           {money(totalGrossAll)}
                         </span>
                       }
@@ -1946,10 +2238,10 @@ export default function CierreVentas({
                               </div>
                               <div className="p-3 rounded bg-white border">
                                 <div className="text-xs text-slate-600">
-                                  Ventas total (Cash + Crédito)
+                                  Ventas total (Cash + abonos)
                                 </div>
                                 <div className="mt-1 text-xl font-bold text-amber-900">
-                                  C${money(totalSalesAll)}
+                                  C${money(ventasCashMasAbonosKpi)}
                                 </div>
                               </div>
                               <div className="p-3 rounded bg-white border">
@@ -2002,16 +2294,16 @@ export default function CierreVentas({
                           <table className="min-w-full w-full text-sm">
                             <thead className="bg-slate-100 sticky top-0 z-10">
                               <tr className="text-[11px] uppercase tracking-wider text-slate-600">
-                                <th className="p-3 border-b text-left">
+                                <th className="p-3 border-b text-left whitespace-nowrap">
                                   Producto
                                 </th>
-                                <th className="p-3 border-b text-right">
-                                  Total libras/unidades
+                                <th className="p-3 border-b text-right whitespace-nowrap">
+                                  Total lbs/und
                                 </th>
-                                <th className="p-3 border-b text-right">
+                                <th className="p-3 border-b text-right whitespace-nowrap">
                                   Total dinero
                                 </th>
-                                <th className="p-3 border-b text-right">
+                                <th className="p-3 border-b text-right whitespace-nowrap">
                                   U.Bruta
                                 </th>
                               </tr>
@@ -2022,33 +2314,33 @@ export default function CierreVentas({
                                   key={row.productName}
                                   className="text-center odd:bg-white even:bg-slate-50"
                                 >
-                                  <td className="p-3 border-b text-left">
+                                  <td className="p-3 border-b text-left max-w-[16rem] truncate whitespace-nowrap" title={row.productName}>
                                     {row.productName}
                                   </td>
-                                  <td className="p-3 border-b text-right">
+                                  <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">
                                     {qty3(row.totalQuantity)}
                                   </td>
-                                  <td className="p-3 border-b text-right">
+                                  <td className="p-3 border-b text-right whitespace-nowrap tabular-nums">
                                     C${money(row.totalAmount)}
                                   </td>
-                                  <td className="p-3 border-b text-right tabular-nums">
+                                  <td className="p-3 border-b text-right tabular-nums whitespace-nowrap">
                                     C${money(row.totalGross)}
                                   </td>
                                 </tr>
                               ))}
                               {productSummaryArray.length > 0 && (
                                 <tr className="text-center bg-slate-100/70">
-                                  <td className="p-3 border-b text-left font-semibold">
+                                  <td className="p-3 border-b text-left font-semibold whitespace-nowrap">
                                     Totales
                                   </td>
-                                  <td className="p-3 border-b text-right font-semibold">
+                                  <td className="p-3 border-b text-right font-semibold whitespace-nowrap tabular-nums">
                                     Lbs: {qty3(totalLbsAll)} • Und:{" "}
                                     {qty3(totalUnitsAll)}
                                   </td>
-                                  <td className="p-3 border-b text-right font-semibold">
+                                  <td className="p-3 border-b text-right font-semibold whitespace-nowrap tabular-nums">
                                     C${money(totalSalesAll)}
                                   </td>
-                                  <td className="p-3 border-b text-right font-semibold tabular-nums">
+                                  <td className="p-3 border-b text-right font-semibold tabular-nums whitespace-nowrap">
                                     C${money(totalGrossAll)}
                                   </td>
                                 </tr>
@@ -2072,12 +2364,39 @@ export default function CierreVentas({
 
                   {showCombinedTable && (
                     <div className="mt-6">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="text-sm font-semibold text-slate-700">
-                          Transacciones Contado + Crédito
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold text-slate-800">
+                            Transacciones Contado + Crédito
+                          </div>
+                          {!combinedOpenEffective &&
+                            combinedCollapsedSummary && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-gradient-to-b from-white to-slate-50 px-2.5 py-1 text-[11px] shadow-sm">
+                                  <span className="text-slate-500 font-medium">
+                                    Monto
+                                  </span>
+                                  <span className="font-bold tabular-nums text-slate-900">
+                                    C${money(combinedCollapsedSummary.amount)}
+                                  </span>
+                                </span>
+                                <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-gradient-to-b from-violet-50/90 to-white px-2.5 py-1 text-[11px] shadow-sm">
+                                  <span className="text-violet-700 font-medium">
+                                    U.B.
+                                  </span>
+                                  <span className="font-bold tabular-nums text-violet-950">
+                                    C${money(combinedCollapsedSummary.gross)}
+                                  </span>
+                                </span>
+                                <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-700 tabular-nums">
+                                  Lb {qty3(combinedCollapsedSummary.lbs)} · Und{" "}
+                                  {qty3(combinedCollapsedSummary.units)}
+                                </span>
+                              </div>
+                            )}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-xs text-slate-500">
+                        <div className="flex shrink-0 items-start gap-2">
+                          <div className="text-xs text-slate-500 text-right pt-0.5">
                             {combinedDailyRows.length} día(s)
                           </div>
                           <Button
@@ -2114,29 +2433,187 @@ export default function CierreVentas({
                     </div>
                   )}
 
-                  <div className="mt-6 flex items-center justify-between mb-3">
-                    <div className="text-sm font-semibold text-slate-700">
-                      Contado
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="text-xs text-slate-500">
-                        {cashSales.length} registro(s)
+                  <div className="mt-6">
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-slate-800">
+                          Abonos (cuentas por cobrar)
+                        </div>
+                        {!abonoOpenEffective && !abonoLoading && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-gradient-to-b from-emerald-50/90 to-white px-2.5 py-1 text-[11px] shadow-sm">
+                              <span className="text-emerald-800 font-medium">
+                                Total abonos
+                              </span>
+                              <span className="font-bold tabular-nums text-emerald-950">
+                                C${money(totalAbonosPeriodo)}
+                              </span>
+                            </span>
+                          </div>
+                        )}
                       </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="primary"
-                        onClick={() => setCashTableOpen((v) => !v)}
-                        className={`text-xs !px-3 !py-1.5 !font-semibold ${
-                          cashOpenEffective
-                            ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
-                            : "!bg-emerald-600 hover:!bg-emerald-700 !border-emerald-600"
-                        }`}
-                      >
-                        {cashOpenEffective ? "Cerrar" : "Ver"}
-                      </Button>
+                      <div className="flex shrink-0 items-start gap-2">
+                        <div className="text-xs text-slate-500 text-right pt-0.5">
+                          {abonoPeriodRows.length} registro(s)
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setAbonoTableOpen((v) => !v)}
+                          className={`text-xs !px-3 !py-1.5 !font-semibold ${
+                            abonoOpenEffective
+                              ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                              : "!bg-blue-600 hover:!bg-blue-700 !border-blue-600"
+                          }`}
+                        >
+                          {abonoOpenEffective ? "Cerrar" : "Ver"}
+                        </Button>
+                      </div>
                     </div>
+                    {abonoOpenEffective && (
+                    <div className="rounded-xl overflow-x-auto border border-slate-200 shadow-sm">
+                      <table className="min-w-full w-full text-sm">
+                        <thead className="bg-slate-100 sticky top-0 z-10">
+                          <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                            <th className="p-3 border-b text-left whitespace-nowrap">
+                              Registro
+                            </th>
+                            <th className="p-3 border-b text-left whitespace-nowrap">
+                              Fecha
+                            </th>
+                            <th className="p-3 border-b text-left whitespace-nowrap">
+                              Cliente
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap">
+                              Saldo anterior
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap">
+                              Abono
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap">
+                              Saldo actual
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {abonoLoading ? (
+                            <tr>
+                              <td
+                                colSpan={6}
+                                className="p-3 text-center text-gray-500"
+                              >
+                                Cargando abonos…
+                              </td>
+                            </tr>
+                          ) : abonoPeriodRows.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={6}
+                                className="p-3 text-center text-gray-500"
+                              >
+                                Sin abonos en este periodo.
+                              </td>
+                            </tr>
+                          ) : (
+                            abonoPeriodRows.map((r) => (
+                              <tr
+                                key={r.id}
+                                className="odd:bg-white even:bg-slate-50"
+                              >
+                                <td className="p-3 border-b text-left tabular-nums whitespace-nowrap">
+                                  {r.registroFmt}
+                                </td>
+                                <td className="p-3 border-b text-left whitespace-nowrap">
+                                  {r.fechaAbono}
+                                </td>
+                                <td className="p-3 border-b text-left max-w-[12rem] truncate whitespace-nowrap" title={r.clienteNombre}>
+                                  {r.clienteNombre}
+                                </td>
+                                <td className="p-3 border-b text-right tabular-nums whitespace-nowrap">
+                                  C${money(r.saldoAnterior)}
+                                </td>
+                                <td className="p-3 border-b text-right tabular-nums font-semibold text-emerald-800 whitespace-nowrap">
+                                  C${money(r.abonoMonto)}
+                                </td>
+                                <td className="p-3 border-b text-right tabular-nums whitespace-nowrap">
+                                  C${money(r.saldoActual)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                        {!abonoLoading && abonoPeriodRows.length > 0 ? (
+                          <tfoot className="bg-slate-100/90">
+                            <tr>
+                              <td
+                                colSpan={4}
+                                className="p-3 border-t text-right font-semibold"
+                              >
+                                Totales
+                              </td>
+                              <td className="p-3 border-t text-right font-bold tabular-nums text-emerald-900">
+                                C${money(totalAbonosPeriodo)}
+                              </td>
+                              <td className="p-3 border-t" />
+                            </tr>
+                          </tfoot>
+                        ) : null}
+                      </table>
+                    </div>
+                    )}
                   </div>
+
+                  <div className="mt-6 flex flex-col gap-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-slate-800">
+                          Contado
+                        </div>
+                        {!cashOpenEffective && cashCollapsedSummary && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-gradient-to-b from-white to-emerald-50/40 px-2.5 py-1 text-[11px] shadow-sm">
+                              <span className="text-slate-500 font-medium">
+                                Monto
+                              </span>
+                              <span className="font-bold tabular-nums text-emerald-950">
+                                C${money(cashCollapsedSummary.amount)}
+                              </span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-gradient-to-b from-violet-50/80 to-white px-2.5 py-1 text-[11px] shadow-sm">
+                              <span className="text-violet-700 font-medium">
+                                U.B.
+                              </span>
+                              <span className="font-bold tabular-nums text-violet-950">
+                                C${money(cashCollapsedSummary.gross)}
+                              </span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-700 tabular-nums">
+                              Lb {qty3(totalLbsCash)} · Und{" "}
+                              {qty3(totalUnitsCash)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-start gap-2">
+                        <div className="text-xs text-slate-500 text-right pt-0.5">
+                          {cashSales.length} registro(s)
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setCashTableOpen((v) => !v)}
+                          className={`text-xs !px-3 !py-1.5 !font-semibold ${
+                            cashOpenEffective
+                              ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                              : "!bg-emerald-600 hover:!bg-emerald-700 !border-emerald-600"
+                          }`}
+                        >
+                          {cashOpenEffective ? "Cerrar" : "Ver"}
+                        </Button>
+                      </div>
+                    </div>
                   {cashOpenEffective && (
                     <>
                       {renderSalesTable(cashRowsForTable, cashSales)}
@@ -2150,16 +2627,43 @@ export default function CierreVentas({
                     </>
                   )}
                 </div>
+                </div>
               )}
 
               {showCreditTable && (
                 <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="text-sm font-semibold text-slate-700">
-                      Crédito
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-slate-800">
+                        Crédito
+                      </div>
+                      {!creditOpenEffective && creditCollapsedSummary && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-gradient-to-b from-white to-amber-50/50 px-2.5 py-1 text-[11px] shadow-sm">
+                            <span className="text-slate-500 font-medium">
+                              Monto
+                            </span>
+                            <span className="font-bold tabular-nums text-amber-950">
+                              C${money(creditCollapsedSummary.amount)}
+                            </span>
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-gradient-to-b from-violet-50/80 to-white px-2.5 py-1 text-[11px] shadow-sm">
+                            <span className="text-violet-700 font-medium">
+                              U.B.
+                            </span>
+                            <span className="font-bold tabular-nums text-violet-950">
+                              C${money(creditCollapsedSummary.gross)}
+                            </span>
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-700 tabular-nums">
+                            Lb {qty3(totalLbsCredit)} · Und{" "}
+                            {qty3(totalUnitsCredit)}
+                          </span>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <div className="text-xs text-slate-500">
+                    <div className="flex shrink-0 items-start gap-2">
+                      <div className="text-xs text-slate-500 text-right pt-0.5">
                         {creditSales.length} registro(s)
                       </div>
                       <Button
@@ -2296,7 +2800,7 @@ export default function CierreVentas({
                       <div className="flex justify-between gap-3">
                         <span className="text-gray-600">Cliente</span>
                         <strong className="text-right break-all">
-                          {s.clientName || "—"}
+                          {resolvedSaleClientName(s, customerNameById) || "—"}
                         </strong>
                       </div>
 

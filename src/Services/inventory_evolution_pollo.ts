@@ -215,6 +215,12 @@ export async function fetchProductEvolutionPollo(args: {
 }): Promise<{
   moves: InvMove[];
   productKpis: ProductKpis;
+  /**
+   * Saldo al inicio del día `from`, para que el balance corrido + movimientos del
+   * rango sea coherente con `remaining` (stock en lotes hoy), asumiendo datos
+   * completos: opening = remaining + Σsalidas(desde from) − Σingresos(desde from).
+   */
+  openingBalance: number;
 }> {
   const { from, to, productKey, productId, productName, measurement } = args;
 
@@ -224,6 +230,7 @@ export async function fetchProductEvolutionPollo(args: {
   let incoming = 0;
   let remaining = 0;
   const ingresoMoves: InvMove[] = [];
+  let sumInFrom = 0;
 
   invSnap.forEach((d) => {
     const b = d.data() as any;
@@ -231,7 +238,6 @@ export async function fetchProductEvolutionPollo(args: {
     const pName = String(b.productName ?? "");
     const pId = String(b.productId ?? "").trim();
 
-    // match batch robusto
     const matchBatch =
       (pId && pId === productKey) ||
       (!pId && normKey(pName) === normKey(productKey)) ||
@@ -252,10 +258,12 @@ export async function fetchProductEvolutionPollo(args: {
     const qty = Number(b.quantity ?? 0);
     const rem = Number(b.remaining ?? 0);
 
-    // stock actual snapshot
     remaining += rem;
 
-    // ingresos en rango
+    if (date && date >= from) {
+      sumInFrom += qty;
+    }
+
     if (date && date >= from && date <= to) {
       incoming += qty;
       ingresoMoves.push({
@@ -269,17 +277,14 @@ export async function fetchProductEvolutionPollo(args: {
     }
   });
 
-  // ========= 2) VENTAS desde salesV2 (en rango) =========
-  const qs = query(
-    collection(db, "salesV2"),
-    where("date", ">=", from),
-    where("date", "<=", to),
-  );
+  // Ventas: desde `from` para cuadrar saldo con stock actual; filas solo hasta `to`
+  const qs = query(collection(db, "salesV2"), where("date", ">=", from));
   const saleSnap = await getDocs(qs);
 
   let soldCash = 0;
   let soldCredit = 0;
   const saleMoves: InvMove[] = [];
+  let sumOutFrom = 0;
 
   const pushSaleMove = (
     date: string,
@@ -299,13 +304,13 @@ export async function fetchProductEvolutionPollo(args: {
 
   saleSnap.forEach((d) => {
     const x = d.data() as any;
-    const date = String(x.date ?? "");
-    const saleType = String(x.type ?? "CONTADO").toUpperCase(); // CONTADO / CREDITO
+    const date = String(x.date ?? "").trim().slice(0, 10);
+    if (!date) return;
+    const saleType = String(x.type ?? "CONTADO").toUpperCase();
 
     const isCashSale = saleType === "CONTADO";
     const moveType = isCashSale ? "VENTA_CASH" : "VENTA_CREDITO";
 
-    // multi-ítems
     if (Array.isArray(x.items) && x.items.length > 0) {
       x.items.forEach((it: any) => {
         const itName = String(it.productName ?? "");
@@ -322,15 +327,16 @@ export async function fetchProductEvolutionPollo(args: {
         const qty = Number(it.qty ?? it.quantity ?? 0);
         if (qty <= 0) return;
 
-        if (isCashSale) soldCash += qty;
-        else soldCredit += qty;
-
-        pushSaleMove(date, moveType, qty, d.id);
+        sumOutFrom += qty;
+        if (date <= to) {
+          if (isCashSale) soldCash += qty;
+          else soldCredit += qty;
+          pushSaleMove(date, moveType, qty, d.id);
+        }
       });
       return;
     }
 
-    // venta simple
     const sName = String(x.productName ?? "");
     const sProductId = String(x.productId ?? "").trim();
 
@@ -345,18 +351,18 @@ export async function fetchProductEvolutionPollo(args: {
     const qty = Number(x.quantity ?? 0);
     if (qty <= 0) return;
 
-    if (isCashSale) soldCash += qty;
-    else soldCredit += qty;
-
-    pushSaleMove(date, moveType, qty, d.id);
+    sumOutFrom += qty;
+    if (date <= to) {
+      if (isCashSale) soldCash += qty;
+      else soldCredit += qty;
+      pushSaleMove(date, moveType, qty, d.id);
+    }
   });
 
-  // ========= 3) MERMA / ROBO desde inventory_adjustments_pollo =========
   const qa = query(
     collection(db, "inventory_adjustments_pollo"),
     where("productKey", "==", productKey),
     where("date", ">=", from),
-    where("date", "<=", to),
   );
   const adjSnap = await getDocs(qa);
 
@@ -364,31 +370,45 @@ export async function fetchProductEvolutionPollo(args: {
 
   adjSnap.forEach((d) => {
     const a = d.data() as any;
-    const date = String(a.date ?? "");
-    const type = String(a.type ?? "").toUpperCase(); // MERMA / ROBO
+    const date = String(a.date ?? "").slice(0, 10);
+    const type = String(a.type ?? "").toUpperCase();
     const qty = Number(a.qty ?? 0);
     if (!date || qty <= 0) return;
 
-    adjMoves.push({
-      date,
-      type: type === "MERMA" ? "MERMA" : "ROBO",
-      description: a.description
-        ? String(a.description)
-        : type === "MERMA"
-          ? "Merma por peso"
-          : "Pérdida/Robo",
-      ref: d.id,
-      qtyIn: 0,
-      qtyOut: qty,
-    });
+    sumOutFrom += qty;
+    if (date <= to) {
+      adjMoves.push({
+        date,
+        type: type === "MERMA" ? "MERMA" : "ROBO",
+        description: a.description
+          ? String(a.description)
+          : type === "MERMA"
+            ? "Merma por peso"
+            : "Pérdida/Robo",
+        ref: d.id,
+        qtyIn: 0,
+        qtyOut: qty,
+      });
+    }
   });
 
-  const moves = [...ingresoMoves, ...saleMoves, ...adjMoves].sort((a, b) =>
-    a.date.localeCompare(b.date),
+  const baseMoves = [...ingresoMoves, ...saleMoves, ...adjMoves];
+
+  const moves = baseMoves.sort((a, b) => {
+    const c = a.date.localeCompare(b.date);
+    if (c !== 0) return c;
+    const order = (t: InvMoveType) =>
+      t === "INGRESO" ? 0 : t.startsWith("VENTA") ? 1 : 2;
+    return order(a.type) - order(b.type);
+  });
+
+  const openingBalance = round3(
+    Number(remaining) + sumOutFrom - sumInFrom,
   );
 
   return {
     moves,
+    openingBalance,
     productKpis: {
       incoming: round3(incoming),
       soldCash: round3(soldCash),

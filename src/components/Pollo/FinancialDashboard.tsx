@@ -12,9 +12,29 @@ import {
   addDoc,
   serverTimestamp,
 } from "firebase/firestore";
-import { endOfMonth, format, parse, startOfMonth } from "date-fns";
+import {
+  addDays,
+  endOfMonth,
+  format,
+  parse,
+  startOfMonth,
+} from "date-fns";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import ActionMenu, {
+  ActionMenuTrigger,
+  actionMenuItemClass,
+} from "../../components/common/ActionMenu";
 import RefreshButton from "../../components/common/RefreshButton";
 import MobileHtmlSelect from "../../components/common/MobileHtmlSelect";
 import Toast from "../../components/common/Toast";
@@ -23,6 +43,28 @@ import Button from "../common/Button";
 
 const money = (n: unknown) => `C$${Number(n ?? 0).toFixed(2)}`;
 const todayStr = () => format(new Date(), "yyyy-MM-dd");
+
+/** Fechas yyyy-MM-dd desde `from` hasta `to` inclusive. */
+function eachDayInclusive(fromStr: string, toStr: string): string[] {
+  const start = parse(fromStr, "yyyy-MM-dd", new Date());
+  const end = parse(toStr, "yyyy-MM-dd", new Date());
+  if (start > end) return [];
+  const days: string[] = [];
+  let d = start;
+  while (d <= end) {
+    days.push(format(d, "yyyy-MM-dd"));
+    d = addDays(d, 1);
+  }
+  return days;
+}
+
+/** Detección libras para lotes (misma lógica que ventas). */
+function batchIsLb(m: unknown): boolean {
+  const s = String(m ?? "")
+    .toLowerCase()
+    .trim();
+  return ["lb", "lbs", "libra", "libras"].includes(s);
+}
 const qty3 = (n: number) => Number(n || 0).toFixed(3);
 
 type Allocation = {
@@ -114,7 +156,19 @@ export default function FinancialDashboard(): React.ReactElement {
   const [totalInversion, setTotalInversion] = useState<number>(0);
   const [totalExistenciasMonetarias, setTotalExistenciasMonetarias] =
     useState<number>(0);
+  /** Libras ingresadas por día de lote (periodo seleccionado). */
+  const [incomingLbsByDay, setIncomingLbsByDay] = useState<
+    Record<string, number>
+  >({});
+  /** Total esperado ventas por día de ingreso de lote (periodo). */
+  const [expectedVentasByDay, setExpectedVentasByDay] = useState<
+    Record<string, number>
+  >({});
   const [priceVenta, setPriceVenta] = useState<Record<string, number>>({});
+
+  const [dashMenuOpen, setDashMenuOpen] = useState(false);
+  const dashMenuBtnRef = useRef<HTMLButtonElement>(null);
+  const [dashMenuRect, setDashMenuRect] = useState<DOMRect | null>(null);
 
   const { refreshKey, refresh } = useManualRefresh();
 
@@ -800,6 +854,8 @@ export default function FinancialDashboard(): React.ReactElement {
         let totalExpected = 0;
         let totalInversionLocal = 0;
         let totalExistenciasLocal = 0;
+        const incomingLbsDayMap: Record<string, number> = {};
+        const expectedVentasDayMap: Record<string, number> = {};
 
         batchesSnap.forEach((d) => {
           const b = d.data() as any;
@@ -809,6 +865,12 @@ export default function FinancialDashboard(): React.ReactElement {
           const batchDate = b?.date?.toDate
             ? format(b.date.toDate(), "yyyy-MM-dd")
             : String(b?.date ?? b?.createdAt ?? "");
+          const batchDateKey =
+            typeof batchDate === "string" && batchDate.length >= 10
+              ? batchDate.slice(0, 10)
+              : "";
+          const inPeriod =
+            batchDateKey && batchDateKey >= from && batchDateKey <= to;
           const inMonth =
             batchDate && batchDate >= monthStart && batchDate <= monthEnd;
           if (!summary[productName]) {
@@ -829,6 +891,15 @@ export default function FinancialDashboard(): React.ReactElement {
             totalExpected += expected;
             totalInversionLocal += invoiced;
           }
+          if (inPeriod) {
+            expectedVentasDayMap[batchDateKey] =
+              (expectedVentasDayMap[batchDateKey] || 0) + expected;
+            const unitRaw = b.unit ?? b.measurement ?? "";
+            if (batchIsLb(unitRaw)) {
+              incomingLbsDayMap[batchDateKey] =
+                (incomingLbsDayMap[batchDateKey] || 0) + qty;
+            }
+          }
           summary[productName].remainingQty += remaining;
           // accumulate monetary value of remaining stock using salePrice
           const saleP = Number(b.salePrice ?? 0);
@@ -839,11 +910,15 @@ export default function FinancialDashboard(): React.ReactElement {
         setTotalExpectedVentas(Number(totalExpected.toFixed(2)));
         setTotalInversion(Number(totalInversionLocal.toFixed(2)));
         setTotalExistenciasMonetarias(Number(totalExistenciasLocal.toFixed(2)));
+        setIncomingLbsByDay(incomingLbsDayMap);
+        setExpectedVentasByDay(expectedVentasDayMap);
       } catch (e) {
         console.error("Error cargando inventario:", e);
         setInventoryByProduct({});
         setTotalExpectedVentas(0);
         setTotalInversion(0);
+        setIncomingLbsByDay({});
+        setExpectedVentasByDay({});
       }
     };
 
@@ -923,6 +998,53 @@ export default function FinancialDashboard(): React.ReactElement {
     () => kpisCashVisible.netProfit + creditGrossProfitCashRange,
     [kpisCashVisible.netProfit, creditGrossProfitCashRange],
   );
+
+  const lbsDailyChartData = useMemo(() => {
+    const soldByDay: Record<string, number> = {};
+    visibleSales.forEach((s: any) => {
+      if (!isLb(s.measurement)) return;
+      const d = String(s.date || "").slice(0, 10);
+      if (!d) return;
+      soldByDay[d] = (soldByDay[d] || 0) + getQty(s);
+    });
+    const days = eachDayInclusive(from, to);
+    return days.map((day) => ({
+      day,
+      label: format(parse(day, "yyyy-MM-dd", new Date()), "dd/MM"),
+      incoming: incomingLbsByDay[day] ?? 0,
+      consumed: soldByDay[day] ?? 0,
+    }));
+  }, [from, to, visibleSales, incomingLbsByDay]);
+
+  const revenueDailyChartData = useMemo(() => {
+    const cashByDay: Record<string, number> = {};
+    visibleSales
+      .filter((s) => s.type === "CONTADO")
+      .forEach((s) => {
+        const d = String(s.date || "").slice(0, 10);
+        if (!d) return;
+        cashByDay[d] = (cashByDay[d] || 0) + Number(s.amount || 0);
+      });
+    const days = eachDayInclusive(from, to);
+    let cumCash = 0;
+    let cumExpected = 0;
+    return days.map((day) => {
+      cumCash += cashByDay[day] ?? 0;
+      cumExpected += expectedVentasByDay[day] ?? 0;
+      return {
+        day,
+        label: format(parse(day, "yyyy-MM-dd", new Date()), "dd/MM"),
+        cumCash,
+        cumExpected,
+      };
+    });
+  }, [from, to, visibleSales, expectedVentasByDay]);
+
+  const openDashMenu = () => {
+    const r = dashMenuBtnRef.current?.getBoundingClientRect() ?? null;
+    setDashMenuRect(r);
+    setDashMenuOpen(true);
+  };
 
   const totalLbsCash = useMemo(
     () =>
@@ -1315,30 +1437,94 @@ export default function FinancialDashboard(): React.ReactElement {
   }, [from, to]);
 
   return (
-    <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
-      <div className="flex items-center justify-between mb-3 gap-2">
-        <h2 className="text-xl sm:text-2xl font-bold">Dashboard Financiero</h2>
-        <div className="flex items-center gap-2">
-          <Button
+    <div className="w-full min-h-[calc(100dvh-5rem)] bg-gradient-to-b from-slate-100/95 via-slate-50/90 to-white pb-8 pt-2 px-3 sm:px-5 lg:px-6">
+      <div className="w-full max-w-[1800px] mx-auto">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+            Dashboard Financiero
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5 hidden sm:block">
+            Periodo y KPI en vista amplia
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-2 shrink-0">
+          <div className="hidden md:flex flex-wrap items-center gap-2 justify-end">
+            <Button
+              type="button"
+              onClick={handleExportPdf}
+              variant="primary"
+              size="sm"
+              className="!bg-gray-900 !text-white hover:!bg-black !rounded-lg !shadow-none"
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              type="button"
+              onClick={() => handleSaveSnapshot()}
+              disabled={savingSnapshot}
+              variant="primary"
+              size="sm"
+              className="!rounded-lg disabled:!opacity-60"
+            >
+              {savingSnapshot ? "Guardando…" : "Guardar KPIs"}
+            </Button>
+            <RefreshButton onClick={refresh} loading={loading} />
+          </div>
+          <ActionMenuTrigger
+            ref={dashMenuBtnRef}
             type="button"
-            onClick={handleExportPdf}
-            variant="primary"
-            size="sm"
-            className="!bg-gray-900 !text-white hover:!bg-black !rounded-lg !shadow-none"
+            aria-label="Acciones del dashboard"
+            className="md:hidden"
+            onClick={() =>
+              dashMenuOpen ? setDashMenuOpen(false) : openDashMenu()
+            }
+          />
+          <ActionMenu
+            anchorRect={dashMenuRect}
+            isOpen={dashMenuOpen}
+            onClose={() => setDashMenuOpen(false)}
+            width={210}
           >
-            Exportar PDF
-          </Button>
-          <Button
-            type="button"
-            onClick={() => handleSaveSnapshot()}
-            disabled={savingSnapshot}
-            variant="primary"
-            size="sm"
-            className="!rounded-lg disabled:!opacity-60"
-          >
-            {savingSnapshot ? "Guardando…" : "Guardar KPIs"}
-          </Button>
-          <RefreshButton onClick={refresh} loading={loading} />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClass}
+              onClick={() => {
+                handleExportPdf();
+                setDashMenuOpen(false);
+              }}
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClass}
+              disabled={savingSnapshot}
+              onClick={() => {
+                void handleSaveSnapshot();
+                setDashMenuOpen(false);
+              }}
+            >
+              {savingSnapshot ? "Guardando…" : "Guardar KPIs"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClass}
+              disabled={loading}
+              onClick={() => {
+                refresh();
+                setDashMenuOpen(false);
+              }}
+            >
+              Actualizar datos
+            </Button>
+          </ActionMenu>
         </div>
       </div>
 
@@ -1373,16 +1559,22 @@ export default function FinancialDashboard(): React.ReactElement {
               type="button"
               onClick={toggleKpiSection}
               variant="outline"
-              className="w-full text-left px-3 py-3 flex items-center justify-between !rounded-2xl bg-white !justify-between"
+              className="w-full text-left px-4 py-3.5 flex items-center justify-between !rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50/40 to-white shadow-[0_10px_38px_-22px_rgba(15,23,42,0.28)] ring-1 ring-slate-900/[0.04] hover:border-slate-300/90 hover:shadow-lg transition-all !justify-between"
             >
               <div>
-                <div className="font-semibold">Kpi Financiero</div>
-                <div className="text-xs text-gray-600">
-                  Ventas: <b>{money(kpisVisible.revenue)}</b> • Utilidad Neta:{" "}
-                  <b>{money(kpisVisible.netProfit)}</b>
+                <div className="font-semibold text-slate-900">KPI financiero</div>
+                <div className="text-xs text-slate-600 mt-0.5">
+                  Ventas:{" "}
+                  <span className="font-semibold text-slate-800 tabular-nums">
+                    {money(kpisVisible.revenue)}
+                  </span>{" "}
+                  · Utilidad neta:{" "}
+                  <span className="font-semibold text-emerald-800 tabular-nums">
+                    {money(kpisVisible.netProfit)}
+                  </span>
                 </div>
               </div>
-              <div className="text-gray-500">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 shrink-0 ml-2 px-2 py-1 rounded-lg bg-slate-100/90 border border-slate-200/80">
                 {kpiSectionOpen ? "Cerrar" : "Ver"}
               </div>
             </Button>
@@ -1402,7 +1594,7 @@ export default function FinancialDashboard(): React.ReactElement {
                 </div>
 
                 <div className="md:hidden space-y-3">
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
+                  <div className="rounded-2xl border border-slate-200/70 border-l-[4px] border-l-emerald-500 bg-white shadow-[0_12px_40px_-22px_rgba(15,23,42,0.22)] ring-1 ring-slate-900/[0.04] p-3 sm:p-4 space-y-3">
                     <Button
                       type="button"
                       variant="ghost"
@@ -1422,7 +1614,7 @@ export default function FinancialDashboard(): React.ReactElement {
                     {salesKpiCardOpen && (
                       <div className="space-y-2">
                         <div className="text-sm text-gray-600">Ventas Cash</div>
-                        <div className="text-lg font-bold">
+                        <div className="text-xl font-bold text-emerald-700 tabular-nums">
                           {money(cashRevenueWithAbonos)}
                         </div>
                         <div className="text-sm text-gray-500">Costo</div>
@@ -1441,7 +1633,7 @@ export default function FinancialDashboard(): React.ReactElement {
                         <div className="text-sm text-gray-600">
                           Ventas Crédito
                         </div>
-                        <div className="text-lg">
+                        <div className="text-xl font-bold text-amber-700 tabular-nums">
                           {money(kpisCreditVisible.revenue)}
                         </div>
                         <div className="text-sm text-gray-500">Costo</div>
@@ -1458,7 +1650,7 @@ export default function FinancialDashboard(): React.ReactElement {
                     )}
                   </div>
 
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
+                  <div className="rounded-2xl border border-slate-200/70 border-l-[4px] border-l-violet-500 bg-white shadow-[0_12px_40px_-22px_rgba(15,23,42,0.22)] ring-1 ring-slate-900/[0.04] p-3 sm:p-4 space-y-3">
                     <Button
                       type="button"
                       variant="ghost"
@@ -1478,7 +1670,7 @@ export default function FinancialDashboard(): React.ReactElement {
                     {fundsKpiCardOpen && (
                       <div className="space-y-2">
                         <div className="text-sm text-gray-600">CxC</div>
-                        <div className="text-lg font-bold">
+                        <div className="text-xl font-bold text-violet-700 tabular-nums">
                           {money(totalPendingBalance)}
                         </div>
                         <div className="text-sm text-gray-500">
@@ -1558,7 +1750,7 @@ export default function FinancialDashboard(): React.ReactElement {
                     )}
                   </div>
 
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 sm:p-4 space-y-3">
+                  <div className="rounded-2xl border border-slate-200/70 border-l-[4px] border-l-amber-500 bg-white shadow-[0_12px_40px_-22px_rgba(15,23,42,0.22)] ring-1 ring-slate-900/[0.04] p-3 sm:p-4 space-y-3">
                     <Button
                       type="button"
                       variant="ghost"
@@ -1610,232 +1802,128 @@ export default function FinancialDashboard(): React.ReactElement {
                   </div>
                 </div>
 
-                {/* legacy KPI grids removed — using vertical card layout below */}
+                <div className="hidden md:grid grid-cols-3 gap-4 mb-3">
+                  <DashboardCard
+                    accent="emerald"
+                    eyebrow="Operaciones"
+                    title="Cash · Crédito"
+                  >
+                    <DashboardKpiHero
+                      label="Ventas Cash"
+                      value={money(cashRevenueWithAbonos)}
+                      valueClassName="text-emerald-700"
+                    />
+                    <DashboardMetricRow
+                      label="Costo"
+                      value={money(kpisCashVisible.cogsReal)}
+                    />
+                    <DashboardMetricRow
+                      label="Utilidad bruta Cash"
+                      value={money(kpisCashVisible.grossProfit)}
+                      emphasize
+                    />
+                    <DashboardSectionDivider label="Crédito" />
+                    <DashboardKpiHero
+                      label="Ventas Crédito"
+                      value={money(kpisCreditVisible.revenue)}
+                      valueClassName="text-amber-700"
+                    />
+                    <DashboardMetricRow
+                      label="Costo"
+                      value={money(kpisCreditVisible.cogsReal)}
+                    />
+                    <DashboardMetricRow
+                      label="Utilidad bruta Crédito"
+                      value={money(kpisCreditVisible.grossProfit)}
+                      emphasize
+                    />
+                  </DashboardCard>
 
-                <div className="md:hidden space-y-3 mb-3">
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 space-y-2">
-                    <h4 className="text-sm font-semibold text-gray-700">
-                      Ventas Cash
-                    </h4>
-                    <div className="text-xl font-bold">
-                      {money(cashRevenueWithAbonos)}
-                    </div>
-                    <div className="text-sm text-gray-500">Costo</div>
-                    <div className="text-base">
-                      {money(kpisCashVisible.cogsReal)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Bruta Cash
-                    </div>
-                    <div className="text-base font-medium">
-                      {money(kpisCashVisible.grossProfit)}
-                    </div>
-                    <hr className="my-2" />
-                    <div className="text-sm text-gray-500">Ventas Crédito</div>
-                    <div className="text-base">
-                      {money(kpisCreditVisible.revenue)}
-                    </div>
-                    <div className="text-sm text-gray-500">Costo</div>
-                    <div className="text-base">
-                      {money(kpisCreditVisible.cogsReal)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Bruta Crédito
-                    </div>
-                    <div className="text-base font-medium">
-                      {money(kpisCreditVisible.grossProfit)}
-                    </div>
-                  </div>
+                  <DashboardCard
+                    accent="violet"
+                    eyebrow="Cartera"
+                    title="CxC · Cobranza"
+                  >
+                    <DashboardKpiHero
+                      label="Saldo CxC"
+                      value={money(totalPendingBalance)}
+                      valueClassName="text-violet-700"
+                    />
+                    <DashboardMetricRow
+                      label="Recaudación global (abonos)"
+                      value={money(totalAbonos)}
+                    />
+                    <DashboardMetricRow
+                      label="Recaudación en el periodo"
+                      value={money(totalAbonosRange)}
+                    />
+                    <DashboardSectionDivider label="Proyección" />
+                    <DashboardMetricRow
+                      label="Total esperado ventas"
+                      value={money(totalExpectedVentas)}
+                      valueClassName="text-sky-800"
+                    />
+                    <DashboardMetricRow
+                      label="Existencias monetarias"
+                      value={money(totalExistenciasMonetarias)}
+                    />
+                    <DashboardMetricRow
+                      label="Recolectado Cash + Abonos"
+                      value={money(collectedCashPlusAbonos)}
+                    />
+                    <DashboardMetricRow
+                      label="Por recolectar"
+                      value={money(porRecolectar)}
+                      emphasize
+                      danger={porRecolectar < 0}
+                    />
+                  </DashboardCard>
 
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 space-y-2">
-                    <h4 className="text-sm font-semibold text-gray-700">CxC</h4>
-                    <div className="text-xl font-bold">
-                      {money(totalPendingBalance)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Recaudación Global(Abonos)
-                    </div>
-                    <div className="text-base">{money(totalAbonos)}</div>
-                    <div className="text-sm text-gray-500">
-                      Recaudación a la fecha
-                    </div>
-                    <div className="text-base">{money(totalAbonosRange)}</div>
-                    <hr className="my-2" />
-                    <div className="text-sm text-gray-500">
-                      Total esperado ventas
-                    </div>
-                    <div className="text-base">
-                      {money(totalExpectedVentas)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Existencias Monetarias
-                    </div>
-                    <div className="text-base">
-                      {money(totalExistenciasMonetarias)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Recolectado Cash + Abonos
-                    </div>
-                    <div className="text-base">
-                      {money(collectedCashPlusAbonos)}
-                    </div>
-                    <div className="text-sm text-gray-500">Por Recolectar</div>
-                    <div
-                      className={`text-base font-medium ${porRecolectar < 0 ? "text-red-600" : ""}`}
-                    >
-                      {money(porRecolectar)}
-                    </div>
-                  </div>
-
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-3 space-y-2">
-                    <h4 className="text-sm font-semibold text-gray-700">
-                      Inversion
-                    </h4>
-                    <div className="text-xl font-bold">
-                      {money(totalInversion)}
-                    </div>
-                    <div className="text-sm text-gray-500">Utilidad bruta</div>
-                    <div className="text-base">{money(utilidadBruta)}</div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Neta Crédito (Caja)
-                    </div>
-                    <div className="text-base">
-                      {money(creditGrossProfitCashRange)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Bruta Cash + Crédito
-                    </div>
-                    <div className="text-base">
-                      {money(grossProfitCashPlusCredit)}
-                    </div>
-                    <div className="text-sm text-gray-500">Gastos</div>
-                    <div className="text-base">
-                      {money(kpisCashVisible.expensesSum)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Neta Cash + Crédito
-                    </div>
-                    <div className="text-base font-medium">
-                      {money(netProfitCashPlusCredit)}
-                    </div>
-                  </div>
+                  <DashboardCard
+                    accent="amber"
+                    eyebrow="Resultado"
+                    title="Inversión · Utilidad"
+                  >
+                    <DashboardKpiHero
+                      label="Inversión"
+                      value={money(totalInversion)}
+                      valueClassName="text-amber-900"
+                    />
+                    <DashboardMetricRow
+                      label="Utilidad bruta"
+                      value={money(utilidadBruta)}
+                    />
+                    <DashboardMetricRow
+                      label="Utilidad neta Crédito (caja)"
+                      value={money(creditGrossProfitCashRange)}
+                    />
+                    <DashboardMetricRow
+                      label="Utilidad bruta Cash + Crédito"
+                      value={money(grossProfitCashPlusCredit)}
+                    />
+                    <DashboardMetricRow
+                      label="Gastos"
+                      value={money(kpisCashVisible.expensesSum)}
+                    />
+                    <DashboardMetricRow
+                      label="Utilidad neta Cash + Crédito"
+                      value={money(netProfitCashPlusCredit)}
+                      emphasize
+                      valueClassName="text-emerald-800"
+                    />
+                  </DashboardCard>
                 </div>
 
-                <div className="hidden md:grid grid-cols-3 gap-3 mb-3">
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-4 space-y-2">
-                    <h4 className="text-sm font-semibold text-gray-700">
-                      Ventas Cash
-                    </h4>
-                    <div className="text-2xl font-bold">
-                      {money(cashRevenueWithAbonos)}
-                    </div>
-                    <div className="text-sm text-gray-500">Costo</div>
-                    <div className="text-lg">
-                      {money(kpisCashVisible.cogsReal)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Bruta Cash
-                    </div>
-                    <div className="text-lg font-medium">
-                      {money(kpisCashVisible.grossProfit)}
-                    </div>
-                    <hr className="my-2" />
-                    <div className="text-sm text-gray-500">Ventas Crédito</div>
-                    <div className="text-lg">
-                      {money(kpisCreditVisible.revenue)}
-                    </div>
-                    <div className="text-sm text-gray-500">Costo</div>
-                    <div className="text-lg">
-                      {money(kpisCreditVisible.cogsReal)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Bruta Crédito
-                    </div>
-                    <div className="text-lg font-medium">
-                      {money(kpisCreditVisible.grossProfit)}
-                    </div>
-                  </div>
-
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-4 space-y-2">
-                    <h4 className="text-sm font-semibold text-gray-700">CxC</h4>
-                    <div className="text-2xl font-bold">
-                      {money(totalPendingBalance)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Recaudación Global(Abonos)
-                    </div>
-                    <div className="text-lg">{money(totalAbonos)}</div>
-                    <div className="text-sm text-gray-500">
-                      Recaudación a la fecha
-                    </div>
-                    <div className="text-lg">{money(totalAbonosRange)}</div>
-                    <hr className="my-2" />
-                    <div className="text-sm text-gray-500">
-                      Total esperado ventas
-                    </div>
-                    <div className="text-lg">{money(totalExpectedVentas)}</div>
-                    <div className="text-sm text-gray-500">
-                      Existencias Monetarias
-                    </div>
-                    <div className="text-lg">
-                      {money(totalExistenciasMonetarias)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Recolectado Cash + Abonos
-                    </div>
-                    <div className="text-lg">
-                      {money(collectedCashPlusAbonos)}
-                    </div>
-                    <div className="text-sm text-gray-500">Por Recolectar</div>
-                    <div
-                      className={`text-lg font-medium ${porRecolectar < 0 ? "text-red-600" : ""}`}
-                    >
-                      {money(porRecolectar)}
-                    </div>
-                  </div>
-
-                  <div className="rounded-3xl bg-white shadow-xl border border-gray-100 p-4 space-y-2">
-                    <h4 className="text-sm font-semibold text-gray-700">
-                      Inversion
-                    </h4>
-                    <div className="text-2xl font-bold">
-                      {money(totalInversion)}
-                    </div>
-                    <div className="text-sm text-gray-500">Utilidad bruta</div>
-                    <div className="text-lg">{money(utilidadBruta)}</div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Neta Crédito (Caja)
-                    </div>
-                    <div className="text-lg">
-                      {money(creditGrossProfitCashRange)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Bruta Cash + Crédito
-                    </div>
-                    <div className="text-lg">
-                      {money(grossProfitCashPlusCredit)}
-                    </div>
-                    <div className="text-sm text-gray-500">Gastos</div>
-                    <div className="text-lg">
-                      {money(kpisCashVisible.expensesSum)}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      Utilidad Neta Cash + Crédito
-                    </div>
-                    <div className="text-lg font-medium">
-                      {money(netProfitCashPlusCredit)}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="hidden md:grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 rounded-lg shadow-2xl p-3 sm:p-4 bg-gray-50">
+                <div className="hidden md:grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 rounded-2xl border border-slate-200/55 bg-gradient-to-b from-slate-50/95 via-white to-white p-4 sm:p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.9)] ring-1 ring-slate-900/[0.03]">
                   <KpiCompact
                     title="Libras Cash + Credito"
                     value={qty3(totalLbsCash + totalLbsCredit)}
+                    valueClassName="text-teal-700"
                   />
                   <KpiCompact
                     title="Unidades Cash + Credito"
                     value={qty3(totalUnitsCash + totalUnitsCredit)}
+                    valueClassName="text-indigo-700"
                   />
                   <KpiList
                     title="Productos más vendidos"
@@ -1848,6 +1936,121 @@ export default function FinancialDashboard(): React.ReactElement {
                 </div>
               </div>
             )}
+            <div className="hidden md:grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4 mt-4 px-0">
+                  <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.04]">
+                    <div className="text-sm font-semibold text-slate-800 mb-1">
+                      Libras ingresadas vs consumidas
+                    </div>
+                    <p className="text-[11px] text-slate-500 mb-3 leading-snug">
+                      Por día en el periodo: ingreso en lotes (lb) frente a libras
+                      vendidas cash + crédito.
+                    </p>
+                    <div className="h-[260px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={lbsDailyChartData}
+                          margin={{ top: 4, right: 12, left: 0, bottom: 0 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fontSize: 10 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis tick={{ fontSize: 10 }} width={40} />
+                          <Tooltip
+                            formatter={(v: number | string | undefined) =>
+                              qty3(Number(v ?? 0))
+                            }
+                            labelStyle={{ fontSize: 12 }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 11 }} />
+                          <Line
+                            type="monotone"
+                            dataKey="incoming"
+                            name="Ingresadas"
+                            stroke="#0ea5e9"
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="consumed"
+                            name="Consumidas"
+                            stroke="#f97316"
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.04]">
+                    <div className="text-sm font-semibold text-slate-800 mb-1">
+                      Esperado acumulado vs ventas cash acumuladas
+                    </div>
+                    <p className="text-[11px] text-slate-500 mb-1 leading-snug">
+                      Esperado según ingreso de lotes (acumulado) vs ventas al
+                      contado (acumulado en el periodo).
+                    </p>
+                    <p className="text-[10px] text-slate-600 mb-3 leading-relaxed">
+                      Saldos pendientes (CxC):{" "}
+                      <span className="font-semibold text-violet-700 tabular-nums">
+                        {money(totalPendingBalance)}
+                      </span>
+                      {" · "}
+                      Ventas crédito (periodo):{" "}
+                      <span className="font-semibold text-amber-700 tabular-nums">
+                        {money(totalSalesCredit)}
+                      </span>
+                    </p>
+                    <div className="h-[240px] w-full min-w-0">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={revenueDailyChartData}
+                          margin={{ top: 4, right: 12, left: 0, bottom: 0 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fontSize: 10 }}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis
+                            tick={{ fontSize: 10 }}
+                            width={48}
+                            tickFormatter={(v) =>
+                              v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`
+                            }
+                          />
+                          <Tooltip
+                            formatter={(v: number | string | undefined) =>
+                              money(Number(v ?? 0))
+                            }
+                            labelStyle={{ fontSize: 12 }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 11 }} />
+                          <Line
+                            type="monotone"
+                            dataKey="cumExpected"
+                            name="Total esperado acum."
+                            stroke="#8b5cf6"
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="cumCash"
+                            name="Ventas cash acum."
+                            stroke="#10b981"
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
           </div>
 
           <div className="mb-3">
@@ -1864,60 +2067,163 @@ export default function FinancialDashboard(): React.ReactElement {
             </Button>
 
             {pendingSectionOpen && (
-              <div className="border rounded-2xl p-3 sm:p-4 bg-gray-50 mt-3">
+              <div className="mt-3 rounded-2xl border border-slate-200/90 bg-white shadow-sm overflow-hidden">
                 {pendingLoading ? (
-                  <div className="text-sm text-gray-600">Cargando saldos…</div>
+                  <div className="text-sm text-slate-600 p-4">
+                    Cargando saldos…
+                  </div>
                 ) : pendingCustomers.length === 0 ? (
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-slate-600 p-4">
                     Sin saldos pendientes.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full border text-sm">
-                      <thead className="bg-white">
-                        <tr>
-                          <th className="border p-2">Cliente</th>
-                          <th className="border p-2">Libras</th>
-                          <th className="border p-2">Unidades</th>
-                          <th className="border p-2">Saldo Global</th>
-                          <th className="border p-2">Último abono</th>
-                          <th className="border p-2">Saldo pendiente</th>
-                          <th className="border p-2">Fecha ult. abono</th>
-                          <th className="border p-2">Ver</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pendingCustomers.map((c) => (
-                          <tr key={c.customerId} className="text-center">
-                            <td className="border p-1 text-left">{c.name}</td>
-                            <td className="border p-1">{qty3(c.lbs)}</td>
-                            <td className="border p-1">{qty3(c.units)}</td>
-                            <td className="border p-1">
-                              {money(c.globalBalance)}
-                            </td>
-                            <td className="border p-1">
-                              {money(c.lastPaymentAmount)}
-                            </td>
-                            <td className="border p-1">{money(c.balance)}</td>
-                            <td className="border p-1">
-                              {c.lastPaymentDate || "—"}
-                            </td>
-                            <td className="border p-1">
-                              <Button
-                                type="button"
-                                onClick={() => setPendingOpen(c)}
-                                variant="primary"
-                                size="sm"
-                                className="!bg-indigo-600 hover:!bg-indigo-700 !text-white !rounded-md !px-3 !py-1 text-xs"
-                              >
-                                Ver
-                              </Button>
-                            </td>
+                  <>
+                    <div className="hidden md:block rounded-xl overflow-x-auto border border-slate-200/80 shadow-sm">
+                      <table className="min-w-full w-full text-sm">
+                        <thead className="bg-slate-100 sticky top-0 z-10">
+                          <tr className="text-[11px] uppercase tracking-wider text-slate-600">
+                            <th className="p-3 border-b text-left whitespace-nowrap">
+                              Cliente
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap">
+                              Libras
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap">
+                              Unidades
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap tabular-nums">
+                              Saldo global
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap tabular-nums">
+                              Último abono
+                            </th>
+                            <th className="p-3 border-b text-right whitespace-nowrap tabular-nums font-semibold text-violet-800">
+                              Saldo pendiente
+                            </th>
+                            <th className="p-3 border-b text-left whitespace-nowrap">
+                              Fecha últ. abono
+                            </th>
+                            <th className="p-3 border-b text-center w-14 whitespace-nowrap" />
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {pendingCustomers.map((c) => (
+                            <tr
+                              key={c.customerId}
+                              className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
+                            >
+                              <td className="p-3 border-b text-left font-medium text-slate-800 max-w-[14rem] truncate">
+                                {c.name}
+                              </td>
+                              <td className="p-3 border-b text-right tabular-nums text-sky-800 font-medium">
+                                {qty3(c.lbs)}
+                              </td>
+                              <td className="p-3 border-b text-right tabular-nums text-slate-700">
+                                {qty3(c.units)}
+                              </td>
+                              <td className="p-3 border-b text-right tabular-nums">
+                                {money(c.globalBalance)}
+                              </td>
+                              <td className="p-3 border-b text-right tabular-nums">
+                                {money(c.lastPaymentAmount)}
+                              </td>
+                              <td className="p-3 border-b text-right tabular-nums font-semibold text-violet-800">
+                                {money(c.balance)}
+                              </td>
+                              <td className="p-3 border-b text-left whitespace-nowrap text-slate-700">
+                                {c.lastPaymentDate || "—"}
+                              </td>
+                              <td className="p-3 border-b text-center">
+                                <Button
+                                  type="button"
+                                  onClick={() => setPendingOpen(c)}
+                                  variant="primary"
+                                  size="sm"
+                                  className="!bg-indigo-600 hover:!bg-indigo-700 !text-white !rounded-lg !px-3 !py-1 text-xs"
+                                >
+                                  Ver
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="md:hidden divide-y divide-slate-100">
+                      {pendingCustomers.map((c) => (
+                        <div
+                          key={c.customerId}
+                          className="p-4 space-y-3 bg-gradient-to-br from-white to-slate-50/80"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="font-semibold text-slate-900 leading-snug">
+                                {c.name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 mt-1">
+                                Últ. abono:{" "}
+                                <span className="text-slate-700">
+                                  {c.lastPaymentDate || "—"}
+                                </span>
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              onClick={() => setPendingOpen(c)}
+                              variant="primary"
+                              size="sm"
+                              className="!bg-indigo-600 hover:!bg-indigo-700 shrink-0 !text-white !rounded-lg !px-3 !py-1.5 text-xs"
+                            >
+                              Ver
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div className="rounded-xl border border-slate-200/80 bg-white px-3 py-2 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                                Libras
+                              </div>
+                              <div className="font-semibold tabular-nums text-sky-800">
+                                {qty3(c.lbs)}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-200/80 bg-white px-3 py-2 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                                Unidades
+                              </div>
+                              <div className="font-semibold tabular-nums text-slate-800">
+                                {qty3(c.units)}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-200/80 bg-white px-3 py-2 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                                Saldo global
+                              </div>
+                              <div className="font-semibold tabular-nums text-slate-900">
+                                {money(c.globalBalance)}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-200/80 bg-white px-3 py-2 shadow-sm">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                                Último abono
+                              </div>
+                              <div className="font-semibold tabular-nums text-slate-900">
+                                {money(c.lastPaymentAmount)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-violet-200/90 bg-violet-50/70 px-3 py-2.5 flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-violet-900">
+                              Saldo pendiente
+                            </span>
+                            <span className="text-lg font-bold tabular-nums text-violet-800">
+                              {money(c.balance)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -2341,11 +2647,115 @@ export default function FinancialDashboard(): React.ReactElement {
       {toastMsg && (
         <Toast message={toastMsg} onClose={() => setToastMsg("")} />
       )}
+      </div>
     </div>
   );
 }
 
 /* ================== UI pequeñas ================== */
+
+const dashboardAccentBar: Record<"emerald" | "violet" | "amber", string> = {
+  emerald: "bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600",
+  violet: "bg-gradient-to-r from-violet-500 via-indigo-500 to-violet-600",
+  amber: "bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600",
+};
+
+function DashboardCard({
+  accent,
+  eyebrow,
+  title,
+  children,
+}: {
+  accent: keyof typeof dashboardAccentBar;
+  eyebrow: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200/70 bg-white shadow-[0_12px_42px_-20px_rgba(15,23,42,0.28)] ring-1 ring-slate-900/[0.035] overflow-hidden flex flex-col min-h-0 transition-[box-shadow,transform] hover:shadow-[0_18px_52px_-18px_rgba(15,23,42,0.32)] hover:-translate-y-[1px]">
+      <div
+        className={`h-[3px] w-full ${dashboardAccentBar[accent]}`}
+        aria-hidden
+      />
+      <div className="px-4 pt-4 pb-3 border-b border-slate-100/90 bg-gradient-to-br from-slate-50/95 via-white to-white">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          {eyebrow}
+        </p>
+        <h4 className="text-[15px] font-semibold text-slate-900 tracking-tight mt-1">
+          {title}
+        </h4>
+      </div>
+      <div className="px-4 py-1 pb-4 flex-1">{children}</div>
+    </div>
+  );
+}
+
+function DashboardMetricRow({
+  label,
+  value,
+  emphasize,
+  danger,
+  valueClassName,
+}: {
+  label: string;
+  value: React.ReactNode;
+  emphasize?: boolean;
+  danger?: boolean;
+  /** Clases Tailwind para el número (p. ej. tonos emerald/violet). */
+  valueClassName?: string;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2.5 border-b border-slate-100/90 last:border-b-0">
+      <span className="text-[11px] sm:text-xs font-medium text-slate-500 leading-snug pt-0.5 max-w-[58%]">
+        {label}
+      </span>
+      <span
+        className={`text-right tabular-nums font-semibold shrink-0 ${
+          danger
+            ? `!text-rose-600 ${emphasize ? "text-base sm:text-[17px]" : "text-sm"}`
+            : `${emphasize ? "text-base sm:text-[17px]" : "text-sm"} ${valueClassName ?? "text-slate-900"}`
+        }`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function DashboardKpiHero({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: React.ReactNode;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="mb-1 pb-4 border-b border-slate-100">
+      <div className="text-[11px] font-medium text-slate-500 mb-1.5">{label}</div>
+      <div
+        className={`text-2xl sm:text-[1.65rem] font-bold tracking-tight tabular-nums ${
+          valueClassName ?? "text-slate-900"
+        }`}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function DashboardSectionDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 py-3">
+      <div className="h-px flex-1 bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 shrink-0">
+        {label}
+      </span>
+      <div className="h-px flex-1 bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
+    </div>
+  );
+}
 
 function Kpi({
   title,
@@ -2371,15 +2781,15 @@ function Kpi({
         : "";
 
   return (
-    <div className="border rounded-2xl p-3 bg-white">
-      <div className="text-[13px] sm:text-[17px] text-gray-500">{title}</div>
+    <div className="rounded-2xl border border-slate-200/70 bg-gradient-to-b from-white to-slate-50/40 p-4 shadow-[0_10px_34px_-18px_rgba(15,23,42,0.22)] ring-1 ring-slate-900/[0.04]">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+        {title}
+      </div>
       {subtitle ? (
-        <div className="text-[11px] sm:text-[12px] text-gray-400">
-          {subtitle}
-        </div>
+        <div className="text-[11px] text-slate-400 mt-1">{subtitle}</div>
       ) : null}
       <div
-        className={`text-[26px] sm:text-[30px] font-bold ${resolvedValueClass}`}
+        className={`text-[26px] sm:text-[30px] font-bold tracking-tight tabular-nums mt-2 ${resolvedValueClass}`}
       >
         {value}
       </div>
@@ -2388,16 +2798,32 @@ function Kpi({
 }
 
 /** KPI compacto (tipografía pequeña) */
-function KpiCompact({ title, value }: { title: string; value: string }) {
+function KpiCompact({
+  title,
+  value,
+  valueClassName,
+}: {
+  title: string;
+  value: string;
+  valueClassName?: string;
+}) {
   return (
-    <div className="border rounded-lg p-3 bg-white">
-      <div className="text-[13px] sm:text-[17px] text-gray-500">{title}</div>
-      <div className="text-[18px] sm:text-[20px] font-semibold">{value}</div>
+    <div className="rounded-xl border border-slate-200/70 bg-white p-4 shadow-[0_8px_28px_-14px_rgba(15,23,42,0.18)] ring-1 ring-slate-900/[0.03] transition-colors hover:border-teal-200/70 hover:shadow-[0_12px_36px_-14px_rgba(15,23,42,0.2)]">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 mb-2">
+        {title}
+      </div>
+      <div
+        className={`text-xl sm:text-2xl font-bold tabular-nums tracking-tight ${
+          valueClassName ?? "text-slate-900"
+        }`}
+      >
+        {value}
+      </div>
     </div>
   );
 }
 
-/** KPI de lista (3 renglones, tipografía chica) */
+/** KPI de lista (top productos, etc.) */
 function KpiList({
   title,
   items,
@@ -2406,15 +2832,25 @@ function KpiList({
   items: { key: string; label: string; value?: string }[];
 }) {
   return (
-    <div className="border rounded-lg p-3 bg-white">
-      <div className="text-[11px] text-gray-500 mb-1">{title}</div>
-      <ul className="text-sm leading-snug list-none pl-0 m-0 space-y-0.5">
+    <div className="rounded-xl border border-slate-200/70 bg-white p-4 shadow-[0_8px_28px_-14px_rgba(15,23,42,0.18)] ring-1 ring-slate-900/[0.03] flex flex-col min-h-[10rem]">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 pb-3 mb-1 border-b border-slate-100">
+        {title}
+      </div>
+      <ul className="text-[13px] leading-relaxed list-none pl-0 m-0 space-y-2 flex-1 overflow-auto max-h-40 pr-0.5">
         {items.length === 0 ? (
-          <li className="text-gray-500">—</li>
+          <li className="text-slate-400 text-sm">—</li>
         ) : (
           items.map((it) => (
-            <li key={it.key}>
-              {it.label} {it.value ?? ""}
+            <li
+              key={it.key}
+              className="flex items-baseline justify-between gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-slate-50/90 transition-colors"
+            >
+              <span className="text-slate-700 font-medium truncate min-w-0">
+                {it.label}
+              </span>
+              <span className="text-slate-600 tabular-nums shrink-0 text-xs font-semibold">
+                {it.value ?? ""}
+              </span>
             </li>
           ))
         )}
@@ -2433,9 +2869,9 @@ function Info({
   valueClass?: string;
 }) {
   return (
-    <div className="border rounded-xl p-2 bg-gray-50">
-      <div className="text-[11px] text-gray-600">{label}</div>
-      <div className={`text-sm mt-0.5 ${valueClass || ""}`}>{value}</div>
+    <div className="border border-slate-200/70 rounded-xl p-2.5 bg-gradient-to-br from-slate-50/90 to-white shadow-sm">
+      <div className="text-[11px] font-medium text-slate-600">{label}</div>
+      <div className={`text-sm mt-1 font-medium ${valueClass || ""}`}>{value}</div>
     </div>
   );
 }

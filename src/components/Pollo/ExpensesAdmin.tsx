@@ -65,6 +65,8 @@ interface ExpenseRow {
   status: Status;
   notes?: string;
   createdAt: Timestamp;
+  /** Si existe, este gasto está enlazado con `cash_ledger_pollo` (creado desde Estado de cuenta). */
+  ledgerId?: string;
 }
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
@@ -134,6 +136,7 @@ export default function ExpensesAdmin() {
             status: (x.status as Status) || "PENDIENTE",
             notes: x.notes || "",
             createdAt: x.createdAt ?? Timestamp.now(),
+            ledgerId: typeof x.ledgerId === "string" ? x.ledgerId : undefined,
           });
         });
         setRows(list);
@@ -246,6 +249,18 @@ export default function ExpensesAdmin() {
 
       await updateDoc(doc(db, "expenses", editingId), payload);
 
+      const linkedLedgerId = rows.find((x) => x.id === editingId)?.ledgerId;
+      if (linkedLedgerId) {
+        await updateDoc(doc(db, "cash_ledger_pollo", linkedLedgerId), {
+          date: eDate,
+          type: "GASTO",
+          description: eDescription.trim(),
+          reference: eCategory || null,
+          inAmount: 0,
+          outAmount: Number(Number(eAmount || 0).toFixed(2)),
+        });
+      }
+
       setRows((prev) =>
         prev.map((x) => (x.id === editingId ? { ...x, ...payload } : x)),
       );
@@ -262,6 +277,9 @@ export default function ExpensesAdmin() {
     if (!ok) return;
 
     try {
+      if (r.ledgerId) {
+        await deleteDoc(doc(db, "cash_ledger_pollo", r.ledgerId));
+      }
       await deleteDoc(doc(db, "expenses", r.id));
       setRows((prev) => prev.filter((x) => x.id !== r.id));
       setMsg("🗑️ Gasto borrado");

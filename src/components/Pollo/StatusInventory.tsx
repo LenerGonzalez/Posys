@@ -24,7 +24,11 @@ import useManualRefresh from "../../hooks/useManualRefresh";
 import Button from "../common/Button";
 import PolloChip, { type PolloChipVariant } from "../common/PolloChip";
 import SlideOverDrawer from "../common/SlideOverDrawer";
-import { DrawerDetailDlCard } from "../common/DrawerContentCards";
+import {
+  DrawerDetailDlCard,
+  DrawerSectionTitle,
+  DrawerStatGrid,
+} from "../common/DrawerContentCards";
 import * as XLSX from "xlsx";
 import {
   fetchGlobalInventoryKpisPollo_debug,
@@ -34,6 +38,17 @@ import {
   type ProductOption,
   type ProductKpis,
 } from "../../Services/inventory_evolution_pollo";
+import {
+  fetchLotGroupsInRange,
+  fetchSalesV2ForLotView,
+  collectLotSaleAllocHits,
+  allocLineAmount,
+  allocLineGross,
+  lineMatchesProductFilter,
+  type LotGroup,
+  type LotBatchLine,
+  type LotSaleAllocHit,
+} from "../../Services/inventory_lotes_pollo";
 
 function tipoMoveChipVariant(t: string): PolloChipVariant {
   switch (t) {
@@ -89,6 +104,430 @@ function KpiCard({
 
 const qty3 = (n: unknown) => Number(n ?? 0).toFixed(3);
 const today = () => format(new Date(), "yyyy-MM-dd");
+const monthStart = () =>
+  format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), "yyyy-MM-dd");
+const moneyFmt = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
+const normKeyLocal = (s: unknown) =>
+  String(s ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+
+function lotProductChipKeyFromLine(l: LotBatchLine): string {
+  return String(l.productId || "").trim() || normKeyLocal(l.productName);
+}
+
+/** Una fila por día + producto: ventas desglosadas; restante = total del lote tras ese día (todas las líneas). */
+type LotExpandedDailyRow = {
+  date: string;
+  productKey: string;
+  productLabel: string;
+  /** Precio unitario de venta (promedio ponderado por lb/und si hay varias líneas ese día). */
+  unitSalePrice: number;
+  cashQty: number;
+  cashMonto: number;
+  creditQty: number;
+  creditMonto: number;
+  restanteTotal: number;
+};
+
+function productKeyFromAllocHit(h: LotSaleAllocHit): string {
+  return String(h.productId || "").trim() || normKeyLocal(h.productName);
+}
+
+function buildLotExpandedDailyRows(
+  visLines: LotBatchLine[],
+  hits: LotSaleAllocHit[],
+): LotExpandedDailyRow[] {
+  /** Cantidad asignada a cada batch solo desde ventas cargadas en el rango [from, to]. */
+  const allocInRangeByBatch = new Map<string, number>();
+  for (const h of hits) {
+    const bid = h.batchId;
+    allocInRangeByBatch.set(
+      bid,
+      (allocInRangeByBatch.get(bid) ?? 0) + Number(h.allocQty ?? 0),
+    );
+  }
+  /**
+   * Stock simulado al **inicio** del periodo (antes de aplicar ventas del rango):
+   * remaining_DB + alloc_en_rango = qty tras ventas anteriores al rango (y cuadra con Σ remaining al final).
+   * Antes se inicializaba con `quantity` y solo se restaban ventas del rango → sobrestimaba restante
+   * si hubo ventas antes del `from` o consumos no cubiertos por hits (merma, etc.).
+   */
+  const remSim = new Map<string, number>();
+  for (const ln of visLines) {
+    const bid = ln.id;
+    const allocHere = allocInRangeByBatch.get(bid) ?? 0;
+    const remNow = Number(ln.remaining ?? 0);
+    remSim.set(bid, round2(remNow + allocHere));
+  }
+  const sorted = [...hits].sort((a, b) => {
+    const c = a.saleDate.localeCompare(b.saleDate);
+    if (c !== 0) return c;
+    return a.saleId.localeCompare(b.saleId);
+  });
+  const dates = [...new Set(sorted.map((h) => h.saleDate))].sort();
+  const rows: LotExpandedDailyRow[] = [];
+
+  for (const date of dates) {
+    const dayHits = sorted.filter((h) => h.saleDate === date);
+    const productKeysOrdered: string[] = [];
+    const seenPk = new Set<string>();
+    for (const h of dayHits) {
+      const pk = productKeyFromAllocHit(h);
+      if (!seenPk.has(pk)) {
+        seenPk.add(pk);
+        productKeysOrdered.push(pk);
+      }
+    }
+    const hitsByProduct = new Map<string, LotSaleAllocHit[]>();
+    for (const h of dayHits) {
+      const pk = productKeyFromAllocHit(h);
+      if (!hitsByProduct.has(pk)) hitsByProduct.set(pk, []);
+      hitsByProduct.get(pk)!.push(h);
+    }
+
+    for (const h of dayHits) {
+      const bid = h.batchId;
+      const prev = remSim.get(bid) ?? 0;
+      remSim.set(bid, Math.max(0, prev - Number(h.allocQty ?? 0)));
+    }
+    let restanteTotal = 0;
+    remSim.forEach((v) => {
+      restanteTotal += v;
+    });
+    restanteTotal = round2(restanteTotal);
+
+    for (const pk of productKeysOrdered) {
+      const grp = hitsByProduct.get(pk)!;
+      let cashQty = 0;
+      let cashMonto = 0;
+      let creditQty = 0;
+      let creditMonto = 0;
+      let priceNumer = 0;
+      let priceDenom = 0;
+      for (const h of grp) {
+        const m = allocLineAmount(h);
+        if (h.isCash) {
+          cashQty += Number(h.allocQty ?? 0);
+          cashMonto += m;
+        } else {
+          creditQty += Number(h.allocQty ?? 0);
+          creditMonto += m;
+        }
+        const q = Number(h.allocQty ?? 0);
+        const up = Number(h.unitPrice ?? 0);
+        if (q > 0) {
+          priceNumer += q * up;
+          priceDenom += q;
+        }
+      }
+      const unitSalePrice =
+        priceDenom > 0
+          ? round2(priceNumer / priceDenom)
+          : round2(Number(grp[0]?.unitPrice ?? 0));
+      const label =
+        String(grp[0]?.productName || "").trim() ||
+        grp.map((x) => String(x.productName || "").trim()).find(Boolean) ||
+        "—";
+      rows.push({
+        date,
+        productKey: pk,
+        productLabel: label,
+        unitSalePrice,
+        cashQty: round2(cashQty),
+        cashMonto: round2(cashMonto),
+        creditQty: round2(creditQty),
+        creditMonto: round2(creditMonto),
+        restanteTotal,
+      });
+    }
+  }
+  return rows;
+}
+
+function LotExpandedDailySubtable({
+  rows,
+  compact,
+}: {
+  rows: LotExpandedDailyRow[];
+  compact?: boolean;
+}) {
+  if (rows.length === 0) {
+    return (
+      <span
+        className={
+          compact ? "text-[11px] text-gray-500" : "text-xs text-gray-600"
+        }
+      >
+        Sin ventas con asignación a este lote en el rango.
+      </span>
+    );
+  }
+  const cell = compact
+    ? "border border-gray-200 px-2 py-1.5 text-[10px]"
+    : "border border-gray-200 px-2 py-2 text-xs sm:text-sm";
+  return (
+    <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-violet-200/90 bg-white shadow-inner">
+      <table className="w-full border-collapse border border-gray-200">
+        <thead className="bg-violet-100/90">
+          <tr>
+            <th
+              className={`${cell} text-left font-semibold whitespace-nowrap`}
+            >
+              Fecha
+            </th>
+            <th
+              className={`${cell} text-left font-semibold whitespace-nowrap min-w-[7rem]`}
+            >
+              Producto
+            </th>
+            <th
+              className={`${cell} text-right font-semibold whitespace-nowrap`}
+            >
+              Precio venta
+            </th>
+            <th
+              className={`${cell} text-right font-semibold whitespace-nowrap`}
+            >
+              Lb / Und Cash
+            </th>
+            <th
+              className={`${cell} text-right font-semibold whitespace-nowrap`}
+            >
+              Monto
+            </th>
+            <th
+              className={`${cell} text-right font-semibold whitespace-nowrap`}
+            >
+              Lb / Und Crédito
+            </th>
+            <th
+              className={`${cell} text-right font-semibold whitespace-nowrap`}
+            >
+              Monto
+            </th>
+            <th
+              className={`${cell} text-right font-semibold whitespace-nowrap`}
+            >
+              Restante (Lb / Und)
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={`${row.date}-${row.productKey}`}
+              className="odd:bg-white even:bg-violet-50/35"
+            >
+              <td className={`${cell} font-mono tabular-nums text-left`}>
+                {row.date}
+              </td>
+              <td
+                className={`${cell} text-left text-gray-800 max-w-[14rem] truncate`}
+                title={row.productLabel}
+              >
+                {row.productLabel}
+              </td>
+              <td className={`${cell} text-right tabular-nums`}>
+                {moneyFmt(row.unitSalePrice)}
+              </td>
+              <td className={`${cell} text-right tabular-nums`}>
+                {qty3(row.cashQty)}
+              </td>
+              <td className={`${cell} text-right tabular-nums font-medium`}>
+                {moneyFmt(row.cashMonto)}
+              </td>
+              <td className={`${cell} text-right tabular-nums`}>
+                {qty3(row.creditQty)}
+              </td>
+              <td className={`${cell} text-right tabular-nums font-medium`}>
+                {moneyFmt(row.creditMonto)}
+              </td>
+              <td
+                className={`${cell} text-right tabular-nums font-semibold text-emerald-900`}
+              >
+                {qty3(row.restanteTotal)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function isPolloLbMeasurement(m: string): boolean {
+  const s = String(m || "").toLowerCase().trim();
+  return s === "lb" || s === "lbs" || s === "libra" || s === "libras";
+}
+
+function parseCashQtyLabelForKpis(qtyLabel: string): {
+  lbs: number;
+  units: number;
+} {
+  const s = String(qtyLabel).trim();
+  if (!s || s === "—") return { lbs: 0, units: 0 };
+  const m = s.match(/^([\d.]+)\s*(.*)$/);
+  const qty = m ? parseFloat(m[1]) : 0;
+  const rest = (m?.[2] || "").toLowerCase().trim();
+  if (/\b(lb|lbs|libra|libras)\b/.test(rest) || rest === "lb")
+    return { lbs: qty, units: 0 };
+  if (!rest) return { lbs: 0, units: qty };
+  return { lbs: 0, units: qty };
+}
+
+type SaleDrawerLine = {
+  id: string;
+  date: string;
+  productName: string;
+  unitPrice: number;
+  qtyLabel: string;
+  qty: number;
+  measurement: string;
+  amount: number;
+  grossProfit: number;
+  seller: string;
+};
+
+function lineKpiBucket(line: SaleDrawerLine): "lb" | "unidad" {
+  const m = String(line.measurement || "").trim();
+  if (m && isPolloLbMeasurement(m)) return "lb";
+  if (m && !isPolloLbMeasurement(m)) return "unidad";
+  const q = parseCashQtyLabelForKpis(line.qtyLabel);
+  if (q.lbs > 0 && q.units === 0) return "lb";
+  return "unidad";
+}
+
+function aggregateSaleDrawerLines(lines: SaleDrawerLine[]) {
+  const products = new Set<string>();
+  let lbs = 0;
+  let units = 0;
+  let amount = 0;
+  let grossProfit = 0;
+  for (const line of lines) {
+    products.add(line.productName);
+    amount += line.amount;
+    grossProfit += line.grossProfit;
+    const qty = Number(line.qty ?? 0);
+    if (qty <= 0) continue;
+    const bucket = lineKpiBucket(line);
+    if (bucket === "lb") lbs += qty;
+    else units += qty;
+  }
+  return {
+    productCount: products.size,
+    lineCount: lines.length,
+    lbs: round2(lbs),
+    units: round2(units),
+    amount: round2(amount),
+    grossProfit: round2(grossProfit),
+  };
+}
+
+/** Líneas de venta (salesV2) filtradas al producto del evolutivo — mismo criterio que inventory_evolution_pollo. */
+function buildSaleDrawerLinesForProduct(
+  docId: string,
+  x: Record<string, unknown>,
+  productKey: string,
+  productId: string | undefined,
+  productName: string,
+): SaleDrawerLine[] {
+  const seller =
+    String(
+      x.userEmail ||
+        x.vendor ||
+        (x.createdBy as { email?: string } | null)?.email ||
+        "—",
+    ).trim() || "—";
+  const day = String(x.date || "")
+    .trim()
+    .slice(0, 10);
+  if (!day) return [];
+
+  const matchItem = (it: Record<string, unknown>) => {
+    const itName = String(it.productName ?? "");
+    const itProductId = String(it.productId ?? "").trim();
+    return (
+      (productId && itProductId && itProductId === productId) ||
+      (itProductId && itProductId === productKey) ||
+      normKeyLocal(itName) === normKeyLocal(productName) ||
+      normKeyLocal(itName) === normKeyLocal(productKey)
+    );
+  };
+
+  const items = Array.isArray(x.items) ? (x.items as Record<string, unknown>[]) : [];
+  const out: SaleDrawerLine[] = [];
+
+  if (items.length > 0) {
+    items.forEach((it, idx) => {
+      if (!matchItem(it)) return;
+      const qty = Number(it.qty ?? 0);
+      const lineFinal =
+        Number(it.lineFinal ?? 0) ||
+        Math.max(
+          0,
+          Number(it.unitPrice || 0) * qty - Number(it.discount || 0),
+        );
+      const cogs = Number(it.cogsAmount ?? 0);
+      const g = Number(it.grossProfit);
+      const gp = Number.isFinite(g) ? round2(g) : round2(lineFinal - cogs);
+      const unit = String(it.unit || "").trim();
+      const measurement = String(it.measurement ?? it.unit ?? "").trim();
+      const qtyLabel =
+        `${Number(qty).toFixed(3)}${unit ? ` ${unit}` : ""}`.trim();
+      out.push({
+        id: `${docId}-${idx}`,
+        date: day,
+        productName: String(it.productName || "—"),
+        unitPrice: Number(it.unitPrice ?? 0),
+        qtyLabel,
+        qty,
+        measurement,
+        amount: round2(lineFinal),
+        grossProfit: gp,
+        seller,
+      });
+    });
+    return out;
+  }
+
+  const sName = String(x.productName ?? "");
+  const sProductId = String(x.productId ?? "").trim();
+  const matchSale =
+    (productId && sProductId && sProductId === productId) ||
+    (sProductId && sProductId === productKey) ||
+    normKeyLocal(sName) === normKeyLocal(productName) ||
+    normKeyLocal(sName) === normKeyLocal(productKey);
+  if (!matchSale) return [];
+
+  const amt = Number(x.amount ?? x.amountCharged ?? 0);
+  const cogs = Number(x.cogsAmount ?? 0);
+  const g = Number(x.grossProfit);
+  const gp = Number.isFinite(g) ? round2(g) : round2(amt - cogs);
+  const qty = Number(x.quantity ?? 0);
+  const meas = String(x.measurement || "").trim();
+  const qtyLabel =
+    qty > 0
+      ? `${qty.toFixed(3)}${meas ? ` ${meas}` : ""}`.trim()
+      : "—";
+  out.push({
+    id: docId,
+    date: day,
+    productName: String(x.productName || "—"),
+    unitPrice: Number(x.unitPrice ?? 0),
+    qtyLabel,
+    qty,
+    measurement: meas,
+    amount: round2(amt),
+    grossProfit: gp,
+    seller,
+  });
+  return out;
+}
 
 function batchesHrefForMermaAdj(
   adjId: string | undefined,
@@ -155,7 +594,7 @@ export default function EvolutivoInventarioPollo({
   role?: string;
   roles?: string[];
 }): React.ReactElement {
-  const [from, setFrom] = useState(today());
+  const [from, setFrom] = useState(monthStart());
   const [to, setTo] = useState(today());
 
   const [loading, setLoading] = useState(true);
@@ -182,6 +621,8 @@ export default function EvolutivoInventarioPollo({
 
   // Evolutivo
   const [moves, setMoves] = useState<InvMove[]>([]);
+  /** Saldo al inicio de `from` para cuadrar balance con stock en lotes. */
+  const [openingBalance, setOpeningBalance] = useState(0);
   const [productKpis, setProductKpis] = useState<ProductKpis>({
     incoming: 0,
     soldCash: 0,
@@ -197,11 +638,34 @@ export default function EvolutivoInventarioPollo({
   const [adjDate, setAdjDate] = useState(today());
   const [adjType, setAdjType] = useState<AdjType>("MERMA");
   const [adjSaving, setAdjSaving] = useState(false);
-  const [adjQty, setAdjQty] = useState<number>(0);
+  const [adjQtyInput, setAdjQtyInput] = useState("");
   const [adjDesc, setAdjDesc] = useState("");
   const [adjModalOpen, setAdjModalOpen] = useState(false);
 
   const { refreshKey, refresh } = useManualRefresh();
+
+  /** Vista principal: evolutivo por producto vs tabla por lotes */
+  const [inventoryView, setInventoryView] = useState<"evolutivo" | "lotes">(
+    "evolutivo",
+  );
+
+  const [lotGroups, setLotGroups] = useState<LotGroup[]>([]);
+  const [lotSales, setLotSales] = useState<
+    Array<{ id: string; data: Record<string, unknown> }>
+  >([]);
+  const [lotLoading, setLotLoading] = useState(false);
+  const [lotFilterId, setLotFilterId] = useState("");
+  /** Solo un lote expandido a la vez (null = ninguno) */
+  const [expandedLotGroupId, setExpandedLotGroupId] = useState<string | null>(
+    null,
+  );
+  const [lotDrawerGroup, setLotDrawerGroup] = useState<LotGroup | null>(null);
+  /** Clave estable por producto dentro del lote (productId o nombre normalizado) */
+  const [lotDrawerProductKey, setLotDrawerProductKey] = useState("");
+  const [lotDrawerPay, setLotDrawerPay] = useState<"CASH" | "CREDITO">(
+    "CASH",
+  );
+
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
   const [priceFilter, setPriceFilter] = useState<string>("ALL");
   const [toastMsg, setToastMsg] = useState("");
@@ -238,6 +702,16 @@ export default function EvolutivoInventarioPollo({
     >
   >({});
   const [adjFifoLoadingId, setAdjFifoLoadingId] = useState<string | null>(null);
+
+  const [saleDrawerOpen, setSaleDrawerOpen] = useState<{
+    id: string;
+    invType: InvMove["type"];
+  } | null>(null);
+  const [saleDrawerDoc, setSaleDrawerDoc] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
+  const [saleDrawerLoading, setSaleDrawerLoading] = useState(false);
 
   // =========================
   // 1) Cargar productos
@@ -294,8 +768,9 @@ export default function EvolutivoInventarioPollo({
     (async () => {
       setLoading(true);
       try {
-        if (!selected) {
+        if (inventoryView !== "evolutivo" || !selected) {
           setMoves([]);
+          setOpeningBalance(0);
           setProductKpis({
             incoming: 0,
             soldCash: 0,
@@ -318,9 +793,10 @@ export default function EvolutivoInventarioPollo({
         });
 
         setMoves(res.moves);
+        setOpeningBalance(Number(res.openingBalance ?? 0));
         setProductKpis(res.productKpis);
 
-        // precargar precios desde salesV2 para ventas en el rango
+        // Precios de venta + FIFO merma en paralelo
         try {
           const saleIds = Array.from(
             new Set(
@@ -329,89 +805,84 @@ export default function EvolutivoInventarioPollo({
                 .map((m: any) => String(m.ref)),
             ),
           );
-
-          const pricesMap: Record<string, number> = {};
-
-          for (const sid of saleIds) {
-            try {
-              const sRef = fsDoc(db, "salesV2", sid);
-              const sSnap = await getDoc(sRef);
-              if (!sSnap.exists()) continue;
-              const s = sSnap.data() as any;
-
-              // Intentar extraer precio del item correspondiente
-              let unitPrice: number | null = null;
-              const selName = (selected?.productName || "").toLowerCase();
-              const selId = (selected as any)?.productId || "";
-
-              if (Array.isArray(s.items) && s.items.length > 0) {
-                for (const it of s.items) {
-                  const itPid = String(it.productId ?? "").trim();
-                  const itName = String(it.productName ?? "").toLowerCase();
-                  if (
-                    (selId && itPid && itPid === selId) ||
-                    itName === selName
-                  ) {
-                    unitPrice = Number(
-                      it.unitPrice ?? it.price ?? it.regularPrice ?? 0,
-                    );
-                    break;
-                  }
-                }
-              }
-
-              // esquema simple: usar amount/quantity
-              if (
-                (unitPrice === null || unitPrice === 0) &&
-                s.quantity &&
-                s.amount
-              ) {
-                const q = Number(s.quantity || 0);
-                const a = Number(s.amount || s.amountCharged || 0);
-                if (q > 0 && a) unitPrice = Number((a / q).toFixed(2));
-              }
-
-              if (unitPrice === null) unitPrice = 0;
-              pricesMap[sid] = unitPrice;
-            } catch (e) {
-              // ignore per-sale errors
-            }
-          }
-
-          setSalePrices(pricesMap);
-        } catch (e) {
-          // noop
-        }
-
-        try {
           const mermaIds = Array.from(
             new Set(
               (res.moves || [])
                 .filter(
-                  (m) =>
-                    (m.type === "MERMA" || m.type === "ROBO") && m.ref,
+                  (m) => (m.type === "MERMA" || m.type === "ROBO") && m.ref,
                 )
                 .map((m) => String(m.ref)),
             ),
           );
-          if (mermaIds.length) {
-            const entries = await Promise.all(
-              mermaIds.map(async (aid) => {
-                try {
-                  const snap = await getDoc(
-                    fsDoc(db, "inventory_adjustments_pollo", aid),
-                  );
-                  return [aid, parseAdjustmentDocumentSnap(snap)] as const;
-                } catch {
-                  return [
-                    aid,
-                    { error: "No se pudo cargar el detalle FIFO." },
-                  ] as const;
-                }
-              }),
-            );
-            const adjPartial: Record<string, AdjFifoParsed> =
-              Object.fromEntries(entries);
+
+          const selName = (selected?.productName || "").toLowerCase();
+          const selId = (selected as any)?.productId || "";
+
+          const [pricesMap, adjPartial] = await Promise.all([
+            (async () => {
+              const pricesMap: Record<string, number> = {};
+              await Promise.all(
+                saleIds.map(async (sid) => {
+                  try {
+                    const sSnap = await getDoc(fsDoc(db, "salesV2", sid));
+                    if (!sSnap.exists()) return;
+                    const s = sSnap.data() as any;
+                    let unitPrice: number | null = null;
+                    if (Array.isArray(s.items) && s.items.length > 0) {
+                      for (const it of s.items) {
+                        const itPid = String(it.productId ?? "").trim();
+                        const itName = String(it.productName ?? "").toLowerCase();
+                        if (
+                          (selId && itPid && itPid === selId) ||
+                          itName === selName
+                        ) {
+                          unitPrice = Number(
+                            it.unitPrice ?? it.price ?? it.regularPrice ?? 0,
+                          );
+                          break;
+                        }
+                      }
+                    }
+                    if (
+                      (unitPrice === null || unitPrice === 0) &&
+                      s.quantity &&
+                      s.amount
+                    ) {
+                      const q = Number(s.quantity || 0);
+                      const a = Number(s.amount || s.amountCharged || 0);
+                      if (q > 0 && a) unitPrice = Number((a / q).toFixed(2));
+                    }
+                    pricesMap[sid] = unitPrice ?? 0;
+                  } catch {
+                    /* ignore */
+                  }
+                }),
+              );
+              return pricesMap;
+            })(),
+            (async () => {
+              if (!mermaIds.length) return {} as Record<string, AdjFifoParsed>;
+              const entries = await Promise.all(
+                mermaIds.map(async (aid) => {
+                  try {
+                    const snap = await getDoc(
+                      fsDoc(db, "inventory_adjustments_pollo", aid),
+                    );
+                    return [aid, parseAdjustmentDocumentSnap(snap)] as const;
+                  } catch {
+                    return [
+                      aid,
+                      { error: "No se pudo cargar el detalle FIFO." },
+                    ] as const;
+                  }
+                }),
+              );
+              return Object.fromEntries(entries) as Record<string, AdjFifoParsed>;
+            })(),
+          ]);
+
+          setSalePrices(pricesMap);
+          if (Object.keys(adjPartial).length) {
             setAdjFifoDetailById((prev) => ({ ...prev, ...adjPartial }));
           }
         } catch {
@@ -420,6 +891,7 @@ export default function EvolutivoInventarioPollo({
       } catch (e) {
         console.error("Error product evolution:", e);
         setMoves([]);
+        setOpeningBalance(0);
         setProductKpis({
           incoming: 0,
           soldCash: 0,
@@ -431,7 +903,41 @@ export default function EvolutivoInventarioPollo({
         setLoading(false);
       }
     })();
-  }, [from, to, selectedKey, refreshKey, selected]);
+  }, [from, to, selectedKey, refreshKey, selected, inventoryView]);
+
+  // ——— Vista Lotes: grupos + ventas en rango ———
+  useEffect(() => {
+    if (inventoryView !== "lotes") return;
+    let cancelled = false;
+    setLotLoading(true);
+    (async () => {
+      try {
+        const [groups, sales] = await Promise.all([
+          fetchLotGroupsInRange(from, to),
+          fetchSalesV2ForLotView(from, to),
+        ]);
+        if (!cancelled) {
+          setLotGroups(groups);
+          setLotSales(sales);
+          setLotFilterId((prev) => {
+            if (!prev) return "";
+            return groups.some((g) => g.groupId === prev) ? prev : "";
+          });
+        }
+      } catch (e) {
+        console.error("Error vista lotes:", e);
+        if (!cancelled) {
+          setLotGroups([]);
+          setLotSales([]);
+        }
+      } finally {
+        if (!cancelled) setLotLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inventoryView, from, to, refreshKey]);
 
   const unitLabel = selected?.measurement === "lb" ? "Lbs" : "Unidades";
 
@@ -440,6 +946,235 @@ export default function EvolutivoInventarioPollo({
     const b = Number(productKpis.soldCredit ?? 0);
     return Number((a + b).toFixed(3));
   }, [productKpis.soldCash, productKpis.soldCredit]);
+
+  const lotGroupsFilteredForTable = useMemo(() => {
+    let list = lotGroups;
+    if (lotFilterId) list = list.filter((g) => g.groupId === lotFilterId);
+    if (selected) {
+      const pk = selected.key;
+      const pid = (selected as { productId?: string }).productId;
+      const pn = selected.productName;
+      list = list.filter((g) =>
+        g.lines.some((ln) => lineMatchesProductFilter(ln, pk, pid, pn)),
+      );
+    }
+    return list;
+  }, [lotGroups, lotFilterId, selected]);
+
+  const lotDrawerVisibleLines = useMemo(() => {
+    if (!lotDrawerGroup) return [] as LotBatchLine[];
+    let lines = lotDrawerGroup.lines;
+    if (selected) {
+      const pk = selected.key;
+      const pid = (selected as { productId?: string }).productId;
+      const pn = selected.productName;
+      lines = lines.filter((ln) =>
+        lineMatchesProductFilter(ln, pk, pid, pn),
+      );
+    }
+    return lines;
+  }, [lotDrawerGroup, selected]);
+
+  const lotDrawerChipOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of lotDrawerVisibleLines) {
+      const k = lotProductChipKeyFromLine(l);
+      if (!m.has(k)) m.set(k, l.productName || k);
+    }
+    return Array.from(m.entries()).map(([value, label]) => ({
+      value,
+      label,
+    }));
+  }, [lotDrawerVisibleLines]);
+
+  /** Ventas con remanente simulado por lote tras cada salida (orden cronológico). */
+  const lotDrawerHitsProductEnriched = useMemo(() => {
+    if (!lotDrawerGroup || !lotDrawerProductKey)
+      return [] as {
+        hit: LotSaleAllocHit;
+        remainingAfterInLot: number;
+      }[];
+    const lines = lotDrawerVisibleLines.filter(
+      (l) => lotProductChipKeyFromLine(l) === lotDrawerProductKey,
+    );
+    if (!lines.length) return [];
+    const batchIds = new Set(lines.map((l) => l.id));
+    const qtyRem = new Map<string, number>(
+      lines.map((l) => [l.id, Number(l.quantity || 0)]),
+    );
+    const hits = collectLotSaleAllocHits(lotSales, batchIds);
+    hits.sort((a, b) => {
+      const d = a.saleDate.localeCompare(b.saleDate);
+      if (d !== 0) return d;
+      return a.saleId.localeCompare(b.saleId);
+    });
+    return hits.map((h) => {
+      const bid = h.batchId;
+      const before = qtyRem.get(bid) ?? 0;
+      const after = Math.max(0, before - Number(h.allocQty));
+      qtyRem.set(bid, after);
+      return { hit: h, remainingAfterInLot: after };
+    });
+  }, [lotDrawerGroup, lotDrawerProductKey, lotDrawerVisibleLines, lotSales]);
+
+  const lotDrawerHitsFilteredForDrawer = useMemo(
+    () =>
+      lotDrawerHitsProductEnriched.filter((x) =>
+        lotDrawerPay === "CASH" ? x.hit.isCash : !x.hit.isCash,
+      ),
+    [lotDrawerHitsProductEnriched, lotDrawerPay],
+  );
+
+  const lotDrawerKpisLot = useMemo(() => {
+    if (!lotDrawerGroup) return null;
+    const lines = lotDrawerGroup.lines;
+    const ingresado = lines.reduce((s, l) => s + Number(l.quantity || 0), 0);
+    const factCost = lines.reduce(
+      (s, l) => s + Number(l.invoiceTotal || 0),
+      0,
+    );
+    const esperado = lines.reduce(
+      (s, l) => s + Number(l.expectedTotal || 0),
+      0,
+    );
+    const consumido = lines.reduce(
+      (s, l) =>
+        s + Math.max(0, Number(l.quantity || 0) - Number(l.remaining || 0)),
+      0,
+    );
+    const restante = lines.reduce((s, l) => s + Number(l.remaining || 0), 0);
+    const batchIdsAll = new Set(lines.map((l) => l.id));
+    const hitsLot = collectLotSaleAllocHits(lotSales, batchIdsAll);
+    const ubVentas = round2(
+      hitsLot.reduce((s, h) => s + allocLineGross(h), 0),
+    );
+    const ubEsperadaIngreso = round2(
+      lines.reduce(
+        (s, l) =>
+          s +
+          (Number(l.expectedTotal || 0) - Number(l.invoiceTotal || 0)),
+        0,
+      ),
+    );
+    return {
+      ingresado,
+      factCost,
+      esperado,
+      consumido,
+      restante,
+      fecha: lotDrawerGroup.displayDate,
+      ubVentas,
+      ubEsperadaIngreso,
+    };
+  }, [lotDrawerGroup, lotSales]);
+
+  const lotDrawerKpisProduct = useMemo(() => {
+    if (!lotDrawerGroup || !lotDrawerProductKey) return null;
+    const lines = lotDrawerVisibleLines.filter(
+      (l) => lotProductChipKeyFromLine(l) === lotDrawerProductKey,
+    );
+    if (!lines.length) return null;
+    const ingresado = lines.reduce((s, l) => s + Number(l.quantity || 0), 0);
+    const factCost = lines.reduce(
+      (s, l) => s + Number(l.invoiceTotal || 0),
+      0,
+    );
+    const restante = lines.reduce((s, l) => s + Number(l.remaining || 0), 0);
+    const batchIds = new Set(lines.map((l) => l.id));
+    const hits = collectLotSaleAllocHits(lotSales, batchIds);
+    let cashM = 0;
+    let credM = 0;
+    let cashQ = 0;
+    let credQ = 0;
+    for (const h of hits) {
+      const amt = allocLineAmount(h);
+      if (h.isCash) {
+        cashM += amt;
+        cashQ += h.allocQty;
+      } else {
+        credM += amt;
+        credQ += h.allocQty;
+      }
+    }
+    const u = lines[0]?.unit || "";
+    const qtyLbl = isPolloLbMeasurement(u) ? "Libras" : "Unidades";
+    const ubVentas = round2(hits.reduce((s, h) => s + allocLineGross(h), 0));
+    const ubEsperadaIngreso = round2(
+      lines.reduce(
+        (s, l) =>
+          s +
+          (Number(l.expectedTotal || 0) - Number(l.invoiceTotal || 0)),
+        0,
+      ),
+    );
+    return {
+      ingresado,
+      factCost,
+      ventasCashMonto: round2(cashM),
+      ventasCredMonto: round2(credM),
+      qtyCash: round2(cashQ),
+      qtyCred: round2(credQ),
+      restante,
+      qtyLabel: qtyLbl,
+      ubVentas,
+      ubEsperadaIngreso,
+    };
+  }, [lotDrawerGroup, lotDrawerProductKey, lotDrawerVisibleLines, lotSales]);
+
+  useEffect(() => {
+    const sid = saleDrawerOpen?.id;
+    if (!sid) {
+      setSaleDrawerDoc(null);
+      setSaleDrawerLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSaleDrawerLoading(true);
+    setSaleDrawerDoc(null);
+    (async () => {
+      try {
+        const snap = await getDoc(fsDoc(db, "salesV2", sid));
+        if (cancelled) return;
+        setSaleDrawerDoc(
+          snap.exists() ? (snap.data() as Record<string, unknown>) : null,
+        );
+      } catch {
+        if (!cancelled) setSaleDrawerDoc(null);
+      } finally {
+        if (!cancelled) setSaleDrawerLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [saleDrawerOpen?.id]);
+
+  const saleDrawerIsCredit = saleDrawerOpen?.invType === "VENTA_CREDITO";
+
+  const saleDrawerLines = useMemo(() => {
+    const sid = saleDrawerOpen?.id;
+    if (!sid || !saleDrawerDoc || !selected) return [];
+    return buildSaleDrawerLinesForProduct(
+      sid,
+      saleDrawerDoc,
+      selected.key,
+      (selected as { productId?: string }).productId,
+      selected.productName,
+    );
+  }, [saleDrawerOpen?.id, saleDrawerDoc, selected]);
+
+  const saleDrawerKpis = useMemo(
+    () => aggregateSaleDrawerLines(saleDrawerLines),
+    [saleDrawerLines],
+  );
+
+  const saleDrawerCustomer = useMemo(() => {
+    if (!saleDrawerDoc) return "—";
+    const c = String(
+      saleDrawerDoc.customerName || saleDrawerDoc.clientName || "",
+    ).trim();
+    return c || "—";
+  }, [saleDrawerDoc]);
 
   useEffect(() => {
     if (!ingresoBatchId) {
@@ -508,28 +1243,37 @@ export default function EvolutivoInventarioPollo({
     ];
     let cancelled = false;
     (async () => {
-      const next: Record<
+      const entries = await Promise.all(
+        ids.map(async (bid) => {
+          try {
+            const s = await getDoc(fsDoc(db, "inventory_batches", bid));
+            if (!s.exists()) {
+              return [
+                bid,
+                { orderName: "—", productName: "—", date: "—" },
+              ] as const;
+            }
+            const d = s.data() as Record<string, unknown>;
+            return [
+              bid,
+              {
+                orderName: String(d.orderName ?? "").trim() || "—",
+                productName: String(d.productName ?? "").trim() || "—",
+                date: String(d.date ?? "").trim() || "—",
+              },
+            ] as const;
+          } catch {
+            return [
+              bid,
+              { orderName: "—", productName: "—", date: "—" },
+            ] as const;
+          }
+        }),
+      );
+      const next = Object.fromEntries(entries) as Record<
         string,
         { orderName: string; productName: string; date: string }
-      > = {};
-      for (const bid of ids) {
-        if (cancelled) return;
-        try {
-          const s = await getDoc(fsDoc(db, "inventory_batches", bid));
-          if (!s.exists()) {
-            next[bid] = { orderName: "—", productName: "—", date: "—" };
-            continue;
-          }
-          const d = s.data() as Record<string, unknown>;
-          next[bid] = {
-            orderName: String(d.orderName ?? "").trim() || "—",
-            productName: String(d.productName ?? "").trim() || "—",
-            date: String(d.date ?? "").trim() || "—",
-          };
-        } catch {
-          next[bid] = { orderName: "—", productName: "—", date: "—" };
-        }
-      }
+      >;
       if (!cancelled) {
         setAdjBatchMetaById((prev) => ({ ...prev, ...next }));
       }
@@ -539,19 +1283,36 @@ export default function EvolutivoInventarioPollo({
     };
   }, [mermaDrawerAdjId, adjFifoDetailById]);
 
-  // Balance corrido (para la tabla del rango)
+  // Balance: saldo al inicio de `from` + movimientos listados (coincide con lotes si no hay movimientos después de `to`)
   const movesWithBalance = useMemo(() => {
-    // si el service nos devolvió openingBalance, iniciamos desde ahí
-    let bal = 0;
-    const opening = (moves && (moves as any).openingBalance) || 0;
-    // Nota: el service ahora retorna openingBalance en el response; en caso de que no esté,
-    // usamos 0 para mantener comportamiento previo.
-    bal = opening || 0;
+    let bal = Number(openingBalance ?? 0);
     return (moves || []).map((m) => {
-      bal = bal + Number(m.qtyIn || 0) - Number(m.qtyOut || 0);
+      bal += Number(m.qtyIn || 0) - Number(m.qtyOut || 0);
       return { ...m, balance: bal };
     });
-  }, [moves]);
+  }, [moves, openingBalance]);
+
+  const rowPriceAndMonto = (m: InvMove) => {
+    const ref = String(m.ref || "");
+    if (
+      (m.type === "MERMA" || m.type === "ROBO") &&
+      ref &&
+      adjFifoDetailById[ref] &&
+      !("error" in adjFifoDetailById[ref])
+    ) {
+      const det = adjFifoDetailById[ref] as {
+        avgUnitCost: number;
+        cogsAmount: number;
+      };
+      const q = Number(m.qtyOut || 0);
+      const unit = Number(det.avgUnitCost || 0);
+      const cog = Number(det.cogsAmount || 0);
+      const monto = cog > 0 ? cog : unit * q;
+      return { price: unit, monto };
+    }
+    const p = Number(salePrices[ref] ?? 0);
+    return { price: p, monto: p * Number(m.qtyOut || 0) };
+  };
 
   // (no price highlighting) — prices will be shown as currency in UI
   // filtered moves by Tipo y Precio
@@ -565,20 +1326,15 @@ export default function EvolutivoInventarioPollo({
   const availablePrices = useMemo(() => {
     const s = new Set<string>();
     for (const m of filteredMoves) {
-      const priceNum = Number(
-        salePrices[String((m as any).ref || "")] ??
-          (m as any).price ??
-          (m as any).unitPrice ??
-          0,
-      );
-      s.add(`C$ ${priceNum.toFixed(2)}`);
+      const { price } = rowPriceAndMonto(m as InvMove);
+      s.add(`C$ ${price.toFixed(2)}`);
     }
     return Array.from(s).sort(
       (a, b) =>
         Number(b.replace(/[^0-9.-]+/g, "")) -
         Number(a.replace(/[^0-9.-]+/g, "")),
     );
-  }, [filteredMoves, salePrices]);
+  }, [filteredMoves, salePrices, adjFifoDetailById]);
 
   const typeFilterSelectOptions = useMemo(
     () => [
@@ -613,25 +1369,14 @@ export default function EvolutivoInventarioPollo({
       return [] as typeof filteredMoves;
     if (!priceFilter || priceFilter === "ALL") return filteredMoves;
     return filteredMoves.filter((m) => {
-      const priceNum = Number(
-        salePrices[String((m as any).ref || "")] ??
-          (m as any).price ??
-          (m as any).unitPrice ??
-          0,
-      );
-      return `C$ ${priceNum.toFixed(2)}` === priceFilter;
+      const { price } = rowPriceAndMonto(m as InvMove);
+      return `C$ ${price.toFixed(2)}` === priceFilter;
     });
-  }, [filteredMoves, priceFilter, salePrices]);
+  }, [filteredMoves, priceFilter, salePrices, adjFifoDetailById]);
 
   const handleExportExcel = () => {
     const rows = (displayedMoves || []).map((m) => {
-      const price = Number(
-        salePrices[String(m.ref || "")] ??
-          (m as any).price ??
-          (m as any).unitPrice ??
-          0,
-      );
-      const total = price * Number(m.qtyOut || 0);
+      const { price, monto } = rowPriceAndMonto(m as InvMove);
       return {
         Fecha: m.date || "",
         Tipo: m.type || "",
@@ -640,7 +1385,7 @@ export default function EvolutivoInventarioPollo({
         Entrada: Number(m.qtyIn || 0),
         Salida: Number(m.qtyOut || 0),
         Precio: `C$ ${price.toFixed(2)}`,
-        Monto: `C$ ${total.toFixed(2)}`,
+        Monto: `C$ ${monto.toFixed(2)}`,
         Balance: Number((m as any).balance || 0),
       };
     });
@@ -679,6 +1424,23 @@ export default function EvolutivoInventarioPollo({
     URL.revokeObjectURL(url);
   };
 
+  const openLotConsumidoDrawer = (g: LotGroup) => {
+    setLotDrawerGroup(g);
+    const vis = selected
+      ? g.lines.filter((ln) =>
+          lineMatchesProductFilter(
+            ln,
+            selected.key,
+            (selected as { productId?: string }).productId,
+            selected.productName,
+          ),
+        )
+      : g.lines.slice();
+    const keys = [...new Set(vis.map(lotProductChipKeyFromLine))];
+    setLotDrawerProductKey(keys[0] || "");
+    setLotDrawerPay("CASH");
+  };
+
   // ================
   // Dropdown helpers
   // ================
@@ -710,6 +1472,19 @@ export default function EvolutivoInventarioPollo({
       ...rows,
     ];
   }, [products, productFilterQuery, selectedKey]);
+
+  const lotFilterSelectOptions = useMemo(() => {
+    const opts = lotGroups.map((g) => ({
+      value: g.groupId,
+      label: `${g.orderName} · ${g.displayDate}${
+        g.lines.length > 1 ? ` (${g.lines.length} prod.)` : ""
+      }`,
+    }));
+    return [
+      { value: "", label: "Todos los lotes (rango de fechas)" },
+      ...opts,
+    ];
+  }, [lotGroups]);
 
   const inventoryBatchesHref = useMemo(() => {
     const pid = selected?.productId?.trim();
@@ -751,8 +1526,8 @@ export default function EvolutivoInventarioPollo({
       return false;
     }
 
-    const q = Number(adjQty || 0);
-    if (q <= 0) {
+    const q = Number(String(adjQtyInput || "").replace(",", "."));
+    if (!Number.isFinite(q) || q <= 0) {
       setToastMsg("⚠️ Ingresá una cantidad mayor a 0.");
       return false;
     }
@@ -789,7 +1564,7 @@ export default function EvolutivoInventarioPollo({
         avgUnitCost: alloc.avgUnitCost,
       });
 
-      setAdjQty(0);
+      setAdjQtyInput("");
       setAdjDesc("");
       refresh();
       setToastMsg(
@@ -814,8 +1589,33 @@ export default function EvolutivoInventarioPollo({
         <h2 className="text-xl sm:text-2xl font-bold">
           Evolutivo Inventario (Pollo)
         </h2>
-        <div className="flex items-center gap-2">
-          <RefreshButton onClick={refresh} loading={loading} />
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <button
+            type="button"
+            onClick={() => setInventoryView("evolutivo")}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors ${
+              inventoryView === "evolutivo"
+                ? "border-sky-500 bg-sky-100 text-sky-900"
+                : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            Evolutivo
+          </button>
+          <button
+            type="button"
+            onClick={() => setInventoryView("lotes")}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors ${
+              inventoryView === "lotes"
+                ? "border-violet-500 bg-violet-100 text-violet-900"
+                : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            Lotes
+          </button>
+          <RefreshButton
+            onClick={refresh}
+            loading={inventoryView === "lotes" ? lotLoading : loading}
+          />
         </div>
       </div>
 
@@ -1012,67 +1812,98 @@ export default function EvolutivoInventarioPollo({
                     />
                   </div>
                 </div>
+
+                {inventoryView === "evolutivo" ? (
+                  <p className="text-[11px] text-slate-600 mt-2 leading-snug">
+                    Saldo al <span className="font-mono">{from}</span> (base del
+                    balance):{" "}
+                    <span className="font-semibold tabular-nums">
+                      {qty3(openingBalance)}
+                    </span>{" "}
+                    {unitLabel}
+                    <span className="block mt-0.5 text-slate-500">
+                      El último balance = existencias en lotes solo si no hay
+                      ventas/mermas después de{" "}
+                      <span className="font-mono">{to}</span>.
+                    </span>
+                  </p>
+                ) : null}
               </>
             ) : null}
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              onClick={() => setAdjModalOpen(true)}
-              variant="primary"
-              className="!rounded-lg text-sm sm:text-base"
-            >
-              Crear Movimiento
-            </Button>
-            <Button
-              type="button"
-              onClick={handleExportExcel}
-              variant="primary"
-              className="!bg-green-600 hover:!bg-green-700 !text-white !rounded-lg text-sm sm:text-base"
-            >
-              Exportar Excel
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 w-full items-end">
-            <MobileHtmlSelect
-              label="Tipo"
-              value={typeFilter}
-              onChange={setTypeFilter}
-              options={typeFilterSelectOptions}
-              sheetTitle="Filtrar por tipo"
-              triggerIcon="menu"
-              selectClassName={POLLO_SELECT_DESKTOP_CLASS}
-              buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
-            />
-            <MobileHtmlSelect
-              label="Precio"
-              value={priceFilter}
-              onChange={setPriceFilter}
-              options={priceFilterSelectOptions}
-              sheetTitle="Filtrar por precio"
-              triggerIcon="menu"
-              selectClassName={POLLO_SELECT_DESKTOP_CLASS}
-              buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
-            />
-          </div>
-
-          {/* Mobile: listado como cards */}
-          <div className="space-y-2">
-            {displayedMoves && displayedMoves.length === 0 ? (
-              <div className="text-sm text-gray-500">
-                No hay movimientos en el rango para este producto.
+          {inventoryView === "lotes" ? (
+            <div className="pt-2 border-t border-slate-100 space-y-1">
+              <div className="text-xs text-gray-500">
+                Lote (ingresado en el rango)
               </div>
-            ) : (
-              (displayedMoves || []).map((m, idx) => {
-                const price = Number(
-                  salePrices[String((m as any).ref || "")] ??
-                    (m as any).price ??
-                    (m as any).unitPrice ??
-                    0,
-                );
-                const total = price * Number(m.qtyOut || 0);
+              <MobileHtmlSelect
+                value={lotFilterId}
+                onChange={setLotFilterId}
+                options={lotFilterSelectOptions}
+                sheetTitle="Lote"
+                triggerIcon="menu"
+                selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+              />
+            </div>
+          ) : null}
+
+          {inventoryView === "evolutivo" ? (
+            <>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  onClick={() => setAdjModalOpen(true)}
+                  variant="primary"
+                  className="!rounded-lg text-sm sm:text-base"
+                  disabled={!selectedKey}
+                >
+                  Crear Movimiento
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleExportExcel}
+                  variant="primary"
+                  className="!bg-green-600 hover:!bg-green-700 !text-white !rounded-lg text-sm sm:text-base"
+                  disabled={!selectedKey}
+                >
+                  Exportar Excel
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 w-full items-end">
+                <MobileHtmlSelect
+                  label="Tipo"
+                  value={typeFilter}
+                  onChange={setTypeFilter}
+                  options={typeFilterSelectOptions}
+                  sheetTitle="Filtrar por tipo"
+                  triggerIcon="menu"
+                  selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                  buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+                />
+                <MobileHtmlSelect
+                  label="Precio"
+                  value={priceFilter}
+                  onChange={setPriceFilter}
+                  options={priceFilterSelectOptions}
+                  sheetTitle="Filtrar por precio"
+                  triggerIcon="menu"
+                  selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+                  buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+                />
+              </div>
+
+              {/* Mobile: listado como cards */}
+              <div className="space-y-2">
+                {displayedMoves && displayedMoves.length === 0 ? (
+                  <div className="text-sm text-gray-500">
+                    No hay movimientos en el rango para este producto.
+                  </div>
+                ) : (
+                  (displayedMoves || []).map((m, idx) => {
+                const { price, monto } = rowPriceAndMonto(m as InvMove);
                 const openIngreso =
                   m.type === "INGRESO" && m.ref
                     ? () => setIngresoBatchId(String(m.ref))
@@ -1081,10 +1912,20 @@ export default function EvolutivoInventarioPollo({
                   (m.type === "MERMA" || m.type === "ROBO") && m.ref
                     ? () => setMermaDrawerAdjId(String(m.ref))
                     : undefined;
-                const cardInteractive = !!(openIngreso || openMerma);
+                const openVenta =
+                  (m.type === "VENTA_CASH" || m.type === "VENTA_CREDITO") &&
+                  m.ref
+                    ? () =>
+                        setSaleDrawerOpen({
+                          id: String(m.ref),
+                          invType: m.type as InvMove["type"],
+                        })
+                    : undefined;
+                const cardInteractive = !!(openIngreso || openMerma || openVenta);
                 const handleCardActivate = () => {
                   if (openIngreso) openIngreso();
                   else if (openMerma) openMerma();
+                  else if (openVenta) openVenta();
                 };
                 return (
                   <div
@@ -1107,7 +1948,9 @@ export default function EvolutivoInventarioPollo({
                         ? "cursor-pointer hover:border-sky-300 hover:bg-sky-50/40"
                         : openMerma
                           ? "cursor-pointer hover:border-rose-200 hover:bg-rose-50/30"
-                          : ""
+                          : openVenta
+                            ? "cursor-pointer hover:border-amber-200 hover:bg-amber-50/35"
+                            : ""
                     }`}
                   >
                     <div className="flex justify-between items-start gap-2">
@@ -1137,10 +1980,13 @@ export default function EvolutivoInventarioPollo({
                     </div>
                     <div className="mt-1 flex justify-between items-center text-sm">
                       <div className="font-semibold text-black">
-                        Precio: C$ {price.toFixed(2)}
+                        Precio: C${" "}
+                        {m.type === "MERMA" || m.type === "ROBO"
+                          ? price.toFixed(4)
+                          : price.toFixed(2)}
                       </div>
                       <div className="font-semibold text-black">
-                        Monto: C$ {total.toFixed(2)}
+                        Monto: C$ {monto.toFixed(2)}
                       </div>
                     </div>
                     {(m.type === "MERMA" || m.type === "ROBO") &&
@@ -1171,6 +2017,144 @@ export default function EvolutivoInventarioPollo({
               })
             )}
           </div>
+            </>
+          ) : inventoryView === "lotes" ? (
+            <div className="space-y-2">
+              {lotLoading ? (
+                <div className="text-sm text-gray-500">Cargando lotes…</div>
+              ) : lotGroupsFilteredForTable.length === 0 ? (
+                <div className="text-sm text-gray-500">
+                  No hay lotes ingresados en este rango
+                  {selected ? " para el producto elegido" : ""}.
+                </div>
+              ) : (
+                lotGroupsFilteredForTable.map((g) => {
+                  const pk = selected?.key || "";
+                  const pid = (selected as { productId?: string })?.productId;
+                  const pn = selected?.productName;
+                  const vis = selected
+                    ? g.lines.filter((ln) =>
+                        lineMatchesProductFilter(ln, pk, pid, pn),
+                      )
+                    : g.lines.slice();
+                  const inicial = vis.reduce(
+                    (s, l) => s + Number(l.quantity || 0),
+                    0,
+                  );
+                  const consumido = vis.reduce(
+                    (s, l) =>
+                      s +
+                      Math.max(
+                        0,
+                        Number(l.quantity || 0) -
+                          Number(l.remaining || 0),
+                      ),
+                    0,
+                  );
+                  const batchIds = new Set(vis.map((l) => l.id));
+                  const hitsAll = collectLotSaleAllocHits(lotSales, batchIds);
+                  const expandedDailyRows = buildLotExpandedDailyRows(
+                    vis,
+                    hitsAll,
+                  );
+                  const restanteVis = vis.reduce(
+                    (s, l) => s + Number(l.remaining || 0),
+                    0,
+                  );
+                  const ubVentasCard = round2(
+                    hitsAll.reduce((s, h) => s + allocLineGross(h), 0),
+                  );
+                  const expanded = expandedLotGroupId === g.groupId;
+                  const names = [
+                    ...new Set(
+                      vis.map((l) => l.productName || "").filter(Boolean),
+                    ),
+                  ];
+                  return (
+                    <div
+                      key={g.groupId}
+                      className={`rounded-xl border p-3 bg-white text-sm shadow-sm space-y-2 transition-shadow ${
+                        expanded
+                          ? "border-violet-300 ring-1 ring-violet-200"
+                          : "border-gray-200 hover:border-gray-300"
+                      }`}
+                    >
+                      <div className="flex justify-between gap-2 items-start">
+                        <div>
+                          <div className="text-[11px] text-gray-500">
+                            {g.displayDate}
+                          </div>
+                          <div className="font-semibold">{g.orderName}</div>
+                          <div className="text-xs text-gray-600 mt-0.5">
+                            {names.join(" · ") || "—"}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-amber-800 underline shrink-0"
+                          onClick={() => openLotConsumidoDrawer(g)}
+                        >
+                          Cons.: {qty3(consumido)}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 text-xs">
+                        <div>
+                          <span className="text-gray-500">Inicial</span>{" "}
+                          <span className="font-medium tabular-nums">
+                            {qty3(inicial)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Restante</span>{" "}
+                          <span className="font-medium tabular-nums text-emerald-900">
+                            {qty3(restanteVis)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Consumido</span>{" "}
+                          <button
+                            type="button"
+                            className="font-medium tabular-nums text-amber-900 underline"
+                            onClick={() => openLotConsumidoDrawer(g)}
+                          >
+                            {qty3(consumido)}
+                          </button>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-gray-500 block text-[10px]">
+                            U.B. ventas
+                          </span>
+                          <span className="font-semibold tabular-nums text-violet-900">
+                            {moneyFmt(ubVentasCard)}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="w-full text-left text-[11px] text-violet-800 font-medium flex justify-between items-center border border-violet-100 rounded-lg px-2 py-1 bg-violet-50/50"
+                        onClick={() =>
+                          setExpandedLotGroupId((cur) =>
+                            cur === g.groupId ? null : g.groupId,
+                          )
+                        }
+                      >
+                        <span>Evolutivo por día</span>
+                        <span>{expanded ? "▼" : "▶"}</span>
+                      </button>
+                      {expanded ? (
+                        <div className="mt-1 w-full min-w-0 -mx-0.5">
+                          <LotExpandedDailySubtable
+                            rows={expandedDailyRows}
+                            compact
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1220,9 +2204,16 @@ export default function EvolutivoInventarioPollo({
           </div>
 
           {!selectedKey ? (
-            <div className="mt-1 text-xs text-red-600">
-              Debés seleccionar un producto para ver el evolutivo.
-            </div>
+            inventoryView === "evolutivo" ? (
+              <div className="mt-1 text-xs text-red-600">
+                Debés seleccionar un producto para ver el evolutivo.
+              </div>
+            ) : (
+              <div className="mt-1 text-xs text-slate-500">
+                Producto opcional: si elegís uno, la tabla solo muestra ese
+                producto por lote.
+              </div>
+            )
           ) : null}
         </div>
 
@@ -1249,11 +2240,30 @@ export default function EvolutivoInventarioPollo({
             </Button>
           ) : (
             <div className="w-full text-gray-500">
-              Para ver el evolutivo tenés que seleccionar un producto.
+              {inventoryView === "evolutivo"
+                ? "Para ver el evolutivo tenés que seleccionar un producto."
+                : "Podés filtrar por producto o ver todos los productos por lote."}
             </div>
           )}
         </div>
       </div>
+
+      {inventoryView === "lotes" ? (
+        <div className="hidden sm:block mb-4 max-w-xl">
+          <label className="block text-sm text-gray-600 mb-1">
+            Lote (ingresado en el rango de fechas)
+          </label>
+          <MobileHtmlSelect
+            value={lotFilterId}
+            onChange={setLotFilterId}
+            options={lotFilterSelectOptions}
+            sheetTitle="Lote"
+            triggerIcon="menu"
+            selectClassName={POLLO_SELECT_DESKTOP_CLASS}
+            buttonClassName={POLLO_SELECT_MOBILE_BUTTON_CLASS}
+          />
+        </div>
+      ) : null}
 
       {/* KPIs por producto */}
       {selected && (
@@ -1287,7 +2297,7 @@ export default function EvolutivoInventarioPollo({
       )}
 
       {/* movimientos manuales (botón + modal) */}
-      {selected && (
+      {selected && inventoryView === "evolutivo" && (
         <>
           <div className="mb-4 hidden sm:flex gap-2 items-center">
             <Button
@@ -1374,11 +2384,20 @@ export default function EvolutivoInventarioPollo({
                       Cantidad ({unitLabel})
                     </label>
                     <input
-                      type="number"
-                      step="0.001"
-                      className="border rounded px-3 py-2 w-full text-sm"
-                      value={adjQty}
-                      onChange={(e) => setAdjQty(Number(e.target.value || 0))}
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      className="border rounded px-3 py-2 w-full text-sm tabular-nums"
+                      value={adjQtyInput}
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/,/g, ".");
+                        if (v === "" || /^\d*\.?\d*$/.test(v))
+                          setAdjQtyInput(v);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === ",") e.preventDefault();
+                      }}
+                      placeholder="0"
                     />
                   </div>
 
@@ -1436,9 +2455,28 @@ export default function EvolutivoInventarioPollo({
         </>
       )}
 
+      {inventoryView === "evolutivo" ? (
+      <>
       {/* listado evolutivo */}
       {/* Desktop table (hidden on mobile) */}
-      <div className="hidden sm:block sm:overflow-x-auto">
+      <div className="hidden sm:block space-y-1">
+        {selected ? (
+          <div className="text-xs text-slate-600 space-y-0.5">
+            <p>
+              Saldo al <span className="font-mono">{from}</span> (base del
+              balance):{" "}
+              <span className="font-semibold tabular-nums">
+                {qty3(openingBalance)}
+              </span>{" "}
+              {unitLabel}
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Último balance = existencias en lotes si no hay movimientos después
+              de <span className="font-mono">{to}</span>.
+            </p>
+          </div>
+        ) : null}
+        <div className="sm:overflow-x-auto">
         <table className="min-w-full border text-sm">
           <thead className="bg-gray-100">
             <tr>
@@ -1473,7 +2511,18 @@ export default function EvolutivoInventarioPollo({
                 </td>
               </tr>
             ) : (
-              displayedMoves.map((m, idx) => (
+              displayedMoves.map((m, idx) => {
+                const { price, monto } = rowPriceAndMonto(m as InvMove);
+                const openVenta =
+                  (m.type === "VENTA_CASH" || m.type === "VENTA_CREDITO") &&
+                  m.ref
+                    ? () =>
+                        setSaleDrawerOpen({
+                          id: String(m.ref),
+                          invType: m.type as InvMove["type"],
+                        })
+                    : undefined;
+                return (
                 <React.Fragment key={`${m.ref || idx}-${m.date}`}>
                   <tr
                     className={`text-center ${
@@ -1481,7 +2530,9 @@ export default function EvolutivoInventarioPollo({
                         ? "cursor-pointer hover:bg-sky-50/80"
                         : (m.type === "MERMA" || m.type === "ROBO") && m.ref
                           ? "cursor-pointer hover:bg-rose-50/35"
-                          : ""
+                          : openVenta
+                            ? "cursor-pointer hover:bg-amber-50/50"
+                            : ""
                     }`}
                     onClick={() => {
                       if (m.type === "INGRESO" && m.ref)
@@ -1491,6 +2542,7 @@ export default function EvolutivoInventarioPollo({
                         m.ref
                       )
                         setMermaDrawerAdjId(String(m.ref));
+                      else if (openVenta) openVenta();
                     }}
                   >
                     <td className="border p-1">{m.date}</td>
@@ -1527,22 +2579,12 @@ export default function EvolutivoInventarioPollo({
                       </span>
                     </td>
                     <td className="border p-1 font-semibold text-black">
-                      {`C$ ${Number(
-                        salePrices[String(m.ref || "")] ??
-                          (m as any).price ??
-                          (m as any).unitPrice ??
-                          0,
-                      ).toFixed(2)}`}
+                      {m.type === "MERMA" || m.type === "ROBO"
+                        ? `C$ ${price.toFixed(4)}`
+                        : `C$ ${price.toFixed(2)}`}
                     </td>
                     <td className="border p-1 font-semibold text-black">
-                      {`C$ ${(
-                        Number(
-                          salePrices[String(m.ref || "")] ??
-                            (m as any).price ??
-                            (m as any).unitPrice ??
-                            0,
-                        ) * Number(m.qtyOut || 0)
-                      ).toFixed(2)}`}
+                      {`C$ ${monto.toFixed(2)}`}
                     </td>
                     <td className="border p-1 font-semibold">
                       {qty3((m as any).balance)}
@@ -1570,11 +2612,194 @@ export default function EvolutivoInventarioPollo({
                     </td>
                   </tr>
                 </React.Fragment>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
+        </div>
       </div>
+      </>
+      ) : inventoryView === "lotes" ? (
+      <div className="hidden sm:block w-full overflow-x-auto overflow-y-visible rounded-lg border border-gray-200 bg-white shadow-sm mb-4 overscroll-x-contain [scrollbar-gutter:stable]">
+        <p className="px-2 py-1.5 text-[11px] text-gray-500 border-b border-gray-100 bg-gray-50/80">
+          Lotes ingresados en el rango. Al expandir uno se cierra el anterior.
+        </p>
+        {lotLoading ? (
+          <p className="p-4 text-sm text-gray-500">Cargando lotes…</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1020px] border-collapse border border-gray-200 text-sm">
+              <thead className="bg-gray-100 sticky top-0 z-10">
+                <tr>
+                  <th
+                    className="border border-gray-200 px-2 py-2.5 text-center text-xs font-semibold whitespace-nowrap w-12"
+                    aria-label="Expandir"
+                  />
+                  <th className="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold whitespace-nowrap min-w-[6.5rem]">
+                    Fecha
+                  </th>
+                  <th className="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold whitespace-nowrap min-w-[8rem]">
+                    Lote
+                  </th>
+                  <th className="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold whitespace-nowrap min-w-[12rem] w-[22%]">
+                    Productos
+                  </th>
+                  <th className="border border-gray-200 px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[6rem]">
+                    Inicial
+                  </th>
+                  <th className="border border-gray-200 px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[6rem]">
+                    Consumido
+                  </th>
+                  <th className="border border-gray-200 px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[6rem]">
+                    Restante
+                  </th>
+                  <th
+                    className="border border-gray-200 px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[7rem] bg-violet-50/90"
+                    title="Utilidad bruta (FIFO) del rango"
+                  >
+                    U.B. ventas
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {lotGroupsFilteredForTable.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="border border-gray-200 px-3 py-4 text-center text-gray-500"
+                    >
+                      No hay lotes ingresados en este rango
+                      {selected ? " para el producto elegido" : ""}.
+                    </td>
+                  </tr>
+                ) : (
+                  lotGroupsFilteredForTable.map((g, rowIdx) => {
+                    const pk = selected?.key || "";
+                    const pid = (selected as { productId?: string })?.productId;
+                    const pn = selected?.productName;
+                    const vis = selected
+                      ? g.lines.filter((ln) =>
+                          lineMatchesProductFilter(ln, pk, pid, pn),
+                        )
+                      : g.lines.slice();
+                    const inicial = vis.reduce(
+                      (s, l) => s + Number(l.quantity || 0),
+                      0,
+                    );
+                    const consumido = vis.reduce(
+                      (s, l) =>
+                        s +
+                        Math.max(
+                          0,
+                          Number(l.quantity || 0) -
+                            Number(l.remaining || 0),
+                        ),
+                      0,
+                    );
+                    const restanteVis = vis.reduce(
+                      (s, l) => s + Number(l.remaining || 0),
+                      0,
+                    );
+                    const batchIds = new Set(vis.map((l) => l.id));
+                    const hitsAll = collectLotSaleAllocHits(
+                      lotSales,
+                      batchIds,
+                    );
+                    const expandedDailyRows = buildLotExpandedDailyRows(
+                      vis,
+                      hitsAll,
+                    );
+                    const ubVentasRow = round2(
+                      hitsAll.reduce((s, h) => s + allocLineGross(h), 0),
+                    );
+                    const expanded = expandedLotGroupId === g.groupId;
+                    const names = [
+                      ...new Set(
+                        vis.map((l) => l.productName || "").filter(Boolean),
+                      ),
+                    ];
+                    const zebra =
+                      rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50/50";
+                    return (
+                      <React.Fragment key={g.groupId}>
+                        <tr
+                          className={`text-center ${zebra} border-t border-gray-100 hover:bg-sky-50/40 transition-colors`}
+                        >
+                          <td className="border border-gray-200 px-2 py-2.5 align-middle">
+                            <button
+                              type="button"
+                              className="text-violet-800 font-mono text-xs px-1 rounded hover:bg-violet-100/80"
+                              aria-expanded={expanded}
+                              title={
+                                expanded
+                                  ? "Colapsar evolutivo"
+                                  : "Ver por día"
+                              }
+                              onClick={() =>
+                                setExpandedLotGroupId((cur) =>
+                                  cur === g.groupId ? null : g.groupId,
+                                )
+                              }
+                            >
+                              {expanded ? "▼" : "▶"}
+                            </button>
+                          </td>
+                          <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle tabular-nums text-left">
+                            {g.displayDate}
+                          </td>
+                          <td className="border border-gray-200 px-3 py-2.5 text-sm align-middle text-left font-medium text-gray-900">
+                            {g.orderName}
+                          </td>
+                          <td className="border border-gray-200 px-3 py-2.5 text-xs align-middle text-left text-gray-700 min-w-0">
+                            <span
+                              className="line-clamp-2"
+                              title={names.join(" · ")}
+                            >
+                              {names.join(" · ") || "—"}
+                            </span>
+                          </td>
+                          <td className="border border-gray-200 px-3 py-2.5 text-sm align-middle tabular-nums text-right">
+                            {qty3(inicial)}
+                          </td>
+                          <td className="border border-gray-200 px-3 py-2.5 text-sm align-middle text-right">
+                            <button
+                              type="button"
+                              className="text-amber-900 font-semibold tabular-nums underline hover:text-amber-950"
+                              onClick={() => openLotConsumidoDrawer(g)}
+                            >
+                              {qty3(consumido)}
+                            </button>
+                          </td>
+                          <td className="border border-gray-200 px-3 py-2.5 text-sm align-middle tabular-nums text-right font-medium text-emerald-900">
+                            {qty3(restanteVis)}
+                          </td>
+                          <td className="border border-gray-200 px-3 py-2.5 text-sm align-middle text-right tabular-nums font-semibold text-violet-900 bg-violet-50/40">
+                            {moneyFmt(ubVentasRow)}
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr className="bg-violet-50/70">
+                            <td
+                              colSpan={8}
+                              className="border border-gray-200 p-2 sm:p-3 align-top bg-violet-50/40"
+                            >
+                              <LotExpandedDailySubtable
+                                rows={expandedDailyRows}
+                              />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      ) : null}
 
       {/* Mobile: already rendered above inside card (sm:hidden) */}
       <SlideOverDrawer
@@ -1648,6 +2873,107 @@ export default function EvolutivoInventarioPollo({
               },
             ]}
           />
+        )}
+      </SlideOverDrawer>
+
+      <SlideOverDrawer
+        open={saleDrawerOpen !== null}
+        onClose={() => {
+          setSaleDrawerOpen(null);
+          setSaleDrawerDoc(null);
+        }}
+        title={
+          saleDrawerIsCredit
+            ? "Venta crédito · detalle"
+            : "Venta contado · detalle"
+        }
+        subtitle={saleDrawerOpen?.id || undefined}
+        titleId="status-inv-sale-drawer-title"
+        panelMaxWidthClassName="max-w-2xl"
+      >
+        {saleDrawerLoading ? (
+          <p className="text-sm text-gray-500">Cargando venta…</p>
+        ) : saleDrawerLines.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            Sin líneas de este producto en esta venta.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {saleDrawerIsCredit ? (
+              <p className="text-sm font-medium text-violet-900 bg-violet-50/80 border border-violet-200 rounded-lg px-3 py-2">
+                Cliente: {saleDrawerCustomer}
+              </p>
+            ) : null}
+            <DrawerStatGrid
+              items={[
+                {
+                  label: "Cant. productos (distintos)",
+                  value: saleDrawerKpis.productCount,
+                  tone: "slate",
+                },
+                {
+                  label: "Líneas",
+                  value: saleDrawerKpis.lineCount,
+                  tone: "sky",
+                },
+                {
+                  label: "Libras (tipo libra)",
+                  value: qty3(saleDrawerKpis.lbs),
+                  tone: "amber",
+                },
+                {
+                  label: "Unidades (no libra)",
+                  value: qty3(saleDrawerKpis.units),
+                  tone: "violet",
+                },
+                {
+                  label: "Monto",
+                  value: moneyFmt(saleDrawerKpis.amount),
+                  tone: "indigo",
+                },
+                {
+                  label: "Utilidad bruta",
+                  value: moneyFmt(saleDrawerKpis.grossProfit),
+                  tone: "emerald",
+                },
+              ]}
+            />
+            <DrawerSectionTitle className="mt-0">
+              {saleDrawerLines.length} línea(s) ·{" "}
+              {saleDrawerIsCredit ? "crédito" : "contado"}
+            </DrawerSectionTitle>
+            {saleDrawerLines.map((line) => (
+              <DrawerDetailDlCard
+                key={line.id}
+                title={line.productName}
+                rows={[
+                  { label: "Fecha venta", value: line.date },
+                  {
+                    label: "Precio",
+                    value: moneyFmt(line.unitPrice),
+                    ddClassName: "tabular-nums",
+                  },
+                  { label: "Cantidad", value: line.qtyLabel },
+                  {
+                    label: "Monto",
+                    value: moneyFmt(line.amount),
+                    ddClassName: "tabular-nums font-semibold",
+                  },
+                  {
+                    label: "U. bruta",
+                    value: moneyFmt(line.grossProfit),
+                    ddClassName:
+                      "tabular-nums text-violet-800 font-semibold",
+                  },
+                  {
+                    label: "Vendedor",
+                    value: line.seller,
+                    ddClassName: "text-sm break-all",
+                  },
+                ]}
+              />
+            ))}
+          </div>
         )}
       </SlideOverDrawer>
 
@@ -1790,6 +3116,269 @@ export default function EvolutivoInventarioPollo({
               </div>
             );
           })()}
+      </SlideOverDrawer>
+
+      <SlideOverDrawer
+        open={lotDrawerGroup !== null}
+        onClose={() => {
+          setLotDrawerGroup(null);
+          setLotDrawerProductKey("");
+        }}
+        title="Consumido — ventas por lote"
+        subtitle={
+          lotDrawerGroup
+            ? `${lotDrawerGroup.orderName} · ${lotDrawerGroup.displayDate}`
+            : undefined
+        }
+        titleId="status-inv-lot-cons-drawer-title"
+        panelMaxWidthClassName="max-w-2xl"
+      >
+        {!lotDrawerGroup ? null : !lotDrawerKpisLot ? (
+          <p className="text-sm text-gray-500">Sin datos de lote.</p>
+        ) : (
+          <div className="space-y-4">
+            <DrawerSectionTitle>Datos de lote</DrawerSectionTitle>
+            <DrawerStatGrid
+              items={[
+                {
+                  label: "Fecha de lote",
+                  value: lotDrawerKpisLot.fecha || "—",
+                  tone: "slate",
+                },
+                {
+                  label: "Ingresado",
+                  value: qty3(lotDrawerKpisLot.ingresado),
+                  tone: "sky",
+                },
+                {
+                  label: "Facturado al costo",
+                  value: moneyFmt(lotDrawerKpisLot.factCost),
+                  tone: "amber",
+                },
+                {
+                  label: "Esperado ventas",
+                  value: moneyFmt(lotDrawerKpisLot.esperado),
+                  tone: "emerald",
+                },
+                {
+                  label: "Consumido",
+                  value: qty3(lotDrawerKpisLot.consumido),
+                  tone: "rose",
+                },
+                {
+                  label: "Restante",
+                  value: qty3(lotDrawerKpisLot.restante),
+                  tone: "violet",
+                },
+                {
+                  label: "U.B. ventas (FIFO)",
+                  value: moneyFmt(lotDrawerKpisLot.ubVentas),
+                  tone: "indigo",
+                },
+                {
+                  label: "U.B. esperada (ingreso)",
+                  value: moneyFmt(lotDrawerKpisLot.ubEsperadaIngreso),
+                  tone: "emerald",
+                },
+              ]}
+            />
+
+            {lotDrawerChipOptions.length > 1 ? (
+              <div>
+                <DrawerSectionTitle>Producto</DrawerSectionTitle>
+                <div className="flex flex-wrap gap-1.5">
+                  {lotDrawerChipOptions.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setLotDrawerProductKey(opt.value)}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                        lotDrawerProductKey === opt.value
+                          ? "border-violet-500 bg-violet-100 text-violet-900"
+                          : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {lotDrawerKpisProduct ? (
+              <>
+                <DrawerSectionTitle>Datos de producto</DrawerSectionTitle>
+                <DrawerStatGrid
+                  items={[
+                    {
+                      label: "Ingresado",
+                      value: qty3(lotDrawerKpisProduct.ingresado),
+                      tone: "sky",
+                    },
+                    {
+                      label: "Facturado al costo",
+                      value: moneyFmt(lotDrawerKpisProduct.factCost),
+                      tone: "amber",
+                    },
+                    {
+                      label: "Ventas cash (monto)",
+                      value: moneyFmt(lotDrawerKpisProduct.ventasCashMonto),
+                      tone: "indigo",
+                    },
+                    {
+                      label: `${lotDrawerKpisProduct.qtyLabel} vendidas (cash)`,
+                      value: qty3(lotDrawerKpisProduct.qtyCash),
+                      tone: "amber",
+                    },
+                    {
+                      label: "Ventas crédito (monto)",
+                      value: moneyFmt(lotDrawerKpisProduct.ventasCredMonto),
+                      tone: "violet",
+                    },
+                    {
+                      label: `${lotDrawerKpisProduct.qtyLabel} vendidas (crédito)`,
+                      value: qty3(lotDrawerKpisProduct.qtyCred),
+                      tone: "violet",
+                    },
+                    {
+                      label: `${lotDrawerKpisProduct.qtyLabel} restantes`,
+                      value: qty3(lotDrawerKpisProduct.restante),
+                      tone: "emerald",
+                    },
+                    {
+                      label: "U.B. ventas (FIFO)",
+                      value: moneyFmt(lotDrawerKpisProduct.ubVentas),
+                      tone: "indigo",
+                    },
+                    {
+                      label: "U.B. esperada (ingreso)",
+                      value: moneyFmt(lotDrawerKpisProduct.ubEsperadaIngreso),
+                      tone: "emerald",
+                    },
+                  ]}
+                />
+              </>
+            ) : (
+              <p className="text-xs text-gray-500">
+                Elegí un producto para ver KPIs detallados.
+              </p>
+            )}
+
+            <div>
+              <DrawerSectionTitle>Listado de ventas</DrawerSectionTitle>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <button
+                  type="button"
+                  onClick={() => setLotDrawerPay("CASH")}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                    lotDrawerPay === "CASH"
+                      ? "border-amber-500 bg-amber-100 text-amber-900"
+                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  Cash
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLotDrawerPay("CREDITO")}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                    lotDrawerPay === "CREDITO"
+                      ? "border-violet-500 bg-violet-100 text-violet-900"
+                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  Crédito
+                </button>
+              </div>
+
+              {lotDrawerHitsFilteredForDrawer.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No hay líneas con asignación a este lote para este producto y
+                  tipo de pago (ventas sin FIFO en ítems no aparecen).
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {lotDrawerHitsFilteredForDrawer.map((row, hi) => {
+                    const h = row.hit;
+                    return (
+                    <div
+                      key={`${h.saleId}-${h.itemIndex}-${hi}`}
+                      className={`rounded-xl border p-3 shadow-sm ${
+                        h.isCash
+                          ? "border-amber-200/90 bg-amber-50/90"
+                          : "border-violet-200/90 bg-violet-50/90"
+                      }`}
+                    >
+                      <DrawerDetailDlCard
+                        title={h.productName || "Producto"}
+                        rows={[
+                          { label: "Id venta", value: h.saleId },
+                          { label: "Fecha venta", value: h.saleDate },
+                          {
+                            label: "Tipo",
+                            value: h.isCash ? "CONTADO" : "CRÉDITO",
+                          },
+                          ...(h.isCash
+                            ? ([] as { label: string; value: string; ddClassName?: string }[])
+                            : [
+                                {
+                                  label: "Cliente",
+                                  value: h.customerLabel || "—",
+                                },
+                                {
+                                  label: "Restante en lote tras esta venta",
+                                  value: qty3(row.remainingAfterInLot),
+                                  ddClassName:
+                                    "tabular-nums font-semibold text-emerald-900",
+                                },
+                              ]),
+                          {
+                            label: "Cantidad (asignada al lote)",
+                            value: `${qty3(h.allocQty)}${
+                              h.measurement ? ` ${h.measurement}` : ""
+                            }`,
+                          },
+                          {
+                            label: "Precio unit.",
+                            value: moneyFmt(h.unitPrice),
+                            ddClassName: "tabular-nums",
+                          },
+                          {
+                            label: "Monto (prorrateo línea)",
+                            value: moneyFmt(allocLineAmount(h)),
+                            ddClassName: "tabular-nums font-semibold",
+                          },
+                          {
+                            label: "U. bruta (prorrateo)",
+                            value: moneyFmt(allocLineGross(h)),
+                            ddClassName:
+                              "tabular-nums text-violet-800 font-semibold",
+                          },
+                          ...(h.isCash
+                            ? [
+                                {
+                                  label: "Restante en lote tras esta venta",
+                                  value: qty3(row.remainingAfterInLot),
+                                  ddClassName:
+                                    "tabular-nums font-semibold text-emerald-900",
+                                },
+                              ]
+                            : []),
+                          {
+                            label: "Vendedor",
+                            value: h.seller,
+                            ddClassName: "text-sm break-all",
+                          },
+                        ]}
+                      />
+                    </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </SlideOverDrawer>
 
       {toastMsg && (

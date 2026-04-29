@@ -154,6 +154,24 @@ const borderByType = (type: string): string => {
   }
 };
 
+/** Mismas categorías que `ExpensesAdmin.tsx` — la Referencia del modal puede ser una de estas. */
+const POLLO_EXPENSE_CATEGORY_LABELS = [
+  "Energia",
+  "Bolsas",
+  "Detergentes",
+  "Limpieza de Freezer",
+  "Delivery",
+  "Pago a Personal",
+  "Varios",
+] as const;
+
+function expenseCategoryFromLedgerReference(ref: string): (typeof POLLO_EXPENSE_CATEGORY_LABELS)[number] {
+  const t = ref.trim();
+  return (POLLO_EXPENSE_CATEGORY_LABELS as readonly string[]).includes(t)
+    ? (t as (typeof POLLO_EXPENSE_CATEGORY_LABELS)[number])
+    : "Varios";
+}
+
 const BADGE_CFG: Record<string, { label: string; cls: string }> = {
   VENTA_CASH:         { label: "VENTA CASH",    cls: "bg-green-100 text-green-800 border-green-200" },
   ABONO:              { label: "ABONO",          cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
@@ -527,6 +545,27 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const [corteDesde, setCorteDesde] = useState<string>("");
   const [corteHasta, setCorteHasta] = useState<string>("");
 
+  /** Vista previa al registrar CORTE: ventas/abonos + flujo caja en [Desde, Hasta] */
+  const [corteModalPreview, setCorteModalPreview] = useState<{
+    loading: boolean;
+    ventasMonto: number;
+    abonosMonto: number;
+    ventasCount: number;
+    abonosCount: number;
+    gastosSum: number;
+    totalCashOutCaja: number;
+    totalCashInCaja: number;
+  }>({
+    loading: false,
+    ventasMonto: 0,
+    abonosMonto: 0,
+    ventasCount: 0,
+    abonosCount: 0,
+    gastosSum: 0,
+    totalCashOutCaja: 0,
+    totalCashInCaja: 0,
+  });
+
   const { refreshKey, refresh } = useManualRefresh();
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -606,21 +645,28 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           orderBy("date", "asc"),
         );
         const expSnap = await getDocs(qExp);
-        const expenseRows: LedgerRow[] = expSnap.docs.map((d) => {
-          const x = d.data() as any;
-          return {
-            id: `exp_${d.id}`,
-            date: x.date || today(),
-            type: "GASTO",
-            description: x.description || "Gasto",
-            reference: x.category || x.reference || null,
-            inAmount: 0,
-            outAmount: Number(x.amount || 0),
-            createdAt: x.createdAt ?? null,
-            createdBy: x.createdBy ?? null,
-            source: "expenses",
-          } as any;
-        });
+        const expenseRows: LedgerRow[] = expSnap.docs
+          .filter((docSnap) => {
+            const x = docSnap.data() as { ledgerId?: string };
+            // Ya está representado por la fila del libro de caja (evita duplicar).
+            if (x.ledgerId) return false;
+            return true;
+          })
+          .map((d) => {
+            const x = d.data() as any;
+            return {
+              id: `exp_${d.id}`,
+              date: x.date || today(),
+              type: "GASTO",
+              description: x.description || "Gasto",
+              reference: x.category || x.reference || null,
+              inAmount: 0,
+              outAmount: Number(x.amount || 0),
+              createdAt: x.createdAt ?? null,
+              createdBy: x.createdBy ?? null,
+              source: "expenses",
+            } as any;
+          });
 
         const merged = [...ledgerRows, ...expenseRows].sort((a, b) =>
           (a.date || "").localeCompare(b.date || ""),
@@ -1012,6 +1058,20 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         : a;
     }, 0);
 
+    /** Toda salida que resta de la caja (misma lógica que el saldo corridos). */
+    const totalCashOutCaja = round2(
+      ledger.reduce((a, r) => {
+        if (!affectsCash(r.type)) return a;
+        return a + Number(r.outAmount || 0);
+      }, 0),
+    );
+    const totalCashInCaja = round2(
+      ledger.reduce((a, r) => {
+        if (!affectsCash(r.type)) return a;
+        return a + Number(r.inAmount || 0);
+      }, 0),
+    );
+
     return {
       inCashSum,
       outSumNonGastos,
@@ -1019,6 +1079,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       abonoDueno,
       reabastecimientoSum,
       comprasDirectasDueno,
+      totalCashOutCaja,
+      totalCashInCaja,
     };
   }, [ledger]);
 
@@ -1364,6 +1426,19 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         : a;
     }, 0);
 
+    const totalCashOutCaja = round2(
+      rows.reduce((a: number, r: any) => {
+        if (!affectsCash(r.type)) return a;
+        return a + Number(r.outAmount || 0);
+      }, 0),
+    );
+    const totalCashInCaja = round2(
+      rows.reduce((a: number, r: any) => {
+        if (!affectsCash(r.type)) return a;
+        return a + Number(r.inAmount || 0);
+      }, 0),
+    );
+
     return {
       inCashSum,
       outSumNonGastos,
@@ -1371,6 +1446,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       abonoDueno,
       reabastecimientoSum,
       comprasDirectasDueno,
+      totalCashOutCaja,
+      totalCashInCaja,
     };
   }, [ledger, movementTypeFilter, totals]);
 
@@ -1552,6 +1629,19 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     };
 
     if (editingId) {
+      const ledRef = doc(db, "cash_ledger_pollo", editingId);
+      let prevData: Record<string, unknown> | undefined;
+      try {
+        const prevSnap = await getDoc(ledRef);
+        prevData = prevSnap.exists()
+          ? (prevSnap.data() as Record<string, unknown>)
+          : undefined;
+      } catch {
+        prevData = undefined;
+      }
+      const prevType = String(prevData?.type ?? "");
+      const linkedExpenseId = prevData?.linkedExpenseId as string | undefined;
+
       const up: Record<string, unknown> = { ...basePayload };
       if (type === "DEPOSITO") {
         up.associatedVentasDia = assocTrim || null;
@@ -1565,8 +1655,42 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         up.corteDesde = deleteField();
         up.corteHasta = deleteField();
       }
+      if (type === "GASTO" && linkedExpenseId) {
+        up.linkedExpenseId = linkedExpenseId;
+      }
+
       try {
-        await updateDoc(doc(db, "cash_ledger_pollo", editingId), up);
+        await updateDoc(ledRef, up);
+
+        if (prevType === "GASTO" && type !== "GASTO" && linkedExpenseId) {
+          await deleteDoc(doc(db, "expenses", linkedExpenseId));
+          await updateDoc(ledRef, { linkedExpenseId: deleteField() });
+        } else if (type === "GASTO" && outVal > 0) {
+          const cat = expenseCategoryFromLedgerReference(reference.trim());
+          const amt = Number(Number(outVal).toFixed(2));
+          if (linkedExpenseId) {
+            await updateDoc(doc(db, "expenses", linkedExpenseId), {
+              date,
+              category: cat,
+              description: description.trim(),
+              amount: amt,
+              status: "PAGADO",
+            });
+          } else {
+            const expRef = await addDoc(collection(db, "expenses"), {
+              date,
+              category: cat,
+              description: description.trim(),
+              amount: amt,
+              status: "PAGADO",
+              notes: "",
+              ledgerId: editingId,
+              createdAt: serverTimestamp(),
+            });
+            await updateDoc(ledRef, { linkedExpenseId: expRef.id });
+          }
+        }
+
         setToastMsg("✅ Movimiento actualizado.");
       } catch (e) {
         console.error("Error updating movement:", e);
@@ -1582,8 +1706,29 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         add.corteDesde = corteDTrim;
         add.corteHasta = corteHTrim;
       }
-      await addDoc(collection(db, "cash_ledger_pollo"), add);
-      setToastMsg("✅ Movimiento guardado.");
+      try {
+        const ledgerRef = await addDoc(collection(db, "cash_ledger_pollo"), add);
+        if (type === "GASTO" && outVal > 0) {
+          const cat = expenseCategoryFromLedgerReference(reference.trim());
+          const amt = Number(Number(outVal).toFixed(2));
+          const expRef = await addDoc(collection(db, "expenses"), {
+            date,
+            category: cat,
+            description: description.trim(),
+            amount: amt,
+            status: "PAGADO",
+            notes: "",
+            ledgerId: ledgerRef.id,
+            createdAt: serverTimestamp(),
+          });
+          await updateDoc(ledgerRef, { linkedExpenseId: expRef.id });
+        }
+        setToastMsg("✅ Movimiento guardado.");
+      } catch (e) {
+        console.error("Error guardando movimiento:", e);
+        setToastMsg("❌ No se pudo guardar el movimiento. Revisa la consola.");
+        return;
+      }
     }
 
     setDescription("");
@@ -1641,6 +1786,145 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     setCorteDesde((prev) => prev || d);
     setCorteHasta((prev) => prev || d);
   }, [type, date]);
+
+  /** Totales y conteos del periodo Desde–Hasta para el modal CORTE */
+  useEffect(() => {
+    if (!modalOpen || type !== "CORTE") return;
+    const d0 = corteDesde.trim().slice(0, 10);
+    const d1 = corteHasta.trim().slice(0, 10);
+    if (!d0 || !d1 || d0 > d1) {
+      setCorteModalPreview({
+        loading: false,
+        ventasMonto: 0,
+        abonosMonto: 0,
+        ventasCount: 0,
+        abonosCount: 0,
+        gastosSum: 0,
+        totalCashOutCaja: 0,
+        totalCashInCaja: 0,
+      });
+      return;
+    }
+    let cancelled = false;
+    setCorteModalPreview((p) => ({ ...p, loading: true }));
+    (async () => {
+      try {
+        const qs = query(
+          collection(db, "salesV2"),
+          where("date", ">=", d0),
+          where("date", "<=", d1),
+        );
+        const snap = await getDocs(qs);
+        let ventasMonto = 0;
+        let ventasCount = 0;
+        snap.forEach((docSnap) => {
+          const x = docSnap.data() as Record<string, unknown>;
+          if (String(x.type ?? "CONTADO").toUpperCase() !== "CONTADO") return;
+          ventasCount += 1;
+          ventasMonto += saleAmountFromSaleDoc(x);
+        });
+        ventasMonto = round2(ventasMonto);
+
+        const qar = query(
+          collection(db, "ar_movements_pollo"),
+          where("date", ">=", d0),
+          where("date", "<=", d1),
+        );
+        const arSnap = await getDocs(qar);
+        let abonosMonto = 0;
+        let abonosCount = 0;
+        arSnap.forEach((docSnap) => {
+          const m = docSnap.data() as Record<string, unknown>;
+          if (String(m.type ?? "").trim().toUpperCase() !== "ABONO") return;
+          abonosCount += 1;
+          abonosMonto += Math.abs(Number(m.amount ?? 0));
+        });
+        abonosMonto = round2(abonosMonto);
+
+        const qLedRango = query(
+          collection(db, "cash_ledger_pollo"),
+          where("date", ">=", d0),
+          where("date", "<=", d1),
+        );
+        const qExpRango = query(
+          collection(db, "expenses"),
+          where("date", ">=", d0),
+          where("date", "<=", d1),
+        );
+        const [ledSnapRango, expSnapRango] = await Promise.all([
+          getDocs(qLedRango),
+          getDocs(qExpRango),
+        ]);
+
+        const ledgerRangoRows = ledSnapRango.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...(docSnap.data() as Record<string, unknown>),
+        })) as { id: string; type?: string; inAmount?: number; outAmount?: number }[];
+
+        const expenseRangoRows = expSnapRango.docs
+          .filter((docSnap) => {
+            const x = docSnap.data() as { ledgerId?: string };
+            return !x.ledgerId;
+          })
+          .map((docSnap) => {
+            const x = docSnap.data() as Record<string, unknown>;
+            return {
+              id: `exp_${docSnap.id}`,
+              date: x.date || today(),
+              type: "GASTO",
+              inAmount: 0,
+              outAmount: Number(x.amount || 0),
+            };
+          });
+
+        const mergedRango = [...ledgerRangoRows, ...expenseRangoRows];
+
+        let gastosSumRango = 0;
+        let totalCashOutRango = 0;
+        let totalCashInRango = 0;
+        for (const r of mergedRango) {
+          const t = String(r.type || "").trim() as LedgerType;
+          if (!affectsCash(t)) continue;
+          totalCashOutRango += Number(r.outAmount || 0);
+          totalCashInRango += Number(r.inAmount || 0);
+          if (t === "GASTO") gastosSumRango += Number(r.outAmount || 0);
+        }
+        gastosSumRango = round2(gastosSumRango);
+        totalCashOutRango = round2(totalCashOutRango);
+        totalCashInRango = round2(totalCashInRango);
+
+        if (!cancelled) {
+          setCorteModalPreview({
+            loading: false,
+            ventasMonto,
+            abonosMonto,
+            ventasCount,
+            abonosCount,
+            gastosSum: gastosSumRango,
+            totalCashOutCaja: totalCashOutRango,
+            totalCashInCaja: totalCashInRango,
+          });
+        }
+      } catch (e) {
+        console.error("Corte modal KPI preview:", e);
+        if (!cancelled) {
+          setCorteModalPreview({
+            loading: false,
+            ventasMonto: 0,
+            abonosMonto: 0,
+            ventasCount: 0,
+            abonosCount: 0,
+            gastosSum: 0,
+            totalCashOutCaja: 0,
+            totalCashInCaja: 0,
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [modalOpen, type, corteDesde, corteHasta]);
 
   /** Si cambia la fecha del formulario, quitar asociación que ya no coincide con ese día. */
   useEffect(() => {
@@ -1832,6 +2116,43 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               </div>
               <div className="text-2xl font-bold">
                 {money(base?.abonosPeriodo ?? 0)}
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-dashed border-gray-200 space-y-2">
+                <div className="text-xs text-gray-600">
+                  Gastos + Salidas (salen de caja)
+                </div>
+                <div className="text-2xl font-bold text-rose-800 tabular-nums">
+                  {money(displayTotals.totalCashOutCaja)}
+                </div>
+                <p className="text-[11px] text-gray-500 leading-snug">
+                  Gastos registrados {money(displayTotals.gastosSum)} · Salidas
+                  restantes (retiros, depósitos, reabast., cortes, etc.){" "}
+                  {money(
+                    round2(
+                      displayTotals.totalCashOutCaja -
+                        displayTotals.gastosSum,
+                    ),
+                  )}
+                </p>
+
+                <div className="text-xs text-gray-600 mt-3">
+                  Saldo Final
+                </div>
+                <div className="text-2xl font-bold text-emerald-900 tabular-nums">
+                  {money(saldoFinal)}
+                </div>
+                <p className="text-[11px] text-gray-500 leading-snug">
+                  Ventas cash + abonos ({money(saldoBase)})
+                  {displayTotals.totalCashInCaja > 0 ? (
+                    <>
+                      {" "}
+                      + entradas de caja ({money(displayTotals.totalCashInCaja)})
+                    </>
+                  ) : null}{" "}
+                  − salidas ({money(displayTotals.totalCashOutCaja)}). Igual al
+                  «Saldo final (Debe − Haber)».
+                </p>
               </div>
             </div>
           )}
@@ -2093,6 +2414,37 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                       {money(base?.abonosPeriodo ?? 0)}
                     </div>
                   </div>
+                  <div className="border rounded p-2 bg-rose-50/80 border-rose-100 col-span-full sm:col-span-3">
+                    <div className="text-xs text-gray-600">
+                      Gastos + Salidas (salen de caja)
+                    </div>
+                    <div className="font-bold tabular-nums text-rose-900">
+                      {money(displayTotals.totalCashOutCaja)}
+                    </div>
+                    <div className="text-[10px] text-gray-500 mt-1 leading-snug">
+                      Gastos {money(displayTotals.gastosSum)} · Otras salidas{" "}
+                      {money(
+                        round2(
+                          displayTotals.totalCashOutCaja -
+                            displayTotals.gastosSum,
+                        ),
+                      )}
+                    </div>
+                  </div>
+                  <div className="border rounded p-2 bg-emerald-50/80 border-emerald-100 col-span-full sm:col-span-3">
+                    <div className="text-xs text-gray-600">Saldo Final</div>
+                    <div className="font-bold tabular-nums text-emerald-950">
+                      {money(saldoFinal)}
+                    </div>
+                    <div className="text-[10px] text-gray-500 mt-1 leading-snug">
+                      Base {money(saldoBase)}
+                      {displayTotals.totalCashInCaja > 0 ? (
+                        <> + entr. {money(displayTotals.totalCashInCaja)}</>
+                      ) : null}{" "}
+                      − sal. {money(displayTotals.totalCashOutCaja)} · igual Debe
+                      − Haber
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -2244,6 +2596,107 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     El detalle del movimiento mostrará las ventas cash (CONTADO) con
                     fecha de venta entre Desde y Hasta, según el periodo cargado.
                   </p>
+                  <div className="sm:col-span-2 rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/95 via-white to-violet-50/60 p-3 shadow-sm">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-900 mb-2">
+                      Vista previa del periodo (Desde → Hasta)
+                    </div>
+                    {corteModalPreview.loading ? (
+                      <p className="text-xs text-indigo-700 py-2">
+                        Calculando ventas, abonos y movimientos de caja…
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="rounded-lg border border-emerald-200 bg-white/90 px-3 py-2">
+                            <div className="text-[11px] font-medium text-emerald-900">
+                              Ventas (monto cash)
+                            </div>
+                            <div className="text-lg font-bold tabular-nums text-emerald-950">
+                              {money(corteModalPreview.ventasMonto)}
+                            </div>
+                          </div>
+                          <div className="rounded-lg border border-violet-200 bg-white/90 px-3 py-2">
+                            <div className="text-[11px] font-medium text-violet-900">
+                              Abonos (monto)
+                            </div>
+                            <div className="text-lg font-bold tabular-nums text-violet-950">
+                              {money(corteModalPreview.abonosMonto)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-indigo-300 bg-indigo-50/80 px-3 py-2">
+                          <div className="text-[11px] font-medium text-indigo-950">
+                            Ventas + Abonos
+                          </div>
+                          <div className="text-xl font-extrabold tabular-nums text-indigo-950">
+                            {money(
+                              round2(
+                                corteModalPreview.ventasMonto +
+                                  corteModalPreview.abonosMonto,
+                              ),
+                            )}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="rounded-lg border border-rose-200 bg-white/90 px-3 py-2">
+                            <div className="text-[11px] font-medium text-rose-900">
+                              Gastos + Salidas (salen de caja)
+                            </div>
+                            <div className="text-lg font-bold tabular-nums text-rose-950">
+                              {money(corteModalPreview.totalCashOutCaja)}
+                            </div>
+                            <p className="text-[10px] text-rose-800/85 mt-1 leading-snug">
+                              Gastos {money(corteModalPreview.gastosSum)} · Otras
+                              salidas{" "}
+                              {money(
+                                round2(
+                                  corteModalPreview.totalCashOutCaja -
+                                    corteModalPreview.gastosSum,
+                                ),
+                              )}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-emerald-300 bg-emerald-50/90 px-3 py-2">
+                            <div className="text-[11px] font-medium text-emerald-950">
+                              Saldo Final
+                            </div>
+                            <div className="text-lg font-extrabold tabular-nums text-emerald-950">
+                              {money(
+                                round2(
+                                  corteModalPreview.ventasMonto +
+                                    corteModalPreview.abonosMonto +
+                                    corteModalPreview.totalCashInCaja -
+                                    corteModalPreview.totalCashOutCaja,
+                                ),
+                              )}
+                            </div>
+                            <p className="text-[10px] text-emerald-900/85 mt-1 leading-snug">
+                              Ventas + abonos + entradas de caja − salidas (rango
+                              Desde→Hasta).
+                            </p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                            <div className="text-[11px] font-medium text-slate-600">
+                              Transacciones (ventas cash)
+                            </div>
+                            <div className="text-2xl font-bold tabular-nums text-slate-900">
+                              {corteModalPreview.ventasCount}
+                            </div>
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                            <div className="text-[11px] font-medium text-slate-600">
+                              Abonos (registros)
+                            </div>
+                            <div className="text-2xl font-bold tabular-nums text-slate-900">
+                              {corteModalPreview.abonosCount}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -3444,7 +3897,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                 setLedgerRowActionMenu(null);
                 if (!window.confirm("Eliminar este movimiento?")) return;
                 try {
+                  const expenseId = (r as { linkedExpenseId?: string })
+                    .linkedExpenseId;
                   await deleteDoc(doc(db, "cash_ledger_pollo", r.id));
+                  if (expenseId) {
+                    await deleteDoc(doc(db, "expenses", expenseId));
+                  }
                   refresh();
                   setToastMsg("✅ Movimiento eliminado.");
                 } catch (e) {

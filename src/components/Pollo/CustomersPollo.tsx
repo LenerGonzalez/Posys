@@ -1666,16 +1666,17 @@ export default function CustomersPollo({
     return buildSaleAbonoLedger(stRows, saleLedgerSaleId);
   }, [stRows, saleLedgerSaleId]);
 
-  const oldestPendingSaleId = useMemo(
-    () =>
-      getOldestPendingSaleId(
-        stRows,
-        normalizeDebtStatus,
-        getPendingForSale,
-        getCargoSaleDate,
-      ),
-    [stRows],
-  );
+  // Id de la consignación más antigua con saldo (antes usado para bloquear pagos hasta liquidarla primero).
+  // const oldestPendingSaleId = useMemo(
+  //   () =>
+  //     getOldestPendingSaleId(
+  //       stRows,
+  //       normalizeDebtStatus,
+  //       getPendingForSale,
+  //       getCargoSaleDate,
+  //     ),
+  //   [stRows],
+  // );
 
   const pendingCreditKpi = useMemo(() => {
     const ids = listPendingSaleIdsOldestFirst(
@@ -1709,20 +1710,21 @@ export default function CustomersPollo({
       return;
     }
 
-    const oldest = getOldestPendingSaleId(
-      stRows,
-      normalizeDebtStatus,
-      getPendingForSale,
-      getCargoSaleDate,
-    );
-    if (oldest) {
-      if (!abonoTargetSaleId || abonoTargetSaleId !== oldest) {
-        setMsg(
-          "Hay consignaciones/ventas pendientes: primero aboná la más antigua.",
-        );
-        return;
-      }
-    }
+    // Regla desactivada: antes solo permitía ligar el abono a la consignación más antigua pendiente.
+    // const oldest = getOldestPendingSaleId(
+    //   stRows,
+    //   normalizeDebtStatus,
+    //   getPendingForSale,
+    //   getCargoSaleDate,
+    // );
+    // if (oldest) {
+    //   if (!abonoTargetSaleId || abonoTargetSaleId !== oldest) {
+    //     setMsg(
+    //       "Hay consignaciones/ventas pendientes: primero aboná la más antigua.",
+    //     );
+    //     return;
+    //   }
+    // }
 
     if (abonoTargetSaleId) {
       const pend = getPendingForSale(stRows, abonoTargetSaleId);
@@ -1845,16 +1847,17 @@ export default function CustomersPollo({
       setMsg("No hay saldo pendiente para esta venta.");
       return;
     }
-    const oldestPay = getOldestPendingSaleId(
-      stRows,
-      normalizeDebtStatus,
-      getPendingForSale,
-      getCargoSaleDate,
-    );
-    if (oldestPay && saleId !== oldestPay) {
-      setMsg("Solo podés pagar primero la consignación/venta más antigua pendiente.");
-      return;
-    }
+    // Regla desactivada: antes solo se podía usar "Pagar" en la consignación más antigua pendiente.
+    // const oldestPay = getOldestPendingSaleId(
+    //   stRows,
+    //   normalizeDebtStatus,
+    //   getPendingForSale,
+    //   getCargoSaleDate,
+    // );
+    // if (oldestPay && saleId !== oldestPay) {
+    //   setMsg("Solo podés pagar primero la consignación/venta más antigua pendiente.");
+    //   return;
+    // }
     const cargo = stRows.find(
       (m) =>
         m.type === "CARGO" &&
@@ -1889,18 +1892,19 @@ export default function CustomersPollo({
       setPagoTotalSaleId(null);
       return;
     }
-    const oldestPay = getOldestPendingSaleId(
-      stRows,
-      normalizeDebtStatus,
-      getPendingForSale,
-      getCargoSaleDate,
-    );
-    if (oldestPay && saleId !== oldestPay) {
-      setMsg("Solo podés pagar primero la consignación/venta más antigua pendiente.");
-      setShowPagoTotalModal(false);
-      setPagoTotalSaleId(null);
-      return;
-    }
+    // Regla desactivada: misma que en openPagoTotalModal (pagar cualquier pendiente).
+    // const oldestPay = getOldestPendingSaleId(
+    //   stRows,
+    //   normalizeDebtStatus,
+    //   getPendingForSale,
+    //   getCargoSaleDate,
+    // );
+    // if (oldestPay && saleId !== oldestPay) {
+    //   setMsg("Solo podés pagar primero la consignación/venta más antigua pendiente.");
+    //   setShowPagoTotalModal(false);
+    //   setPagoTotalSaleId(null);
+    //   return;
+    // }
     const cargo = stRows.find(
       (m) =>
         m.type === "CARGO" &&
@@ -4216,10 +4220,12 @@ export default function CustomersPollo({
                     );
                   }
                   const pend = getPendingForSale(stRows, sid);
-                  const bloqueadoPorOrden =
-                    oldestPendingSaleId &&
-                    sid !== oldestPendingSaleId &&
-                    pend > 0.005;
+                  // Antes: bloqueaba Pagar/Abonar si no era la consignación más antigua pendiente.
+                  // const bloqueadoPorOrden =
+                  //   oldestPendingSaleId &&
+                  //   sid !== oldestPendingSaleId &&
+                  //   pend > 0.005;
+                  const bloqueadoPorOrden = false;
                   return (
                     <div className="py-1">
                       <Button
