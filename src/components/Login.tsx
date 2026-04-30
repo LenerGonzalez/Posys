@@ -10,6 +10,7 @@ import {
 import { doc, getDoc } from "firebase/firestore";
 import { hasRole } from "../utils/roles";
 import { Link, useNavigate } from "react-router-dom";
+import { FiEye, FiEyeOff } from "react-icons/fi";
 import BottomSheet from "./common/BottomSheet";
 
 type AllowedRole =
@@ -272,10 +273,10 @@ export default function Login() {
               <label className="block text-sm font-semibold text-slate-700">
                 Contraseña
               </label>
-              <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+              <div className="relative mt-1">
                 <input
                   type={showPw ? "text" : "password"}
-                  className="min-w-0 flex-1 border border-slate-200 rounded-2xl px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  className="w-full border border-slate-200 rounded-2xl py-2 pl-3 pr-12 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   minLength={6}
@@ -283,10 +284,18 @@ export default function Login() {
                 />
                 <button
                   type="button"
-                  className="w-full shrink-0 whitespace-nowrap rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 sm:w-auto"
                   onClick={() => setShowPw((v) => !v)}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-0"
+                  aria-label={
+                    showPw ? "Ocultar contraseña" : "Mostrar contraseña"
+                  }
+                  title={showPw ? "Ocultar contraseña" : "Mostrar contraseña"}
                 >
-                  {showPw ? "Ocultar" : "Mostrar"}
+                  {showPw ? (
+                    <FiEyeOff className="h-5 w-5 shrink-0" aria-hidden />
+                  ) : (
+                    <FiEye className="h-5 w-5 shrink-0" aria-hidden />
+                  )}
                 </button>
               </div>
               <div className="text-xs text-slate-500 mt-2">
@@ -366,7 +375,7 @@ export default function Login() {
       >
         <div className="px-2 pt-2 space-y-2">
           <p className="text-sm text-slate-600 px-1 pb-1">
-            Elige una opción permitida sin cuenta:
+            Puedes consultar precios sin iniciar sesión:
           </p>
           <Link
             to="/publico/precios-venta"
@@ -375,13 +384,7 @@ export default function Login() {
           >
             Precios ventas
           </Link>
-          <Link
-            to="/publico/saldos-externos"
-            onClick={() => setPublicAccessOpen(false)}
-            className="block w-full rounded-xl border border-violet-200 bg-violet-50 px-4 py-3.5 text-left text-base font-semibold text-violet-950 hover:bg-violet-100"
-          >
-            Saldos externos
-          </Link>
+        
         </div>
       </BottomSheet>
     </div>

@@ -2485,7 +2485,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       </div>
 
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
           <div
             className="absolute inset-0 bg-black/40"
             onClick={() => setModalOpen(false)}
@@ -2493,10 +2493,25 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
           <div
             ref={modalRef}
-            className="relative bg-white rounded-2xl p-4 w-full max-w-2xl shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="status-account-movement-modal-title"
+            className={
+              type === "CORTE"
+                ? "relative flex w-full max-w-2xl min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-xl max-h-[min(92dvh,calc(100vh-1.5rem))]"
+                : "relative w-full max-w-2xl rounded-2xl bg-white p-4 shadow-xl"
+            }
           >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">Agregar movimiento</h3>
+            <div
+              className={
+                type === "CORTE"
+                  ? "flex shrink-0 items-center justify-between border-b border-gray-100 px-4 py-3"
+                  : "mb-3 flex items-center justify-between"
+              }
+            >
+              <h3 id="status-account-movement-modal-title" className="font-semibold">
+                Agregar movimiento
+              </h3>
               <Button
                 type="button"
                 variant="ghost"
@@ -2509,7 +2524,14 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            <div
+              className={
+                type === "CORTE"
+                  ? "min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 [scrollbar-gutter:stable]"
+                  : ""
+              }
+            >
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
               <div>
                 <label className="block text-sm text-gray-600 mb-1">
                   {type === "CORTE" ? "Fecha de corte" : "Fecha"}
@@ -2816,6 +2838,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                   Guardar movimiento
                 </Button>
               </div>
+            </div>
             </div>
           </div>
         </div>
