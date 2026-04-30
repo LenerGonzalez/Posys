@@ -12,6 +12,7 @@ import {
   deleteField,
   doc,
   updateDoc,
+  waitForPendingWrites,
 } from "firebase/firestore";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
@@ -1729,6 +1730,17 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         setToastMsg("❌ No se pudo guardar el movimiento. Revisa la consola.");
         return;
       }
+    }
+
+    try {
+      await waitForPendingWrites(db);
+    } catch (e) {
+      console.warn("waitForPendingWrites:", e);
+    }
+    const moveDate = String(date || "").trim().slice(0, 10);
+    if (moveDate) {
+      if (moveDate < from) setFrom(moveDate);
+      if (moveDate > to) setTo(moveDate);
     }
 
     setDescription("");

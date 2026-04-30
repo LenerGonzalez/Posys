@@ -2363,7 +2363,7 @@ export default function CierreVentas({
                   </div>
 
                   {showCombinedTable && (
-                    <div className="mt-6">
+                    <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-semibold text-slate-800">
@@ -2433,7 +2433,7 @@ export default function CierreVentas({
                     </div>
                   )}
 
-                  <div className="mt-6">
+                  <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm">
                     <div className="flex items-start justify-between gap-3 mb-3">
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-semibold text-slate-800">
@@ -2564,7 +2564,7 @@ export default function CierreVentas({
                     )}
                   </div>
 
-                  <div className="mt-6 flex flex-col gap-3">
+                  <div className="mt-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-semibold text-slate-800">
@@ -2631,7 +2631,7 @@ export default function CierreVentas({
               )}
 
               {showCreditTable && (
-                <div>
+                <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm">
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold text-slate-800">
