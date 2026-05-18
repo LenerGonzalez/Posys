@@ -1073,6 +1073,7 @@ export default function PrecioVentas({
           "productId",
           "categoria",
           "nombreProducto",
+          "costo",
           "precioIslaActual",
           "precioRivasActual",
           "precioIslaAnterior",
@@ -1095,10 +1096,15 @@ export default function PrecioVentas({
         const usuario = [p?.updatedByDisplayName, p?.updatedByEmail]
           .filter(Boolean)
           .join(" — ");
+        const costo =
+          r.providerPrice != null && Number.isFinite(Number(r.providerPrice))
+            ? Number(r.providerPrice)
+            : "";
         aoa.push([
           r.productId,
           r.category,
           r.productName,
+          costo,
           r.priceIsla,
           r.priceRivas,
           prevI,
