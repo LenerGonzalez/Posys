@@ -179,14 +179,12 @@ function findProductByImportedName(
   );
   if (byName) return byName;
   const byCatDash = products.find(
-    (x) =>
-      normalizeProductNameForImport(`${x.category} - ${x.name}`) === q,
+    (x) => normalizeProductNameForImport(`${x.category} - ${x.name}`) === q,
   );
   if (byCatDash) return byCatDash;
   return (
     products.find(
-      (x) =>
-        normalizeProductNameForImport(`${x.category} ${x.name}`) === q,
+      (x) => normalizeProductNameForImport(`${x.category} ${x.name}`) === q,
     ) || null
   );
 }
@@ -310,6 +308,23 @@ interface OrderSummaryRow {
   transferredIn: number;
 }
 
+interface VendorOrderAuditRow {
+  id: string;
+  action?: string;
+  eventType?: string;
+  entity?: string;
+  orderId?: string;
+  orderName?: string;
+  orderDate?: string;
+  productId?: string;
+  productName?: string;
+  changeType?: string;
+  changes?: any[];
+  changedFields?: any[];
+  loggedAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
 type RoleProp =
@@ -413,6 +428,14 @@ export default function VendorCandyOrders({
   const [vendorOrderDrawerOpen, setVendorOrderDrawerOpen] = useState(false);
   const [vendorOrderDrawerSummary, setVendorOrderDrawerSummary] =
     useState<OrderSummaryRow | null>(null);
+  const [auditDrawerOpen, setAuditDrawerOpen] = useState(false);
+  const [auditDrawerLoading, setAuditDrawerLoading] = useState(false);
+  const [auditRows, setAuditRows] = useState<VendorOrderAuditRow[]>([]);
+  const [auditOrderFilter, setAuditOrderFilter] = useState<string>("ALL");
+  const [auditEventFilter, setAuditEventFilter] = useState<string>("ALL");
+  const [expandedAuditRows, setExpandedAuditRows] = useState<
+    Record<string, boolean>
+  >({});
   const [editingOrderKey, setEditingOrderKey] = useState<string | null>(null);
 
   const [sellerId, setSellerId] = useState<string>("");
@@ -425,7 +448,8 @@ export default function VendorCandyOrders({
   const [productSearch, setProductSearch] = useState("");
   const [associatedSearch, setAssociatedSearch] = useState("");
   /** Solo pedido nuevo: OM desde la que se descontará al guardar (FIFO si vacío) */
-  const [selectedMasterOrderId, setSelectedMasterOrderId] = useState<string>("");
+  const [selectedMasterOrderId, setSelectedMasterOrderId] =
+    useState<string>("");
   /** Líneas con rem > 0 por doc candy_main_orders */
   const [masterOrderLinesByOrderId, setMasterOrderLinesByOrderId] = useState<
     Record<string, { productId: string; remainingPackages: number }[]>
@@ -2047,6 +2071,180 @@ export default function VendorCandyOrders({
     setOpenForm(false);
   };
 
+  const openVendorAuditDrawer = async () => {
+    setAuditDrawerOpen(true);
+    setAuditDrawerLoading(true);
+    try {
+      const snap = await getDocs(collection(db, "vendors_orders_logs"));
+      const rows: VendorOrderAuditRow[] = [];
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        rows.push({
+          id: d.id,
+          action: String(x.action || ""),
+          eventType: String(x.eventType || ""),
+          entity: String(x.entity || ""),
+          orderId: String(x.orderId || ""),
+          orderName: String(x.orderName || ""),
+          orderDate: String(x.orderDate || ""),
+          productId: String(x.productId || ""),
+          productName: String(x.productName || ""),
+          changeType: String(x.changeType || ""),
+          changes: Array.isArray(x.changes) ? x.changes : [],
+          changedFields: Array.isArray(x.changedFields) ? x.changedFields : [],
+          loggedAt: x.loggedAt,
+          updatedAt: x.updatedAt,
+        });
+      });
+      const ts = (v: any) => {
+        if (v?.toMillis) return v.toMillis();
+        if (v?.toDate) return v.toDate().getTime();
+        return 0;
+      };
+      rows.sort((a, b) => {
+        const at = ts(a.loggedAt) || ts(a.updatedAt);
+        const bt = ts(b.loggedAt) || ts(b.updatedAt);
+        return bt - at;
+      });
+      setAuditRows(rows.slice(0, 250));
+      setAuditOrderFilter("ALL");
+      setAuditEventFilter("ALL");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error cargando auditoría de vendedores.");
+    } finally {
+      setAuditDrawerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const map: Record<string, boolean> = {};
+    for (const r of auditRows) map[r.id] = false;
+    setExpandedAuditRows(map);
+  }, [auditRows]);
+
+  const auditOrderOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of auditRows) {
+      const key = String(r.orderId || r.orderName || "").trim();
+      if (!key) continue;
+      map.set(key, String(r.orderName || r.orderId || key));
+    }
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "es"));
+  }, [auditRows]);
+
+  const auditEventOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of auditRows) {
+      const v = String(r.eventType || r.action || "").trim();
+      if (v) set.add(v);
+    }
+    return Array.from(set)
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map((v) => ({ value: v, label: v }));
+  }, [auditRows]);
+
+  const filteredAuditRows = useMemo(() => {
+    const hasUsefulDetail = (r: VendorOrderAuditRow) => {
+      const action = String(r.action || "").trim();
+      const entity = String(r.entity || "").trim();
+      const changedFields = Array.isArray(r.changedFields)
+        ? r.changedFields
+        : [];
+      const changes = Array.isArray(r.changes) ? r.changes : [];
+      return Boolean(
+        action || entity || changedFields.length || changes.length,
+      );
+    };
+
+    return auditRows.filter((r) => {
+      if (!hasUsefulDetail(r)) return false;
+      const rowOrderKey = String(r.orderId || r.orderName || "").trim();
+      const byOrder =
+        auditOrderFilter === "ALL" || rowOrderKey === auditOrderFilter;
+      const byEvent =
+        auditEventFilter === "ALL" ||
+        String(r.eventType || r.action || "").trim() === auditEventFilter;
+      return byOrder && byEvent;
+    });
+  }, [auditRows, auditOrderFilter, auditEventFilter]);
+
+  const formatAuditValue = (v: any) => {
+    if (v === null || v === undefined) return "—";
+    if (typeof v === "object") return JSON.stringify(v);
+    return String(v);
+  };
+
+  const writeVendorOrderLog = async (payload: Record<string, any>) => {
+    try {
+      await addDoc(collection(db, "vendors_orders_logs"), {
+        ...payload,
+        loggedAt: Timestamp.now(),
+      });
+    } catch (e) {
+      console.error("Error guardando vendors_orders_logs", e);
+    }
+  };
+
+  const buildVendorAuditFields = (
+    beforeRow: VendorCandyRow | null,
+    afterItem: OrderItem | null,
+  ) => {
+    const baseBefore = {
+      providerPrice: Number(beforeRow?.providerPrice || 0),
+      packages: floor(beforeRow?.packages || 0),
+      unitsPerPackage: floor(beforeRow?.unitsPerPackage || 0),
+      remainingPackages: floor(beforeRow?.remainingPackages || 0),
+      unitPriceRivas: Number(beforeRow?.unitPriceRivas || 0),
+      unitPriceIsla: Number(beforeRow?.unitPriceIsla || 0),
+      vendorMarginPercent: clampPercent(beforeRow?.vendorMarginPercent || 0),
+    };
+    const baseAfter = {
+      providerPrice: Number(afterItem?.providerPrice || 0),
+      packages: floor(afterItem?.packages || 0),
+      unitsPerPackage: floor(afterItem?.unitsPerPackage || 0),
+      remainingPackages: floor(afterItem?.remainingPackages || 0),
+      unitPriceRivas: Number(afterItem?.unitPriceRivas || 0),
+      unitPriceIsla: Number(afterItem?.unitPriceIsla || 0),
+      vendorMarginPercent: clampPercent(afterItem?.vendorMarginPercent || 0),
+    };
+
+    const labels: Record<string, string> = {
+      providerPrice: "Precio prov",
+      packages: "Paquetes",
+      unitsPerPackage: "Und x Paq",
+      remainingPackages: "Restantes",
+      unitPriceRivas: "Precio Rivas",
+      unitPriceIsla: "Precio Isla",
+      vendorMarginPercent: "Margen",
+    };
+
+    const keys = Object.keys(labels);
+    const out: Array<{
+      field: string;
+      label: string;
+      before: any;
+      after: any;
+    }> = [];
+
+    for (const k of keys) {
+      const before = beforeRow ? (baseBefore as any)[k] : null;
+      const after = afterItem ? (baseAfter as any)[k] : null;
+      if (
+        beforeRow &&
+        afterItem &&
+        Number(before || 0) === Number(after || 0)
+      ) {
+        continue;
+      }
+      out.push({ field: k, label: labels[k], before, after });
+    }
+
+    return out;
+  };
+
   const syncAllOrdersFromMaster = async () => {
     if (!isAdmin) return;
     if (isSyncingAll) return;
@@ -3006,8 +3204,7 @@ export default function VendorCandyOrders({
     }
     if (!sellerId) return setMsg("⚠️ Seleccioná un vendedor.");
     if (!date) return setMsg("⚠️ Seleccioná una fecha.");
-    const lines =
-      masterOrderLinesByOrderId[selectedMasterOrderId.trim()] || [];
+    const lines = masterOrderLinesByOrderId[selectedMasterOrderId.trim()] || [];
     if (!lines.length) {
       return setMsg("⚠️ Esa orden maestra no tiene paquetes disponibles.");
     }
@@ -3074,9 +3271,7 @@ export default function VendorCandyOrders({
       );
     }
 
-    setOrderItems((prev) =>
-      mergeOrderItemsByProductId([...toMerged, ...prev]),
-    );
+    setOrderItems((prev) => mergeOrderItemsByProductId([...toMerged, ...prev]));
     setItemsPage(1);
     let msg = `✅ Agregados ${toMerged.length} productos desde la orden maestra.`;
     if (skippedNames.length) {
@@ -3676,9 +3871,7 @@ export default function VendorCandyOrders({
         );
       }
       if (idxPackages < 0) {
-        return setMsg(
-          "❌ Plantilla inválida: debe tener columna Paquetes.",
-        );
+        return setMsg("❌ Plantilla inválida: debe tener columna Paquetes.");
       }
 
       if (!sellerId)
@@ -3718,9 +3911,7 @@ export default function VendorCandyOrders({
 
         if (!p || !pid) {
           const label =
-            idxProductName >= 0
-              ? String(r[idxProductName] || "").trim()
-              : "";
+            idxProductName >= 0 ? String(r[idxProductName] || "").trim() : "";
           const fallback = [label, pid].filter(Boolean).join(" · ");
           if (fallback) skippedNames.push(fallback);
           continue;
@@ -3956,9 +4147,10 @@ export default function VendorCandyOrders({
         setItemsPage(1);
       }
 
-      let resultMsg = toAddMerged.length > 0
-        ? `✅ Importados ${toAddMerged.length} productos desde plantilla.`
-        : "⚠️ No se agregaron productos nuevos.";
+      let resultMsg =
+        toAddMerged.length > 0
+          ? `✅ Importados ${toAddMerged.length} productos desde plantilla.`
+          : "⚠️ No se agregaron productos nuevos.";
       if (skippedNames.length > 0) {
         resultMsg += ` ⚠️ No encontrados (${skippedNames.length}): ${skippedNames.slice(0, 5).join(", ")}${skippedNames.length > 5 ? "..." : ""}`;
       }
@@ -3999,9 +4191,16 @@ export default function VendorCandyOrders({
 
       const prevOrderName = String(prevRows[0]?.orderName || "").trim();
       const nextOrderName = String(orderName || "").trim();
+      const prevOrderDate = editingOrderKey
+        ? String(editingOrderKey.split("__")[1] || "").trim()
+        : "";
+      const nextOrderDate = String(date || "").trim();
       const orderNameChanged = editingOrderKey
         ? prevOrderName !== nextOrderName
         : nextOrderName !== "";
+      const orderDateChanged = editingOrderKey
+        ? prevOrderDate !== nextOrderDate
+        : nextOrderDate !== "";
 
       const normPid = (v: any) => String(v ?? "").trim();
 
@@ -4123,6 +4322,43 @@ export default function VendorCandyOrders({
               : row,
           ),
         );
+
+        if (orderNameChanged) {
+          await writeVendorOrderLog({
+            action: "update_order",
+            eventType: "Cambio Nombre",
+            entity: "order",
+            orderId: editingOrderKey,
+            orderName: nextOrderName,
+            orderDate: nextOrderDate,
+            changes: [
+              {
+                field: "orderName",
+                label: "Nombre orden",
+                before: prevOrderName,
+                after: nextOrderName,
+              },
+            ],
+          });
+        }
+        if (orderDateChanged) {
+          await writeVendorOrderLog({
+            action: "update_order",
+            eventType: "Cambio Fecha",
+            entity: "order",
+            orderId: editingOrderKey,
+            orderName: nextOrderName,
+            orderDate: nextOrderDate,
+            changes: [
+              {
+                field: "orderDate",
+                label: "Fecha orden",
+                before: prevOrderDate,
+                after: nextOrderDate,
+              },
+            ],
+          });
+        }
 
         setMsg("✅ Pedido guardado.");
         setOpenForm(false);
@@ -4425,6 +4661,142 @@ export default function VendorCandyOrders({
         );
       }
 
+      if (editingOrderKey) {
+        if (orderNameChanged) {
+          await writeVendorOrderLog({
+            action: "update_order",
+            eventType: "Cambio Nombre",
+            entity: "order",
+            orderId: editingOrderKey,
+            orderName: nextOrderName,
+            orderDate: nextOrderDate,
+            changes: [
+              {
+                field: "orderName",
+                label: "Nombre orden",
+                before: prevOrderName,
+                after: nextOrderName,
+              },
+            ],
+          });
+        }
+        if (orderDateChanged) {
+          await writeVendorOrderLog({
+            action: "update_order",
+            eventType: "Cambio Fecha",
+            entity: "order",
+            orderId: editingOrderKey,
+            orderName: nextOrderName,
+            orderDate: nextOrderDate,
+            changes: [
+              {
+                field: "orderDate",
+                label: "Fecha orden",
+                before: prevOrderDate,
+                after: nextOrderDate,
+              },
+            ],
+          });
+        }
+
+        for (const it of orderItems) {
+          const prev = getPrev(it.productId);
+          if (!prev) {
+            await writeVendorOrderLog({
+              action: "update_product",
+              eventType: "Agrega productos",
+              entity: "product",
+              orderId: editingOrderKey,
+              orderName: nextOrderName,
+              orderDate: nextOrderDate,
+              productId: it.productId,
+              productName: it.productName,
+              changeType: "added",
+              changedFields: buildVendorAuditFields(null, it),
+            });
+            continue;
+          }
+
+          const changedFields = buildVendorAuditFields(prev, it);
+          if (!changedFields.length) continue;
+
+          const packBefore = floor(prev.packages || 0);
+          const packAfter = floor(it.packages || 0);
+          const marginBefore = clampPercent(prev.vendorMarginPercent || 0);
+          const marginAfter = clampPercent(it.vendorMarginPercent || 0);
+
+          let eventType = "Actualiza producto";
+          if (packAfter > packBefore) eventType = "Incremento Paquetes";
+          else if (packAfter < packBefore) eventType = "Decremento Paquetes";
+          else if (marginAfter !== marginBefore) eventType = "Cambio Margen";
+
+          await writeVendorOrderLog({
+            action: "update_product",
+            eventType,
+            entity: "product",
+            orderId: editingOrderKey,
+            orderName: nextOrderName,
+            orderDate: nextOrderDate,
+            productId: it.productId,
+            productName: it.productName,
+            changeType: "updated",
+            changedFields,
+          });
+        }
+
+        for (const r of removed) {
+          const fakeAfter = null;
+          await writeVendorOrderLog({
+            action: "delete_product",
+            eventType: "Elimina productos",
+            entity: "product",
+            orderId: editingOrderKey,
+            orderName: nextOrderName,
+            orderDate: nextOrderDate,
+            productId: String(r.productId || ""),
+            productName: String(r.productName || ""),
+            changeType: "removed",
+            changedFields: buildVendorAuditFields(r, fakeAfter),
+          });
+        }
+      } else {
+        await writeVendorOrderLog({
+          action: "create_order",
+          eventType: "Crea orden",
+          entity: "order",
+          orderId: orderKey,
+          orderName: nextOrderName,
+          orderDate: nextOrderDate,
+          changes: [
+            {
+              field: "created",
+              label: "Orden creada",
+              before: null,
+              after: {
+                sellerId,
+                orderName: nextOrderName,
+                orderDate: nextOrderDate,
+              },
+            },
+          ],
+        });
+
+        for (const it of orderItems) {
+          await writeVendorOrderLog({
+            action: "create_product",
+            eventType: "Agrega productos",
+            entity: "product",
+            orderId: orderKey,
+            orderName: nextOrderName,
+            orderDate: nextOrderDate,
+            productId: it.productId,
+            productName: it.productName,
+            changeType: "added",
+            changedFields: buildVendorAuditFields(null, it),
+          });
+        }
+      }
+
       setMsg("✅ Pedido guardado.");
       setOpenForm(false);
       resetForm();
@@ -4508,6 +4880,15 @@ export default function VendorCandyOrders({
 
         <div className="flex flex-wrap gap-2">
           <RefreshButton onClick={refresh} />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-lg border-slate-200 shadow-sm"
+            onClick={() => void openVendorAuditDrawer()}
+          >
+            Auditoria
+          </Button>
         </div>
       </div>
 
@@ -4632,9 +5013,7 @@ export default function VendorCandyOrders({
                         <td className="p-2.5 font-medium text-slate-900">
                           {o.orderName || "—"}
                         </td>
-                        <td className="p-2.5 text-slate-800">
-                          {o.sellerName}
-                        </td>
+                        <td className="p-2.5 text-slate-800">{o.sellerName}</td>
                         <td className="p-2.5 text-right tabular-nums text-slate-800">
                           <span className={zeroClass(o.totalPackages)}>
                             {o.totalPackages}
@@ -4905,8 +5284,7 @@ export default function VendorCandyOrders({
               const utilidadNeta = grossProfitVal - gastosVal - vendorProfitVal;
               const costoProveedor = vendorOrderDrawerItems.reduce(
                 (s, it) =>
-                  s +
-                  Number(it.providerPrice || 0) * Number(it.packages || 0),
+                  s + Number(it.providerPrice || 0) * Number(it.packages || 0),
                 0,
               );
 
@@ -5036,6 +5414,183 @@ export default function VendorCandyOrders({
         ) : null}
       </SlideOverDrawer>
 
+      <SlideOverDrawer
+        open={auditDrawerOpen}
+        onClose={() => {
+          setAuditDrawerOpen(false);
+        }}
+        title="Auditoria"
+        subtitle="vendors_orders_logs"
+        badge={
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+            Eventos
+          </span>
+        }
+      >
+        {auditDrawerLoading ? (
+          <div className="py-8 text-center text-sm text-gray-600">
+            Cargando auditoría…
+          </div>
+        ) : auditRows.length === 0 ? (
+          <div className="py-8 text-center text-sm text-gray-600">
+            Sin eventos en auditoría.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="rounded-xl border border-slate-200/80 bg-white p-3 shadow-sm">
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Filtrar por orden
+                  </label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                    value={auditOrderFilter}
+                    onChange={(e) => setAuditOrderFilter(e.target.value)}
+                  >
+                    <option value="ALL">Todas</option>
+                    {auditOrderOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Filtrar por evento
+                  </label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                    value={auditEventFilter}
+                    onChange={(e) => setAuditEventFilter(e.target.value)}
+                  >
+                    <option value="ALL">Todos</option>
+                    {auditEventOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-slate-500">
+                Mostrando {filteredAuditRows.length} de {auditRows.length}{" "}
+                eventos.
+              </div>
+            </div>
+
+            {filteredAuditRows.map((r) => {
+              const rawWhen =
+                (r.loggedAt as any)?.toDate?.() ||
+                (r.updatedAt as any)?.toDate?.() ||
+                null;
+              const when = rawWhen ? rawWhen.toLocaleString("es-NI") : "—";
+              const changedFields = Array.isArray(r.changedFields)
+                ? r.changedFields
+                : [];
+              const changes = Array.isArray(r.changes) ? r.changes : [];
+              const details =
+                changedFields.length > 0
+                  ? changedFields
+                  : changes.length > 0
+                    ? changes
+                    : [];
+              const isExpanded = !!expandedAuditRows[r.id];
+
+              return (
+                <div
+                  key={r.id}
+                  className="rounded-xl border border-slate-200/80 bg-white p-3 shadow-sm"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold text-slate-900">
+                      {String(r.eventType || r.action || "evento")} ·{" "}
+                      {String(r.entity || "")}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="!rounded-md"
+                      onClick={() =>
+                        setExpandedAuditRows((prev) => ({
+                          ...prev,
+                          [r.id]: !prev[r.id],
+                        }))
+                      }
+                    >
+                      {isExpanded ? "Colapsar" : "Expandir"}
+                    </Button>
+                  </div>
+                  <div className="mt-1 grid grid-cols-1 gap-1 text-xs text-slate-600">
+                    <div>Tipo evento: {r.eventType || r.action || "—"}</div>
+                    <div>Fecha log: {when}</div>
+                    <div>Orden: {r.orderName || r.orderId || "—"}</div>
+                    <div>Fecha orden: {r.orderDate || "—"}</div>
+                    <div>
+                      Producto: {r.productName || "—"}
+                      {r.productId ? ` (${r.productId})` : ""}
+                    </div>
+                  </div>
+
+                  {isExpanded ? (
+                    details.length > 0 ? (
+                      <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-slate-50">
+                            <tr>
+                              <th className="px-2 py-1 text-left font-semibold text-slate-700">
+                                Campo
+                              </th>
+                              <th className="px-2 py-1 text-left font-semibold text-slate-700">
+                                Valor anterior
+                              </th>
+                              <th className="px-2 py-1 text-left font-semibold text-slate-700">
+                                Valor actualizado
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {details.map((f: any, idx: number) => (
+                              <tr
+                                key={`${r.id}-${idx}`}
+                                className="border-t border-slate-100"
+                              >
+                                <td className="px-2 py-1 text-slate-700">
+                                  {String(f?.label || f?.field || "—")}
+                                </td>
+                                <td className="px-2 py-1 text-slate-900">
+                                  {formatAuditValue(f?.before)}
+                                </td>
+                                <td className="px-2 py-1 text-slate-900">
+                                  {formatAuditValue(f?.after)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-xs text-slate-500">
+                        Sin detalle de campos.
+                      </div>
+                    )
+                  ) : null}
+                </div>
+              );
+            })}
+
+            {filteredAuditRows.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-600">
+                No hay eventos con esos filtros.
+              </div>
+            ) : null}
+          </div>
+        )}
+      </SlideOverDrawer>
+
       {/* ===================== MODAL ===================== */}
       {openForm && (
         <div
@@ -5134,96 +5689,20 @@ export default function VendorCandyOrders({
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 pb-4 sm:px-5 md:px-6">
                 <div className="space-y-3">
-              {/* Mobile: filtros + menú plantilla/importar */}
-              <div className="md:hidden flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="flex min-w-0 flex-1 justify-between rounded shadow-none"
-                  onClick={() => setMobileMetaOpen((v) => !v)}
-                >
-                  <span>Filtros y KPIs</span>
-                  <span>{mobileMetaOpen ? "−" : "+"}</span>
-                </Button>
-                <ActionMenuTrigger
-                  className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
-                  aria-label="Plantilla e importar"
-                  iconClassName="h-[22px] w-[22px] text-slate-700"
-                  onClick={(e) =>
-                    setModalImportMenu({
-                      rect: (
-                        e.currentTarget as HTMLElement
-                      ).getBoundingClientRect(),
-                    })
-                  }
-                />
-              </div>
-
-              <div
-                className={`${mobileMetaOpen ? "block" : "hidden"} md:block space-y-3`}
-              >
-                {/* Top selectors */}
-                <div
-                  className={`grid gap-2 ${editingOrderKey ? "md:grid-cols-3" : "md:grid-cols-4"}`}
-                >
-                  <div
-                    className={
-                      editingOrderKey ? "md:col-span-3" : "md:col-span-4"
-                    }
-                  >
-                    <label className="text-xs font-medium text-slate-600">
-                      Nombre
-                    </label>
-                    <input
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      value={orderName}
-                      onChange={(e) => setOrderName(e.target.value)}
-                      placeholder="Nombre de la orden"
-                      disabled={isReadOnly}
-                    />
-                  </div>
-                  {!editingOrderKey && (
-                    <div>
-                      <MobileHtmlSelect
-                        label="Orden maestra"
-                        value={selectedMasterOrderId}
-                        onChange={setSelectedMasterOrderId}
-                        options={masterOrderHtmlSelectOptions}
-                        sheetTitle="Orden maestra"
-                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
-                      />
-                    </div>
-                  )}
-                  <div>
-                    <MobileHtmlSelect
-                      label="Vendedor"
-                      value={sellerId}
-                      onChange={setSellerId}
-                      disabled={disableSellerSelect}
-                      options={sellerSelectOptions}
-                      sheetTitle="Vendedor"
-                      selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-medium text-slate-600">
-                      Fecha
-                    </label>
-                    <input
-                      type="date"
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="hidden md:flex items-end justify-end">
+                  {/* Mobile: filtros + menú plantilla/importar */}
+                  <div className="md:hidden flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="flex min-w-0 flex-1 justify-between rounded shadow-none"
+                      onClick={() => setMobileMetaOpen((v) => !v)}
+                    >
+                      <span>Filtros y KPIs</span>
+                      <span>{mobileMetaOpen ? "−" : "+"}</span>
+                    </Button>
                     <ActionMenuTrigger
-                      className="!h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                      className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
                       aria-label="Plantilla e importar"
                       iconClassName="h-[22px] w-[22px] text-slate-700"
                       onClick={(e) =>
@@ -5234,469 +5713,584 @@ export default function VendorCandyOrders({
                         })
                       }
                     />
-                    <input
-                      ref={importInputRef}
-                      type="file"
-                      accept=".xlsx,.xls"
-                      className="hidden"
-                      onChange={onImportChange}
-                    />
                   </div>
-                </div>
 
-                {/* KPIs */}
-                <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
-                  <div className="rounded-xl border border-sky-200/90 bg-sky-50/90 p-2.5 shadow-sm ring-1 ring-sky-900/[0.04]">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-sky-900/70">
-                      Paquetes Agregados
-                    </div>
+                  <div
+                    className={`${mobileMetaOpen ? "block" : "hidden"} md:block space-y-3`}
+                  >
+                    {/* Top selectors */}
                     <div
-                      className={`text-lg font-semibold ${zeroClass(
-                        Number(kpiTotals.totalPackages || 0),
-                      )}`}
+                      className={`grid gap-2 ${editingOrderKey ? "md:grid-cols-3" : "md:grid-cols-4"}`}
                     >
-                      {kpiTotals.totalPackages}
-                    </div>
-                  </div>
-
-                  {isAdmin && (
-                    <>
-                      <div className="rounded-xl border border-blue-200/90 bg-blue-50/90 p-2.5 shadow-sm ring-1 ring-blue-900/[0.04]">
-                        <div className="text-[11px] font-medium uppercase tracking-wide text-blue-900/70">
-                          Total esperado
-                        </div>
-                        <div
-                          className={`text-lg font-semibold ${zeroClass(
-                            Number(kpiTotals.totalExpected || 0),
-                          )}`}
-                        >
-                          {money(kpiTotals.totalExpected)}
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-amber-200/90 bg-amber-50/90 p-2.5 shadow-sm ring-1 ring-amber-900/[0.04]">
-                        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-900/70">
-                          Utilidad Bruta
-                        </div>
-                        <div
-                          className={`text-lg font-semibold ${zeroClass(
-                            Number(kpiTotals.grossProfit || 0),
-                          )}`}
-                        >
-                          {money(kpiTotals.grossProfit)}
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  <div className="rounded-xl border border-emerald-200/90 bg-emerald-50/90 p-2.5 shadow-sm ring-1 ring-emerald-900/[0.04]">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-900/70">
-                      Utilidad Vendedor
-                    </div>
-                    <div
-                      className={`text-lg font-semibold ${zeroClass(
-                        Number(kpiTotals.uVendor || 0),
-                      )}`}
-                    >
-                      {money(kpiTotals.uVendor)}
-                    </div>
-                  </div>
-
-                  {isAdmin && (
-                    <div className="rounded-xl border border-indigo-200/90 bg-indigo-50/90 p-2.5 shadow-sm ring-1 ring-indigo-900/[0.04]">
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-indigo-900/70">
-                        Utilidad Negocio
-                      </div>
                       <div
-                        className={`text-lg font-semibold ${zeroClass(
-                          Number(kpiUNeta || 0),
-                        )}`}
+                        className={
+                          editingOrderKey ? "md:col-span-3" : "md:col-span-4"
+                        }
                       >
-                        {money(kpiUNeta)}
+                        <label className="text-xs font-medium text-slate-600">
+                          Nombre
+                        </label>
+                        <input
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          value={orderName}
+                          onChange={(e) => setOrderName(e.target.value)}
+                          placeholder="Nombre de la orden"
+                          disabled={isReadOnly}
+                        />
+                      </div>
+                      {!editingOrderKey && (
+                        <div>
+                          <MobileHtmlSelect
+                            label="Orden maestra"
+                            value={selectedMasterOrderId}
+                            onChange={setSelectedMasterOrderId}
+                            options={masterOrderHtmlSelectOptions}
+                            sheetTitle="Orden maestra"
+                            selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <MobileHtmlSelect
+                          label="Vendedor"
+                          value={sellerId}
+                          onChange={setSellerId}
+                          disabled={disableSellerSelect}
+                          options={sellerSelectOptions}
+                          sheetTitle="Vendedor"
+                          selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-medium text-slate-600">
+                          Fecha
+                        </label>
+                        <input
+                          type="date"
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          value={date}
+                          onChange={(e) => setDate(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="hidden md:flex items-end justify-end">
+                        <ActionMenuTrigger
+                          className="!h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                          aria-label="Plantilla e importar"
+                          iconClassName="h-[22px] w-[22px] text-slate-700"
+                          onClick={(e) =>
+                            setModalImportMenu({
+                              rect: (
+                                e.currentTarget as HTMLElement
+                              ).getBoundingClientRect(),
+                            })
+                          }
+                        />
+                        <input
+                          ref={importInputRef}
+                          type="file"
+                          accept=".xlsx,.xls"
+                          className="hidden"
+                          onChange={onImportChange}
+                        />
                       </div>
                     </div>
-                  )}
-                </div>
-              </div>
 
-              {/* Add product row */}
-              <div className="space-y-2 rounded-xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 p-4 shadow-sm">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="flex w-full justify-between rounded shadow-none md:hidden"
-                  onClick={() => setMobileAddOpen((v) => !v)}
-                >
-                  <span>Agregar producto</span>
-                  <span>{mobileAddOpen ? "−" : "+"}</span>
-                </Button>
-
-                <div
-                  className={`${mobileAddOpen ? "block" : "hidden"} md:block space-y-2`}
-                >
-                  <div className="text-sm font-semibold hidden md:block">
-                    Agregar producto
-                  </div>
-
-                  <div className="grid md:grid-cols-4 gap-2">
-                    <div className="md:col-span-2">
-                      <label className="text-xs font-medium text-slate-600">
-                        Buscar Producto
-                      </label>
-                      <input
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                        value={productSearch}
-                        onChange={(e) => setProductSearch(e.target.value)}
-                        placeholder="Buscar por categoría o nombre…"
-                      />
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <MobileHtmlSelect
-                        label="Seleccione Producto"
-                        value={selectedProductId}
-                        onChange={setSelectedProductId}
-                        options={productPickerSelectOptions}
-                        sheetTitle="Producto"
-                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-medium text-slate-600">
-                        Cantidad de Paquetes
-                      </label>
-                      <input
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                        value={packagesToAdd}
-                        onChange={(e) => setPackagesToAdd(e.target.value)}
-                        inputMode="numeric"
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                      <Button
-                        type="button"
-                        variant="primary"
-                        size="sm"
-                        className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500 sm:flex-1"
-                        onClick={addItemToOrder}
-                        disabled={!selectedProduct}
-                      >
-                        Agregar Paquetes
-                      </Button>
-                      {!editingOrderKey && (
-                        <Button
-                          type="button"
-                          variant="primary"
-                          size="sm"
-                          className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500 sm:w-auto sm:shrink-0"
-                          onClick={addAllProductsFromMasterOrder}
-                          disabled={
-                            !selectedMasterOrderId.trim() ||
-                            !sellerId ||
-                            !date
-                          }
+                    {/* KPIs */}
+                    <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+                      <div className="rounded-xl border border-sky-200/90 bg-sky-50/90 p-2.5 shadow-sm ring-1 ring-sky-900/[0.04]">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-sky-900/70">
+                          Paquetes Agregados
+                        </div>
+                        <div
+                          className={`text-lg font-semibold ${zeroClass(
+                            Number(kpiTotals.totalPackages || 0),
+                          )}`}
                         >
-                          Agregar OM
-                        </Button>
+                          {kpiTotals.totalPackages}
+                        </div>
+                      </div>
+
+                      {isAdmin && (
+                        <>
+                          <div className="rounded-xl border border-blue-200/90 bg-blue-50/90 p-2.5 shadow-sm ring-1 ring-blue-900/[0.04]">
+                            <div className="text-[11px] font-medium uppercase tracking-wide text-blue-900/70">
+                              Total esperado
+                            </div>
+                            <div
+                              className={`text-lg font-semibold ${zeroClass(
+                                Number(kpiTotals.totalExpected || 0),
+                              )}`}
+                            >
+                              {money(kpiTotals.totalExpected)}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-amber-200/90 bg-amber-50/90 p-2.5 shadow-sm ring-1 ring-amber-900/[0.04]">
+                            <div className="text-[11px] font-medium uppercase tracking-wide text-amber-900/70">
+                              Utilidad Bruta
+                            </div>
+                            <div
+                              className={`text-lg font-semibold ${zeroClass(
+                                Number(kpiTotals.grossProfit || 0),
+                              )}`}
+                            >
+                              {money(kpiTotals.grossProfit)}
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <div className="rounded-xl border border-emerald-200/90 bg-emerald-50/90 p-2.5 shadow-sm ring-1 ring-emerald-900/[0.04]">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-900/70">
+                          Utilidad Vendedor
+                        </div>
+                        <div
+                          className={`text-lg font-semibold ${zeroClass(
+                            Number(kpiTotals.uVendor || 0),
+                          )}`}
+                        >
+                          {money(kpiTotals.uVendor)}
+                        </div>
+                      </div>
+
+                      {isAdmin && (
+                        <div className="rounded-xl border border-indigo-200/90 bg-indigo-50/90 p-2.5 shadow-sm ring-1 ring-indigo-900/[0.04]">
+                          <div className="text-[11px] font-medium uppercase tracking-wide text-indigo-900/70">
+                            Utilidad Negocio
+                          </div>
+                          <div
+                            className={`text-lg font-semibold ${zeroClass(
+                              Number(kpiUNeta || 0),
+                            )}`}
+                          >
+                            {money(kpiUNeta)}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Items table — montos por sucursal del vendedor (no columnas Rivas/Isla separadas como en Orden Maestra) */}
-              <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/[0.03]">
-                <div className="flex flex-col gap-2 border-b border-slate-200/90 bg-slate-50/80 p-3 md:flex-row md:items-center md:justify-between md:gap-3">
-                  <div className="shrink-0 text-sm font-semibold text-slate-900">
-                    Productos asociados ({orderItems.length})
-                  </div>
+                  {/* Add product row */}
+                  <div className="space-y-2 rounded-xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 p-4 shadow-sm">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="flex w-full justify-between rounded shadow-none md:hidden"
+                      onClick={() => setMobileAddOpen((v) => !v)}
+                    >
+                      <span>Agregar producto</span>
+                      <span>{mobileAddOpen ? "−" : "+"}</span>
+                    </Button>
 
-                  {/* Móvil: búsqueda + margen; acciones en menú */}
-                  <div className="flex md:hidden flex-col gap-2 w-full">
-                    <div className="flex items-center gap-2">
-                    <input
-                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      placeholder="Buscar producto"
-                      value={associatedSearch}
-                      onChange={(e) => {
-                        setAssociatedSearch(e.target.value);
-                        setItemsPage(1);
-                      }}
-                    />
-                      <ActionMenuTrigger
-                        className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
-                        aria-label="Acciones de productos"
-                        iconClassName="h-[22px] w-[22px] text-slate-700"
-                        onClick={(e) =>
-                          setModalItemsToolbarMenu({
-                            rect: (
-                              e.currentTarget as HTMLElement
-                            ).getBoundingClientRect(),
-                          })
-                        }
-                      />
-                    </div>
-                    <input
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      placeholder="Margen % (aplicar desde menú ⋮)"
-                      value={bulkMarginPercent}
-                      onChange={(e) => setBulkMarginPercent(e.target.value)}
-                      inputMode="decimal"
-                    />
-                  </div>
+                    <div
+                      className={`${mobileAddOpen ? "block" : "hidden"} md:block space-y-2`}
+                    >
+                      <div className="text-sm font-semibold hidden md:block">
+                        Agregar producto
+                      </div>
 
-                  <div className="hidden min-w-0 flex-1 flex-wrap items-center justify-end gap-2 md:flex">
-                    <input
-                      className="min-w-[8rem] max-w-xs flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      placeholder="Buscar producto"
-                      value={associatedSearch}
-                      onChange={(e) => {
-                        setAssociatedSearch(e.target.value);
-                        setItemsPage(1);
-                      }}
-                    />
-                    <input
-                      className="w-24 shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      placeholder="Margen %"
-                      value={bulkMarginPercent}
-                      onChange={(e) => setBulkMarginPercent(e.target.value)}
-                      inputMode="decimal"
-                    />
-                    <ActionMenuTrigger
-                      className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
-                      aria-label="Aplicar margen o exportar"
-                      iconClassName="h-[22px] w-[22px] text-slate-700"
-                      onClick={(e) =>
-                        setModalItemsToolbarMenu({
-                          rect: (
-                            e.currentTarget as HTMLElement
-                          ).getBoundingClientRect(),
-                        })
-                      }
-                    />
-                  </div>
-                </div>
+                      <div className="grid md:grid-cols-4 gap-2">
+                        <div className="md:col-span-2">
+                          <label className="text-xs font-medium text-slate-600">
+                            Buscar Producto
+                          </label>
+                          <input
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            value={productSearch}
+                            onChange={(e) => setProductSearch(e.target.value)}
+                            placeholder="Buscar por categoría o nombre…"
+                          />
+                        </div>
 
-                {/* Desktop table: table-auto evita que table-fixed reparta mal el ancho y desalinee encabezados vs celdas */}
-                <div className="hidden md:block overflow-x-auto">
-                  <table className="w-max min-w-full border-collapse divide-y divide-slate-100 text-xs">
-                    <thead className="border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
-                      <tr className="sticky top-0 z-10 whitespace-nowrap">
-                        <th className="min-w-[4.5rem] max-w-[4.5rem] border-b border-slate-200 px-2 py-2 text-left font-semibold text-slate-700">
-                          Tipo
-                        </th>
-                        <th className="min-w-[11rem] max-w-[13rem] border-b border-slate-200 px-2 py-2 text-left font-semibold text-slate-700">
-                          Producto
-                        </th>
-                        <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Agregados
-                        </th>
-                        <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Restantes
-                        </th>
-                        {isAdmin && (
-                          <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Costo
-                          </th>
-                        )}
-                        <th className="min-w-[6.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Venta
-                        </th>
-                        <th className="min-w-[8rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                        Esperado
-                        </th>
-                        {isAdmin && (
-                          <>
-                            <th className="min-w-[8rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              U.Bruta
-                            </th>
-                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              Gastos
-                            </th>
-                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              U.Paq
-                            </th>
-                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              UN.Paq
-                            </th>
-                            <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              UV.Paq
-                            </th>
-                            <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              U.Ruta
-                            </th>
-                            <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                              U.Neta
-                            </th>
-                          </>
-                        )}
-                        <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
-                          Margen
-                        </th>
-                        <th className="min-w-[2.5rem] w-10 border-b border-slate-200 px-1 py-2 text-center font-semibold text-slate-700">
-                          X
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pagedOrderItems.map((it) => {
-                        const {
-                          totalExpected,
-                          grossProfit,
-                          gastos,
-                          uVendor,
-                          uNeta,
-                        } = getItemActiveFinancials(it);
+                        <div className="md:col-span-2">
+                          <MobileHtmlSelect
+                            label="Seleccione Producto"
+                            value={selectedProductId}
+                            onChange={setSelectedProductId}
+                            options={productPickerSelectOptions}
+                            sheetTitle="Producto"
+                            selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
+                          />
+                        </div>
 
-                        const p =
-                          productsAll.find((x) => x.id === it.productId) ||
-                          null;
-                        const s =
-                          sellers.find((x) => x.id === sellerId) || null;
-                        const br = s?.branch;
-                        const packs = Math.max(0, Number(it.packages || 0));
-                        const grossPerPackBase = computeGrossPerPack(p, it, br);
-                        const grossProfitBase =
-                          packs > 0 && Number.isFinite(grossPerPackBase)
-                            ? grossPerPackBase * packs
-                            : Number(it.grossProfit || 0);
-                        const paquetesAsociados = Math.max(
-                          0,
-                          Number(it.packages || 0),
-                        );
-                        const uXpaq =
-                          paquetesAsociados > 0
-                            ? grossProfitBase / paquetesAsociados
-                            : 0;
-                        // For display, use the full (non-active-adjusted) vendor utility per pack
-                        const vendorMarginPercentDisplay = clampPercent(
-                          it.vendorMarginPercent ??
-                            getSellerMarginPercent(sellerId),
-                        );
-                        const splitFull = calcSplitFromGross(
-                          grossProfitBase,
-                          vendorMarginPercentDisplay,
-                        );
-                        const uVendorDisplay = Number(splitFull.uVendor || 0);
-                        const gastosBase = getItemLogisticBase(it);
-                        const uNetaDisplay =
-                          Number(grossProfitBase || 0) -
-                          Number(gastosBase || 0) -
-                          Number(uVendorDisplay || 0);
-                        const uvXpaq =
-                          paquetesAsociados > 0
-                            ? Number(splitFull.uVendor || 0) / paquetesAsociados
-                            : 0;
+                        <div>
+                          <label className="text-xs font-medium text-slate-600">
+                            Cantidad de Paquetes
+                          </label>
+                          <input
+                            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            value={packagesToAdd}
+                            onChange={(e) => setPackagesToAdd(e.target.value)}
+                            inputMode="numeric"
+                          />
+                        </div>
 
-                        return (
-                          <tr
-                            key={it.id}
-                            className="whitespace-nowrap align-middle transition-colors hover:bg-slate-50/90"
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                          <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500 sm:flex-1"
+                            onClick={addItemToOrder}
+                            disabled={!selectedProduct}
                           >
-                            <td
-                              className="border-b px-2 py-2 align-middle max-w-[4.5rem] truncate"
-                              title={it.category}
+                            Agregar Paquetes
+                          </Button>
+                          {!editingOrderKey && (
+                            <Button
+                              type="button"
+                              variant="primary"
+                              size="sm"
+                              className="w-full rounded bg-indigo-600 shadow-none hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-gray-200 disabled:text-gray-500 sm:w-auto sm:shrink-0"
+                              onClick={addAllProductsFromMasterOrder}
+                              disabled={
+                                !selectedMasterOrderId.trim() ||
+                                !sellerId ||
+                                !date
+                              }
                             >
-                              {it.category}
-                            </td>
-                            <td className="border-b px-2 py-2 align-middle max-w-[13rem] overflow-hidden">
-                              <div className="min-w-0">
-                                <span
-                                  className="block truncate text-left"
-                                  title={it.productName}
-                                >
-                                  {it.productName}
-                                </span>
-                              </div>
-                            </td>
+                              Agregar OM
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
-                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                              {!isReadOnly ? (
-                                editingPackagesMap[it.id] ? (
-                                  <input
-                                    className="w-20 border rounded p-1 text-right"
-                                    value={String(it.packages)}
-                                    onChange={(e) =>
-                                      updateItemPackages(it.id, e.target.value)
-                                    }
-                                    onBlur={() => closePackageEdit(it.id)}
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" ||
-                                        e.key === "Escape"
-                                      ) {
-                                        closePackageEdit(it.id);
-                                      }
-                                    }}
-                                    inputMode="numeric"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <div className="flex items-center justify-end gap-2">
+                  {/* Items table — montos por sucursal del vendedor (no columnas Rivas/Isla separadas como en Orden Maestra) */}
+                  <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/[0.03]">
+                    <div className="flex flex-col gap-2 border-b border-slate-200/90 bg-slate-50/80 p-3 md:flex-row md:items-center md:justify-between md:gap-3">
+                      <div className="shrink-0 text-sm font-semibold text-slate-900">
+                        Productos asociados ({orderItems.length})
+                      </div>
+
+                      {/* Móvil: búsqueda + margen; acciones en menú */}
+                      <div className="flex md:hidden flex-col gap-2 w-full">
+                        <div className="flex items-center gap-2">
+                          <input
+                            className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            placeholder="Buscar producto"
+                            value={associatedSearch}
+                            onChange={(e) => {
+                              setAssociatedSearch(e.target.value);
+                              setItemsPage(1);
+                            }}
+                          />
+                          <ActionMenuTrigger
+                            className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                            aria-label="Acciones de productos"
+                            iconClassName="h-[22px] w-[22px] text-slate-700"
+                            onClick={(e) =>
+                              setModalItemsToolbarMenu({
+                                rect: (
+                                  e.currentTarget as HTMLElement
+                                ).getBoundingClientRect(),
+                              })
+                            }
+                          />
+                        </div>
+                        <input
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          placeholder="Margen % (aplicar desde menú ⋮)"
+                          value={bulkMarginPercent}
+                          onChange={(e) => setBulkMarginPercent(e.target.value)}
+                          inputMode="decimal"
+                        />
+                      </div>
+
+                      <div className="hidden min-w-0 flex-1 flex-wrap items-center justify-end gap-2 md:flex">
+                        <input
+                          className="min-w-[8rem] max-w-xs flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          placeholder="Buscar producto"
+                          value={associatedSearch}
+                          onChange={(e) => {
+                            setAssociatedSearch(e.target.value);
+                            setItemsPage(1);
+                          }}
+                        />
+                        <input
+                          className="w-24 shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          placeholder="Margen %"
+                          value={bulkMarginPercent}
+                          onChange={(e) => setBulkMarginPercent(e.target.value)}
+                          inputMode="decimal"
+                        />
+                        <ActionMenuTrigger
+                          className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                          aria-label="Aplicar margen o exportar"
+                          iconClassName="h-[22px] w-[22px] text-slate-700"
+                          onClick={(e) =>
+                            setModalItemsToolbarMenu({
+                              rect: (
+                                e.currentTarget as HTMLElement
+                              ).getBoundingClientRect(),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    {/* Desktop table: table-auto evita que table-fixed reparta mal el ancho y desalinee encabezados vs celdas */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="w-max min-w-full border-collapse divide-y divide-slate-100 text-xs">
+                        <thead className="border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
+                          <tr className="sticky top-0 z-10 whitespace-nowrap">
+                            <th className="min-w-[4.5rem] max-w-[4.5rem] border-b border-slate-200 px-2 py-2 text-left font-semibold text-slate-700">
+                              Tipo
+                            </th>
+                            <th className="min-w-[11rem] max-w-[13rem] border-b border-slate-200 px-2 py-2 text-left font-semibold text-slate-700">
+                              Producto
+                            </th>
+                            <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                              Agregados
+                            </th>
+                            <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                              Restantes
+                            </th>
+                            {isAdmin && (
+                              <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                Costo
+                              </th>
+                            )}
+                            <th className="min-w-[6.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                              Venta
+                            </th>
+                            <th className="min-w-[8rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                              Esperado
+                            </th>
+                            {isAdmin && (
+                              <>
+                                <th className="min-w-[8rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                  U.Bruta
+                                </th>
+                                <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                  Gastos
+                                </th>
+                                <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                  U.Paq
+                                </th>
+                                <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                  UN.Paq
+                                </th>
+                                <th className="min-w-[5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                  UV.Paq
+                                </th>
+                                <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                  U.Ruta
+                                </th>
+                                <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                                  U.Neta
+                                </th>
+                              </>
+                            )}
+                            <th className="min-w-[5.5rem] border-b border-slate-200 px-2 py-2 text-right font-semibold text-slate-700">
+                              Margen
+                            </th>
+                            <th className="min-w-[2.5rem] w-10 border-b border-slate-200 px-1 py-2 text-center font-semibold text-slate-700">
+                              X
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pagedOrderItems.map((it) => {
+                            const {
+                              totalExpected,
+                              grossProfit,
+                              gastos,
+                              uVendor,
+                              uNeta,
+                            } = getItemActiveFinancials(it);
+
+                            const p =
+                              productsAll.find((x) => x.id === it.productId) ||
+                              null;
+                            const s =
+                              sellers.find((x) => x.id === sellerId) || null;
+                            const br = s?.branch;
+                            const packs = Math.max(0, Number(it.packages || 0));
+                            const grossPerPackBase = computeGrossPerPack(
+                              p,
+                              it,
+                              br,
+                            );
+                            const grossProfitBase =
+                              packs > 0 && Number.isFinite(grossPerPackBase)
+                                ? grossPerPackBase * packs
+                                : Number(it.grossProfit || 0);
+                            const paquetesAsociados = Math.max(
+                              0,
+                              Number(it.packages || 0),
+                            );
+                            const uXpaq =
+                              paquetesAsociados > 0
+                                ? grossProfitBase / paquetesAsociados
+                                : 0;
+                            // For display, use the full (non-active-adjusted) vendor utility per pack
+                            const vendorMarginPercentDisplay = clampPercent(
+                              it.vendorMarginPercent ??
+                                getSellerMarginPercent(sellerId),
+                            );
+                            const splitFull = calcSplitFromGross(
+                              grossProfitBase,
+                              vendorMarginPercentDisplay,
+                            );
+                            const uVendorDisplay = Number(
+                              splitFull.uVendor || 0,
+                            );
+                            const gastosBase = getItemLogisticBase(it);
+                            const uNetaDisplay =
+                              Number(grossProfitBase || 0) -
+                              Number(gastosBase || 0) -
+                              Number(uVendorDisplay || 0);
+                            const uvXpaq =
+                              paquetesAsociados > 0
+                                ? Number(splitFull.uVendor || 0) /
+                                  paquetesAsociados
+                                : 0;
+
+                            return (
+                              <tr
+                                key={it.id}
+                                className="whitespace-nowrap align-middle transition-colors hover:bg-slate-50/90"
+                              >
+                                <td
+                                  className="border-b px-2 py-2 align-middle max-w-[4.5rem] truncate"
+                                  title={it.category}
+                                >
+                                  {it.category}
+                                </td>
+                                <td className="border-b px-2 py-2 align-middle max-w-[13rem] overflow-hidden">
+                                  <div className="min-w-0">
+                                    <span
+                                      className="block truncate text-left"
+                                      title={it.productName}
+                                    >
+                                      {it.productName}
+                                    </span>
+                                  </div>
+                                </td>
+
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                  {!isReadOnly ? (
+                                    editingPackagesMap[it.id] ? (
+                                      <input
+                                        className="w-20 border rounded p-1 text-right"
+                                        value={String(it.packages)}
+                                        onChange={(e) =>
+                                          updateItemPackages(
+                                            it.id,
+                                            e.target.value,
+                                          )
+                                        }
+                                        onBlur={() => closePackageEdit(it.id)}
+                                        onKeyDown={(e) => {
+                                          if (
+                                            e.key === "Enter" ||
+                                            e.key === "Escape"
+                                          ) {
+                                            closePackageEdit(it.id);
+                                          }
+                                        }}
+                                        inputMode="numeric"
+                                        autoFocus
+                                      />
+                                    ) : (
+                                      <div className="flex items-center justify-end gap-2">
+                                        <span
+                                          className={zeroClass(it.packages)}
+                                        >
+                                          {it.packages}
+                                        </span>
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                          onClick={() => openPackageEdit(it.id)}
+                                          aria-label="Editar paquetes"
+                                          title="Editar paquetes"
+                                        >
+                                          ✏️
+                                        </Button>
+                                      </div>
+                                    )
+                                  ) : (
                                     <span className={zeroClass(it.packages)}>
                                       {it.packages}
                                     </span>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                      onClick={() => openPackageEdit(it.id)}
-                                      aria-label="Editar paquetes"
-                                      title="Editar paquetes"
-                                    >
-                                      ✏️
-                                    </Button>
-                                  </div>
-                                )
-                              ) : (
-                                <span className={zeroClass(it.packages)}>
-                                  {it.packages}
-                                </span>
-                              )}
-                            </td>
-                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                              {isAdmin ? (
-                                editingRemainingMap[it.id] ? (
-                                  <div className="flex items-center justify-end gap-2">
-                                    <input
-                                      className="w-20 border rounded p-1 text-right"
-                                      value={String(it.remainingPackages)}
-                                      onChange={(e) => {
-                                        const v = Math.max(
-                                          0,
-                                          floor(e.target.value),
-                                        );
-                                        setOrderItems((prev) =>
-                                          prev.map((x) =>
-                                            x.id === it.id
-                                              ? { ...x, remainingPackages: v }
-                                              : x,
-                                          ),
-                                        );
-                                      }}
-                                      onBlur={() => closeRemainingEdit(it.id)}
-                                      onKeyDown={(e) => {
-                                        if (
-                                          e.key === "Enter" ||
-                                          e.key === "Escape"
-                                        ) {
-                                          closeRemainingEdit(it.id);
-                                        }
-                                      }}
-                                      inputMode="numeric"
-                                      autoFocus
-                                    />
-                                    {savingRemainingMap[it.id] && (
-                                      <div className="text-xs text-gray-500">
-                                        Guardando…
+                                  )}
+                                </td>
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                  {isAdmin ? (
+                                    editingRemainingMap[it.id] ? (
+                                      <div className="flex items-center justify-end gap-2">
+                                        <input
+                                          className="w-20 border rounded p-1 text-right"
+                                          value={String(it.remainingPackages)}
+                                          onChange={(e) => {
+                                            const v = Math.max(
+                                              0,
+                                              floor(e.target.value),
+                                            );
+                                            setOrderItems((prev) =>
+                                              prev.map((x) =>
+                                                x.id === it.id
+                                                  ? {
+                                                      ...x,
+                                                      remainingPackages: v,
+                                                    }
+                                                  : x,
+                                              ),
+                                            );
+                                          }}
+                                          onBlur={() =>
+                                            closeRemainingEdit(it.id)
+                                          }
+                                          onKeyDown={(e) => {
+                                            if (
+                                              e.key === "Enter" ||
+                                              e.key === "Escape"
+                                            ) {
+                                              closeRemainingEdit(it.id);
+                                            }
+                                          }}
+                                          inputMode="numeric"
+                                          autoFocus
+                                        />
+                                        {savingRemainingMap[it.id] && (
+                                          <div className="text-xs text-gray-500">
+                                            Guardando…
+                                          </div>
+                                        )}
                                       </div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center justify-end gap-2">
+                                    ) : (
+                                      <div className="flex items-center justify-end gap-2">
+                                        <span
+                                          className={zeroClass(
+                                            it.remainingPackages,
+                                          )}
+                                        >
+                                          {it.remainingPackages}
+                                        </span>
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                          onClick={() =>
+                                            openRemainingEdit(it.id)
+                                          }
+                                          aria-label="Editar restantes"
+                                          title="Editar restantes"
+                                        >
+                                          ✏️
+                                        </Button>
+                                      </div>
+                                    )
+                                  ) : (
                                     <span
                                       className={zeroClass(
                                         it.remainingPackages,
@@ -5704,99 +6298,52 @@ export default function VendorCandyOrders({
                                     >
                                       {it.remainingPackages}
                                     </span>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                      onClick={() => openRemainingEdit(it.id)}
-                                      aria-label="Editar restantes"
-                                      title="Editar restantes"
-                                    >
-                                      ✏️
-                                    </Button>
-                                  </div>
-                                )
-                              ) : (
-                                <span
-                                  className={zeroClass(it.remainingPackages)}
-                                >
-                                  {it.remainingPackages}
-                                </span>
-                              )}
-                            </td>
-
-                            {isAdmin && (
-                              <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                                <span
-                                  className={zeroClass(
-                                    Number((it as any).providerPrice || 0),
                                   )}
-                                >
-                                  {money((it as any).providerPrice || 0)}
-                                </span>
-                              </td>
-                            )}
+                                </td>
 
-                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                              <span
-                                className={zeroClass(
-                                  Number(it.pricePerPackage || 0),
-                                )}
-                              >
-                                {money(it.pricePerPackage)}
-                              </span>
-                            </td>
-
-                            <td className="min-w-[8rem] border-b px-2 py-2 text-right align-middle">
-                              <div className="flex w-full min-w-0 justify-end">
-                                <div className="inline-flex max-w-full flex-nowrap items-center gap-1">
-                                  {isAdmin && (
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="sm"
-                                      className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                      onClick={async () => recalcItem(it.id)}
-                                      aria-label="Recalcular total esperado"
+                                {isAdmin && (
+                                  <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                    <span
+                                      className={zeroClass(
+                                        Number((it as any).providerPrice || 0),
+                                      )}
                                     >
-                                      🔁
-                                    </Button>
-                                  )}
-                                  <span
-                                    className={`shrink-0 tabular-nums ${zeroClass(totalExpected)}`}
-                                  >
-                                    {money(totalExpected)}
-                                  </span>
-                                  {savingCalcMap[it.id] && (
-                                    <span className="shrink-0 text-[10px] text-gray-500">
-                                      Calc…
+                                      {money((it as any).providerPrice || 0)}
                                     </span>
-                                  )}
-                                </div>
-                              </div>
-                            </td>
+                                  </td>
+                                )}
 
-                            {isAdmin && (
-                              <>
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                  <span
+                                    className={zeroClass(
+                                      Number(it.pricePerPackage || 0),
+                                    )}
+                                  >
+                                    {money(it.pricePerPackage)}
+                                  </span>
+                                </td>
+
                                 <td className="min-w-[8rem] border-b px-2 py-2 text-right align-middle">
                                   <div className="flex w-full min-w-0 justify-end">
                                     <div className="inline-flex max-w-full flex-nowrap items-center gap-1">
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                        onClick={async () =>
-                                          await recalcItem(it.id)
-                                        }
-                                        aria-label="Recalcular U. Bruta"
-                                      >
-                                        🔁
-                                      </Button>
+                                      {isAdmin && (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="sm"
+                                          className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                          onClick={async () =>
+                                            recalcItem(it.id)
+                                          }
+                                          aria-label="Recalcular total esperado"
+                                        >
+                                          🔁
+                                        </Button>
+                                      )}
                                       <span
-                                        className={`shrink-0 tabular-nums ${zeroClass(grossProfitBase)}`}
+                                        className={`shrink-0 tabular-nums ${zeroClass(totalExpected)}`}
                                       >
-                                        {money(grossProfitBase)}
+                                        {money(totalExpected)}
                                       </span>
                                       {savingCalcMap[it.id] && (
                                         <span className="shrink-0 text-[10px] text-gray-500">
@@ -5807,425 +6354,28 @@ export default function VendorCandyOrders({
                                   </div>
                                 </td>
 
-                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                                  {money(gastos)}
-                                </td>
-
-                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                                  <span className={zeroClass(uXpaq)}>
-                                    {money(uXpaq)}
-                                  </span>
-                                </td>
-
-                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                                  <span
-                                    className={zeroClass(uNetaDisplay && packs)}
-                                  >
-                                    {packs > 0
-                                      ? money(uNetaDisplay / packs)
-                                      : "-"}
-                                  </span>
-                                </td>
-                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                                  <span className={zeroClass(uvXpaq)}>
-                                    {money(round2(Number(uvXpaq || 0)))}
-                                  </span>
-                                </td>
-                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                                  <span
-                                    className={zeroClass(uVendorDisplay)}
-                                  >
-                                    {money(
-                                      round2(Number(uVendorDisplay || 0)),
-                                    )}
-                                  </span>
-                                </td>
-                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                                  <span
-                                    className={`${zeroClass(uNetaDisplay)} ${
-                                      uNetaDisplay === uVendorDisplay
-                                        ? "text-amber-700"
-                                        : uNetaDisplay < uVendorDisplay
-                                          ? "text-red-700"
-                                          : "text-green-700"
-                                    } font-semibold`}
-                                  >
-                                    {money(uNetaDisplay)}
-                                  </span>
-                                </td>
-                              </>
-                            )}
-
-                            <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
-                              {!isReadOnly ? (
-                                editingMarginMap[it.id] ? (
-                                  <input
-                                    type="number"
-                                    step="0.001"
-                                    min={0}
-                                    className="w-full max-w-[5rem] border rounded p-1 text-right"
-                                    value={String(
-                                      it.vendorMarginPercent ??
-                                        getSellerMarginPercent(sellerId),
-                                    )}
-                                    onChange={(e) =>
-                                      updateItemVendorMarginPercent(
-                                        it.id,
-                                        e.target.value,
-                                      )
-                                    }
-                                    onBlur={() => closeMarginEdit(it.id)}
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" ||
-                                        e.key === "Escape"
-                                      ) {
-                                        closeMarginEdit(it.id);
-                                      }
-                                    }}
-                                    inputMode="decimal"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <div className="flex w-full justify-end">
-                                    <div className="inline-flex items-center gap-2">
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                        onClick={() => openMarginEdit(it.id)}
-                                        aria-label="Editar margen"
-                                        title="Editar margen"
-                                      >
-                                        ✏️
-                                      </Button>
-                                      <span
-                                        className={zeroClass(
-                                          Number(
-                                            it.vendorMarginPercent ??
-                                              getSellerMarginPercent(sellerId),
-                                          ),
-                                        )}
-                                      >
-                                        {Number(
-                                          it.vendorMarginPercent ??
-                                            getSellerMarginPercent(sellerId),
-                                        ).toFixed(0)}
-                                        %
-                                      </span>
-                                    </div>
-                                  </div>
-                                )
-                              ) : (
-                                <span
-                                  className={zeroClass(
-                                    Number(
-                                      it.vendorMarginPercent ??
-                                        getSellerMarginPercent(sellerId),
-                                    ),
-                                  )}
-                                >
-                                  {Number(
-                                    it.vendorMarginPercent ??
-                                      getSellerMarginPercent(sellerId),
-                                  ).toFixed(3)}
-                                  %
-                                </span>
-                              )}
-                            </td>
-
-                            <td className="border-b px-1 py-2 text-center align-middle">
-                              {!isReadOnly && (
-                                <ActionMenuTrigger
-                                  className="!h-8 !w-8"
-                                  aria-label="Acciones"
-                                  iconClassName="h-5 w-5 text-gray-700"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setModalLineMenu({
-                                      id: it.id,
-                                      rect: (
-                                        e.currentTarget as HTMLElement
-                                      ).getBoundingClientRect(),
-                                    });
-                                  }}
-                                />
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-
-                      {!pagedOrderItems.length && (
-                        <tr>
-                          <td
-                            className="p-3 text-sm text-gray-600"
-                            colSpan={isAdmin ? 16 : 8}
-                          >
-                            No hay productos asociados.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile cards by category */}
-                <div className="md:hidden p-3 space-y-2">
-                  {pagedItemsByCategory.map(([cat, items]) => {
-                    const expanded = !!openCategoryMap[cat];
-                    return (
-                      <div
-                        key={cat}
-                        className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm"
-                      >
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="w-full justify-between px-3 py-2.5 text-sm font-normal shadow-none ring-offset-0 hover:bg-slate-50"
-                          onClick={() => toggleCategory(cat)}
-                        >
-                          <span className="font-semibold">{cat}</span>
-                          <span className="text-xs text-gray-600">
-                            {items.length}{" "}
-                            {items.length === 1 ? "producto" : "productos"}
-                          </span>
-                        </Button>
-
-                        {expanded && (
-                          <div className="px-3 pb-3 space-y-2">
-                            {items.map((it) => {
-                              const {
-                                totalExpected,
-                                grossProfit,
-                                gastos,
-                                uVendor,
-                                uNeta,
-                              } = getItemActiveFinancials(it);
-                              const p =
-                                productsAll.find(
-                                  (x) => x.id === it.productId,
-                                ) || null;
-                              const s =
-                                sellers.find((x) => x.id === sellerId) || null;
-                              const br = s?.branch;
-                              const packs = Math.max(
-                                0,
-                                Number(it.packages || 0),
-                              );
-                              const grossPerPackBase = computeGrossPerPack(
-                                p,
-                                it,
-                                br,
-                              );
-                              const grossProfitBase =
-                                packs > 0 && Number.isFinite(grossPerPackBase)
-                                  ? grossPerPackBase * packs
-                                  : Number(it.grossProfit || 0);
-                              const vendorMarginPercentDisplay = clampPercent(
-                                it.vendorMarginPercent ??
-                                  getSellerMarginPercent(sellerId),
-                              );
-                              const splitDisplay = calcSplitFromGross(
-                                grossProfitBase,
-                                vendorMarginPercentDisplay,
-                              );
-                              const uVendorDisplay = Number(
-                                splitDisplay.uVendor || 0,
-                              );
-                              const uXpaq =
-                                packs > 0 ? grossProfitBase / packs : 0;
-                              const uvXpaq =
-                                packs > 0
-                                  ? round2(
-                                      Number(splitDisplay.uVendor || 0) /
-                                        packs,
-                                    )
-                                  : 0;
-                              const gastosBase = getItemLogisticBase(it);
-                              const uNetaDisplay =
-                                Number(grossProfitBase || 0) -
-                                Number(gastosBase || 0) -
-                                Number(uVendorDisplay || 0);
-
-                              return (
-                                <div
-                                  key={it.id}
-                                  className="space-y-2 rounded-lg border border-slate-200/70 bg-slate-50/50 p-3 text-xs"
-                                >
-                                  <div className="text-sm font-semibold text-slate-900">
-                                    {it.productName}
-                                  </div>
-
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <div>
-                                      <div className="text-gray-600">
-                                        Paquetes
-                                      </div>
-                                      {!isReadOnly ? (
-                                        editingPackagesMap[it.id] ? (
-                                          <input
-                                            className="w-full border rounded p-1 text-right"
-                                            value={String(it.packages)}
-                                            onChange={(e) =>
-                                              updateItemPackages(
-                                                it.id,
-                                                e.target.value,
-                                              )
+                                {isAdmin && (
+                                  <>
+                                    <td className="min-w-[8rem] border-b px-2 py-2 text-right align-middle">
+                                      <div className="flex w-full min-w-0 justify-end">
+                                        <div className="inline-flex max-w-full flex-nowrap items-center gap-1">
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="min-h-0 shrink-0 px-0.5 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                            onClick={async () =>
+                                              await recalcItem(it.id)
                                             }
-                                            onBlur={() =>
-                                              closePackageEdit(it.id)
-                                            }
-                                            onKeyDown={(e) => {
-                                              if (
-                                                e.key === "Enter" ||
-                                                e.key === "Escape"
-                                              ) {
-                                                closePackageEdit(it.id);
-                                              }
-                                            }}
-                                            inputMode="numeric"
-                                            autoFocus
-                                          />
-                                        ) : (
-                                          <div className="flex items-center justify-end gap-2">
-                                            <span
-                                              className={`font-semibold ${zeroClass(it.packages)}`}
-                                            >
-                                              {it.packages}
-                                            </span>
-                                            <Button
-                                              type="button"
-                                              variant="ghost"
-                                              className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                              onClick={() =>
-                                                openPackageEdit(it.id)
-                                              }
-                                              aria-label="Editar paquetes"
-                                            >
-                                              ✏️
-                                            </Button>
-                                          </div>
-                                        )
-                                      ) : (
-                                        <div
-                                          className={`font-semibold ${zeroClass(it.packages)}`}
-                                        >
-                                          {it.packages}
-                                        </div>
-                                      )}
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-600">
-                                        Restantes
-                                      </div>
-                                      <div className="font-semibold">
-                                        {isAdmin ? (
-                                          editingRemainingMap[it.id] ? (
-                                            <div className="flex items-center justify-end gap-2">
-                                              <input
-                                                className="w-full border rounded p-1 text-right"
-                                                value={String(
-                                                  it.remainingPackages,
-                                                )}
-                                                onChange={(e) => {
-                                                  const v = Math.max(
-                                                    0,
-                                                    floor(e.target.value),
-                                                  );
-                                                  setOrderItems((prev) =>
-                                                    prev.map((x) =>
-                                                      x.id === it.id
-                                                        ? {
-                                                            ...x,
-                                                            remainingPackages:
-                                                              v,
-                                                          }
-                                                        : x,
-                                                    ),
-                                                  );
-                                                }}
-                                                onBlur={() =>
-                                                  closeRemainingEdit(it.id)
-                                                }
-                                                onKeyDown={(e) => {
-                                                  if (
-                                                    e.key === "Enter" ||
-                                                    e.key === "Escape"
-                                                  ) {
-                                                    closeRemainingEdit(it.id);
-                                                  }
-                                                }}
-                                                inputMode="numeric"
-                                                autoFocus
-                                              />
-                                            </div>
-                                          ) : (
-                                            <div className="flex items-center justify-end gap-2">
-                                              <span
-                                                className={`font-semibold ${zeroClass(it.remainingPackages)}`}
-                                              >
-                                                {it.remainingPackages}
-                                              </span>
-                                              <Button
-                                                type="button"
-                                                variant="ghost"
-                                                className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                                onClick={() =>
-                                                  openRemainingEdit(it.id)
-                                                }
-                                                aria-label="Editar restantes"
-                                              >
-                                                ✏️
-                                              </Button>
-                                            </div>
-                                          )
-                                        ) : (
-                                          <div
-                                            className={`font-semibold ${zeroClass(it.remainingPackages)}`}
+                                            aria-label="Recalcular U. Bruta"
                                           >
-                                            {it.remainingPackages}
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-600">
-                                        Precio/paq
-                                      </div>
-                                      <div
-                                        className={`font-semibold ${zeroClass(Number(it.pricePerPackage || 0))}`}
-                                      >
-                                        {money(it.pricePerPackage)}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-gray-600">
-                                        Total esperado
-                                      </div>
-                                      <div className="mt-0.5 flex w-full justify-end">
-                                        <div className="inline-flex max-w-full flex-nowrap items-center gap-1 whitespace-nowrap">
-                                          {isAdmin && (
-                                            <Button
-                                              type="button"
-                                              variant="ghost"
-                                              size="sm"
-                                              className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
-                                              onClick={async (e) => {
-                                                e.stopPropagation();
-                                                await recalcItem(it.id);
-                                              }}
-                                              aria-label="Recalcular total esperado"
-                                            >
-                                              🔁
-                                            </Button>
-                                          )}
-                                          <div
-                                            className={`font-semibold tabular-nums ${zeroClass(totalExpected)}`}
+                                            🔁
+                                          </Button>
+                                          <span
+                                            className={`shrink-0 tabular-nums ${zeroClass(grossProfitBase)}`}
                                           >
-                                            {money(totalExpected)}
-                                          </div>
+                                            {money(grossProfitBase)}
+                                          </span>
                                           {savingCalcMap[it.id] && (
                                             <span className="shrink-0 text-[10px] text-gray-500">
                                               Calc…
@@ -6233,12 +6383,417 @@ export default function VendorCandyOrders({
                                           )}
                                         </div>
                                       </div>
-                                    </div>
-                                    {isAdmin && (
-                                      <>
+                                    </td>
+
+                                    <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                      {money(gastos)}
+                                    </td>
+
+                                    <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                      <span className={zeroClass(uXpaq)}>
+                                        {money(uXpaq)}
+                                      </span>
+                                    </td>
+
+                                    <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                      <span
+                                        className={zeroClass(
+                                          uNetaDisplay && packs,
+                                        )}
+                                      >
+                                        {packs > 0
+                                          ? money(uNetaDisplay / packs)
+                                          : "-"}
+                                      </span>
+                                    </td>
+                                    <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                      <span className={zeroClass(uvXpaq)}>
+                                        {money(round2(Number(uvXpaq || 0)))}
+                                      </span>
+                                    </td>
+                                    <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                      <span
+                                        className={zeroClass(uVendorDisplay)}
+                                      >
+                                        {money(
+                                          round2(Number(uVendorDisplay || 0)),
+                                        )}
+                                      </span>
+                                    </td>
+                                    <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                      <span
+                                        className={`${zeroClass(uNetaDisplay)} ${
+                                          uNetaDisplay === uVendorDisplay
+                                            ? "text-amber-700"
+                                            : uNetaDisplay < uVendorDisplay
+                                              ? "text-red-700"
+                                              : "text-green-700"
+                                        } font-semibold`}
+                                      >
+                                        {money(uNetaDisplay)}
+                                      </span>
+                                    </td>
+                                  </>
+                                )}
+
+                                <td className="border-b px-2 py-2 text-right align-middle tabular-nums">
+                                  {!isReadOnly ? (
+                                    editingMarginMap[it.id] ? (
+                                      <input
+                                        type="number"
+                                        step="0.001"
+                                        min={0}
+                                        className="w-full max-w-[5rem] border rounded p-1 text-right"
+                                        value={String(
+                                          it.vendorMarginPercent ??
+                                            getSellerMarginPercent(sellerId),
+                                        )}
+                                        onChange={(e) =>
+                                          updateItemVendorMarginPercent(
+                                            it.id,
+                                            e.target.value,
+                                          )
+                                        }
+                                        onBlur={() => closeMarginEdit(it.id)}
+                                        onKeyDown={(e) => {
+                                          if (
+                                            e.key === "Enter" ||
+                                            e.key === "Escape"
+                                          ) {
+                                            closeMarginEdit(it.id);
+                                          }
+                                        }}
+                                        inputMode="decimal"
+                                        autoFocus
+                                      />
+                                    ) : (
+                                      <div className="flex w-full justify-end">
+                                        <div className="inline-flex items-center gap-2">
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                            onClick={() =>
+                                              openMarginEdit(it.id)
+                                            }
+                                            aria-label="Editar margen"
+                                            title="Editar margen"
+                                          >
+                                            ✏️
+                                          </Button>
+                                          <span
+                                            className={zeroClass(
+                                              Number(
+                                                it.vendorMarginPercent ??
+                                                  getSellerMarginPercent(
+                                                    sellerId,
+                                                  ),
+                                              ),
+                                            )}
+                                          >
+                                            {Number(
+                                              it.vendorMarginPercent ??
+                                                getSellerMarginPercent(
+                                                  sellerId,
+                                                ),
+                                            ).toFixed(0)}
+                                            %
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )
+                                  ) : (
+                                    <span
+                                      className={zeroClass(
+                                        Number(
+                                          it.vendorMarginPercent ??
+                                            getSellerMarginPercent(sellerId),
+                                        ),
+                                      )}
+                                    >
+                                      {Number(
+                                        it.vendorMarginPercent ??
+                                          getSellerMarginPercent(sellerId),
+                                      ).toFixed(3)}
+                                      %
+                                    </span>
+                                  )}
+                                </td>
+
+                                <td className="border-b px-1 py-2 text-center align-middle">
+                                  {!isReadOnly && (
+                                    <ActionMenuTrigger
+                                      className="!h-8 !w-8"
+                                      aria-label="Acciones"
+                                      iconClassName="h-5 w-5 text-gray-700"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setModalLineMenu({
+                                          id: it.id,
+                                          rect: (
+                                            e.currentTarget as HTMLElement
+                                          ).getBoundingClientRect(),
+                                        });
+                                      }}
+                                    />
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                          {!pagedOrderItems.length && (
+                            <tr>
+                              <td
+                                className="p-3 text-sm text-gray-600"
+                                colSpan={isAdmin ? 16 : 8}
+                              >
+                                No hay productos asociados.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile cards by category */}
+                    <div className="md:hidden p-3 space-y-2">
+                      {pagedItemsByCategory.map(([cat, items]) => {
+                        const expanded = !!openCategoryMap[cat];
+                        return (
+                          <div
+                            key={cat}
+                            className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm"
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="w-full justify-between px-3 py-2.5 text-sm font-normal shadow-none ring-offset-0 hover:bg-slate-50"
+                              onClick={() => toggleCategory(cat)}
+                            >
+                              <span className="font-semibold">{cat}</span>
+                              <span className="text-xs text-gray-600">
+                                {items.length}{" "}
+                                {items.length === 1 ? "producto" : "productos"}
+                              </span>
+                            </Button>
+
+                            {expanded && (
+                              <div className="px-3 pb-3 space-y-2">
+                                {items.map((it) => {
+                                  const {
+                                    totalExpected,
+                                    grossProfit,
+                                    gastos,
+                                    uVendor,
+                                    uNeta,
+                                  } = getItemActiveFinancials(it);
+                                  const p =
+                                    productsAll.find(
+                                      (x) => x.id === it.productId,
+                                    ) || null;
+                                  const s =
+                                    sellers.find((x) => x.id === sellerId) ||
+                                    null;
+                                  const br = s?.branch;
+                                  const packs = Math.max(
+                                    0,
+                                    Number(it.packages || 0),
+                                  );
+                                  const grossPerPackBase = computeGrossPerPack(
+                                    p,
+                                    it,
+                                    br,
+                                  );
+                                  const grossProfitBase =
+                                    packs > 0 &&
+                                    Number.isFinite(grossPerPackBase)
+                                      ? grossPerPackBase * packs
+                                      : Number(it.grossProfit || 0);
+                                  const vendorMarginPercentDisplay =
+                                    clampPercent(
+                                      it.vendorMarginPercent ??
+                                        getSellerMarginPercent(sellerId),
+                                    );
+                                  const splitDisplay = calcSplitFromGross(
+                                    grossProfitBase,
+                                    vendorMarginPercentDisplay,
+                                  );
+                                  const uVendorDisplay = Number(
+                                    splitDisplay.uVendor || 0,
+                                  );
+                                  const uXpaq =
+                                    packs > 0 ? grossProfitBase / packs : 0;
+                                  const uvXpaq =
+                                    packs > 0
+                                      ? round2(
+                                          Number(splitDisplay.uVendor || 0) /
+                                            packs,
+                                        )
+                                      : 0;
+                                  const gastosBase = getItemLogisticBase(it);
+                                  const uNetaDisplay =
+                                    Number(grossProfitBase || 0) -
+                                    Number(gastosBase || 0) -
+                                    Number(uVendorDisplay || 0);
+
+                                  return (
+                                    <div
+                                      key={it.id}
+                                      className="space-y-2 rounded-lg border border-slate-200/70 bg-slate-50/50 p-3 text-xs"
+                                    >
+                                      <div className="text-sm font-semibold text-slate-900">
+                                        {it.productName}
+                                      </div>
+
+                                      <div className="grid grid-cols-2 gap-2">
                                         <div>
                                           <div className="text-gray-600">
-                                            U. Bruta
+                                            Paquetes
+                                          </div>
+                                          {!isReadOnly ? (
+                                            editingPackagesMap[it.id] ? (
+                                              <input
+                                                className="w-full border rounded p-1 text-right"
+                                                value={String(it.packages)}
+                                                onChange={(e) =>
+                                                  updateItemPackages(
+                                                    it.id,
+                                                    e.target.value,
+                                                  )
+                                                }
+                                                onBlur={() =>
+                                                  closePackageEdit(it.id)
+                                                }
+                                                onKeyDown={(e) => {
+                                                  if (
+                                                    e.key === "Enter" ||
+                                                    e.key === "Escape"
+                                                  ) {
+                                                    closePackageEdit(it.id);
+                                                  }
+                                                }}
+                                                inputMode="numeric"
+                                                autoFocus
+                                              />
+                                            ) : (
+                                              <div className="flex items-center justify-end gap-2">
+                                                <span
+                                                  className={`font-semibold ${zeroClass(it.packages)}`}
+                                                >
+                                                  {it.packages}
+                                                </span>
+                                                <Button
+                                                  type="button"
+                                                  variant="ghost"
+                                                  className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                                  onClick={() =>
+                                                    openPackageEdit(it.id)
+                                                  }
+                                                  aria-label="Editar paquetes"
+                                                >
+                                                  ✏️
+                                                </Button>
+                                              </div>
+                                            )
+                                          ) : (
+                                            <div
+                                              className={`font-semibold ${zeroClass(it.packages)}`}
+                                            >
+                                              {it.packages}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            Restantes
+                                          </div>
+                                          <div className="font-semibold">
+                                            {isAdmin ? (
+                                              editingRemainingMap[it.id] ? (
+                                                <div className="flex items-center justify-end gap-2">
+                                                  <input
+                                                    className="w-full border rounded p-1 text-right"
+                                                    value={String(
+                                                      it.remainingPackages,
+                                                    )}
+                                                    onChange={(e) => {
+                                                      const v = Math.max(
+                                                        0,
+                                                        floor(e.target.value),
+                                                      );
+                                                      setOrderItems((prev) =>
+                                                        prev.map((x) =>
+                                                          x.id === it.id
+                                                            ? {
+                                                                ...x,
+                                                                remainingPackages:
+                                                                  v,
+                                                              }
+                                                            : x,
+                                                        ),
+                                                      );
+                                                    }}
+                                                    onBlur={() =>
+                                                      closeRemainingEdit(it.id)
+                                                    }
+                                                    onKeyDown={(e) => {
+                                                      if (
+                                                        e.key === "Enter" ||
+                                                        e.key === "Escape"
+                                                      ) {
+                                                        closeRemainingEdit(
+                                                          it.id,
+                                                        );
+                                                      }
+                                                    }}
+                                                    inputMode="numeric"
+                                                    autoFocus
+                                                  />
+                                                </div>
+                                              ) : (
+                                                <div className="flex items-center justify-end gap-2">
+                                                  <span
+                                                    className={`font-semibold ${zeroClass(it.remainingPackages)}`}
+                                                  >
+                                                    {it.remainingPackages}
+                                                  </span>
+                                                  <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                                    onClick={() =>
+                                                      openRemainingEdit(it.id)
+                                                    }
+                                                    aria-label="Editar restantes"
+                                                  >
+                                                    ✏️
+                                                  </Button>
+                                                </div>
+                                              )
+                                            ) : (
+                                              <div
+                                                className={`font-semibold ${zeroClass(it.remainingPackages)}`}
+                                              >
+                                                {it.remainingPackages}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            Precio/paq
+                                          </div>
+                                          <div
+                                            className={`font-semibold ${zeroClass(Number(it.pricePerPackage || 0))}`}
+                                          >
+                                            {money(it.pricePerPackage)}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-gray-600">
+                                            Total esperado
                                           </div>
                                           <div className="mt-0.5 flex w-full justify-end">
                                             <div className="inline-flex max-w-full flex-nowrap items-center gap-1 whitespace-nowrap">
@@ -6252,19 +6807,15 @@ export default function VendorCandyOrders({
                                                     e.stopPropagation();
                                                     await recalcItem(it.id);
                                                   }}
-                                                  aria-label="Recalcular U. Bruta"
+                                                  aria-label="Recalcular total esperado"
                                                 >
                                                   🔁
                                                 </Button>
                                               )}
                                               <div
-                                                className={`font-semibold tabular-nums ${zeroClass(
-                                                  Number(grossProfitBase || 0),
-                                                )}`}
+                                                className={`font-semibold tabular-nums ${zeroClass(totalExpected)}`}
                                               >
-                                                {money(
-                                                  Number(grossProfitBase || 0),
-                                                )}
+                                                {money(totalExpected)}
                                               </div>
                                               {savingCalcMap[it.id] && (
                                                 <span className="shrink-0 text-[10px] text-gray-500">
@@ -6274,240 +6825,286 @@ export default function VendorCandyOrders({
                                             </div>
                                           </div>
                                         </div>
-                                        <div>
-                                          <div className="text-gray-600">
-                                            Gastos
-                                          </div>
-                                          <div className="font-semibold">
-                                            {money(gastos)}
-                                          </div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-600">
-                                            U.Paq
-                                          </div>
-                                          <div
-                                            className={`font-semibold ${zeroClass(
-                                              uXpaq,
-                                            )}`}
-                                          >
-                                            {money(uXpaq)}
-                                          </div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-600">
-                                            UN.Paq
-                                          </div>
-                                          <div
-                                            className={`font-semibold ${zeroClass(
-                                              uNetaDisplay && packs,
-                                            )}`}
-                                          >
-                                            {packs > 0
-                                              ? money(uNetaDisplay / packs)
-                                              : "-"}
-                                          </div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-600">
-                                            UV.Paq
-                                          </div>
-                                          <div
-                                            className={`font-semibold ${zeroClass(
-                                              uvXpaq,
-                                            )}`}
-                                          >
-                                            {money(
-                                              round2(Number(uvXpaq || 0)),
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-600">
-                                            U.Ruta
-                                          </div>
-                                          <div
-                                            className={`font-semibold ${zeroClass(
-                                              uVendorDisplay,
-                                            )}`}
-                                          >
-                                            {money(
-                                              round2(
-                                                Number(uVendorDisplay || 0),
-                                              ),
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div>
-                                          <div className="text-gray-600">
-                                            U.Neta
-                                          </div>
-                                          <div
-                                            className={`font-semibold ${zeroClass(
-                                              uNetaDisplay,
-                                            )}`}
-                                          >
-                                            {money(uNetaDisplay)}
-                                          </div>
-                                        </div>
-                                      </>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center gap-2">
-                                    <div className="flex-1">
-                                      <div className="text-gray-600">
-                                        Margen
-                                      </div>
-                                      {!isReadOnly ? (
-                                        editingMarginMap[it.id] ? (
-                                          <input
-                                            type="number"
-                                            step="0.001"
-                                            min={0}
-                                            className="w-full border rounded p-1 text-right"
-                                            value={String(
-                                              it.vendorMarginPercent ??
-                                                getSellerMarginPercent(
-                                                  sellerId,
-                                                ),
-                                            )}
-                                            onChange={(e) =>
-                                              updateItemVendorMarginPercent(
-                                                it.id,
-                                                e.target.value,
-                                              )
-                                            }
-                                            onBlur={() =>
-                                              closeMarginEdit(it.id)
-                                            }
-                                            onKeyDown={(e) => {
-                                              if (
-                                                e.key === "Enter" ||
-                                                e.key === "Escape"
-                                              ) {
-                                                closeMarginEdit(it.id);
-                                              }
-                                            }}
-                                            inputMode="decimal"
-                                            autoFocus
-                                          />
-                                        ) : (
-                                          <div className="flex w-full justify-end">
-                                            <div className="inline-flex items-center gap-2">
-                                              <Button
-                                                type="button"
-                                                variant="ghost"
-                                                className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                                onClick={() =>
-                                                  openMarginEdit(it.id)
-                                                }
-                                                aria-label="Editar margen"
-                                              >
-                                                ✏️
-                                              </Button>
-                                              <span
-                                                className={`font-semibold ${zeroClass(
-                                                  Number(
-                                                    it.vendorMarginPercent ??
-                                                      getSellerMarginPercent(
-                                                        sellerId,
+                                        {isAdmin && (
+                                          <>
+                                            <div>
+                                              <div className="text-gray-600">
+                                                U. Bruta
+                                              </div>
+                                              <div className="mt-0.5 flex w-full justify-end">
+                                                <div className="inline-flex max-w-full flex-nowrap items-center gap-1 whitespace-nowrap">
+                                                  {isAdmin && (
+                                                    <Button
+                                                      type="button"
+                                                      variant="ghost"
+                                                      size="sm"
+                                                      className="min-h-0 shrink-0 px-1 py-0 text-xs font-normal text-gray-600 shadow-none ring-offset-0 hover:bg-transparent hover:text-gray-900"
+                                                      onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        await recalcItem(it.id);
+                                                      }}
+                                                      aria-label="Recalcular U. Bruta"
+                                                    >
+                                                      🔁
+                                                    </Button>
+                                                  )}
+                                                  <div
+                                                    className={`font-semibold tabular-nums ${zeroClass(
+                                                      Number(
+                                                        grossProfitBase || 0,
                                                       ),
-                                                  ),
+                                                    )}`}
+                                                  >
+                                                    {money(
+                                                      Number(
+                                                        grossProfitBase || 0,
+                                                      ),
+                                                    )}
+                                                  </div>
+                                                  {savingCalcMap[it.id] && (
+                                                    <span className="shrink-0 text-[10px] text-gray-500">
+                                                      Calc…
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <div className="text-gray-600">
+                                                Gastos
+                                              </div>
+                                              <div className="font-semibold">
+                                                {money(gastos)}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <div className="text-gray-600">
+                                                U.Paq
+                                              </div>
+                                              <div
+                                                className={`font-semibold ${zeroClass(
+                                                  uXpaq,
                                                 )}`}
                                               >
-                                                {Number(
+                                                {money(uXpaq)}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <div className="text-gray-600">
+                                                UN.Paq
+                                              </div>
+                                              <div
+                                                className={`font-semibold ${zeroClass(
+                                                  uNetaDisplay && packs,
+                                                )}`}
+                                              >
+                                                {packs > 0
+                                                  ? money(uNetaDisplay / packs)
+                                                  : "-"}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <div className="text-gray-600">
+                                                UV.Paq
+                                              </div>
+                                              <div
+                                                className={`font-semibold ${zeroClass(
+                                                  uvXpaq,
+                                                )}`}
+                                              >
+                                                {money(
+                                                  round2(Number(uvXpaq || 0)),
+                                                )}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <div className="text-gray-600">
+                                                U.Ruta
+                                              </div>
+                                              <div
+                                                className={`font-semibold ${zeroClass(
+                                                  uVendorDisplay,
+                                                )}`}
+                                              >
+                                                {money(
+                                                  round2(
+                                                    Number(uVendorDisplay || 0),
+                                                  ),
+                                                )}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <div className="text-gray-600">
+                                                U.Neta
+                                              </div>
+                                              <div
+                                                className={`font-semibold ${zeroClass(
+                                                  uNetaDisplay,
+                                                )}`}
+                                              >
+                                                {money(uNetaDisplay)}
+                                              </div>
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
+
+                                      <div className="flex items-center gap-2">
+                                        <div className="flex-1">
+                                          <div className="text-gray-600">
+                                            Margen
+                                          </div>
+                                          {!isReadOnly ? (
+                                            editingMarginMap[it.id] ? (
+                                              <input
+                                                type="number"
+                                                step="0.001"
+                                                min={0}
+                                                className="w-full border rounded p-1 text-right"
+                                                value={String(
                                                   it.vendorMarginPercent ??
                                                     getSellerMarginPercent(
                                                       sellerId,
                                                     ),
-                                                ).toFixed(3)}
-                                                %
-                                              </span>
-                                            </div>
-                                          </div>
-                                        )
-                                      ) : (
-                                        <div
-                                          className={`font-semibold ${zeroClass(
-                                            Number(
-                                              it.vendorMarginPercent ??
-                                                getSellerMarginPercent(
-                                                  sellerId,
+                                                )}
+                                                onChange={(e) =>
+                                                  updateItemVendorMarginPercent(
+                                                    it.id,
+                                                    e.target.value,
+                                                  )
+                                                }
+                                                onBlur={() =>
+                                                  closeMarginEdit(it.id)
+                                                }
+                                                onKeyDown={(e) => {
+                                                  if (
+                                                    e.key === "Enter" ||
+                                                    e.key === "Escape"
+                                                  ) {
+                                                    closeMarginEdit(it.id);
+                                                  }
+                                                }}
+                                                inputMode="decimal"
+                                                autoFocus
+                                              />
+                                            ) : (
+                                              <div className="flex w-full justify-end">
+                                                <div className="inline-flex items-center gap-2">
+                                                  <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                                    onClick={() =>
+                                                      openMarginEdit(it.id)
+                                                    }
+                                                    aria-label="Editar margen"
+                                                  >
+                                                    ✏️
+                                                  </Button>
+                                                  <span
+                                                    className={`font-semibold ${zeroClass(
+                                                      Number(
+                                                        it.vendorMarginPercent ??
+                                                          getSellerMarginPercent(
+                                                            sellerId,
+                                                          ),
+                                                      ),
+                                                    )}`}
+                                                  >
+                                                    {Number(
+                                                      it.vendorMarginPercent ??
+                                                        getSellerMarginPercent(
+                                                          sellerId,
+                                                        ),
+                                                    ).toFixed(3)}
+                                                    %
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            )
+                                          ) : (
+                                            <div
+                                              className={`font-semibold ${zeroClass(
+                                                Number(
+                                                  it.vendorMarginPercent ??
+                                                    getSellerMarginPercent(
+                                                      sellerId,
+                                                    ),
                                                 ),
-                                            ),
-                                          )}`}
-                                        >
-                                          {Number(
-                                            it.vendorMarginPercent ??
-                                              getSellerMarginPercent(sellerId),
-                                          ).toFixed(3)}
-                                          %
+                                              )}`}
+                                            >
+                                              {Number(
+                                                it.vendorMarginPercent ??
+                                                  getSellerMarginPercent(
+                                                    sellerId,
+                                                  ),
+                                              ).toFixed(3)}
+                                              %
+                                            </div>
+                                          )}
                                         </div>
-                                      )}
+
+                                        {!isReadOnly && (
+                                          <ActionMenuTrigger
+                                            className="!h-8 !w-8"
+                                            aria-label="Acciones"
+                                            iconClassName="h-5 w-5 text-gray-700"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setModalLineMenu({
+                                                id: it.id,
+                                                rect: (
+                                                  e.currentTarget as HTMLElement
+                                                ).getBoundingClientRect(),
+                                              });
+                                            }}
+                                          />
+                                        )}
+                                      </div>
                                     </div>
-
-                                    {!isReadOnly && (
-                                      <ActionMenuTrigger
-                                        className="!h-8 !w-8"
-                                        aria-label="Acciones"
-                                        iconClassName="h-5 w-5 text-gray-700"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setModalLineMenu({
-                                            id: it.id,
-                                            rect: (
-                                              e.currentTarget as HTMLElement
-                                            ).getBoundingClientRect(),
-                                          });
-                                        }}
-                                      />
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                        );
+                      })}
 
-                  {!pagedOrderItems.length && (
-                    <div className="p-3 text-sm text-gray-600 text-center">
-                      No hay productos asociados.
+                      {!pagedOrderItems.length && (
+                        <div className="p-3 text-sm text-gray-600 text-center">
+                          No hay productos asociados.
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-                {/* items pagination */}
-                <div className="flex items-center justify-between gap-2 border-t border-slate-200/90 bg-slate-50/50 px-3 py-2.5">
-                  <div className="text-xs text-slate-600">
-                    Página items {itemsPage} / {itemsTotalPages}
+                    {/* items pagination */}
+                    <div className="flex items-center justify-between gap-2 border-t border-slate-200/90 bg-slate-50/50 px-3 py-2.5">
+                      <div className="text-xs text-slate-600">
+                        Página items {itemsPage} / {itemsTotalPages}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-lg border-slate-200 shadow-sm"
+                          onClick={itemsPrev}
+                          disabled={itemsPage <= 1}
+                        >
+                          ←
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-lg border-slate-200 shadow-sm"
+                          onClick={itemsNext}
+                          disabled={itemsPage >= itemsTotalPages}
+                        >
+                          →
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="rounded-lg border-slate-200 shadow-sm"
-                      onClick={itemsPrev}
-                      disabled={itemsPage <= 1}
-                    >
-                      ←
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="rounded-lg border-slate-200 shadow-sm"
-                      onClick={itemsNext}
-                      disabled={itemsPage >= itemsTotalPages}
-                    >
-                      →
-                    </Button>
-                  </div>
-                </div>
-              </div>
                 </div>
               </div>
 
@@ -6669,9 +7266,7 @@ export default function VendorCandyOrders({
                   ? "cursor-not-allowed text-gray-400"
                   : ""
               }`}
-              disabled={
-                !orderItems.length || !String(bulkMarginPercent).trim()
-              }
+              disabled={!orderItems.length || !String(bulkMarginPercent).trim()}
               onClick={() => {
                 setModalItemsToolbarMenu(null);
                 if (orderItems.length && String(bulkMarginPercent).trim()) {
@@ -6771,9 +7366,7 @@ export default function VendorCandyOrders({
               onClick={() => {
                 setVendorListToolbarMenu(null);
                 if (
-                  confirm(
-                    "¿Sincronizar todos los pedidos con Orden Maestra?",
-                  )
+                  confirm("¿Sincronizar todos los pedidos con Orden Maestra?")
                 ) {
                   syncAllOrdersFromMaster();
                 }
@@ -6794,9 +7387,7 @@ export default function VendorCandyOrders({
                 backfillCalculatedFields();
               }}
             >
-              {isBackfilling
-                ? "Actualizando Firestore..."
-                : "Update Firestore"}
+              {isBackfilling ? "Actualizando Firestore..." : "Update Firestore"}
             </Button>
           </div>
         )}

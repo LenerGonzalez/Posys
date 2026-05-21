@@ -153,6 +153,23 @@ interface OrderInventoryAgg {
   remainingPackages: number;
 }
 
+interface MainOrderAuditRow {
+  id: string;
+  action?: string;
+  eventType?: string;
+  entity?: string;
+  orderId?: string;
+  orderName?: string;
+  orderDate?: string;
+  productId?: string;
+  productName?: string;
+  changeType?: string;
+  changes?: any[];
+  changedFields?: any[];
+  loggedAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
 type CandyMainOrderDoc = {
   name: string;
   date: string;
@@ -248,7 +265,10 @@ function deriveMarginPercentFromSubtotalAndTotal(
   total: number,
 ): number {
   if (!Number.isFinite(total) || total <= 0) return 0;
-  return Math.min(Math.max((1 - subtotal / total) * 100, 0), MAX_MARGIN_PERCENT);
+  return Math.min(
+    Math.max((1 - subtotal / total) * 100, 0),
+    MAX_MARGIN_PERCENT,
+  );
 }
 
 /** Precio Rivas/Isla por paquete fijado (p. ej. desde current_prices); SJ sigue por margen. */
@@ -276,10 +296,7 @@ function calcTotalsFromFixedPackageSalePrices(
   const unitSJ = packagesNum > 0 ? roundToInt(totalSJ / packagesNum) : 0;
   const unitIO = packagesNum > 0 ? roundToInt(totalI / packagesNum) : 0;
 
-  const marginR = deriveMarginPercentFromSubtotalAndTotal(
-    subtotalCalc,
-    totalR,
-  );
+  const marginR = deriveMarginPercentFromSubtotalAndTotal(subtotalCalc, totalR);
   const marginIsla = deriveMarginPercentFromSubtotalAndTotal(
     subtotalCalc,
     totalI,
@@ -407,6 +424,14 @@ export default function CandyMainOrders() {
   const [masterDrawerUBrutaGlobal, setMasterDrawerUBrutaGlobal] = useState<
     number | null
   >(null);
+  const [auditDrawerOpen, setAuditDrawerOpen] = useState(false);
+  const [auditDrawerLoading, setAuditDrawerLoading] = useState(false);
+  const [auditRows, setAuditRows] = useState<MainOrderAuditRow[]>([]);
+  const [auditOrderFilter, setAuditOrderFilter] = useState<string>("ALL");
+  const [auditEventFilter, setAuditEventFilter] = useState<string>("ALL");
+  const [expandedAuditRows, setExpandedAuditRows] = useState<
+    Record<string, boolean>
+  >({});
 
   // modal orden
   const [openOrderModal, setOpenOrderModal] = useState(false);
@@ -467,7 +492,8 @@ export default function CandyMainOrders() {
   // auto-llenados desde catálogo (solo lectura)
   const [orderProviderPrice, setOrderProviderPrice] = useState<string>("");
   /** Precio venta Isla por paquete desde current_prices (solo lectura en el formulario). */
-  const [orderSalePricePkgIsla, setOrderSalePricePkgIsla] = useState<string>("");
+  const [orderSalePricePkgIsla, setOrderSalePricePkgIsla] =
+    useState<string>("");
   const [orderUnitsPerPackage, setOrderUnitsPerPackage] = useState<string>("1");
   const [orderPackages, setOrderPackages] = useState<string>("0");
 
@@ -476,7 +502,17 @@ export default function CandyMainOrders() {
 
   const [itemSearch, setItemSearch] = useState("");
 
-  const serializeOrderState = (items: CandyOrderItem[]) => {
+  const serializeOrderState = (
+    items: CandyOrderItem[],
+    header?: {
+      orderName?: string;
+      orderDate?: string;
+      marginRivas?: number;
+      marginSanJorge?: number;
+      marginIsla?: number;
+      logisticsCost?: number;
+    },
+  ) => {
     const normalizedItems = items
       .map((it) => ({
         id: it.id,
@@ -493,12 +529,12 @@ export default function CandyMainOrders() {
       .sort((a, b) => a.id.localeCompare(b.id));
 
     return JSON.stringify({
-      orderName: String(orderName || "").trim(),
-      orderDate: String(orderDate || ""),
-      marginRivas: Number(marginRivas || 0),
-      marginSanJorge: Number(marginSanJorge || 0),
-      marginIsla: Number(marginIsla || 0),
-      logisticsCost: Number(logisticsCost || 0),
+      orderName: String(header?.orderName ?? orderName ?? "").trim(),
+      orderDate: String(header?.orderDate ?? orderDate ?? ""),
+      marginRivas: Number(header?.marginRivas ?? marginRivas ?? 0),
+      marginSanJorge: Number(header?.marginSanJorge ?? marginSanJorge ?? 0),
+      marginIsla: Number(header?.marginIsla ?? marginIsla ?? 0),
+      logisticsCost: Number(header?.logisticsCost ?? logisticsCost ?? 0),
       items: normalizedItems,
     });
   };
@@ -516,6 +552,132 @@ export default function CandyMainOrders() {
     } catch {
       return { itemMap: new Map<string, any>() };
     }
+  };
+
+  const writeMainOrderLog = async (payload: Record<string, any>) => {
+    try {
+      await addDoc(collection(db, "candy_main_orders_logs"), {
+        ...payload,
+        loggedAt: Timestamp.now(),
+      });
+    } catch (e) {
+      console.error("Error guardando candy_main_orders_logs", e);
+    }
+  };
+
+  const diffOrderHeaderChanges = (prevSnap: any, currSnap: any) => {
+    const fields: Array<{
+      key: string;
+      label: string;
+      numeric?: boolean;
+    }> = [
+      { key: "orderName", label: "Nombre orden" },
+      { key: "orderDate", label: "Fecha orden" },
+      { key: "marginRivas", label: "MV Rivas", numeric: true },
+      { key: "marginSanJorge", label: "MV SJ", numeric: true },
+      { key: "marginIsla", label: "MV Isla", numeric: true },
+      { key: "logisticsCost", label: "Gastos logísticos", numeric: true },
+    ];
+
+    const changes: Array<{
+      field: string;
+      label: string;
+      before: any;
+      after: any;
+    }> = [];
+
+    for (const f of fields) {
+      const before = prevSnap?.[f.key];
+      const after = currSnap?.[f.key];
+      const changed = f.numeric
+        ? Number(before || 0) !== Number(after || 0)
+        : String(before ?? "") !== String(after ?? "");
+      if (!changed) continue;
+      changes.push({ field: f.key, label: f.label, before, after });
+    }
+
+    return changes;
+  };
+
+  const diffProductChanges = (prevSnap: any, currSnap: any) => {
+    const fieldLabelMap: Record<string, string> = {
+      providerPrice: "Precio prov",
+      packages: "Paquetes",
+      unitsPerPackage: "Und x Paq",
+      remainingPackages: "Restantes",
+      marginRivas: "MV Rivas",
+      marginSanJorge: "MV SJ",
+      marginIsla: "MV Isla",
+      unitPriceRivas: "Precio Rivas",
+      unitPriceIsla: "Precio Isla",
+    };
+
+    const prevMap: Map<string, any> = prevSnap?.itemMap ?? new Map();
+    const currMap: Map<string, any> = currSnap?.itemMap ?? new Map();
+    const ids = Array.from(
+      new Set([...prevMap.keys(), ...currMap.keys()]),
+    ).sort((a, b) => String(a).localeCompare(String(b)));
+
+    return ids
+      .map((productId) => {
+        const prevItem = prevMap.get(productId);
+        const currItem = currMap.get(productId);
+
+        if (!prevItem && currItem) {
+          return {
+            productId,
+            changeType: "added",
+            changedFields: Object.keys(fieldLabelMap).map((key) => ({
+              field: key,
+              label: fieldLabelMap[key],
+              before: null,
+              after: Number(currItem[key] || 0),
+            })),
+          };
+        }
+
+        if (prevItem && !currItem) {
+          return {
+            productId,
+            changeType: "removed",
+            changedFields: Object.keys(fieldLabelMap).map((key) => ({
+              field: key,
+              label: fieldLabelMap[key],
+              before: Number(prevItem[key] || 0),
+              after: null,
+            })),
+          };
+        }
+
+        const changedFields = Object.keys(fieldLabelMap)
+          .filter(
+            (key) =>
+              Number(prevItem?.[key] || 0) !== Number(currItem?.[key] || 0),
+          )
+          .map((key) => ({
+            field: key,
+            label: fieldLabelMap[key],
+            before: Number(prevItem?.[key] || 0),
+            after: Number(currItem?.[key] || 0),
+          }));
+
+        if (!changedFields.length) return null;
+        return {
+          productId,
+          changeType: "updated",
+          changedFields,
+        };
+      })
+      .filter(Boolean) as Array<{
+      productId: string;
+      changeType: "added" | "removed" | "updated";
+      changedFields: Array<{
+        field: string;
+        label: string;
+        before: any;
+        after: any;
+      }>;
+    }>;
   };
 
   // Paginado tabla (desktop)
@@ -762,9 +924,7 @@ export default function CandyMainOrders() {
 
     setAddingItemToOrder(true);
     try {
-      const priceSnap = await getDoc(
-        doc(db, "current_prices", catProd.id),
-      );
+      const priceSnap = await getDoc(doc(db, "current_prices", catProd.id));
       if (!priceSnap.exists()) {
         setMsg(
           "Cargá primero los precios de venta en Precios ventas para este producto.",
@@ -776,10 +936,8 @@ export default function CandyMainOrders() {
         raw,
         unitsNum,
       );
-      if (!(pkgR > 0 && pkgI > 0)) {
-        setMsg(
-          "Faltan precios Rivas e Isla válidos en Precios ventas para este producto.",
-        );
+      if (!(pkgI > 0)) {
+        setMsg("Faltan precios válidos en Precios ventas para este producto.");
         return;
       }
 
@@ -1637,6 +1795,108 @@ export default function CandyMainOrders() {
     }
   };
 
+  const openAuditDrawer = async () => {
+    setAuditDrawerOpen(true);
+    setAuditDrawerLoading(true);
+    try {
+      const snap = await getDocs(collection(db, "candy_main_orders_logs"));
+      const rows: MainOrderAuditRow[] = [];
+      snap.forEach((d) => {
+        const x = d.data() as any;
+        rows.push({
+          id: d.id,
+          action: String(x.action || ""),
+          eventType: String(x.eventType || ""),
+          entity: String(x.entity || ""),
+          orderId: String(x.orderId || ""),
+          orderName: String(x.orderName || ""),
+          orderDate: String(x.orderDate || ""),
+          productId: String(x.productId || ""),
+          productName: String(x.productName || ""),
+          changeType: String(x.changeType || ""),
+          changes: Array.isArray(x.changes) ? x.changes : [],
+          changedFields: Array.isArray(x.changedFields) ? x.changedFields : [],
+          loggedAt: x.loggedAt,
+          updatedAt: x.updatedAt,
+        });
+      });
+      const ts = (v: any) => {
+        if (v?.toMillis) return v.toMillis();
+        if (v?.toDate) return v.toDate().getTime();
+        return 0;
+      };
+      rows.sort((a, b) => {
+        const at = ts(a.loggedAt) || ts(a.updatedAt);
+        const bt = ts(b.loggedAt) || ts(b.updatedAt);
+        return bt - at;
+      });
+      setAuditRows(rows.slice(0, 250));
+      setAuditOrderFilter("ALL");
+      setAuditEventFilter("ALL");
+    } catch (e) {
+      console.error(e);
+      setMsg("❌ Error cargando auditoría.");
+    } finally {
+      setAuditDrawerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const map: Record<string, boolean> = {};
+    for (const r of auditRows) map[r.id] = false;
+    setExpandedAuditRows(map);
+  }, [auditRows]);
+
+  const auditOrderOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of auditRows) {
+      const key = String(r.orderId || r.orderName || "").trim();
+      if (!key) continue;
+      map.set(key, String(r.orderName || r.orderId || key));
+    }
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "es"));
+  }, [auditRows]);
+
+  const auditEventOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of auditRows) {
+      const v = String(r.eventType || r.action || "").trim();
+      if (v) set.add(v);
+    }
+    return Array.from(set)
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map((v) => ({ value: v, label: v }));
+  }, [auditRows]);
+
+  const filteredAuditRows = useMemo(() => {
+    const hasUsefulDetail = (r: MainOrderAuditRow) => {
+      const action = String(r.action || "").trim();
+      const entity = String(r.entity || "").trim();
+      const changedFields = Array.isArray(r.changedFields)
+        ? r.changedFields
+        : [];
+      const changes = Array.isArray(r.changes) ? r.changes : [];
+
+      if (action || entity) return true;
+      if (changedFields.length > 0) return true;
+      if (changes.length > 0) return true;
+      return false;
+    };
+
+    return auditRows.filter((r) => {
+      if (!hasUsefulDetail(r)) return false;
+      const rowOrderKey = String(r.orderId || r.orderName || "").trim();
+      const byOrder =
+        auditOrderFilter === "ALL" || rowOrderKey === auditOrderFilter;
+      const byEvent =
+        auditEventFilter === "ALL" ||
+        String(r.eventType || r.action || "").trim() === auditEventFilter;
+      return byOrder && byEvent;
+    });
+  }, [auditRows, auditOrderFilter, auditEventFilter]);
+
   // =========================
   // Guardar pedido (crea / edita)
   // =========================
@@ -1697,6 +1957,22 @@ export default function CandyMainOrders() {
       }
 
       let editedItemsSummary: Array<{ name: string; fields: string[] }> = [];
+      let orderHeaderChangesForLog: Array<{
+        field: string;
+        label: string;
+        before: any;
+        after: any;
+      }> = [];
+      let productChangesForLog: Array<{
+        productId: string;
+        changeType: "added" | "removed" | "updated";
+        changedFields: Array<{
+          field: string;
+          label: string;
+          before: any;
+          after: any;
+        }>;
+      }> = [];
       if (editingOrderId) {
         const currentSnapshot = serializeOrderState(orderItems);
         if (currentSnapshot === originalOrderSnapshotRef.current) {
@@ -1707,6 +1983,8 @@ export default function CandyMainOrders() {
 
         const prevSnap = parseOrderSnapshot(originalOrderSnapshotRef.current);
         const currSnap = parseOrderSnapshot(currentSnapshot);
+        orderHeaderChangesForLog = diffOrderHeaderChanges(prevSnap, currSnap);
+        productChangesForLog = diffProductChanges(prevSnap, currSnap);
 
         const fieldLabelMap: Record<string, string> = {
           providerPrice: "Precio prov",
@@ -2027,15 +2305,6 @@ export default function CandyMainOrders() {
                 : "") +
               `\nEditados: ${details}${extra}`,
           );
-
-          await addDoc(collection(db, "candy_main_orders_logs"), {
-            orderId: editingOrderId,
-            orderName: header.name,
-            orderDate: header.date,
-            changes: editedItemsSummary,
-            updatedAt: Timestamp.now(),
-            type: "update_items",
-          });
         } else {
           setMsg(
             `✅ Orden maestra actualizada (pedido + inventario). ` +
@@ -2045,6 +2314,60 @@ export default function CandyMainOrders() {
                 : ""),
           );
         }
+
+        if (orderHeaderChangesForLog.length > 0) {
+          const mapOrderFieldEventType = (field: string) => {
+            if (field === "orderName") return "Cambio Nombre";
+            if (field === "orderDate") return "Cambio Fecha";
+            return "Actualiza Orden";
+          };
+
+          for (const ch of orderHeaderChangesForLog) {
+            await writeMainOrderLog({
+              action: "update_order",
+              eventType: mapOrderFieldEventType(ch.field),
+              entity: "order",
+              orderId: editingOrderId,
+              orderName: header.name,
+              orderDate: header.date,
+              changes: [ch],
+              hasItemChanges: productChangesForLog.length > 0,
+            });
+          }
+        }
+
+        for (const ch of productChangesForLog) {
+          const productRef =
+            orderItems.find((it) => it.id === ch.productId) ||
+            catalog.find((c) => c.id === ch.productId);
+
+          const packageChange = ch.changedFields.find(
+            (f) => f.field === "packages",
+          );
+          let eventType = "Actualiza producto";
+          if (ch.changeType === "added") eventType = "Agrega productos";
+          else if (ch.changeType === "removed") eventType = "Elimina productos";
+          else if (packageChange) {
+            const before = Number(packageChange.before || 0);
+            const after = Number(packageChange.after || 0);
+            if (after > before) eventType = "Incremento Paquetes";
+            else if (after < before) eventType = "Decremento Paquetes";
+          }
+
+          await writeMainOrderLog({
+            action: "update_product",
+            eventType,
+            entity: "product",
+            orderId: editingOrderId,
+            orderName: header.name,
+            orderDate: header.date,
+            productId: ch.productId,
+            productName: String(productRef?.name || ""),
+            changeType: ch.changeType,
+            changedFields: ch.changedFields,
+          });
+        }
+
         originalOrderSnapshotRef.current = serializeOrderState(orderItems);
         resetOrderForm();
         setOpenOrderModal(false);
@@ -2117,6 +2440,80 @@ export default function CandyMainOrders() {
       }
 
       await batch.commit();
+
+      await writeMainOrderLog({
+        action: "create_order",
+        eventType: "Crea orden",
+        entity: "order",
+        orderId,
+        orderName: header.name,
+        orderDate: header.date,
+        changes: [
+          {
+            field: "created",
+            label: "Orden creada",
+            before: null,
+            after: {
+              name: header.name,
+              date: header.date,
+              logisticsCost: header.logisticsCost ?? 0,
+              totalPackages: header.totalPackages,
+            },
+          },
+        ],
+      });
+
+      for (const it of itemsToSave) {
+        await writeMainOrderLog({
+          action: "create_product",
+          eventType: "Agrega productos",
+          entity: "product",
+          orderId,
+          orderName: header.name,
+          orderDate: header.date,
+          productId: it.id,
+          productName: it.name,
+          changeType: "added",
+          changedFields: [
+            {
+              field: "providerPrice",
+              label: "Precio prov",
+              before: null,
+              after: Number(it.providerPrice || 0),
+            },
+            {
+              field: "packages",
+              label: "Paquetes",
+              before: null,
+              after: safeInt(it.packages),
+            },
+            {
+              field: "unitsPerPackage",
+              label: "Und x Paq",
+              before: null,
+              after: safeInt(it.unitsPerPackage),
+            },
+            {
+              field: "remainingPackages",
+              label: "Restantes",
+              before: null,
+              after: safeInt(it.remainingPackages ?? it.packages),
+            },
+            {
+              field: "unitPriceRivas",
+              label: "Precio Rivas",
+              before: null,
+              after: Number(it.unitPriceRivas || 0),
+            },
+            {
+              field: "unitPriceIsla",
+              label: "Precio Isla",
+              before: null,
+              after: Number(it.unitPriceIsla || 0),
+            },
+          ],
+        });
+      }
 
       setMsg(
         `✅ Orden maestra creada y registrada en inventario. Items: ${itemsToSave.length}.`,
@@ -2256,7 +2653,16 @@ export default function CandyMainOrders() {
       }
 
       setOrderItems(normalized);
-      originalOrderSnapshotRef.current = serializeOrderState(normalized);
+      originalOrderSnapshotRef.current = serializeOrderState(normalized, {
+        orderName: String(orderData?.name ?? order.name ?? "").trim(),
+        orderDate: String(orderData?.date ?? order.date ?? ""),
+        marginRivas: Number(orderData?.marginRivas ?? order.marginRivas ?? 20),
+        marginSanJorge: Number(
+          orderData?.marginSanJorge ?? order.marginSanJorge ?? 15,
+        ),
+        marginIsla: Number(orderData?.marginIsla ?? order.marginIsla ?? 30),
+        logisticsCost: Number(orderData?.logisticsCost ?? 0),
+      });
       setOpenOrderModal(true);
     } catch (e) {
       console.error(e);
@@ -2277,6 +2683,19 @@ export default function CandyMainOrders() {
 
     setMsg("");
     try {
+      let orderItemsForLog: CandyOrderItem[] = [];
+      try {
+        const orderDoc = await getDoc(doc(db, "candy_main_orders", order.id));
+        if (orderDoc.exists()) {
+          const data = orderDoc.data() as any;
+          orderItemsForLog = Array.isArray(data.items)
+            ? (data.items as CandyOrderItem[])
+            : [];
+        }
+      } catch (e) {
+        console.error("No se pudo leer orden para log", e);
+      }
+
       const invSnap = await getDocs(
         query(
           collection(db, "inventory_candies"),
@@ -2289,6 +2708,113 @@ export default function CandyMainOrders() {
       }
 
       await deleteDoc(doc(db, "candy_main_orders", order.id));
+
+      await writeMainOrderLog({
+        action: "delete_order",
+        eventType: "Elimina orden",
+        entity: "order",
+        orderId: order.id,
+        orderName: order.name,
+        orderDate: order.date,
+        changes: [
+          {
+            field: "deleted",
+            label: "Orden eliminada",
+            before: {
+              totalPackages: Number(order.totalPackages || 0),
+              subtotal: Number(order.subtotal || 0),
+              totalIsla: Number(order.totalIsla || 0),
+              logisticsCost: Number(order.logisticsCost || 0),
+            },
+            after: null,
+          },
+        ],
+      });
+
+      const productRowsForLog =
+        orderItemsForLog.length > 0
+          ? orderItemsForLog.map((it) => ({
+              productId: it.id,
+              productName: String(it.name || ""),
+              providerPrice: Number(it.providerPrice || 0),
+              packages: safeInt(it.packages),
+              unitsPerPackage: safeInt(it.unitsPerPackage),
+              remainingPackages: safeInt(it.remainingPackages ?? it.packages),
+              unitPriceRivas: Number(it.unitPriceRivas || 0),
+              unitPriceIsla: Number(it.unitPriceIsla || 0),
+            }))
+          : invSnap.docs.map((d) => {
+              const x = d.data() as any;
+              return {
+                productId: String(x.productId || ""),
+                productName: String(x.productName || ""),
+                providerPrice: Number(x.providerPrice || 0),
+                packages: safeInt(x.packages || 0),
+                unitsPerPackage: safeInt(x.unitsPerPackage || 1),
+                remainingPackages: getRemainingPackagesFromInvDoc(x),
+                unitPriceRivas: Number(x.unitPriceRivas || 0),
+                unitPriceIsla: Number(x.unitPriceIsla || 0),
+              };
+            });
+
+      const uniqueProducts = new Map<string, any>();
+      for (const p of productRowsForLog) {
+        if (!p?.productId) continue;
+        uniqueProducts.set(p.productId, p);
+      }
+
+      for (const p of uniqueProducts.values()) {
+        await writeMainOrderLog({
+          action: "delete_product",
+          eventType: "Elimina productos",
+          entity: "product",
+          orderId: order.id,
+          orderName: order.name,
+          orderDate: order.date,
+          productId: p.productId,
+          productName: String(p.productName || ""),
+          changeType: "removed",
+          changedFields: [
+            {
+              field: "providerPrice",
+              label: "Precio prov",
+              before: Number(p.providerPrice || 0),
+              after: null,
+            },
+            {
+              field: "packages",
+              label: "Paquetes",
+              before: safeInt(p.packages),
+              after: null,
+            },
+            {
+              field: "unitsPerPackage",
+              label: "Und x Paq",
+              before: safeInt(p.unitsPerPackage),
+              after: null,
+            },
+            {
+              field: "remainingPackages",
+              label: "Restantes",
+              before: safeInt(p.remainingPackages),
+              after: null,
+            },
+            {
+              field: "unitPriceRivas",
+              label: "Precio Rivas",
+              before: Number(p.unitPriceRivas || 0),
+              after: null,
+            },
+            {
+              field: "unitPriceIsla",
+              label: "Precio Isla",
+              before: Number(p.unitPriceIsla || 0),
+              after: null,
+            },
+          ],
+        });
+      }
+
       setOrders((prev) => prev.filter((o) => o.id !== order.id));
       setMsg("✅ Orden maestra eliminada.");
       refresh();
@@ -2436,7 +2962,6 @@ export default function CandyMainOrders() {
             prorrateados.
           </p>
         </div> */}
-
       </div>
 
       {msg && <Toast message={msg} onClose={() => setMsg("")} />}
@@ -2623,49 +3148,49 @@ export default function CandyMainOrders() {
               className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 sm:px-5 md:px-6"
             >
               <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain space-y-5 py-3 pb-4">
-              {/* file input (oculto) */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                className="hidden"
-                onChange={handleExcelFileChange}
-              />
+                {/* file input (oculto) */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={handleExcelFileChange}
+                />
 
-              {/* ===== DATOS ===== */}
-              <div
-                className={`${mobileTab === "DATOS" ? "block" : "hidden"} md:block`}
-              >
-                <div className="rounded-xl border border-slate-200/80 bg-slate-50/40 p-4 shadow-sm">
-                  <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Datos generales
-                  </h4>
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                  <div className="md:col-span-2">
-                    <label className="block text-[13px] font-semibold text-slate-700 md:text-sm">
-                      Nombre de Orden
-                    </label>
-                    <input
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-snug shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 md:text-sm md:leading-normal"
-                      value={orderName}
-                      onChange={(e) => setOrderName(e.target.value)}
-                      placeholder="Ej: Pedido enero 19"
-                    />
-                  </div>
+                {/* ===== DATOS ===== */}
+                <div
+                  className={`${mobileTab === "DATOS" ? "block" : "hidden"} md:block`}
+                >
+                  <div className="rounded-xl border border-slate-200/80 bg-slate-50/40 p-4 shadow-sm">
+                    <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Datos generales
+                    </h4>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                      <div className="md:col-span-2">
+                        <label className="block text-[13px] font-semibold text-slate-700 md:text-sm">
+                          Nombre de Orden
+                        </label>
+                        <input
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-snug shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 md:text-sm md:leading-normal"
+                          value={orderName}
+                          onChange={(e) => setOrderName(e.target.value)}
+                          placeholder="Ej: Pedido enero 19"
+                        />
+                      </div>
 
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700">
-                      Fecha del pedido
-                    </label>
-                    <input
-                      type="date"
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      value={orderDate}
-                      onChange={(e) => setOrderDate(e.target.value)}
-                    />
-                  </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700">
+                          Fecha del pedido
+                        </label>
+                        <input
+                          type="date"
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          value={orderDate}
+                          onChange={(e) => setOrderDate(e.target.value)}
+                        />
+                      </div>
 
-                  {/* <div>
+                      {/* <div>
                     <label className="block text-sm font-semibold text-slate-700">
                       % Ganancia Rivas
                     </label>
@@ -2677,192 +3202,192 @@ export default function CandyMainOrders() {
                     />
                   </div> */}
 
-                  {/* San Jorge legacy: lo mantenemos oculto en UI */}
-                  <input type="hidden" value={marginSanJorge} readOnly />
+                      {/* San Jorge legacy: lo mantenemos oculto en UI */}
+                      <input type="hidden" value={marginSanJorge} readOnly />
 
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700">
-                      % Ganancia Isla Ometepe
-                    </label>
-                    <input
-                      type="number"
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                      value={marginIsla}
-                      onChange={(e) => setMarginIsla(e.target.value)}
-                    />
-                  </div>
-                </div>
-                </div>
-              </div>
-
-              {/* ===== AGREGAR ===== */}
-              <div
-                className={`${mobileTab === "AGREGAR" ? "block" : "hidden"} md:block`}
-              >
-                <div className="rounded-xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 p-4 shadow-sm">
-                  <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Agregar producto a la orden
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                    <div>
-                      <MobileHtmlSelect
-                        label="Categoría (dinámica)"
-                        value={
-                          catalogCategories.length === 0 ? "" : orderCategory
-                        }
-                        onChange={(v) => {
-                          setOrderCategory(v || "Todas");
-                          setOrderProductId("");
-                        }}
-                        disabled={catalogLoading}
-                        options={orderCategorySelectOptions}
-                        sheetTitle="Categoría"
-                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
-                      />
-                    </div>
-
-                    <div className="md:col-span-2 space-y-2">
                       <div>
                         <label className="block text-sm font-semibold text-slate-700">
-                          Buscar producto
+                          % Ganancia Isla Ometepe
                         </label>
                         <input
-                          className="mb-2 mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                          placeholder="Buscar producto..."
-                          value={productSearch}
-                          onChange={(e) => setProductSearch(e.target.value)}
+                          type="number"
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          value={marginIsla}
+                          onChange={(e) => setMarginIsla(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ===== AGREGAR ===== */}
+                <div
+                  className={`${mobileTab === "AGREGAR" ? "block" : "hidden"} md:block`}
+                >
+                  <div className="rounded-xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 p-4 shadow-sm">
+                    <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Agregar producto a la orden
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                      <div>
+                        <MobileHtmlSelect
+                          label="Categoría (dinámica)"
+                          value={
+                            catalogCategories.length === 0 ? "" : orderCategory
+                          }
+                          onChange={(v) => {
+                            setOrderCategory(v || "Todas");
+                            setOrderProductId("");
+                          }}
+                          disabled={catalogLoading}
+                          options={orderCategorySelectOptions}
+                          sheetTitle="Categoría"
+                          selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
                         />
                       </div>
 
-                      <MobileHtmlSelect
-                        label="Producto (catálogo)"
-                        value={orderProductId}
-                        onChange={setOrderProductId}
-                        disabled={catalogLoading}
-                        options={orderProductSelectOptions}
-                        sheetTitle="Producto"
-                        selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                        buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
-                      />
+                      <div className="md:col-span-2 space-y-2">
+                        <div>
+                          <label className="block text-sm font-semibold text-slate-700">
+                            Buscar producto
+                          </label>
+                          <input
+                            className="mb-2 mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            placeholder="Buscar producto..."
+                            value={productSearch}
+                            onChange={(e) => setProductSearch(e.target.value)}
+                          />
+                        </div>
+
+                        <MobileHtmlSelect
+                          label="Producto (catálogo)"
+                          value={orderProductId}
+                          onChange={setOrderProductId}
+                          disabled={catalogLoading}
+                          options={orderProductSelectOptions}
+                          sheetTitle="Producto"
+                          selectClassName="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          buttonClassName="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm shadow-sm hover:border-slate-300"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700">
+                          Precio proveedor (paq)
+                        </label>
+                        <input
+                          type="number"
+                          className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
+                          value={orderProviderPrice}
+                          readOnly
+                        />
+                        <label className="mt-2 block text-sm font-semibold text-slate-700">
+                          Precio venta Isla (paq)
+                        </label>
+                        <input
+                          type="text"
+                          readOnly
+                          className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
+                          value={orderSalePricePkgIsla || "—"}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700">
+                          Paquetes
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          value={orderPackages}
+                          onChange={(e) => setOrderPackages(e.target.value)}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700">
+                          Unidades por paquete
+                        </label>
+                        <input
+                          type="number"
+                          className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
+                          value={orderUnitsPerPackage}
+                          readOnly
+                        />
+                      </div>
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-700">
-                        Precio proveedor (paq)
-                      </label>
-                      <input
-                        type="number"
-                        className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
-                        value={orderProviderPrice}
-                        readOnly
-                      />
-                      <label className="mt-2 block text-sm font-semibold text-slate-700">
-                        Precio venta Isla (paq)
-                      </label>
-                      <input
-                        type="text"
-                        readOnly
-                        className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
-                        value={orderSalePricePkgIsla || "—"}
-                      />
+                    <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-end">
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => void addItemToOrder()}
+                        disabled={addingItemToOrder}
+                        className="!rounded-lg px-4 shadow-sm disabled:opacity-60"
+                      >
+                        {addingItemToOrder ? "Cargando…" : "Agregar producto"}
+                      </Button>
                     </div>
-
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-700">
-                        Paquetes
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                        value={orderPackages}
-                        onChange={(e) => setOrderPackages(e.target.value)}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-700">
-                        Unidades por paquete
-                      </label>
-                      <input
-                        type="number"
-                        className="mt-1 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm tabular-nums text-slate-600"
-                        value={orderUnitsPerPackage}
-                        readOnly
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-end">
-                    <Button
-                      type="button"
-                      variant="primary"
-                      size="sm"
-                      onClick={() => void addItemToOrder()}
-                      disabled={addingItemToOrder}
-                      className="!rounded-lg px-4 shadow-sm disabled:opacity-60"
-                    >
-                      {addingItemToOrder ? "Cargando…" : "Agregar producto"}
-                    </Button>
                   </div>
                 </div>
-              </div>
 
-              {/* Plantilla / import / export — menú ⋮ (móvil y web) */}
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-slate-200/90 bg-slate-50/60 px-3 py-2.5">
-                <span className="text-xs text-slate-600">
-                  Excel: plantilla, importar o exportar
-                </span>
-                <ActionMenuTrigger
-                  className="!h-10 !w-10 shrink-0 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
-                  aria-label="Plantilla, importar y exportar Excel"
-                  title="Descargar plantilla, importar o exportar"
-                  iconClassName="h-[22px] w-[22px] text-slate-700"
-                  onClick={(e) =>
-                    setMasterModalExcelMenu({
-                      rect: (
-                        e.currentTarget as HTMLElement
-                      ).getBoundingClientRect(),
-                    })
-                  }
-                />
-              </div>
+                {/* Plantilla / import / export — menú ⋮ (móvil y web) */}
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-slate-200/90 bg-slate-50/60 px-3 py-2.5">
+                  <span className="text-xs text-slate-600">
+                    Excel: plantilla, importar o exportar
+                  </span>
+                  <ActionMenuTrigger
+                    className="!h-10 !w-10 shrink-0 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                    aria-label="Plantilla, importar y exportar Excel"
+                    title="Descargar plantilla, importar o exportar"
+                    iconClassName="h-[22px] w-[22px] text-slate-700"
+                    onClick={(e) =>
+                      setMasterModalExcelMenu({
+                        rect: (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect(),
+                      })
+                    }
+                  />
+                </div>
 
-              {/* ===== ITEMS ===== */}
-              <div
-                className={`${mobileTab === "ITEMS" ? "block" : "hidden"} md:block`}
-              >
-                <div className="mt-1">
-                  <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500 md:hidden">
-                    Líneas de la orden
-                  </h4>
-                  <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div className="text-xs text-slate-600">
-                      Items:{" "}
-                      <span className="font-semibold text-slate-900">
-                        {orderItems.length}
-                      </span>
-                      {itemSearch.trim() ? (
-                        <>
-                          {" "}
-                          · Mostrando{" "}
-                          <span className="font-semibold text-slate-900">
-                            {filteredItems.length}
-                          </span>
-                        </>
-                      ) : null}
-                    </div>
+                {/* ===== ITEMS ===== */}
+                <div
+                  className={`${mobileTab === "ITEMS" ? "block" : "hidden"} md:block`}
+                >
+                  <div className="mt-1">
+                    <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500 md:hidden">
+                      Líneas de la orden
+                    </h4>
+                    <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="text-xs text-slate-600">
+                        Items:{" "}
+                        <span className="font-semibold text-slate-900">
+                          {orderItems.length}
+                        </span>
+                        {itemSearch.trim() ? (
+                          <>
+                            {" "}
+                            · Mostrando{" "}
+                            <span className="font-semibold text-slate-900">
+                              {filteredItems.length}
+                            </span>
+                          </>
+                        ) : null}
+                      </div>
 
-                    <div className="flex w-full items-center gap-2 md:w-auto">
-                      <input
-                        value={itemSearch}
-                        onChange={(e) => setItemSearch(e.target.value)}
-                        placeholder="Buscar producto o categoría…"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 md:w-80"
-                      />
+                      <div className="flex w-full items-center gap-2 md:w-auto">
+                        <input
+                          value={itemSearch}
+                          onChange={(e) => setItemSearch(e.target.value)}
+                          placeholder="Buscar producto o categoría…"
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 md:w-80"
+                        />
 
-                      {/* Margen global deshabilitado: MV se recalcula desde precios de venta (current_prices)
+                        {/* Margen global deshabilitado: MV se recalcula desde precios de venta (current_prices)
                       <input
                         type="number"
                         placeholder="Margen %"
@@ -2871,103 +3396,449 @@ export default function CandyMainOrders() {
                       />
                       */}
 
-                      <Button
-                        type="button"
-                        variant="primary"
-                        size="sm"
-                        className="!rounded-lg !bg-emerald-600 shadow-sm hover:!bg-emerald-700 active:!bg-emerald-800 disabled:opacity-60"
-                        disabled={refreshingSalePrices || !orderItems.length}
-                        onClick={() =>
-                          void refreshSalePricesFromCurrentPrices(true)
-                        }
-                      >
-                        Aplicar
-                      </Button>
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          className="!rounded-lg !bg-emerald-600 shadow-sm hover:!bg-emerald-700 active:!bg-emerald-800 disabled:opacity-60"
+                          disabled={refreshingSalePrices || !orderItems.length}
+                          onClick={() =>
+                            void refreshSalePricesFromCurrentPrices(true)
+                          }
+                        >
+                          Aplicar
+                        </Button>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Desktop: Tabla */}
-                  <div className="hidden md:block">
-                    <div className="overflow-x-auto rounded-xl border border-slate-200/80 bg-white pb-1 shadow-sm">
-                      <table className="min-w-[1150px] w-full text-xs">
-                        <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
-                          <tr>
-                            <th className="p-2 text-left font-semibold text-slate-700">
-                              Categoría
-                            </th>
-                            <th className="p-2 text-left font-semibold text-slate-700">
-                              Producto
-                            </th>
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Paquetes
-                            </th>
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Restantes
-                            </th>
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Unidades
-                            </th>
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Precio Proveedor
-                            </th>
+                    {/* Desktop: Tabla */}
+                    <div className="hidden md:block">
+                      <div className="overflow-x-auto rounded-xl border border-slate-200/80 bg-white pb-1 shadow-sm">
+                        <table className="min-w-[1150px] w-full text-xs">
+                          <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100/95 backdrop-blur-sm">
+                            <tr>
+                              <th className="p-2 text-left font-semibold text-slate-700">
+                                Categoría
+                              </th>
+                              <th className="p-2 text-left font-semibold text-slate-700">
+                                Producto
+                              </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Paquetes
+                              </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Restantes
+                              </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Unidades
+                              </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Precio Proveedor
+                              </th>
 
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Facturado
-                            </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Facturado
+                              </th>
 
-                            {/* Columnas Rivas ocultas en UI (Precio / Esperado / MV / U. bruta) */}
-                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              {/* Columnas Rivas ocultas en UI (Precio / Esperado / MV / U. bruta) */}
+                              {/* <th className="p-2 text-right font-semibold text-slate-700">
                               Precio Rivas
                             </th> */}
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Venta
-                            </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Venta
+                              </th>
 
-                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              {/* <th className="p-2 text-right font-semibold text-slate-700">
                               Esperado Rivas
                             </th> */}
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Esperado
-                            </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Esperado
+                              </th>
 
-                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              {/* <th className="p-2 text-right font-semibold text-slate-700">
                               MV Rivas
                             </th> */}
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Margen
-                            </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Margen
+                              </th>
 
-                            {/* <th className="p-2 text-right font-semibold text-slate-700">
+                              {/* <th className="p-2 text-right font-semibold text-slate-700">
                               U. Bruta Rivas
                             </th> */}
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              U. Bruta
-                            </th>
-                            <th className="p-2 text-right font-semibold text-slate-700">
-                              Prorrateo
-                            </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                U. Bruta
+                              </th>
+                              <th className="p-2 text-right font-semibold text-slate-700">
+                                Prorrateo
+                              </th>
 
-                            <th className="p-2 text-center font-semibold text-slate-700">
-                              Opcion
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {pagedFilteredItems.map((it) => (
-                            <tr
-                              key={it.id}
-                              className="border-t border-slate-100 transition-colors hover:bg-slate-50/80"
-                            >
-                              <td className="p-2 text-slate-600">{it.category}</td>
-                              <td className="p-2 font-semibold text-slate-900">
-                                {it.name}
-                              </td>
+                              <th className="p-2 text-center font-semibold text-slate-700">
+                                Opcion
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pagedFilteredItems.map((it) => (
+                              <tr
+                                key={it.id}
+                                className="border-t border-slate-100 transition-colors hover:bg-slate-50/80"
+                              >
+                                <td className="p-2 text-slate-600">
+                                  {it.category}
+                                </td>
+                                <td className="p-2 font-semibold text-slate-900">
+                                  {it.name}
+                                </td>
 
-                              <td className="p-2 text-right">
+                                <td className="p-2 text-right">
+                                  {editingPackagesMap[it.id] ? (
+                                    <input
+                                      type="number"
+                                      className="w-20 border rounded p-1 text-right"
+                                      value={it.packages}
+                                      onChange={(e) =>
+                                        handleItemFieldChange(
+                                          it.id,
+                                          "packages",
+                                          e.target.value,
+                                        )
+                                      }
+                                      onBlur={() => closePackagesEdit(it.id)}
+                                      onKeyDown={(e) => {
+                                        if (
+                                          e.key === "Enter" ||
+                                          e.key === "Escape"
+                                        ) {
+                                          closePackagesEdit(it.id);
+                                        }
+                                      }}
+                                      inputMode="numeric"
+                                      autoFocus
+                                    />
+                                  ) : (
+                                    <div className="flex items-center justify-end gap-2">
+                                      <span>{it.packages}</span>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                        onClick={() => openPackagesEdit(it.id)}
+                                        aria-label="Editar paquetes"
+                                      >
+                                        ✏️
+                                      </Button>
+                                    </div>
+                                  )}
+                                </td>
+
+                                <td className="p-2 text-right">
+                                  {editingRemainingMap[it.id] ? (
+                                    <input
+                                      type="number"
+                                      className="w-20 border rounded p-1 text-right"
+                                      value={safeInt(
+                                        it.remainingPackages ?? it.packages,
+                                      )}
+                                      onChange={(e) =>
+                                        handleItemFieldChange(
+                                          it.id,
+                                          "remainingPackages",
+                                          e.target.value,
+                                        )
+                                      }
+                                      onBlur={() => closeRemainingEdit(it.id)}
+                                      onKeyDown={(e) => {
+                                        if (
+                                          e.key === "Enter" ||
+                                          e.key === "Escape"
+                                        ) {
+                                          closeRemainingEdit(it.id);
+                                        }
+                                      }}
+                                      inputMode="numeric"
+                                      autoFocus
+                                    />
+                                  ) : (
+                                    <div className="flex items-center justify-end gap-2">
+                                      <span>
+                                        {safeInt(
+                                          it.remainingPackages ?? it.packages,
+                                        )}
+                                      </span>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                        onClick={() => openRemainingEdit(it.id)}
+                                        aria-label="Editar paquetes restantes"
+                                      >
+                                        ✏️
+                                      </Button>
+                                    </div>
+                                  )}
+                                </td>
+
+                                <td className="p-2 text-right">
+                                  {editingUnitsMap[it.id] ? (
+                                    <input
+                                      type="number"
+                                      className="w-20 border rounded p-1 text-right"
+                                      value={it.unitsPerPackage}
+                                      onChange={(e) =>
+                                        handleItemFieldChange(
+                                          it.id,
+                                          "unitsPerPackage",
+                                          e.target.value,
+                                        )
+                                      }
+                                      onBlur={() => closeUnitsEdit(it.id)}
+                                      onKeyDown={(e) => {
+                                        if (
+                                          e.key === "Enter" ||
+                                          e.key === "Escape"
+                                        ) {
+                                          closeUnitsEdit(it.id);
+                                        }
+                                      }}
+                                      inputMode="numeric"
+                                      autoFocus
+                                    />
+                                  ) : (
+                                    <div className="flex items-center justify-end gap-2">
+                                      <span>{it.unitsPerPackage}</span>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                        onClick={() => openUnitsEdit(it.id)}
+                                        aria-label="Editar unidades por paquete"
+                                      >
+                                        ✏️
+                                      </Button>
+                                    </div>
+                                  )}
+                                </td>
+
+                                <td className="p-2 text-right">
+                                  {editingProviderPriceMap[it.id] ? (
+                                    <input
+                                      type="number"
+                                      className="w-20 border rounded p-1 text-right"
+                                      value={Number(it.providerPrice || 0)}
+                                      onChange={(e) =>
+                                        handleItemFieldChange(
+                                          it.id,
+                                          "providerPrice",
+                                          e.target.value,
+                                        )
+                                      }
+                                      onBlur={() =>
+                                        closeProviderPriceEdit(it.id)
+                                      }
+                                      onKeyDown={(e) => {
+                                        if (
+                                          e.key === "Enter" ||
+                                          e.key === "Escape"
+                                        ) {
+                                          closeProviderPriceEdit(it.id);
+                                        }
+                                      }}
+                                      inputMode="decimal"
+                                      autoFocus
+                                    />
+                                  ) : (
+                                    <div className="flex items-center justify-end gap-2">
+                                      <span>
+                                        {Number(it.providerPrice || 0).toFixed(
+                                          2,
+                                        )}
+                                      </span>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
+                                        onClick={() =>
+                                          openProviderPriceEdit(it.id)
+                                        }
+                                        aria-label="Editar precio proveedor"
+                                      >
+                                        ✏️
+                                      </Button>
+                                    </div>
+                                  )}
+                                </td>
+
+                                <td className="p-2 text-right">
+                                  {Number(it.subtotal || 0).toFixed(2)}
+                                </td>
+
+                                {/* <td className="p-2 text-right">
+                                <span>{Number(it.unitPriceRivas || 0)}</span>
+                              </td> */}
+                                <td className="p-2 text-right">
+                                  <span>{Number(it.unitPriceIsla || 0)}</span>
+                                </td>
+
+                                {/* <td className="p-2 text-right">
+                                {Number(it.totalRivas || 0).toFixed(2)}
+                              </td> */}
+                                <td className="p-2 text-right">
+                                  {Number(it.totalIsla || 0).toFixed(2)}
+                                </td>
+
+                                {/* <td className="p-2 text-right">
+                                <span>
+                                  {Number(it.marginRivas ?? 0).toFixed(3)}
+                                </span>
+                              </td> */}
+
+                                <td className="p-2 text-right">
+                                  <span>
+                                    {Number(it.marginIsla ?? 0).toFixed(3)}
+                                  </span>
+                                </td>
+
+                                {/* <td className="p-2 text-right">
+                                {Number(it.grossProfit || 0).toFixed(2)}
+                              </td> */}
+                                <td className="p-2 text-right">
+                                  {Number(it.grossProfitIsla || 0).toFixed(2)}
+                                </td>
+                                <td className="p-2 text-right">
+                                  {Number(it.logisticAllocated || 0).toFixed(2)}
+                                </td>
+
+                                <td className="p-2 text-center">
+                                  <ActionMenuTrigger
+                                    className="!h-8 !w-8"
+                                    iconClassName="h-5 w-5 text-gray-700"
+                                    aria-label="Acciones"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setModalItemMenu({
+                                        id: it.id,
+                                        rect: (
+                                          e.currentTarget as HTMLElement
+                                        ).getBoundingClientRect(),
+                                      });
+                                    }}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                            {filteredItems.length === 0 && (
+                              <tr>
+                                <td
+                                  colSpan={13}
+                                  className="p-8 text-center text-sm text-slate-500"
+                                >
+                                  No hay productos en la orden.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                      {/* Paginación items (desktop) */}
+                      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-sm text-slate-600">
+                          Mostrando{" "}
+                          {Math.min(
+                            (itemPage - 1) * ITEMS_PAGE_SIZE + 1,
+                            filteredItems.length,
+                          )}
+                          -
+                          {Math.min(
+                            itemPage * ITEMS_PAGE_SIZE,
+                            filteredItems.length,
+                          )}{" "}
+                          de {filteredItems.length}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={itemPage <= 1}
+                            onClick={() =>
+                              setItemPage((p) => Math.max(1, p - 1))
+                            }
+                            className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
+                          >
+                            Anterior
+                          </Button>
+
+                          <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium tabular-nums text-slate-800 shadow-sm">
+                            {itemPage} / {totalItemPages}
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={itemPage >= totalItemPages}
+                            onClick={() =>
+                              setItemPage((p) =>
+                                Math.min(totalItemPages, p + 1),
+                              )
+                            }
+                            className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
+                          >
+                            Siguiente
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* MÓVIL: Cards */}
+                    <div className="md:hidden space-y-3">
+                      {filteredItems.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-center text-sm text-slate-600">
+                          No hay productos en esta orden.
+                        </div>
+                      ) : (
+                        filteredItems.map((it) => (
+                          <div
+                            key={it.id}
+                            className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]"
+                          >
+                            <div className="flex items-start gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="font-semibold text-base leading-tight truncate">
+                                  {it.name}
+                                </div>
+                                <div className="text-xs text-gray-500 truncate">
+                                  {it.category}
+                                </div>
+                              </div>
+
+                              <ActionMenuTrigger
+                                className="!h-8 !w-8 shrink-0"
+                                iconClassName="h-5 w-5 text-gray-700"
+                                aria-label="Acciones"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setModalItemMenu({
+                                    id: it.id,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  });
+                                }}
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 mt-3">
+                              <div>
+                                <label className="text-xs text-gray-600">
+                                  Paquetes
+                                </label>
                                 {editingPackagesMap[it.id] ? (
                                   <input
                                     type="number"
-                                    className="w-20 border rounded p-1 text-right"
+                                    step="0.001"
+                                    className="w-full border p-2 rounded text-right"
                                     value={it.packages}
                                     onChange={(e) =>
                                       handleItemFieldChange(
@@ -2990,7 +3861,9 @@ export default function CandyMainOrders() {
                                   />
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>{it.packages}</span>
+                                    <span className="font-semibold">
+                                      {it.packages}
+                                    </span>
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -3002,13 +3875,16 @@ export default function CandyMainOrders() {
                                     </Button>
                                   </div>
                                 )}
-                              </td>
+                              </div>
 
-                              <td className="p-2 text-right">
+                              <div>
+                                <label className="text-xs text-gray-600">
+                                  Paquetes restantes
+                                </label>
                                 {editingRemainingMap[it.id] ? (
                                   <input
                                     type="number"
-                                    className="w-20 border rounded p-1 text-right"
+                                    className="w-full border p-2 rounded text-right"
                                     value={safeInt(
                                       it.remainingPackages ?? it.packages,
                                     )}
@@ -3033,7 +3909,7 @@ export default function CandyMainOrders() {
                                   />
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>
+                                    <span className="font-semibold">
                                       {safeInt(
                                         it.remainingPackages ?? it.packages,
                                       )}
@@ -3049,13 +3925,17 @@ export default function CandyMainOrders() {
                                     </Button>
                                   </div>
                                 )}
-                              </td>
+                              </div>
 
-                              <td className="p-2 text-right">
+                              <div>
+                                <label className="text-xs text-gray-600">
+                                  Und x Paquete
+                                </label>
                                 {editingUnitsMap[it.id] ? (
                                   <input
                                     type="number"
-                                    className="w-20 border rounded p-1 text-right"
+                                    step="0.001"
+                                    className="w-full border p-2 rounded text-right"
                                     value={it.unitsPerPackage}
                                     onChange={(e) =>
                                       handleItemFieldChange(
@@ -3078,7 +3958,9 @@ export default function CandyMainOrders() {
                                   />
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>{it.unitsPerPackage}</span>
+                                    <span className="font-semibold">
+                                      {it.unitsPerPackage}
+                                    </span>
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -3090,13 +3972,97 @@ export default function CandyMainOrders() {
                                     </Button>
                                   </div>
                                 )}
-                              </td>
+                              </div>
 
-                              <td className="p-2 text-right">
+                              <div>
+                                <label className="text-xs text-gray-600">
+                                  Precio proveedor
+                                </label>
+                                <input
+                                  className="w-full border p-2 rounded text-right bg-gray-100"
+                                  value={Number(it.providerPrice || 0).toFixed(
+                                    2,
+                                  )}
+                                  readOnly
+                                />
+                              </div>
+                            </div>
+
+                            <div className="mt-3">
+                              {/* MV Rivas oculto en UI */}
+                              <div>
+                                <label className="text-xs text-gray-600">
+                                  MV Isla (%)
+                                </label>
+                                <div className="text-right font-semibold">
+                                  {Number(it.marginIsla ?? 0).toFixed(3)}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                              <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
+                                <div className="text-xs text-gray-600">
+                                  Facturado
+                                </div>
+                                <div className="font-semibold">
+                                  {Number(it.subtotal || 0).toFixed(2)}
+                                </div>
+                              </div>
+
+                              {/* Precio Rivas (paq) oculto en UI */}
+
+                              <div className="rounded border border-sky-200/80 bg-sky-50/90 p-2">
+                                <div className="text-xs text-gray-600">
+                                  Precio Isla (paq)
+                                </div>
+                                <div className="text-right font-semibold">
+                                  {Number(it.unitPriceIsla || 0)}
+                                </div>
+                              </div>
+
+                              {/* Esperado Rivas oculto en UI */}
+
+                              <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
+                                <div className="text-xs text-gray-600">
+                                  Esperado Isla
+                                </div>
+                                <div className="font-semibold">
+                                  {Number(it.totalIsla || 0).toFixed(2)}
+                                </div>
+                              </div>
+
+                              <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
+                                <div className="text-xs text-gray-600">
+                                  Prorrateo logístico
+                                </div>
+                                <div className="font-semibold">
+                                  {Number(it.logisticAllocated || 0).toFixed(2)}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 text-xs">
+                              {/* U. Bruta Rivas oculto en UI */}
+                              <div className="rounded border border-emerald-200/80 bg-emerald-50/90 p-2">
+                                <div className="text-gray-600">
+                                  U. Bruta Isla
+                                </div>
+                                <div className="font-semibold">
+                                  {Number(it.grossProfitIsla || 0).toFixed(2)}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-2 mt-3 text-xs">
+                              <div className="p-2 rounded bg-gray-50 border">
+                                <div className="text-gray-600">
+                                  Precio proveedor (paq)
+                                </div>
                                 {editingProviderPriceMap[it.id] ? (
                                   <input
                                     type="number"
-                                    className="w-20 border rounded p-1 text-right"
+                                    className="w-full border rounded p-2 text-right"
                                     value={Number(it.providerPrice || 0)}
                                     onChange={(e) =>
                                       handleItemFieldChange(
@@ -3119,7 +4085,7 @@ export default function CandyMainOrders() {
                                   />
                                 ) : (
                                   <div className="flex items-center justify-end gap-2">
-                                    <span>
+                                    <span className="font-semibold">
                                       {Number(it.providerPrice || 0).toFixed(2)}
                                     </span>
                                     <Button
@@ -3135,526 +4101,101 @@ export default function CandyMainOrders() {
                                     </Button>
                                   </div>
                                 )}
-                              </td>
-
-                              <td className="p-2 text-right">
-                                {Number(it.subtotal || 0).toFixed(2)}
-                              </td>
-
-                              {/* <td className="p-2 text-right">
-                                <span>{Number(it.unitPriceRivas || 0)}</span>
-                              </td> */}
-                              <td className="p-2 text-right">
-                                <span>{Number(it.unitPriceIsla || 0)}</span>
-                              </td>
-
-                              {/* <td className="p-2 text-right">
-                                {Number(it.totalRivas || 0).toFixed(2)}
-                              </td> */}
-                              <td className="p-2 text-right">
-                                {Number(it.totalIsla || 0).toFixed(2)}
-                              </td>
-
-                              {/* <td className="p-2 text-right">
-                                <span>
-                                  {Number(it.marginRivas ?? 0).toFixed(3)}
-                                </span>
-                              </td> */}
-
-                              <td className="p-2 text-right">
-                                <span>
-                                  {Number(it.marginIsla ?? 0).toFixed(3)}
-                                </span>
-                              </td>
-
-                              {/* <td className="p-2 text-right">
-                                {Number(it.grossProfit || 0).toFixed(2)}
-                              </td> */}
-                              <td className="p-2 text-right">
-                                {Number(it.grossProfitIsla || 0).toFixed(2)}
-                              </td>
-                              <td className="p-2 text-right">
-                                {Number(it.logisticAllocated || 0).toFixed(2)}
-                              </td>
-
-                              <td className="p-2 text-center">
-                                <ActionMenuTrigger
-                                  className="!h-8 !w-8"
-                                  iconClassName="h-5 w-5 text-gray-700"
-                                  aria-label="Acciones"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setModalItemMenu({
-                                      id: it.id,
-                                      rect: (
-                                        e.currentTarget as HTMLElement
-                                      ).getBoundingClientRect(),
-                                    });
-                                  }}
-                                />
-                              </td>
-                            </tr>
-                          ))}
-                          {filteredItems.length === 0 && (
-                            <tr>
-                              <td
-                                colSpan={13}
-                                className="p-8 text-center text-sm text-slate-500"
-                              >
-                                No hay productos en la orden.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
-                    {/* Paginación items (desktop) */}
-                    <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="text-sm text-slate-600">
-                        Mostrando{" "}
-                        {Math.min(
-                          (itemPage - 1) * ITEMS_PAGE_SIZE + 1,
-                          filteredItems.length,
-                        )}
-                        -
-                        {Math.min(
-                          itemPage * ITEMS_PAGE_SIZE,
-                          filteredItems.length,
-                        )}{" "}
-                        de {filteredItems.length}
+                  </div>
+                </div>
+
+                {/* ===== TOTALES / KPIs ===== */}
+                <div
+                  className={`${mobileTab === "TOTALES" ? "block" : "hidden"} md:block`}
+                >
+                  <h4 className="mb-3 mt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Resumen de la orden
+                  </h4>
+                  <div className="mt-1 grid grid-cols-1 gap-3 md:grid-cols-4">
+                    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                        Paquetes totales
+                      </div>
+                      <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
+                        {orderKPIs.totalPackages}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                        Subtotal costo (facturado)
+                      </div>
+                      <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
+                        {Number(orderKPIs.subtotalCosto || 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                        Esperado (Rivas / Isla)
+                      </div>
+                      <div className="mt-1 text-sm font-semibold leading-relaxed text-slate-800">
+                        Rivas: {Number(orderKPIs.esperadoRivas || 0).toFixed(2)}
+                        <br />
+                        Isla: {Number(orderKPIs.esperadoIsla || 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                        Gastos logísticos
+                      </div>
+                      <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
+                        {Number(orderKPIs.gastosLogisticos || 0).toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/90">
+                          Utilidad Bruta Rivas
+                        </div>
+                        <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
+                          {Number(orderKPIs.utilidadBrutaRivas || 0).toFixed(2)}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={itemPage <= 1}
-                          onClick={() => setItemPage((p) => Math.max(1, p - 1))}
-                          className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
-                        >
-                          Anterior
-                        </Button>
-
-                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium tabular-nums text-slate-800 shadow-sm">
-                          {itemPage} / {totalItemPages}
+                      <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/90">
+                          Utilidad Bruta Isla
                         </div>
+                        <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
+                          {Number(orderKPIs.utilidadBrutaIsla || 0).toFixed(2)}
+                        </div>
+                      </div>
+                    </div>
 
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={itemPage >= totalItemPages}
-                          onClick={() =>
-                            setItemPage((p) => Math.min(totalItemPages, p + 1))
+                    <div className="mt-4 rounded-xl border border-dashed border-slate-200/90 bg-slate-50/60 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-slate-600">
+                          Plantilla, importar o exportar (menú ⋮ arriba o aquí)
+                        </span>
+                        <ActionMenuTrigger
+                          className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
+                          aria-label="Excel: plantilla, importar, exportar"
+                          iconClassName="h-[22px] w-[22px] text-slate-700"
+                          onClick={(e) =>
+                            setMasterModalExcelMenu({
+                              rect: (
+                                e.currentTarget as HTMLElement
+                              ).getBoundingClientRect(),
+                            })
                           }
-                          className="!rounded-lg border-slate-200 shadow-sm disabled:opacity-50"
-                        >
-                          Siguiente
-                        </Button>
+                        />
                       </div>
-                    </div>
-                  </div>
-
-                  {/* MÓVIL: Cards */}
-                  <div className="md:hidden space-y-3">
-                    {filteredItems.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-center text-sm text-slate-600">
-                        No hay productos en esta orden.
-                      </div>
-                    ) : (
-                      filteredItems.map((it) => (
-                        <div
-                          key={it.id}
-                          className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]"
-                        >
-                          <div className="flex items-start gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="font-semibold text-base leading-tight truncate">
-                                {it.name}
-                              </div>
-                              <div className="text-xs text-gray-500 truncate">
-                                {it.category}
-                              </div>
-                            </div>
-
-                            <ActionMenuTrigger
-                              className="!h-8 !w-8 shrink-0"
-                              iconClassName="h-5 w-5 text-gray-700"
-                              aria-label="Acciones"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setModalItemMenu({
-                                  id: it.id,
-                                  rect: (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect(),
-                                });
-                              }}
-                            />
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2 mt-3">
-                            <div>
-                              <label className="text-xs text-gray-600">
-                                Paquetes
-                              </label>
-                              {editingPackagesMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  step="0.001"
-                                  className="w-full border p-2 rounded text-right"
-                                  value={it.packages}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "packages",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closePackagesEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closePackagesEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="numeric"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {it.packages}
-                                  </span>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                    onClick={() => openPackagesEdit(it.id)}
-                                    aria-label="Editar paquetes"
-                                  >
-                                    ✏️
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-
-                            <div>
-                              <label className="text-xs text-gray-600">
-                                Paquetes restantes
-                              </label>
-                              {editingRemainingMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  className="w-full border p-2 rounded text-right"
-                                  value={safeInt(
-                                    it.remainingPackages ?? it.packages,
-                                  )}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "remainingPackages",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closeRemainingEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closeRemainingEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="numeric"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {safeInt(
-                                      it.remainingPackages ?? it.packages,
-                                    )}
-                                  </span>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                    onClick={() => openRemainingEdit(it.id)}
-                                    aria-label="Editar paquetes restantes"
-                                  >
-                                    ✏️
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-
-                            <div>
-                              <label className="text-xs text-gray-600">
-                                Und x Paquete
-                              </label>
-                              {editingUnitsMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  step="0.001"
-                                  className="w-full border p-2 rounded text-right"
-                                  value={it.unitsPerPackage}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "unitsPerPackage",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closeUnitsEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closeUnitsEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="numeric"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {it.unitsPerPackage}
-                                  </span>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                    onClick={() => openUnitsEdit(it.id)}
-                                    aria-label="Editar unidades por paquete"
-                                  >
-                                    ✏️
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-
-                            <div>
-                              <label className="text-xs text-gray-600">
-                                Precio proveedor
-                              </label>
-                              <input
-                                className="w-full border p-2 rounded text-right bg-gray-100"
-                                value={Number(it.providerPrice || 0).toFixed(2)}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-
-                          <div className="mt-3">
-                            {/* MV Rivas oculto en UI */}
-                            <div>
-                              <label className="text-xs text-gray-600">
-                                MV Isla (%)
-                              </label>
-                              <div className="text-right font-semibold">
-                                {Number(it.marginIsla ?? 0).toFixed(3)}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                            <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
-                              <div className="text-xs text-gray-600">
-                                Facturado
-                              </div>
-                              <div className="font-semibold">
-                                {Number(it.subtotal || 0).toFixed(2)}
-                              </div>
-                            </div>
-
-                            {/* Precio Rivas (paq) oculto en UI */}
-
-                            <div className="rounded border border-sky-200/80 bg-sky-50/90 p-2">
-                              <div className="text-xs text-gray-600">
-                                Precio Isla (paq)
-                              </div>
-                              <div className="text-right font-semibold">
-                                {Number(it.unitPriceIsla || 0)}
-                              </div>
-                            </div>
-
-                            {/* Esperado Rivas oculto en UI */}
-
-                            <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
-                              <div className="text-xs text-gray-600">
-                                Esperado Isla
-                              </div>
-                              <div className="font-semibold">
-                                {Number(it.totalIsla || 0).toFixed(2)}
-                              </div>
-                            </div>
-
-                            <div className="rounded border border-slate-200/80 bg-slate-50/90 p-2">
-                              <div className="text-xs text-gray-600">
-                                Prorrateo logístico
-                              </div>
-                              <div className="font-semibold">
-                                {Number(it.logisticAllocated || 0).toFixed(2)}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mt-3 text-xs">
-                            {/* U. Bruta Rivas oculto en UI */}
-                            <div className="rounded border border-emerald-200/80 bg-emerald-50/90 p-2">
-                              <div className="text-gray-600">U. Bruta Isla</div>
-                              <div className="font-semibold">
-                                {Number(it.grossProfitIsla || 0).toFixed(2)}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 gap-2 mt-3 text-xs">
-                            <div className="p-2 rounded bg-gray-50 border">
-                              <div className="text-gray-600">
-                                Precio proveedor (paq)
-                              </div>
-                              {editingProviderPriceMap[it.id] ? (
-                                <input
-                                  type="number"
-                                  className="w-full border rounded p-2 text-right"
-                                  value={Number(it.providerPrice || 0)}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      it.id,
-                                      "providerPrice",
-                                      e.target.value,
-                                    )
-                                  }
-                                  onBlur={() => closeProviderPriceEdit(it.id)}
-                                  onKeyDown={(e) => {
-                                    if (
-                                      e.key === "Enter" ||
-                                      e.key === "Escape"
-                                    ) {
-                                      closeProviderPriceEdit(it.id);
-                                    }
-                                  }}
-                                  inputMode="decimal"
-                                  autoFocus
-                                />
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="font-semibold">
-                                    {Number(it.providerPrice || 0).toFixed(2)}
-                                  </span>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    className="text-xs text-gray-600 hover:text-gray-900 !rounded-md shadow-none font-normal min-h-0 px-1 py-0.5"
-                                    onClick={() => openProviderPriceEdit(it.id)}
-                                    aria-label="Editar precio proveedor"
-                                  >
-                                    ✏️
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* ===== TOTALES / KPIs ===== */}
-              <div
-                className={`${mobileTab === "TOTALES" ? "block" : "hidden"} md:block`}
-              >
-                <h4 className="mb-3 mt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Resumen de la orden
-                </h4>
-                <div className="mt-1 grid grid-cols-1 gap-3 md:grid-cols-4">
-                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                      Paquetes totales
-                    </div>
-                    <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
-                      {orderKPIs.totalPackages}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                      Subtotal costo (facturado)
-                    </div>
-                    <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
-                      {Number(orderKPIs.subtotalCosto || 0).toFixed(2)}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                      Esperado (Rivas / Isla)
-                    </div>
-                    <div className="mt-1 text-sm font-semibold leading-relaxed text-slate-800">
-                      Rivas: {Number(orderKPIs.esperadoRivas || 0).toFixed(2)}
-                      <br />
-                      Isla: {Number(orderKPIs.esperadoIsla || 0).toFixed(2)}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/[0.03]">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                      Gastos logísticos
-                    </div>
-                    <div className="mt-1 text-xl font-bold tabular-nums text-slate-900">
-                      {Number(orderKPIs.gastosLogisticos || 0).toFixed(2)}
                     </div>
                   </div>
                 </div>
-
-                <div className="mt-4">
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/90">
-                        Utilidad Bruta Rivas
-                      </div>
-                      <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
-                        {Number(orderKPIs.utilidadBrutaRivas || 0).toFixed(2)}
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/90">
-                        Utilidad Bruta Isla
-                      </div>
-                      <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
-                        {Number(orderKPIs.utilidadBrutaIsla || 0).toFixed(2)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 rounded-xl border border-dashed border-slate-200/90 bg-slate-50/60 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-slate-600">
-                        Plantilla, importar o exportar (menú ⋮ arriba o aquí)
-                      </span>
-                      <ActionMenuTrigger
-                        className="shrink-0 !h-10 !w-10 rounded-xl border border-slate-200/80 bg-white shadow-sm hover:bg-slate-50"
-                        aria-label="Excel: plantilla, importar, exportar"
-                        iconClassName="h-[22px] w-[22px] text-slate-700"
-                        onClick={(e) =>
-                          setMasterModalExcelMenu({
-                            rect: (
-                              e.currentTarget as HTMLElement
-                            ).getBoundingClientRect(),
-                          })
-                        }
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
               </div>
 
               {/* ===== Botonera sticky ===== */}
@@ -3711,16 +4252,12 @@ export default function CandyMainOrders() {
                     type="button"
                     variant="ghost"
                     className={`w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal hover:bg-gray-100 ${
-                      savingOrder ||
-                      refreshingSalePrices ||
-                      !orderItems.length
+                      savingOrder || refreshingSalePrices || !orderItems.length
                         ? "text-gray-400 cursor-not-allowed"
                         : ""
                     }`}
                     disabled={
-                      savingOrder ||
-                      refreshingSalePrices ||
-                      !orderItems.length
+                      savingOrder || refreshingSalePrices || !orderItems.length
                     }
                     onClick={() => {
                       setMasterModalHeaderMenu(null);
@@ -3743,7 +4280,9 @@ export default function CandyMainOrders() {
                       void loadCatalog();
                     }}
                   >
-                    {catalogLoading ? "Cargando catálogo…" : "Actualizar productos"}
+                    {catalogLoading
+                      ? "Cargando catálogo…"
+                      : "Actualizar productos"}
                   </Button>
                   {editingOrderId ? (
                     <Button
@@ -3896,6 +4435,17 @@ export default function CandyMainOrders() {
                 onClick={refresh}
                 loading={loading || catalogLoading}
               />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="!rounded-md shadow-none"
+                onClick={() => void openAuditDrawer()}
+                aria-label="Auditoria"
+                title="Auditoria"
+              >
+                Auditoria
+              </Button>
               <Button
                 type="button"
                 variant="primary"
@@ -4310,8 +4860,7 @@ export default function CandyMainOrders() {
           {/* Paginación (desktop) */}
           <div className="flex flex-col gap-2 border-t border-slate-200/90 bg-slate-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-slate-600">
-              Mostrando{" "}
-              {Math.min((page - 1) * PAGE_SIZE + 1, orders.length)}-
+              Mostrando {Math.min((page - 1) * PAGE_SIZE + 1, orders.length)}-
               {Math.min(page * PAGE_SIZE, orders.length)} de {orders.length}
             </div>
 
@@ -4509,6 +5058,191 @@ export default function CandyMainOrders() {
               )}
             </>
           ) : null}
+        </SlideOverDrawer>
+
+        <SlideOverDrawer
+          open={auditDrawerOpen}
+          onClose={() => {
+            setAuditDrawerOpen(false);
+          }}
+          title="Auditoria"
+          subtitle="candy_main_orders_logs"
+          badge={
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+              Eventos
+            </span>
+          }
+        >
+          {auditDrawerLoading ? (
+            <div className="py-8 text-center text-sm text-gray-600">
+              Cargando auditoría…
+            </div>
+          ) : auditRows.length === 0 ? (
+            <div className="py-8 text-center text-sm text-gray-600">
+              Sin eventos en auditoría.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="rounded-xl border border-slate-200/80 bg-white p-3 shadow-sm">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600">
+                      Filtrar por orden
+                    </label>
+                    <select
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                      value={auditOrderFilter}
+                      onChange={(e) => setAuditOrderFilter(e.target.value)}
+                    >
+                      <option value="ALL">Todas</option>
+                      {auditOrderOptions.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600">
+                      Filtrar por evento
+                    </label>
+                    <select
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+                      value={auditEventFilter}
+                      onChange={(e) => setAuditEventFilter(e.target.value)}
+                    >
+                      <option value="ALL">Todos</option>
+                      {auditEventOptions.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-2 text-xs text-slate-500">
+                  Mostrando {filteredAuditRows.length} de {auditRows.length}{" "}
+                  eventos.
+                </div>
+              </div>
+
+              {filteredAuditRows.map((r) => {
+                const rawWhen =
+                  (r.loggedAt as any)?.toDate?.() ||
+                  (r.updatedAt as any)?.toDate?.() ||
+                  null;
+                const when = rawWhen ? rawWhen.toLocaleString("es-NI") : "—";
+                const changedFields = Array.isArray(r.changedFields)
+                  ? r.changedFields
+                  : [];
+                const changes = Array.isArray(r.changes) ? r.changes : [];
+                const details =
+                  changedFields.length > 0
+                    ? changedFields
+                    : changes.length > 0
+                      ? changes
+                      : [];
+                const isExpanded = !!expandedAuditRows[r.id];
+                return (
+                  <div
+                    key={r.id}
+                    className="rounded-xl border border-slate-200/80 bg-white p-3 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900">
+                        {String(r.eventType || r.action || "evento")} ·{" "}
+                        {String(r.entity || "")}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="!rounded-md"
+                        onClick={() =>
+                          setExpandedAuditRows((prev) => ({
+                            ...prev,
+                            [r.id]: !prev[r.id],
+                          }))
+                        }
+                      >
+                        {isExpanded ? "Colapsar" : "Expandir"}
+                      </Button>
+                    </div>
+                    <div className="mt-1 grid grid-cols-1 gap-1 text-xs text-slate-600">
+                      <div>Tipo evento: {r.eventType || r.action || "—"}</div>
+                      <div>Fecha log: {when}</div>
+                      <div>Orden: {r.orderName || r.orderId || "—"}</div>
+                      <div>Fecha orden: {r.orderDate || "—"}</div>
+                      <div>
+                        Producto: {r.productName || "—"}
+                        {r.productId ? ` (${r.productId})` : ""}
+                      </div>
+                    </div>
+
+                    {isExpanded ? (
+                      details.length > 0 ? (
+                        <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
+                          <table className="min-w-full text-xs">
+                            <thead className="bg-slate-50">
+                              <tr>
+                                <th className="px-2 py-1 text-left font-semibold text-slate-700">
+                                  Campo
+                                </th>
+                                <th className="px-2 py-1 text-left font-semibold text-slate-700">
+                                  Valor anterior
+                                </th>
+                                <th className="px-2 py-1 text-left font-semibold text-slate-700">
+                                  Valor actualizado
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {details.map((f: any, idx: number) => (
+                                <tr
+                                  key={`${r.id}-${idx}`}
+                                  className="border-t border-slate-100"
+                                >
+                                  <td className="px-2 py-1 text-slate-700">
+                                    {String(f?.label || f?.field || "—")}
+                                  </td>
+                                  <td className="px-2 py-1 text-slate-900">
+                                    {f?.before === null ||
+                                    f?.before === undefined
+                                      ? "—"
+                                      : typeof f.before === "object"
+                                        ? JSON.stringify(f.before)
+                                        : String(f.before)}
+                                  </td>
+                                  <td className="px-2 py-1 text-slate-900">
+                                    {f?.after === null || f?.after === undefined
+                                      ? "—"
+                                      : typeof f.after === "object"
+                                        ? JSON.stringify(f.after)
+                                        : String(f.after)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-xs text-slate-500">
+                          Sin detalle de campos.
+                        </div>
+                      )
+                    ) : null}
+                  </div>
+                );
+              })}
+              {filteredAuditRows.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-600">
+                  No hay eventos con esos filtros.
+                </div>
+              ) : null}
+            </div>
+          )}
         </SlideOverDrawer>
       </div>
     </div>
