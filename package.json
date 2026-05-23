@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && firebase deploy"
+    "deploy": "npm run build && firebase deploy",
+    "backfill:sales:totals": "node scripts/backfill_sales_totals.js"
   },
   "dependencies": {
     "@types/react-router": "^5.1.20",

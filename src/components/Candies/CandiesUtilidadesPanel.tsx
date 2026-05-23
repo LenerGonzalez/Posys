@@ -36,8 +36,7 @@ export const UTILIDADES_UTIL_GLOSSARY_TEXT = `Dispers. = paquetes asignados a ó
 export const UTILIDADES_ATRIB_VISTAS_TEXT = `Tres vistas: todas las ventas del rango, solo contado (cash), o solo ventas a crédito. Los importes se reparten entre maestras según allocationsByItem y, en el pedido del vendedor, masterAllocations.units (ej. 24 unidades a una maestra y 1176 a otra ⇒ la primera recibe 24/1200 de esa venta).`;
 
 /** Paquetes siempre enteros en UI (las atribuciones internas pueden ser fracción). */
-const fmtPacks = (n: unknown) =>
-  String(Math.round(Number(n) || 0));
+const fmtPacks = (n: unknown) => String(Math.round(Number(n) || 0));
 
 const safeInt = (v: unknown) => Math.max(0, Math.floor(Number(v) || 0));
 
@@ -116,10 +115,7 @@ function lineFinalFromItem(it: Record<string, unknown>): number {
   const explicit = Number(it.lineFinal ?? 0);
   if (explicit > 0) return round2(explicit);
   const unit = Number(it.unitPricePackage || it.unitPrice || 0);
-  const fromPrice = Math.max(
-    0,
-    unit * qtyPacks - Number(it.discount || 0),
-  );
+  const fromPrice = Math.max(0, unit * qtyPacks - Number(it.discount || 0));
   if (fromPrice > 0) return round2(fromPrice);
   return round2(Number(it.total || 0));
 }
@@ -177,7 +173,9 @@ function accumulateSalesByMaster(
   if (saleTypeFilter === "contado" && typ !== "CONTADO") return;
   if (saleTypeFilter === "credito" && typ !== "CREDITO") return;
 
-  const items = Array.isArray(sale.items) ? (sale.items as Record<string, unknown>[]) : [];
+  const items = Array.isArray(sale.items)
+    ? (sale.items as Record<string, unknown>[])
+    : [];
   const allocRoot = sale.allocationsByItem as
     | Record<string, { allocations?: unknown[] }>
     | undefined;
@@ -197,14 +195,10 @@ function accumulateSalesByMaster(
     const ubPerPack = itemUb / denomP;
     const unp = Number(it.uNetaPorPaquete ?? NaN);
     const invPerPack =
-      Number.isFinite(unp) && unp !== 0
-        ? unp
-        : itemInv / denomP;
+      Number.isFinite(unp) && unp !== 0 ? unp : itemInv / denomP;
     const uvx = Number(it.uvXpaq ?? it.uvxpaq ?? it.upaquete ?? NaN);
     const vendPerPack =
-      Number.isFinite(uvx) && uvx !== 0
-        ? uvx
-        : itemVend / denomP;
+      Number.isFinite(uvx) && uvx !== 0 ? uvx : itemVend / denomP;
 
     const entry = allocRoot?.[productId];
     const allocs = Array.isArray(entry?.allocations)
@@ -220,7 +214,10 @@ function accumulateSalesByMaster(
       if (!seller) continue;
 
       const mas = Array.isArray(seller.masterAllocations)
-        ? (seller.masterAllocations as { masterOrderId?: string; units?: number }[])
+        ? (seller.masterAllocations as {
+            masterOrderId?: string;
+            units?: number;
+          }[])
         : [];
       const totalMu = mas.reduce(
         (s, m) => s + Math.max(0, Number(m.units || 0)),
@@ -371,7 +368,10 @@ export default function CandiesUtilidadesPanel({
       sellerSnap.forEach((d) => {
         const x = d.data() as Record<string, unknown>;
         const allocs = Array.isArray(x.masterAllocations)
-          ? (x.masterAllocations as { masterOrderId?: string; units?: number }[])
+          ? (x.masterAllocations as {
+              masterOrderId?: string;
+              units?: number;
+            }[])
           : [];
         if (allocs.length === 0) return;
 
@@ -421,13 +421,7 @@ export default function CandiesUtilidadesPanel({
         const d = String(s.date || "").slice(0, 10);
         if (!d || d < fromK || d > toK) return;
         if (!saleMatchesVentasFilter(s, ventasAtribFilter)) return;
-        accumulateSalesByMaster(
-          s,
-          sMap,
-          attribMaster,
-          pair,
-          ventasAtribFilter,
-        );
+        accumulateSalesByMaster(s, sMap, attribMaster, pair, ventasAtribFilter);
         salesLite.push({
           id,
           date: d,
@@ -446,7 +440,9 @@ export default function CandiesUtilidadesPanel({
           where("date", "<=", toK),
         );
         const sSnap = await getDocs(qSales);
-        sSnap.forEach((doc) => pushSale(doc.id, doc.data() as Record<string, unknown>));
+        sSnap.forEach((doc) =>
+          pushSale(doc.id, doc.data() as Record<string, unknown>),
+        );
       } catch {
         const fallback = query(
           collection(db, "sales_candies"),
@@ -454,18 +450,22 @@ export default function CandiesUtilidadesPanel({
           limit(500),
         );
         const sSnap = await getDocs(fallback);
-        sSnap.forEach((doc) => pushSale(doc.id, doc.data() as Record<string, unknown>));
+        sSnap.forEach((doc) =>
+          pushSale(doc.id, doc.data() as Record<string, unknown>),
+        );
       }
 
       setAttribPair(pair);
-      salesLite.sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+      salesLite.sort(
+        (a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id),
+      );
       setSalesList(salesLite);
 
       const list: MasterOrderUtilRow[] = [];
       snapO.forEach((d) => {
         const x = d.data() as Record<string, unknown>;
         const dateStr = String(x.date || "").slice(0, 10);
-        if (!dateStr || dateStr < fromK || dateStr > toK) return;
+        if (!dateStr) return;
 
         const id = d.id;
         const inv = invAgg[id] || { initial: 0, remaining: 0 };
@@ -504,7 +504,9 @@ export default function CandiesUtilidadesPanel({
         });
       });
 
-      list.sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
+      list.sort(
+        (a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name),
+      );
       setRows(list);
     } catch (e) {
       console.error("CandiesUtilidadesPanel load:", e);
@@ -609,9 +611,7 @@ export default function CandiesUtilidadesPanel({
       const mine = allocs.find((m) => String(m.masterOrderId || "") === mid);
       if (!mine || totalMu <= 0) return;
       const w =
-        totalMu > 0
-          ? Math.max(0, Number(mine.units || 0)) / totalMu
-          : 0;
+        totalMu > 0 ? Math.max(0, Number(mine.units || 0)) / totalMu : 0;
       if (w <= 0) return;
 
       const pk = safeInt(x.packages);
@@ -654,7 +654,7 @@ export default function CandiesUtilidadesPanel({
       const marginPct =
         margins.length > 0
           ? round2(margins.reduce((s, m) => s + m, 0) / margins.length)
-          : arr[0]?.marginPct ?? 0;
+          : (arr[0]?.marginPct ?? 0);
       const first = arr[0]!;
       cards.push({
         sellerDocId: arr.map((x) => x.sellerDocId).join(","),
@@ -667,15 +667,20 @@ export default function CandiesUtilidadesPanel({
         pkVendInv: round2(arr.reduce((s, x) => s + x.pkVendInv, 0)),
         esperadoVentas: round2(arr.reduce((s, x) => s + x.esperadoVentas, 0)),
         ventasEfectivas: round2(arr.reduce((s, x) => s + x.ventasEfectivas, 0)),
-        comisionEsperada: round2(arr.reduce((s, x) => s + x.comisionEsperada, 0)),
-        comisionEfectiva: round2(arr.reduce((s, x) => s + x.comisionEfectiva, 0)),
+        comisionEsperada: round2(
+          arr.reduce((s, x) => s + x.comisionEsperada, 0),
+        ),
+        comisionEfectiva: round2(
+          arr.reduce((s, x) => s + x.comisionEfectiva, 0),
+        ),
         uNetaEsperada: round2(arr.reduce((s, x) => s + x.uNetaEsperada, 0)),
         uNetaEfectiva: round2(arr.reduce((s, x) => s + x.uNetaEfectiva, 0)),
       });
     }
-    cards.sort((a, b) =>
-      a.orderName.localeCompare(b.orderName) ||
-      a.sellerName.localeCompare(b.sellerName),
+    cards.sort(
+      (a, b) =>
+        a.orderName.localeCompare(b.orderName) ||
+        a.sellerName.localeCompare(b.sellerName),
     );
 
     const sumCards = cards.reduce(
@@ -742,14 +747,7 @@ export default function CandiesUtilidadesPanel({
         un: round2(ventasTabUn),
       },
     };
-  }, [
-    drawerRow,
-    rows,
-    salesList,
-    sellersById,
-    attribPair,
-    ventasAtribFilter,
-  ]);
+  }, [drawerRow, rows, salesList, sellersById, attribPair, ventasAtribFilter]);
 
   useEffect(() => {
     if (drawerRow) setDrawerTab("vendedores");
@@ -931,7 +929,8 @@ export default function CandiesUtilidadesPanel({
 
       <div className="hidden md:block overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
         <p className="px-3 py-2 text-[10px] text-slate-500 border-b border-slate-100 bg-slate-50/90 whitespace-nowrap">
-          Deslizá horizontalmente para ver el texto completo. Paquetes = números enteros.
+          Deslizá horizontalmente para ver el texto completo. Paquetes = números
+          enteros.
         </p>
         <table className="min-w-max w-full text-[15px] leading-snug text-slate-800">
           <thead className="bg-slate-100 text-left">
@@ -986,7 +985,10 @@ export default function CandiesUtilidadesPanel({
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="p-6 text-center text-slate-500 border-b border-slate-100">
+                <td
+                  colSpan={12}
+                  className="p-6 text-center text-slate-500 border-b border-slate-100"
+                >
                   No hay órdenes maestras en este rango.
                 </td>
               </tr>
@@ -1041,7 +1043,10 @@ export default function CandiesUtilidadesPanel({
             )}
             {rows.length > 0 ? (
               <tr className="bg-slate-200/60 font-semibold">
-                <td className="px-2 py-1.5 border-t border-slate-300 whitespace-nowrap" colSpan={2}>
+                <td
+                  className="px-2 py-1.5 border-t border-slate-300 whitespace-nowrap"
+                  colSpan={2}
+                >
                   Totales
                 </td>
                 <td className="px-2 py-1.5 border-t border-slate-300 text-right tabular-nums whitespace-nowrap">
@@ -1118,13 +1123,19 @@ export default function CandiesUtilidadesPanel({
                 }
                 rows={[
                   { label: "P. ingresados", value: fmtPacks(r.totalPackages) },
-                  { label: "P. restantes", value: fmtPacks(r.remainingMasterPacks) },
+                  {
+                    label: "P. restantes",
+                    value: fmtPacks(r.remainingMasterPacks),
+                  },
                   { label: "Dispers.", value: fmtPacks(r.dispersAsignada) },
                   { label: "Vendido", value: fmtPacks(r.vendidoPacks) },
                   { label: "Inversión", value: money(r.subtotal) },
                   { label: "Venta Isla", value: money(r.totalIsla) },
                   { label: "U.Bruta maestra", value: money(r.uBrutaGlobal) },
-                  { label: "Ventas efectivas", value: money(r.ventasEfectivas) },
+                  {
+                    label: "Ventas efectivas",
+                    value: money(r.ventasEfectivas),
+                  },
                   { label: "UB Efectiva", value: money(r.ubEfectiva) },
                   { label: "Logística", value: money(r.logisticsCost) },
                 ]}
@@ -1167,7 +1178,9 @@ export default function CandiesUtilidadesPanel({
               ]}
             />
 
-            <DrawerSectionTitle>2 · Ventas ya atribuidas a esta maestra</DrawerSectionTitle>
+            <DrawerSectionTitle>
+              2 · Ventas ya atribuidas a esta maestra
+            </DrawerSectionTitle>
             <DrawerMoneyStrip
               items={[
                 {
@@ -1188,12 +1201,14 @@ export default function CandiesUtilidadesPanel({
               ]}
             />
             <p className="text-[10px] text-slate-500 mt-1 leading-snug">
-              <strong>Falta $ para meta</strong> = Venta Isla de la maestra menos
-              monto ya vendido atribuido. Negativo = ya superaste esa meta en
-              ventas atribuidas.
+              <strong>Falta $ para meta</strong> = Venta Isla de la maestra
+              menos monto ya vendido atribuido. Negativo = ya superaste esa meta
+              en ventas atribuidas.
             </p>
 
-            <DrawerSectionTitle>3 · Lo que ya ganaste (solo vendido atribuido)</DrawerSectionTitle>
+            <DrawerSectionTitle>
+              3 · Lo que ya ganaste (solo vendido atribuido)
+            </DrawerSectionTitle>
             <DrawerMoneyStrip
               items={[
                 {
@@ -1328,7 +1343,9 @@ export default function CandiesUtilidadesPanel({
                                 </span>
                               </li>
                               <li className="flex justify-between gap-2">
-                                <span className="text-slate-500">Comisión vendedor</span>
+                                <span className="text-slate-500">
+                                  Comisión vendedor
+                                </span>
                                 <span className="tabular-nums text-slate-700">
                                   {money(c.comisionEsperada)}
                                 </span>
@@ -1349,13 +1366,17 @@ export default function CandiesUtilidadesPanel({
                             </p>
                             <ul className="mt-2 space-y-1.5 text-[14px]">
                               <li className="flex justify-between gap-2">
-                                <span className="text-emerald-900/70">Ventas</span>
+                                <span className="text-emerald-900/70">
+                                  Ventas
+                                </span>
                                 <span className="font-semibold tabular-nums text-emerald-950">
                                   {money(c.ventasEfectivas)}
                                 </span>
                               </li>
                               <li className="flex justify-between gap-2">
-                                <span className="text-emerald-900/70">Comisión</span>
+                                <span className="text-emerald-900/70">
+                                  Comisión
+                                </span>
                                 <span className="tabular-nums text-emerald-900">
                                   {money(c.comisionEfectiva)}
                                 </span>
@@ -1376,7 +1397,9 @@ export default function CandiesUtilidadesPanel({
                   ))
                 )}
 
-                <DrawerSectionTitle>Resumen (todas las líneas)</DrawerSectionTitle>
+                <DrawerSectionTitle>
+                  Resumen (todas las líneas)
+                </DrawerSectionTitle>
                 <DrawerDetailDlCard
                   title="Esperado vs efectivo"
                   rows={[
