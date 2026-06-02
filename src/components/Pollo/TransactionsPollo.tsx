@@ -171,23 +171,20 @@ function ensureSaleDate(x: any): string {
   const fromDateField = normalizeDateString(x?.date);
   const createdAt = x?.createdAt?.toDate ? x.createdAt.toDate() : null;
 
-  // Si existe date pero es inconsistente con createdAt, usar createdAt
-  if (fromDateField && createdAt) {
+  /** Legacy: si `date` parece corrupto vs `createdAt`, usar createdAt — salvo edición manual. */
+  if (!x?.edited && fromDateField && createdAt) {
     const dateTs = toDateNumber(fromDateField);
     const createdTs = createdAt.getTime();
 
     const diffDays = Math.abs(createdTs - dateTs) / (1000 * 60 * 60 * 24);
 
-    // si difiere más de 30 días, date está mal guardado
     if (diffDays > 30) {
       return format(createdAt, "yyyy-MM-dd");
     }
   }
 
-  // si date es válido y coherente, usarlo
   if (fromDateField) return fromDateField;
 
-  // fallback real
   if (x?.timestamp?.toDate) return format(x.timestamp.toDate(), "yyyy-MM-dd");
 
   if (createdAt) return format(createdAt, "yyyy-MM-dd");

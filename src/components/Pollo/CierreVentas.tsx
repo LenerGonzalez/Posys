@@ -240,15 +240,15 @@ function collapsedSummaryFromDailyRows(rows: CombinedDailyRow[]) {
 }
 
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
-  const dateFromField = raw.date ? String(raw.date) : "";
+  const dateFromField = raw.date ? String(raw.date).slice(0, 10) : "";
   const dateFromTs = raw.timestamp?.toDate
     ? format(raw.timestamp.toDate()!, "yyyy-MM-dd")
     : "";
 
-  // ✅ Si hay raw.date pero está desfasada vs timestamp, gana timestamp
   let date = dateFromField || dateFromTs;
 
-  if (dateFromField && dateFromTs) {
+  /** Legacy: si `date` parece corrupto vs `timestamp`, usar timestamp — salvo edición manual. */
+  if (!raw.edited && dateFromField && dateFromTs) {
     const a = new Date(dateFromField + "T00:00:00").getTime();
     const b = new Date(dateFromTs + "T00:00:00").getTime();
     const diffDays = Math.abs(a - b) / (1000 * 60 * 60 * 24);
@@ -1611,6 +1611,36 @@ export default function CierreVentas({
         })),
         quantityChanged: qtyChanged,
       }).catch((err) => console.error("Error guardando log de edición:", err));
+
+      const patchRowAfterEdit = (s: SaleData): SaleData => {
+        if (s.id.split("#")[0] !== docId) return s;
+        const rowItemIdx = s.id.includes("#")
+          ? parseInt(s.id.split("#")[1], 10)
+          : null;
+        const shared = {
+          date: editDate,
+          clientName: trimClient,
+          edited: true as const,
+        };
+        if (
+          itemIdx !== null &&
+          rowItemIdx !== null &&
+          rowItemIdx !== itemIdx
+        ) {
+          return { ...s, ...shared };
+        }
+        const nextCogs = Number(s.cogsAmount ?? 0);
+        return {
+          ...s,
+          ...shared,
+          quantity: qty,
+          amount: newAmount,
+          unitPrice: price,
+          grossProfit: round2(newAmount - nextCogs),
+        };
+      };
+      setSales((prev) => prev.map(patchRowAfterEdit));
+      setFloatersExtra((prev) => prev.map(patchRowAfterEdit));
 
       setEditing(null);
       setEditConfirm(false);

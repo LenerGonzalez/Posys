@@ -52,6 +52,27 @@ import {
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
+function formatInventoryCreatedAt(ts?: Timestamp | null): string {
+  if (!ts?.toDate) return "—";
+  const d = ts.toDate();
+  if (Number.isNaN(d.getTime())) return "—";
+  return format(d, "yyyy-MM-dd HH:mm");
+}
+
+function earliestCreatedAt(items: Batch[]): Timestamp | undefined {
+  let best: Timestamp | undefined;
+  let minSec = Infinity;
+  for (const b of items) {
+    const sec = b.createdAt?.seconds;
+    if (sec == null) continue;
+    if (sec < minSec) {
+      minSec = sec;
+      best = b.createdAt;
+    }
+  }
+  return best;
+}
+
 function groupStockBadgeClass(s: GroupStockStatusSummary): string {
   if (s === "activa") return "bg-emerald-100 text-emerald-800";
   if (s === "pendiente") return "bg-amber-100 text-amber-800";
@@ -357,6 +378,8 @@ type GroupRow = {
   groupId: string;
   orderName: string;
   date: string;
+  /** Fecha y hora de creación del pedido (lote más antiguo del grupo). */
+  createdAt?: Timestamp;
   typeLabel: string;
   status: "PENDIENTE" | "PAGADO";
   stockStatusSummary: GroupStockStatusSummary;
@@ -1168,6 +1191,7 @@ export default function InventoryBatches({
         groupId,
         orderName: orderNameLocal,
         date,
+        createdAt: earliestCreatedAt(ordered),
         typeLabel,
         status,
         stockStatusSummary,
@@ -3644,6 +3668,18 @@ export default function InventoryBatches({
       >
         {desktopDrawerGroup ? (
           <>
+            <DrawerDetailDlCard
+              title="Registro"
+              rows={[
+                {
+                  label: "Timestamp",
+                  value: formatInventoryCreatedAt(desktopDrawerGroup.createdAt),
+                  ddClassName:
+                    "text-sm font-semibold tabular-nums text-gray-900",
+                },
+              ]}
+            />
+
             <DrawerStatGrid
               items={[
                 {
