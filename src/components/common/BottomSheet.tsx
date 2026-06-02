@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { createPortal } from "react-dom";
 
 export type BottomSheetProps = {
@@ -47,6 +47,17 @@ export default function BottomSheet({
   centerOnDesktop = true,
   container,
 }: BottomSheetProps) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.stopPropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   const target = container ?? (typeof document !== "undefined" ? document.body : null);
 
   if (!open || !target) return null;

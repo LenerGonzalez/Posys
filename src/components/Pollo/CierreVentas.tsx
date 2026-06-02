@@ -189,6 +189,56 @@ function saleGrossProfit(s: SaleData): number {
   return round2((s.amount || 0) - Number(s.cogsAmount ?? 0));
 }
 
+const isUnitMeasure = (m?: string) =>
+  String(m || "")
+    .trim()
+    .toLowerCase() !== "lb";
+
+/** Agrupa ventas por fecha + producto (tabla diaria consolidada). */
+function buildCombinedDailyRowsFromSales(sales: SaleData[]): CombinedDailyRow[] {
+  const map: Record<string, CombinedDailyRow> = {};
+
+  for (const s of sales) {
+    const productName = s.productName || "(sin nombre)";
+    const key = `${s.date || "—"}||${productName}`;
+    if (!map[key]) {
+      map[key] = {
+        date: s.date || "—",
+        product: productName,
+        totalLbs: 0,
+        totalUnits: 0,
+        totalAmount: 0,
+        totalGross: 0,
+      };
+    }
+
+    if (isUnitMeasure(s.measurement)) {
+      map[key].totalUnits = round3(map[key].totalUnits + (s.quantity || 0));
+    } else {
+      map[key].totalLbs = round3(map[key].totalLbs + (s.quantity || 0));
+    }
+
+    map[key].totalAmount = round2(map[key].totalAmount + (s.amount || 0));
+    map[key].totalGross = round2(map[key].totalGross + saleGrossProfit(s));
+  }
+
+  return Object.values(map).sort((a, b) => {
+    const byDate = b.date.localeCompare(a.date);
+    if (byDate !== 0) return byDate;
+    return String(a.product || "").localeCompare(String(b.product || ""));
+  });
+}
+
+function collapsedSummaryFromDailyRows(rows: CombinedDailyRow[]) {
+  if (!rows.length) return null;
+  return {
+    lbs: round3(rows.reduce((s, r) => s + r.totalLbs, 0)),
+    units: round3(rows.reduce((s, r) => s + r.totalUnits, 0)),
+    amount: round2(rows.reduce((s, r) => s + r.totalAmount, 0)),
+    gross: round2(rows.reduce((s, r) => s + r.totalGross, 0)),
+  };
+}
+
 const normalizeMany = (raw: SaleDataRaw, id: string): SaleData[] => {
   const dateFromField = raw.date ? String(raw.date) : "";
   const dateFromTs = raw.timestamp?.toDate
@@ -363,7 +413,6 @@ export default function CierreVentas({
 
   // ✅ NUEVOS: colapsables (todo nace colapsado)
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [ventasOpen, setVentasOpen] = useState(false);
   const [consolidadoOpen, setConsolidadoOpen] = useState(false);
   const [indicadoresOpen, setIndicadoresOpen] = useState(false);
 
@@ -377,10 +426,14 @@ export default function CierreVentas({
   const [cashPage, setCashPage] = useState(1);
   const [creditPage, setCreditPage] = useState(1);
   const [combinedPage, setCombinedPage] = useState(1);
+  const [cashDailyPage, setCashDailyPage] = useState(1);
+  const [creditDailyPage, setCreditDailyPage] = useState(1);
   const [pdfMode, setPdfMode] = useState(false);
   const [cashTableOpen, setCashTableOpen] = useState(false);
   const [creditTableOpen, setCreditTableOpen] = useState(false);
   const [combinedTableOpen, setCombinedTableOpen] = useState(false);
+  const [cashDailyTableOpen, setCashDailyTableOpen] = useState(false);
+  const [creditDailyTableOpen, setCreditDailyTableOpen] = useState(false);
   const [abonoTableOpen, setAbonoTableOpen] = useState(false);
 
   const [abonoPeriodRows, setAbonoPeriodRows] = useState<AbonoPeriodRow[]>([]);
@@ -421,8 +474,9 @@ export default function CierreVentas({
             <span className="text-xs text-gray-600">{right}</span>
           ) : null}
         </div>
-        <div className="shrink-0 text-lg font-bold leading-none">
-          {open ? "−" : "+"}
+        <div className="shrink-0 text-sm font-semibold leading-none md:text-lg">
+          <span className="md:hidden">{open ? "Ocultar" : "Ver"}</span>
+          <span className="hidden md:inline">{open ? "−" : "+"}</span>
         </div>
       </Button>
     );
@@ -828,11 +882,6 @@ export default function CierreVentas({
     return changes;
   }, [editing, editDate, editQty, editPrice, editClient, customerNameById]);
 
-  const isUnitMeasure = (m?: string) =>
-    String(m || "")
-      .trim()
-      .toLowerCase() !== "lb";
-
   const cashSales = visibleSalesSorted.filter((s) => s.type === "CONTADO");
   const creditSales = visibleSalesSorted.filter((s) => s.type === "CREDITO");
 
@@ -856,6 +905,8 @@ export default function CierreVentas({
     setCashPage(1);
     setCreditPage(1);
     setCombinedPage(1);
+    setCashDailyPage(1);
+    setCreditDailyPage(1);
   }, [visibleSales]);
 
   useEffect(() => {
@@ -875,6 +926,8 @@ export default function CierreVentas({
   const cashOpenEffective = pdfMode ? true : cashTableOpen;
   const creditOpenEffective = pdfMode ? true : creditTableOpen;
   const combinedOpenEffective = pdfMode ? true : combinedTableOpen;
+  const cashDailyOpenEffective = pdfMode ? true : cashDailyTableOpen;
+  const creditDailyOpenEffective = pdfMode ? true : creditDailyTableOpen;
   const abonoOpenEffective = pdfMode ? true : abonoTableOpen;
 
   const cashRowsForTable = pdfMode ? cashSales : pagedCashSales;
@@ -926,45 +979,34 @@ export default function CierreVentas({
     totalSalesCash + totalAbonosPeriodo,
   );
 
-  const combinedDailyRows = React.useMemo(() => {
-    const map: Record<string, CombinedDailyRow> = {};
+  const combinedDailyRows = React.useMemo(
+    () => buildCombinedDailyRowsFromSales(visibleSales),
+    [visibleSales],
+  );
 
-    visibleSales.forEach((s) => {
-      const productName = s.productName || "(sin nombre)";
-      const key = `${s.date || "—"}||${productName}`;
-      if (!map[key]) {
-        map[key] = {
-          date: s.date || "—",
-          product: productName,
-          totalLbs: 0,
-          totalUnits: 0,
-          totalAmount: 0,
-          totalGross: 0,
-        };
-      }
+  const cashDailyRows = React.useMemo(
+    () => buildCombinedDailyRowsFromSales(cashSales),
+    [cashSales],
+  );
 
-      if (isUnitMeasure(s.measurement)) {
-        map[key].totalUnits = round3(map[key].totalUnits + (s.quantity || 0));
-      } else {
-        map[key].totalLbs = round3(map[key].totalLbs + (s.quantity || 0));
-      }
-
-      map[key].totalAmount = round2(map[key].totalAmount + (s.amount || 0));
-      map[key].totalGross = round2(
-        map[key].totalGross + saleGrossProfit(s),
-      );
-    });
-
-    return Object.values(map).sort((a, b) => {
-      const byDate = b.date.localeCompare(a.date);
-      if (byDate !== 0) return byDate;
-      return String(a.product || "").localeCompare(String(b.product || ""));
-    });
-  }, [visibleSales]);
+  const creditDailyRows = React.useMemo(
+    () => buildCombinedDailyRowsFromSales(creditSales),
+    [creditSales],
+  );
 
   const combinedTotalPages = Math.max(
     1,
     Math.ceil(combinedDailyRows.length / COMBINED_PAGE_SIZE),
+  );
+
+  const cashDailyTotalPages = Math.max(
+    1,
+    Math.ceil(cashDailyRows.length / COMBINED_PAGE_SIZE),
+  );
+
+  const creditDailyTotalPages = Math.max(
+    1,
+    Math.ceil(creditDailyRows.length / COMBINED_PAGE_SIZE),
   );
 
   const combinedDailyRowsPaged = React.useMemo(() => {
@@ -972,21 +1014,43 @@ export default function CierreVentas({
     return combinedDailyRows.slice(start, start + COMBINED_PAGE_SIZE);
   }, [combinedDailyRows, combinedPage]);
 
+  const cashDailyRowsPaged = React.useMemo(() => {
+    const start = (cashDailyPage - 1) * COMBINED_PAGE_SIZE;
+    return cashDailyRows.slice(start, start + COMBINED_PAGE_SIZE);
+  }, [cashDailyRows, cashDailyPage]);
+
+  const creditDailyRowsPaged = React.useMemo(() => {
+    const start = (creditDailyPage - 1) * COMBINED_PAGE_SIZE;
+    return creditDailyRows.slice(start, start + COMBINED_PAGE_SIZE);
+  }, [creditDailyRows, creditDailyPage]);
+
   useEffect(() => {
     setCombinedPage((p) => Math.min(p, combinedTotalPages));
   }, [combinedTotalPages]);
 
+  useEffect(() => {
+    setCashDailyPage((p) => Math.min(p, cashDailyTotalPages));
+  }, [cashDailyTotalPages]);
+
+  useEffect(() => {
+    setCreditDailyPage((p) => Math.min(p, creditDailyTotalPages));
+  }, [creditDailyTotalPages]);
+
   /** Totales completos (como pie de tabla) para mostrar en cabecera cuando la tabla está colapsada. */
-  const combinedCollapsedSummary = React.useMemo(() => {
-    const rows = combinedDailyRows;
-    if (!rows.length) return null;
-    return {
-      lbs: round3(rows.reduce((s, r) => s + r.totalLbs, 0)),
-      units: round3(rows.reduce((s, r) => s + r.totalUnits, 0)),
-      amount: round2(rows.reduce((s, r) => s + r.totalAmount, 0)),
-      gross: round2(rows.reduce((s, r) => s + r.totalGross, 0)),
-    };
-  }, [combinedDailyRows]);
+  const combinedCollapsedSummary = React.useMemo(
+    () => collapsedSummaryFromDailyRows(combinedDailyRows),
+    [combinedDailyRows],
+  );
+
+  const cashDailyCollapsedSummary = React.useMemo(
+    () => collapsedSummaryFromDailyRows(cashDailyRows),
+    [cashDailyRows],
+  );
+
+  const creditDailyCollapsedSummary = React.useMemo(
+    () => collapsedSummaryFromDailyRows(creditDailyRows),
+    [creditDailyRows],
+  );
 
   const cashCollapsedSummary = React.useMemo(() => {
     if (!cashSales.length) return null;
@@ -1945,21 +2009,302 @@ export default function CierreVentas({
     );
   };
 
+  const renderDailyTransactionsBlock = (
+    title: string,
+    rows: CombinedDailyRow[],
+    rowsPaged: CombinedDailyRow[],
+    page: number,
+    totalPages: number,
+    setPage: React.Dispatch<React.SetStateAction<number>>,
+    openEffective: boolean,
+    setTableOpen: React.Dispatch<React.SetStateAction<boolean>>,
+    collapsedSummary: ReturnType<typeof collapsedSummaryFromDailyRows>,
+    verButtonClass: string,
+  ) => (
+    <div className="rounded-xl border border-slate-200 bg-white/70 p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-slate-800">{title}</div>
+          {!openEffective && collapsedSummary && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-gradient-to-b from-white to-slate-50 px-2.5 py-1 text-[11px] shadow-sm">
+                <span className="text-slate-500 font-medium">Monto</span>
+                <span className="font-bold tabular-nums text-slate-900">
+                  C${money(collapsedSummary.amount)}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-gradient-to-b from-violet-50/90 to-white px-2.5 py-1 text-[11px] shadow-sm">
+                <span className="text-violet-700 font-medium">U.B.</span>
+                <span className="font-bold tabular-nums text-violet-950">
+                  C${money(collapsedSummary.gross)}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-700 tabular-nums">
+                Lb {qty3(collapsedSummary.lbs)} · Und{" "}
+                {qty3(collapsedSummary.units)}
+              </span>
+            </div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-start gap-2">
+          <div className="text-xs text-slate-500 text-right pt-0.5">
+            {rows.length} fila(s)
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="primary"
+            onClick={() => setTableOpen((v) => !v)}
+            className={`text-xs !px-3 !py-1.5 !font-semibold ${verButtonClass}`}
+          >
+            {openEffective ? "Cerrar" : "Ver"}
+          </Button>
+        </div>
+      </div>
+
+      {openEffective && (
+        <>
+          {renderCombinedDailyTable(
+            pdfMode ? rows : rowsPaged,
+            rows,
+          )}
+          {!pdfMode &&
+            renderProPager(page, totalPages, setPage, rows.length)}
+        </>
+      )}
+    </div>
+  );
+
+  const renderMobileSaleCard = (s: SaleData) => (
+    <div
+      key={s.id}
+      className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold truncate">{s.productName}</div>
+          <div className="text-xs text-gray-500 flex flex-wrap items-center gap-1.5 mt-0.5">
+            <span>{s.date}</span>
+            <span>·</span>
+            <span>{s.type === "CREDITO" ? "Crédito" : "Cash"}</span>
+            {s.edited && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 font-medium">
+                Editada
+              </span>
+            )}
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] ${
+                s.status === "PROCESADA"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-yellow-100 text-yellow-700"
+              }`}
+            >
+              {s.status === "PROCESADA" ? "Procesada" : "Flotante"}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-start gap-1 shrink-0">
+          {canEditSale ? (
+            <ActionMenuTrigger
+              className="!h-8 !w-8"
+              title="Acciones"
+              aria-label="Acciones"
+              onClick={(e) => {
+                e.stopPropagation();
+                const rect = (
+                  e.currentTarget as HTMLElement
+                ).getBoundingClientRect();
+                setRowActionMenu({ rect, sale: s });
+              }}
+            />
+          ) : null}
+          <div className="text-right">
+            <div className="text-sm font-bold tabular-nums text-slate-900">
+              C${money(s.amount)}
+            </div>
+            <div className="text-[10px] font-semibold text-violet-800 tabular-nums">
+              U.B. C${money(saleGrossProfit(s))}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 pt-2 border-t border-slate-100 space-y-1.5 text-xs">
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Cantidad</span>
+          <strong className="tabular-nums">{qty3(s.quantity)}</strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Precio</span>
+          <strong className="tabular-nums">
+            C$
+            {money(
+              s.unitPrice && s.unitPrice > 0
+                ? s.unitPrice
+                : s.quantity > 0
+                  ? s.amount / s.quantity
+                  : 0,
+            )}
+          </strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Cliente</span>
+          <strong className="text-right break-all">
+            {resolvedSaleClientName(s, customerNameById) || "—"}
+          </strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Vendedor</span>
+          <strong className="text-right break-all">
+            {displaySeller(s.userEmail)}
+          </strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Fecha ingreso</span>
+          <strong className="text-right break-all">{s.createdAt || "—"}</strong>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderMobileSalesList = (
+    sales: SaleData[],
+    pagedSales: SaleData[],
+    page: number,
+    totalPages: number,
+    setPage: React.Dispatch<React.SetStateAction<number>>,
+    emptyMsg: string,
+  ) => (
+    <>
+      <div className="space-y-3">
+        {(pdfMode ? sales : pagedSales).map((s) => renderMobileSaleCard(s))}
+        {sales.length === 0 && (
+          <div className="text-center text-gray-500 text-sm py-6">{emptyMsg}</div>
+        )}
+      </div>
+      {!pdfMode &&
+        sales.length > 0 &&
+        renderProPager(page, totalPages, setPage, sales.length)}
+    </>
+  );
+
+  const renderMobileCombinedDailyCard = (r: CombinedDailyRow) => (
+    <div
+      key={`${r.date}||${r.product}`}
+      className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+    >
+      <div className="flex justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold truncate">
+            {r.product || "(sin nombre)"}
+          </div>
+          <div className="text-xs text-gray-500">{r.date}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-sm font-bold tabular-nums">
+            C${money(r.totalAmount)}
+          </div>
+          <div className="text-[10px] font-semibold text-violet-800 tabular-nums">
+            U.B. C${money(r.totalGross)}
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 pt-2 border-t border-slate-100 flex justify-between text-xs">
+        <span className="text-gray-600">Libras</span>
+        <strong className="tabular-nums">{qty3(r.totalLbs)}</strong>
+      </div>
+      <div className="flex justify-between text-xs mt-1">
+        <span className="text-gray-600">Unidades</span>
+        <strong className="tabular-nums">{qty3(r.totalUnits)}</strong>
+      </div>
+    </div>
+  );
+
+  const renderMobileDailyTransactionsBlock = (
+    title: string,
+    rows: CombinedDailyRow[],
+    rowsPaged: CombinedDailyRow[],
+    page: number,
+    totalPages: number,
+    setPage: React.Dispatch<React.SetStateAction<number>>,
+    openEffective: boolean,
+    setTableOpen: React.Dispatch<React.SetStateAction<boolean>>,
+    collapsedSummary: ReturnType<typeof collapsedSummaryFromDailyRows>,
+    verButtonClass: string,
+  ) => (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/40 p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-slate-800">{title}</div>
+          {!openEffective && collapsedSummary && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] shadow-sm">
+                <span className="text-slate-500 font-medium">Monto</span>
+                <span className="font-bold tabular-nums text-slate-900">
+                  C${money(collapsedSummary.amount)}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-gradient-to-b from-violet-50/90 to-white px-2.5 py-1 text-[11px] shadow-sm">
+                <span className="text-violet-700 font-medium">U.B.</span>
+                <span className="font-bold tabular-nums text-violet-950">
+                  C${money(collapsedSummary.gross)}
+                </span>
+              </span>
+            </div>
+          )}
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="primary"
+          onClick={() => setTableOpen((v) => !v)}
+          className={`text-xs !px-3 !py-1.5 !font-semibold shrink-0 ${verButtonClass}`}
+        >
+          {openEffective ? "Cerrar" : "Ver"}
+        </Button>
+      </div>
+      {openEffective && (
+        <>
+          <div className="space-y-3">
+            {(pdfMode ? rows : rowsPaged).map((r) =>
+              renderMobileCombinedDailyCard(r),
+            )}
+            {rows.length === 0 && (
+              <div className="text-center text-gray-500 text-sm py-4">
+                Sin ventas para mostrar.
+              </div>
+            )}
+          </div>
+          {!pdfMode &&
+            rows.length > 0 &&
+            renderProPager(page, totalPages, setPage, rows.length)}
+        </>
+      )}
+    </div>
+  );
+
   return (
-    <div className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-2xl">
+    <div
+      className={
+        "w-full min-w-0 md:max-w-7xl md:mx-auto bg-white md:p-6 md:rounded-2xl md:shadow-2xl " +
+        "max-md:max-w-[100vw] max-md:w-screen max-md:ml-[calc(50%-50vw)] max-md:mr-[calc(50%-50vw)] " +
+        "max-md:box-border max-md:overflow-x-hidden max-md:-mt-3 max-md:min-h-[calc(100dvh-5.75rem)] " +
+        "max-md:rounded-none max-md:shadow-none max-md:border-0 max-md:px-4 max-md:pt-4 " +
+        "max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      }
+    >
       {/* ✅ CSS interno para alternar vista en PDF (compat con mobile cards) */}
       <style>{`
         .pdf-print-mode .pdf-desktop { display: block !important; }
         .pdf-print-mode .pdf-mobile  { display: none !important; }
       `}</style>
 
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <h2 className="text-lg font-bold">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <h2 className="text-lg md:text-xl font-bold min-w-0 truncate">
           Ventas Diarias
         </h2>
 
-        <div className="flex items-center gap-2">
-          <RefreshButton onClick={refresh} />
+        <div className="flex items-center gap-2 shrink-0">
+          <RefreshButton onClick={refresh} className="!hidden md:!inline-flex" />
           <ActionMenuTrigger
             title="Más acciones"
             aria-label="Más acciones"
@@ -1980,6 +2325,18 @@ export default function CierreVentas({
           width={220}
         >
           <div className="py-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal md:hidden"
+              onClick={() => {
+                setHeaderToolsMenuRect(null);
+                refresh();
+              }}
+            >
+              Actualizar
+            </Button>
             <Button
               type="button"
               variant="ghost"
@@ -2101,29 +2458,23 @@ export default function CierreVentas({
         <p>Cargando ventas...</p>
       ) : (
         <div ref={pdfRef}>
-          {/* =========================
-              DESKTOP / WEB -> TABLA (igual que antes)
-              ========================= */}
-          <div className="pdf-desktop hidden md:block">
-            <div className="space-y-6">
-              {showCashTable && (
-                <div className="mt-8">
-                  <div className="mb-6">
-                    <SectionHeader
-                      title="Indicadores financieros"
-                      open={pdfMode ? true : indicadoresOpen}
-                      onToggle={() => setIndicadoresOpen((v) => !v)}
-                      right={
-                        <span className="ml-1">
-                          Ventas C${money(ventasCashMasAbonosKpi)} • U.B. C$
-                          {money(totalGrossAll)}
-                        </span>
-                      }
-                    />
+          {showCashTable && (
+            <div className="mb-4 mt-4">
+              <SectionHeader
+                title="Indicadores financieros"
+                open={pdfMode ? true : indicadoresOpen}
+                onToggle={() => setIndicadoresOpen((v) => !v)}
+                right={
+                  <span className="ml-1 hidden sm:inline">
+                    Ventas C${money(ventasCashMasAbonosKpi)} • U.B. C$
+                    {money(totalGrossAll)}
+                  </span>
+                }
+              />
 
-                    {(pdfMode || indicadoresOpen) && (
-                      <div className="mt-3">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {(pdfMode || indicadoresOpen) && (
+                <div className="mt-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                           {/* Card 1: Libras & Unidades (cash / credito) */}
                           <div className="p-4 rounded-lg border bg-blue-50 border-blue-200">
                             <div className="text-sm font-semibold text-blue-800">
@@ -2271,14 +2622,22 @@ export default function CierreVentas({
                               </div>
                             </div>
                           </div>
-                        </div>
-                      </div>
-                    )}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
 
+          {/* =========================
+              DESKTOP / WEB -> TABLA (igual que antes)
+              ========================= */}
+          <div className="pdf-desktop hidden md:block">
+            <div className="space-y-6">
+              {showCashTable && (
+                <div className="mt-8">
                   <div className="mt-4">
                     <SectionHeader
-                      title="Consolidado por producto"
+                      title="Consolidado por producto Contado + Credito"
                       open={consolidadoOpen}
                       onToggle={() => setConsolidadoOpen((v) => !v)}
                       right={
@@ -2367,7 +2726,7 @@ export default function CierreVentas({
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-semibold text-slate-800">
-                            Transacciones Contado + Crédito
+                            Listado de ventas Contado + Crédito
                           </div>
                           {!combinedOpenEffective &&
                             combinedCollapsedSummary && (
@@ -2565,10 +2924,36 @@ export default function CierreVentas({
                   </div>
 
                   <div className="mt-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm">
+                    <div className="max-w-sm">
+                      <MobileHtmlSelect
+                        label="Producto"
+                        value={productFilter}
+                        onChange={setProductFilter}
+                        options={productFilterOptions}
+                        sheetTitle="Producto"
+                        selectClassName="border rounded px-2 py-2 w-full"
+                      />
+                    </div>
+
+                    {renderDailyTransactionsBlock(
+                      "Consolidado Ventas contado por dia",
+                      cashDailyRows,
+                      cashDailyRowsPaged,
+                      cashDailyPage,
+                      cashDailyTotalPages,
+                      setCashDailyPage,
+                      cashDailyOpenEffective,
+                      setCashDailyTableOpen,
+                      cashDailyCollapsedSummary,
+                      cashDailyOpenEffective
+                        ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                        : "!bg-emerald-600 hover:!bg-emerald-700 !border-emerald-600",
+                    )}
+
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-semibold text-slate-800">
-                          Contado
+                          Listado de ventas al contado
                         </div>
                         {!cashOpenEffective && cashCollapsedSummary && (
                           <div className="mt-2 flex flex-wrap gap-2">
@@ -2631,11 +3016,26 @@ export default function CierreVentas({
               )}
 
               {showCreditTable && (
-                <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm">
+                <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm space-y-3">
+                  {renderDailyTransactionsBlock(
+                    "Consolidado Ventas crédito por dia",
+                    creditDailyRows,
+                    creditDailyRowsPaged,
+                    creditDailyPage,
+                    creditDailyTotalPages,
+                    setCreditDailyPage,
+                    creditDailyOpenEffective,
+                    setCreditDailyTableOpen,
+                    creditDailyCollapsedSummary,
+                    creditDailyOpenEffective
+                      ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                      : "!bg-amber-500 hover:!bg-amber-600 !border-amber-500",
+                  )}
+
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold text-slate-800">
-                        Crédito
+                        Listado de ventas al crédito
                       </div>
                       {!creditOpenEffective && creditCollapsedSummary && (
                         <div className="mt-2 flex flex-wrap gap-2">
@@ -2699,140 +3099,276 @@ export default function CierreVentas({
           </div>
 
           {/* =========================
-              MOBILE / PWA -> CONTENEDOR "VENTAS" COLAPSADO
+              MOBILE / PWA -> tarjetas (sin scroll horizontal)
               ========================= */}
-          <div className="pdf-mobile md:hidden mb-4">
-            <SectionHeader
-              title="Ventas"
-              open={ventasOpen}
-              onToggle={() => setVentasOpen((v) => !v)}
-              right={
-                <span className="ml-1">
-                  {visibleSales.length} • C${money(totalCharged)} • U.B. C$
-                  {money(totalGrossAll)}
-                </span>
-              }
-            />
-
-            {ventasOpen && (
-              <div className="mt-3 space-y-3">
-                {visibleSalesSorted.map((s) => (
-                  <details
-                    key={s.id}
-                    className="border rounded-xl bg-white shadow-sm"
-                  >
-                    <summary className="px-4 py-3 flex justify-between items-center cursor-pointer">
-                      <div className="min-w-0">
-                        <div className="font-semibold truncate">
-                          {s.productName}
-                        </div>
-                        <div className="text-xs text-gray-500 flex items-center gap-1.5 mt-0.5">
-                          {s.date}
-                          {s.edited && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 font-medium">
-                              Editada
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0 ml-3">
-                        <div className="font-bold">C${money(s.amount)}</div>
-                        <div className="text-xs text-violet-800 font-semibold">
-                          U.B. C${money(saleGrossProfit(s))}
-                        </div>
-                        <span
-                          className={`text-xs px-2 py-0.5 rounded ${
-                            s.status === "PROCESADA"
-                              ? "bg-green-100 text-green-700"
-                              : "bg-yellow-100 text-yellow-700"
-                          }`}
-                          title={s.status}
-                          aria-label={s.status}
+          <div className="pdf-mobile md:hidden space-y-4 mb-4 min-w-0">
+            {showCashTable && (
+              <>
+                <div>
+                  <SectionHeader
+                    title="Consolidado por producto"
+                    open={consolidadoOpen}
+                    onToggle={() => setConsolidadoOpen((v) => !v)}
+                    right={
+                      <span className="ml-1">{productSummaryArray.length}</span>
+                    }
+                  />
+                  {consolidadoOpen && (
+                    <div className="mt-3 space-y-3">
+                      {productSummaryArray.map((row) => (
+                        <div
+                          key={row.productName}
+                          className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
                         >
-                          {s.status === "PROCESADA" ? (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 00-1.414-1.414L8 11.172 4.707 7.879a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8z" clipRule="evenodd" />
-                            </svg>
-                          ) : (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 inline" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                              <path d="M6 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1zM14 4a1 1 0 011 1v10a1 1 0 11-2 0V5a1 1 0 011-1z" />
-                            </svg>
-                          )}
-                        </span>
-                      </div>
-                    </summary>
-
-                      <div className="px-4 pb-4 pt-2 text-sm space-y-2">
-                      <div className="flex justify-between gap-3">
-                        <span className="text-gray-600">Cantidad</span>
-                        <strong>{qty3(s.quantity)}</strong>
-                      </div>
-
-                      <div className="flex justify-between gap-3">
-                        <span className="text-gray-600">U.Bruta</span>
-                        <strong className="text-violet-900">
-                          C${money(saleGrossProfit(s))}
-                        </strong>
-                      </div>
-
-                      <div className="flex justify-between gap-3">
-                        <span className="text-gray-600">Precio</span>
-                        <strong>
-                          C${money(s.unitPrice && s.unitPrice > 0 ? s.unitPrice : s.quantity > 0 ? s.amount / s.quantity : 0)}
-                        </strong>
-                      </div>
-
-                      <div className="flex justify-between gap-3">
-                        <span className="text-gray-600">Tipo</span>
-                        <strong>
-                          {s.type === "CREDITO" ? "Crédito" : "Cash"}
-                        </strong>
-                      </div>
-
-                      <div className="flex justify-between gap-3">
-                        <span className="text-gray-600">Vendedor</span>
-                        <strong className="text-right break-all">
-                          {displaySeller(s.userEmail)}
-                        </strong>
-                      </div>
-
-                      <div className="flex justify-between gap-3">
-                        <span className="text-gray-600">Cliente</span>
-                        <strong className="text-right break-all">
-                          {resolvedSaleClientName(s, customerNameById) || "—"}
-                        </strong>
-                      </div>
-
-                      <div className="flex justify-between gap-3">
-                        <span className="text-gray-600">Fecha ingreso</span>
-                        <strong className="text-right break-all">
-                          {s.createdAt || "—"}
-                        </strong>
-                      </div>
-
-                      {canEditSale && (
-                        <div className="pt-2 flex justify-end">
-                          <ActionMenuTrigger
-                            aria-label="Acciones"
-                            title="Acciones"
-                            onClick={(e) => {
-                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                              setRowActionMenu({ rect, sale: s });
-                            }}
-                          />
+                          <div className="text-sm font-semibold truncate">
+                            {row.productName}
+                          </div>
+                          <div className="mt-2 space-y-1.5 text-xs">
+                            <div className="flex justify-between gap-3">
+                              <span className="text-gray-600">Total lbs/und</span>
+                              <strong className="tabular-nums">
+                                {qty3(row.totalQuantity)}
+                              </strong>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-gray-600">Total dinero</span>
+                              <strong className="tabular-nums">
+                                C${money(row.totalAmount)}
+                              </strong>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-gray-600">U.Bruta</span>
+                              <strong className="tabular-nums text-violet-900">
+                                C${money(row.totalGross)}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {productSummaryArray.length === 0 && (
+                        <div className="text-center text-gray-500 text-sm py-4">
+                          Sin datos para consolidar.
                         </div>
                       )}
                     </div>
-                  </details>
-                ))}
+                  )}
+                </div>
 
-                {visibleSales.length === 0 && (
-                  <div className="text-center text-gray-500 text-sm py-6">
-                    Sin ventas para mostrar.
+                {showCombinedTable &&
+                  renderMobileDailyTransactionsBlock(
+                    "Listado de ventas Contado + Crédito",
+                    combinedDailyRows,
+                    combinedDailyRowsPaged,
+                    combinedPage,
+                    combinedTotalPages,
+                    setCombinedPage,
+                    combinedOpenEffective,
+                    setCombinedTableOpen,
+                    combinedCollapsedSummary,
+                    combinedOpenEffective
+                      ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                      : "!bg-blue-600 hover:!bg-blue-700 !border-blue-600",
+                  )}
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50/40 p-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-slate-800">
+                        Abonos (cuentas por cobrar)
+                      </div>
+                      {!abonoOpenEffective && !abonoLoading && (
+                        <div className="mt-2 text-xs font-bold text-emerald-900 tabular-nums">
+                          Total C${money(totalAbonosPeriodo)}
+                        </div>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="primary"
+                      onClick={() => setAbonoTableOpen((v) => !v)}
+                      className={`text-xs !px-3 !py-1.5 !font-semibold shrink-0 ${
+                        abonoOpenEffective
+                          ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                          : "!bg-blue-600 hover:!bg-blue-700 !border-blue-600"
+                      }`}
+                    >
+                      {abonoOpenEffective ? "Cerrar" : "Ver"}
+                    </Button>
+                  </div>
+                  {abonoOpenEffective && (
+                    <div className="space-y-3">
+                      {abonoLoading ? (
+                        <div className="text-center text-gray-500 text-sm py-4">
+                          Cargando abonos…
+                        </div>
+                      ) : abonoPeriodRows.length === 0 ? (
+                        <div className="text-center text-gray-500 text-sm py-4">
+                          Sin abonos en este periodo.
+                        </div>
+                      ) : (
+                        abonoPeriodRows.map((r) => (
+                          <div
+                            key={r.id}
+                            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+                          >
+                            <div className="flex justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-semibold truncate">
+                                  {r.clienteNombre}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {r.fechaAbono} · #{r.registroFmt}
+                                </div>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <div className="text-sm font-bold text-emerald-800 tabular-nums">
+                                  C${money(r.abonoMonto)}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="mt-2 pt-2 border-t border-slate-100 space-y-1 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-gray-600">Saldo anterior</span>
+                                <strong className="tabular-nums">
+                                  C${money(r.saldoAnterior)}
+                                </strong>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-600">Saldo actual</span>
+                                <strong className="tabular-nums">
+                                  C${money(r.saldoActual)}
+                                </strong>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50/40 p-3 shadow-sm space-y-3">
+                  <div className="max-w-sm">
+                    <MobileHtmlSelect
+                      label="Producto"
+                      value={productFilter}
+                      onChange={setProductFilter}
+                      options={productFilterOptions}
+                      sheetTitle="Producto"
+                      selectClassName="border rounded px-2 py-2 w-full"
+                    />
+                  </div>
+
+                  {renderMobileDailyTransactionsBlock(
+                    "Transacciones Contado",
+                    cashDailyRows,
+                    cashDailyRowsPaged,
+                    cashDailyPage,
+                    cashDailyTotalPages,
+                    setCashDailyPage,
+                    cashDailyOpenEffective,
+                    setCashDailyTableOpen,
+                    cashDailyCollapsedSummary,
+                    cashDailyOpenEffective
+                      ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                      : "!bg-emerald-600 hover:!bg-emerald-700 !border-emerald-600",
+                  )}
+
+                  <div>
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-slate-800">
+                          Contado
+                        </div>
+                        {!cashOpenEffective && cashCollapsedSummary && (
+                          <div className="mt-1 text-xs font-bold text-emerald-950 tabular-nums">
+                            C${money(cashCollapsedSummary.amount)}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="primary"
+                        onClick={() => setCashTableOpen((v) => !v)}
+                        className={`text-xs !px-3 !py-1.5 !font-semibold shrink-0 ${
+                          cashOpenEffective
+                            ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                            : "!bg-emerald-600 hover:!bg-emerald-700 !border-emerald-600"
+                        }`}
+                      >
+                        {cashOpenEffective ? "Cerrar" : "Ver"}
+                      </Button>
+                    </div>
+                    {cashOpenEffective &&
+                      renderMobileSalesList(
+                        cashSales,
+                        pagedCashSales,
+                        cashPage,
+                        cashTotalPages,
+                        setCashPage,
+                        "Sin ventas contado para mostrar.",
+                      )}
+                  </div>
+                </div>
+
+                {showCreditTable && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/40 p-3 shadow-sm space-y-3">
+                    {renderMobileDailyTransactionsBlock(
+                      "Transacciones Crédito",
+                      creditDailyRows,
+                      creditDailyRowsPaged,
+                      creditDailyPage,
+                      creditDailyTotalPages,
+                      setCreditDailyPage,
+                      creditDailyOpenEffective,
+                      setCreditDailyTableOpen,
+                      creditDailyCollapsedSummary,
+                      creditDailyOpenEffective
+                        ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                        : "!bg-amber-500 hover:!bg-amber-600 !border-amber-500",
+                    )}
+
+                    <div>
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold text-slate-800">
+                            Crédito
+                          </div>
+                          {!creditOpenEffective && creditCollapsedSummary && (
+                            <div className="mt-1 text-xs font-bold text-amber-950 tabular-nums">
+                              C${money(creditCollapsedSummary.amount)}
+                            </div>
+                          )}
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setCreditTableOpen((v) => !v)}
+                          className={`text-xs !px-3 !py-1.5 !font-semibold shrink-0 ${
+                            creditOpenEffective
+                              ? "!bg-rose-600 hover:!bg-rose-700 !border-rose-600"
+                              : "!bg-amber-500 hover:!bg-amber-600 !border-amber-500"
+                          }`}
+                        >
+                          {creditOpenEffective ? "Cerrar" : "Ver"}
+                        </Button>
+                      </div>
+                      {creditOpenEffective &&
+                        renderMobileSalesList(
+                          creditSales,
+                          pagedCreditSales,
+                          creditPage,
+                          creditTotalPages,
+                          setCreditPage,
+                          "Sin ventas crédito para mostrar.",
+                        )}
+                    </div>
                   </div>
                 )}
-              </div>
+              </>
             )}
           </div>
         </div>

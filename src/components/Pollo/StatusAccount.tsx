@@ -2335,7 +2335,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             </div>
           </div>
 
-          {/* ✅ KPI NUEVO mobile */}
+          {!allCollapsed && (
+            <>
           <div className="border rounded p-2 bg-gray-50">
             <div className="text-xs text-gray-600">
               Saldo contable (incluye compras dueño)
@@ -2461,6 +2462,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               )}
             </div>
           </div>
+            </>
+          )}
         </div>
       </div>
 

@@ -1,9 +1,9 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FiChevronDown, FiMenu } from "react-icons/fi";
 import BottomSheet from "./BottomSheet";
 import SelectOptionList, {
   type SelectListOption,
-  selectDropdownPanelClassName,
 } from "./SelectOptionList";
 
 export type MobileHtmlSelectOption = SelectListOption;
@@ -30,8 +30,29 @@ type Props = {
 const desktopTriggerBase =
   "group w-full flex items-center justify-between gap-2 text-left rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 transition-colors hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 focus-visible:border-gray-300 disabled:cursor-not-allowed disabled:opacity-60";
 
+function computeDropdownPosition(anchorRect: DOMRect) {
+  const vw = typeof window !== "undefined" ? window.innerWidth : 400;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 600;
+  const width = Math.min(anchorRect.width, vw - 16);
+  const left = Math.min(Math.max(anchorRect.left, 8), vw - width - 8);
+  const maxMenuHeight = Math.min(320, Math.max(120, vh - 16));
+  const gap = 4;
+  let top = anchorRect.bottom + gap;
+  const spaceBelow = vh - anchorRect.bottom - gap;
+  const spaceAbove = anchorRect.top - gap;
+  if (top + maxMenuHeight > vh - 8) {
+    const openAbove = anchorRect.top - maxMenuHeight - gap;
+    if (openAbove >= 8 && spaceAbove >= spaceBelow) {
+      top = openAbove;
+    } else {
+      top = Math.max(8, vh - maxMenuHeight - 8);
+    }
+  }
+  return { top, left, width, maxMenuHeight };
+}
+
 /**
- * Escritorio (md+): listbox con panel tipo ActionMenu.
+ * Escritorio (md+): listbox con panel portaled (scroll, no se recorta en modales).
  * Móvil: botón + BottomSheet.
  */
 export default function MobileHtmlSelect({
@@ -49,7 +70,9 @@ export default function MobileHtmlSelect({
 }: Props) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [desktopOpen, setDesktopOpen] = useState(false);
-  const desktopRef = useRef<HTMLDivElement>(null);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const autoId = useId();
   const lid = id ?? autoId;
 
@@ -63,29 +86,98 @@ export default function MobileHtmlSelect({
     (typeof label === "string" && label ? label : "Seleccionar");
 
   useEffect(() => {
-    if (!desktopOpen) return;
+    if (!desktopOpen) {
+      setAnchorRect(null);
+      return;
+    }
+
+    const syncRect = () => {
+      if (triggerRef.current) {
+        setAnchorRect(triggerRef.current.getBoundingClientRect());
+      }
+    };
+
+    syncRect();
+    window.addEventListener("resize", syncRect);
+    window.addEventListener("scroll", syncRect, true);
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setDesktopOpen(false);
     };
-    const onDoc = (e: MouseEvent) => {
+
+    const onPointerDown = (ev: PointerEvent) => {
+      const target = ev.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      setDesktopOpen(false);
+    };
+
+    const onScroll = (ev: Event) => {
+      const target = ev.target as Node;
+      if (dropdownRef.current?.contains(target)) return;
+      const t = ev.target as HTMLElement | null;
       if (
-        desktopRef.current &&
-        !desktopRef.current.contains(e.target as Node)
+        t === document ||
+        t === document.documentElement ||
+        t === document.body
       ) {
         setDesktopOpen(false);
       }
     };
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("mousedown", onDoc);
+
+    const timer = setTimeout(() => {
+      document.addEventListener("keydown", onKey);
+      document.addEventListener("pointerdown", onPointerDown);
+      document.addEventListener("scroll", onScroll, true);
+    }, 100);
+
     return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", syncRect);
+      window.removeEventListener("scroll", syncRect, true);
       document.removeEventListener("keydown", onKey);
-      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("scroll", onScroll, true);
     };
   }, [desktopOpen]);
 
   useEffect(() => {
     if (disabled) setDesktopOpen(false);
   }, [disabled]);
+
+  const dropdownPos = anchorRect ? computeDropdownPosition(anchorRect) : null;
+
+  const desktopDropdown =
+    desktopOpen && !disabled && dropdownPos && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={dropdownRef}
+            data-mobile-html-select-dropdown
+            style={{
+              position: "fixed",
+              top: `${dropdownPos.top}px`,
+              left: `${dropdownPos.left}px`,
+              width: `${dropdownPos.width}px`,
+              maxHeight: `${dropdownPos.maxMenuHeight}px`,
+              zIndex: 10000,
+            }}
+            className="overflow-y-auto overflow-x-hidden overscroll-contain bg-white border border-gray-200 rounded-lg shadow-lg py-1"
+          >
+            <SelectOptionList
+              variant="dropdown"
+              options={options}
+              value={value}
+              ariaLabelledBy={lid}
+              className="max-h-none overflow-visible shadow-none border-0 rounded-none py-0"
+              onSelect={(v) => {
+                onChange(v);
+                setDesktopOpen(false);
+              }}
+            />
+          </div>,
+          document.body,
+        )
+      : null;
 
   return (
     <div className="w-full">
@@ -102,12 +194,10 @@ export default function MobileHtmlSelect({
         )
       ) : null}
 
-      {/* Escritorio: listbox personalizado */}
-      <div
-        ref={desktopRef}
-        className={`relative hidden md:block ${disabled ? "opacity-60" : ""}`}
-      >
+      {/* Escritorio: listbox personalizado (portal) */}
+      <div className={`hidden md:block ${disabled ? "opacity-60" : ""}`}>
         <button
+          ref={triggerRef}
           type="button"
           id={lid}
           disabled={disabled}
@@ -131,19 +221,7 @@ export default function MobileHtmlSelect({
             />
           )}
         </button>
-        {desktopOpen && !disabled && (
-          <SelectOptionList
-            variant="dropdown"
-            options={options}
-            value={value}
-            ariaLabelledBy={lid}
-            className={selectDropdownPanelClassName}
-            onSelect={(v) => {
-              onChange(v);
-              setDesktopOpen(false);
-            }}
-          />
-        )}
+        {desktopDropdown}
       </div>
 
       {/* Móvil: botón + BottomSheet */}
@@ -168,6 +246,7 @@ export default function MobileHtmlSelect({
         onClose={() => setSheetOpen(false)}
         title={title}
         closeText="Cerrar"
+        zIndexClassName="z-[200]"
       >
         <SelectOptionList
           variant="sheet"

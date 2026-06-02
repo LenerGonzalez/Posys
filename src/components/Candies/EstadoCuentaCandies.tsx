@@ -19,6 +19,11 @@ import * as XLSX from "xlsx";
 import { db, auth } from "../../firebase";
 import RefreshButton from "../common/RefreshButton";
 import Button from "../common/Button";
+import ActionMenu, {
+  ActionMenuTrigger,
+  actionMenuItemClass,
+  actionMenuItemClassDestructive,
+} from "../common/ActionMenu";
 import MobileHtmlSelect from "../common/MobileHtmlSelect";
 import Toast from "../common/Toast";
 import KpiCard from "../common/KpiCard";
@@ -839,9 +844,13 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   // vendor en movimiento manual (para Pago Comisión)
   const [vendorId, setVendorId] = useState<string>("");
 
-  // kebab
-  const [actionOpenId, setActionOpenId] = useState<string | null>(null);
-  const actionMenuRef = useRef<HTMLDivElement | null>(null);
+  // kebab / menús
+  const [headerToolsMenuRect, setHeaderToolsMenuRect] =
+    useState<DOMRect | null>(null);
+  const [ledgerRowActionMenu, setLedgerRowActionMenu] = useState<{
+    rect: DOMRect;
+    row: UnifiedRow;
+  } | null>(null);
 
   // colapsables de indicadores
   const [collapsePacks, setCollapsePacks] = useState(false);
@@ -1964,24 +1973,35 @@ export default function EstadoCuentaCandies(): React.ReactElement {
 
   // close modal/menu on outside click or Escape
   useEffect(() => {
+    const isInsidePortaledOverlay = (target: Node): boolean => {
+      if (!(target instanceof Element)) return false;
+      if (target.closest("[data-mobile-html-select-dropdown]")) return true;
+      const dialog = target.closest('[role="dialog"][aria-modal="true"]');
+      if (!dialog || !modalRef.current) return false;
+      return !modalRef.current.contains(dialog);
+    };
+
     const onDocMouseDown = (ev: MouseEvent) => {
       const target = ev.target as Node;
       if (modalOpen) {
         if (modalRef.current && !modalRef.current.contains(target)) {
+          if (isInsidePortaledOverlay(target)) return;
           setModalOpen(false);
           setEditingId(null);
-        }
-      }
-      if (actionOpenId) {
-        if (actionMenuRef.current && !actionMenuRef.current.contains(target)) {
-          setActionOpenId(null);
         }
       }
     };
 
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") {
-        setActionOpenId(null);
+      if (ev.key !== "Escape") return;
+      if (document.querySelector("[data-mobile-html-select-dropdown]")) {
+        return;
+      }
+      if (modalOpen && modalRef.current) {
+        const hasExternalDialog = Array.from(
+          document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+        ).some((d) => !modalRef.current!.contains(d));
+        if (hasExternalDialog) return;
         setModalOpen(false);
         setEditingId(null);
       }
@@ -1993,7 +2013,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
       document.removeEventListener("mousedown", onDocMouseDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [modalOpen, actionOpenId]);
+  }, [modalOpen]);
 
   // ===== cards comisiones =====
   const totalComisionCash = base?.comisionCash ?? 0;
@@ -2034,6 +2054,159 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   const movimientoDrawerKpis = useMemo(
     () => aggregateCandyCashSaleLines(movimientoDrawerLines),
     [movimientoDrawerLines],
+  );
+
+  const openLedgerEditModal = (r: UnifiedRow) => {
+    setEditingId(r.id);
+    setDate(r.date || today());
+    setType(r.movement as LedgerType);
+    setDescription(r.description || "");
+    setReference(r.reference || "");
+    setVendorId(r.vendorId || "");
+    setCorteDesde(String((r as UnifiedRow).corteDesde || "").slice(0, 10));
+    setCorteHasta(String((r as UnifiedRow).corteHasta || "").slice(0, 10));
+    setInAmount(
+      Number(r.inAmount || 0) === 0 ? "" : String(Number(r.inAmount)),
+    );
+    setOutAmount(
+      Number(r.outAmount || 0) === 0 ? "" : String(Number(r.outAmount)),
+    );
+    setModalOpen(true);
+    setLedgerRowActionMenu(null);
+  };
+
+  const deleteLedgerRow = async (r: UnifiedRow) => {
+    setLedgerRowActionMenu(null);
+    if (!window.confirm("¿Eliminar este movimiento?")) return;
+    try {
+      await deleteDoc(doc(db, "cash_ledger_candies", r.id));
+      refresh();
+      setToastMsg("✅ Movimiento eliminado.");
+    } catch (e) {
+      console.error(e);
+      setToastMsg("❌ No se pudo eliminar el movimiento. Revisa la consola.");
+    }
+  };
+
+  const mobileLedgerCardClass = (r: UnifiedRow) => {
+    if (r.movement === "Venta") return "border-blue-200 bg-blue-50/40";
+    if (r.movement === "Abono") return "border-emerald-200 bg-emerald-50/40";
+    if (String(r.movement || "").toUpperCase() === "CORTE") {
+      return "border-purple-200 bg-purple-50/30";
+    }
+    if (Number(r.inAmount || 0) > 0) return "border-green-200 bg-green-50/30";
+    if (Number(r.outAmount || 0) > 0) return "border-red-200 bg-red-50/30";
+    return "border-slate-200 bg-white";
+  };
+
+  const renderMobileLedgerCard = (r: UnifiedRow) => (
+    <div
+      key={r.id}
+      className={`rounded-xl border p-3 shadow-sm ${mobileLedgerCardClass(r)}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold truncate">
+            {r.description?.trim() || r.movement || "—"}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-gray-500">{r.date}</span>
+            {renderMovementChip(r)}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-start gap-1">
+          {r.source === "ledger" ? (
+            <ActionMenuTrigger
+              className="!h-8 !w-8"
+              title="Acciones"
+              aria-label="Acciones"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLedgerRowActionMenu({
+                  rect: (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                  row: r,
+                });
+              }}
+            />
+          ) : null}
+          <div className="text-right space-y-0.5">
+            {Number(r.inAmount || 0) > 0 && (
+              <div>
+                <div className="text-sm font-semibold text-green-700 tabular-nums">
+                  +{money(r.inAmount)}
+                </div>
+                <div className="text-[10px] text-gray-400">Entrada</div>
+              </div>
+            )}
+            {Number(r.outAmount || 0) > 0 && (
+              <div>
+                <div className="text-sm font-semibold text-red-700 tabular-nums">
+                  -{money(r.outAmount)}
+                </div>
+                <div className="text-[10px] text-gray-400">Salida</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-2 space-y-1 border-t border-slate-200/80 pt-2 text-xs">
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Tipo</span>
+          <strong>{r.type || "—"}</strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Vendedor</span>
+          <strong className="text-right break-all">{r.vendorName || "—"}</strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Venta</span>
+          <strong className="tabular-nums">{money(r.saleAmount || 0)}</strong>
+        </div>
+        <div className="flex justify-between gap-3 items-center">
+          <span className="text-gray-600">Paquetes</span>
+          {typeof r.packages === "number" && r.saleId ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="!h-auto !px-1 !py-0 !rounded-md underline !text-blue-600 hover:!text-blue-800 hover:!bg-blue-50 !font-normal !text-xs"
+              onClick={() => openItemsDrawer(r.saleId!, r)}
+            >
+              {r.packages}
+            </Button>
+          ) : (
+            <strong>—</strong>
+          )}
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Comisión</span>
+          <strong className="tabular-nums">
+            {typeof r.commission === "number" && r.commission > 0
+              ? money(r.commission)
+              : "—"}
+          </strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Evol. comisión</span>
+          <strong className="tabular-nums text-green-700">
+            {money(r.commissionEvol || 0)}
+          </strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Evolutivo</span>
+          <strong className="tabular-nums text-green-700">
+            {money((r as UnifiedRow).evolutive || 0)}
+          </strong>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-gray-600">Saldo</span>
+          <strong className="tabular-nums font-semibold">
+            {money(r.balance)}
+          </strong>
+        </div>
+      </div>
+    </div>
   );
 
   const renderMovementChip = (r: UnifiedRow) => {
@@ -2105,30 +2278,102 @@ export default function EstadoCuentaCandies(): React.ReactElement {
   };
 
   return (
-    <div className="max-w-7xl mx-auto bg-white p-4 sm:p-6 rounded-2xl shadow-2xl">
+    <div
+      className={
+        "w-full min-w-0 md:max-w-7xl md:mx-auto bg-white md:p-6 md:rounded-2xl md:shadow-2xl " +
+        "max-md:max-w-[100vw] max-md:w-screen max-md:ml-[calc(50%-50vw)] max-md:mr-[calc(50%-50vw)] " +
+        "max-md:box-border max-md:overflow-x-hidden max-md:-mt-3 max-md:min-h-[calc(100dvh-5.75rem)] " +
+        "max-md:rounded-none max-md:shadow-none max-md:border-0 max-md:px-4 max-md:pt-4 " +
+        "max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      }
+    >
       <div className="flex items-center justify-between mb-3 gap-2">
-        <h2 className="text-xl sm:text-2xl font-bold">Estado de Cuenta</h2>
-        <div className="flex items-center gap-2">
+        <h2 className="text-lg md:text-xl font-bold min-w-0 truncate">
+          Estado de Cuenta
+        </h2>
+        <div className="flex items-center gap-2 shrink-0">
           <Button
             type="button"
             variant="outline"
             size="sm"
             onClick={() => setBackfillModalOpen(true)}
-            className="!rounded-xl !text-amber-700 border-amber-300 hover:!bg-amber-50"
+            className="!rounded-xl !text-amber-700 border-amber-300 hover:!bg-amber-50 !hidden md:!inline-flex"
           >
             Backfill Totales
           </Button>
-          <RefreshButton onClick={refresh} loading={loading} />
+          <RefreshButton
+            onClick={refresh}
+            loading={loading}
+            className="!hidden md:!inline-flex"
+          />
           <Button
             type="button"
             variant="outline"
             size="sm"
             onClick={exportToExcel}
-            className="!rounded-xl"
+            className="!rounded-xl !hidden md:!inline-flex"
           >
             Excel
           </Button>
+          <ActionMenuTrigger
+            title="Más acciones"
+            aria-label="Más acciones"
+            className="!h-10 !w-10 md:hidden"
+            onClick={(e) => {
+              setLedgerRowActionMenu(null);
+              setHeaderToolsMenuRect(
+                e.currentTarget.getBoundingClientRect(),
+              );
+            }}
+          />
         </div>
+
+        <ActionMenu
+          anchorRect={headerToolsMenuRect}
+          isOpen={!!headerToolsMenuRect}
+          onClose={() => setHeaderToolsMenuRect(null)}
+          width={220}
+        >
+          <div className="py-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal md:hidden"
+              disabled={loading}
+              onClick={() => {
+                setHeaderToolsMenuRect(null);
+                refresh();
+              }}
+            >
+              Actualizar
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal md:hidden"
+              onClick={() => {
+                setHeaderToolsMenuRect(null);
+                setBackfillModalOpen(true);
+              }}
+            >
+              Backfill Totales
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
+              onClick={() => {
+                setHeaderToolsMenuRect(null);
+                exportToExcel();
+              }}
+            >
+              Exportar Excel
+            </Button>
+          </div>
+        </ActionMenu>
       </div>
 
       {/* Filtros fecha */}
@@ -2445,6 +2690,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
           </div>
 
           {/* KPIs Mobile (Ventas -> Paquetes -> Comisiones -> Gastos) */}
+          {!allCollapsed && (
           <div className="md:hidden mb-4">
             <div className="grid grid-cols-2 gap-2">
               <div className="border rounded-2xl p-3 bg-blue-50 text-center">
@@ -2511,6 +2757,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
               </div>
             </div>
           </div>
+          )}
 
           {/* Botón + filtros */}
           <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3">
@@ -2639,14 +2886,26 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
               <div
                 className="absolute inset-0 bg-black/40"
-                onClick={() => setModalOpen(false)}
+                aria-hidden
+                onPointerDown={(e) => {
+                  if (e.target === e.currentTarget) {
+                    setModalOpen(false);
+                    setEditingId(null);
+                  }
+                }}
               />
               <div
                 ref={modalRef}
-                className="relative bg-white rounded-2xl p-4 w-full max-w-2xl shadow-xl max-h-[92vh] overflow-hidden"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="candies-ledger-movement-modal-title"
+                className="relative flex w-full max-w-2xl min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-xl max-h-[min(92dvh,calc(100vh-2rem))]"
               >
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold">
+                <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-4 py-3">
+                  <h3
+                    id="candies-ledger-movement-modal-title"
+                    className="font-semibold"
+                  >
                     {editingId ? "Editar movimiento" : "Agregar movimiento"}
                   </h3>
                   <Button
@@ -2661,7 +2920,7 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                   </Button>
                 </div>
 
-                <div className="max-h-[78vh] overflow-y-auto pr-1">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 [scrollbar-gutter:stable]">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                   <div>
                     <label className="block text-sm text-gray-600 mb-1">
@@ -3188,8 +3447,8 @@ export default function EstadoCuentaCandies(): React.ReactElement {
             </div>
           ) : null}
 
-          {/* Tabla (desktop + móvil) */}
-          <div className="block overflow-x-auto">
+          {/* Tabla desktop */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="min-w-full w-full border text-sm table-auto">
               <thead className="bg-gray-100">
                 <tr>
@@ -3293,99 +3552,21 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                     </td>
 
                     <td className="border p-1 relative">
-                      {/* ✅ SOLO editable/eliminable: lo manual (cash_ledger_candies) */}
                       {r.source !== "ledger" ? (
                         <div className="text-xs text-gray-400">—</div>
                       ) : (
-                        <div className="inline-block">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              setActionOpenId(
-                                actionOpenId === r.id ? null : r.id,
-                              )
-                            }
-                            className="!px-2 !py-1 !rounded-lg"
-                            aria-label="Acciones"
-                          >
-                            ⋯
-                          </Button>
-
-                          {actionOpenId === r.id && (
-                            <div
-                              ref={(el) => {
-                                actionMenuRef.current =
-                                  el as HTMLDivElement | null;
-                              }}
-                              className="absolute right-2 mt-1 bg-white border rounded shadow-md z-50 text-left text-sm"
-                            >
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                className="block w-full !rounded-none justify-start px-3 py-2 text-sm font-normal"
-                                onClick={() => {
-                                  setEditingId(r.id);
-                                  setDate(r.date);
-                                  setType(r.movement as LedgerType);
-                                  setDescription(r.description || "");
-                                  setReference(r.reference || "");
-                                  setVendorId(r.vendorId || "");
-                                  setCorteDesde(
-                                    String((r as any).corteDesde || "").slice(0, 10),
-                                  );
-                                  setCorteHasta(
-                                    String((r as any).corteHasta || "").slice(0, 10),
-                                  );
-                                  setInAmount(
-                                    Number(r.inAmount || 0) === 0
-                                      ? ""
-                                      : String(Number(r.inAmount)),
-                                  );
-                                  setOutAmount(
-                                    Number(r.outAmount || 0) === 0
-                                      ? ""
-                                      : String(Number(r.outAmount)),
-                                  );
-                                  setModalOpen(true);
-                                  setActionOpenId(null);
-                                }}
-                              >
-                                Editar
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                className="block w-full !rounded-none justify-start px-3 py-2 text-sm !text-red-600 hover:!bg-red-50"
-                                onClick={async () => {
-                                  setActionOpenId(null);
-                                  if (
-                                    !window.confirm(
-                                      "¿Eliminar este movimiento?",
-                                    )
-                                  )
-                                    return;
-
-                                  try {
-                                    await deleteDoc(
-                                      doc(db, "cash_ledger_candies", r.id),
-                                    );
-                                    refresh();
-                                    setToastMsg("✅ Movimiento eliminado.");
-                                  } catch (e) {
-                                    console.error(e);
-                                    setToastMsg(
-                                      "❌ No se pudo eliminar el movimiento. Revisa la consola.",
-                                    );
-                                  }
-                                }}
-                              >
-                                Eliminar
-                              </Button>
-                            </div>
-                          )}
-                        </div>
+                        <ActionMenuTrigger
+                          className="!h-8 !w-8"
+                          title="Acciones"
+                          aria-label="Acciones"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLedgerRowActionMenu({
+                              rect: (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                              row: r,
+                            });
+                          }}
+                        />
                       )}
                     </td>
                   </tr>
@@ -3400,6 +3581,36 @@ export default function EstadoCuentaCandies(): React.ReactElement {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Movimientos en tarjetas (móvil) */}
+          <div className="md:hidden space-y-3">
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-indigo-900">
+                    Saldo inicial
+                  </div>
+                  <div className="mt-1 text-xs text-indigo-700">
+                    {from} → {to}
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="text-sm font-bold tabular-nums text-indigo-900">
+                    {money(saldoBase)}
+                  </div>
+                  <div className="text-[10px] text-indigo-600">Saldo</div>
+                </div>
+              </div>
+            </div>
+
+            {filteredRows.length === 0 ? (
+              <div className="text-center text-gray-500 text-sm py-6">
+                No hay datos en este rango.
+              </div>
+            ) : (
+              filteredRows.map((r) => renderMobileLedgerCard(r))
+            )}
           </div>
         </>
       )}
@@ -3779,6 +3990,36 @@ export default function EstadoCuentaCandies(): React.ReactElement {
         </div>
       )}
       {toastMsg && <Toast message={toastMsg} onClose={() => setToastMsg("")} />}
+
+      <ActionMenu
+        anchorRect={ledgerRowActionMenu?.rect ?? null}
+        isOpen={!!ledgerRowActionMenu}
+        onClose={() => setLedgerRowActionMenu(null)}
+        width={200}
+      >
+        {ledgerRowActionMenu && (
+          <div className="py-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClass}
+              onClick={() => openLedgerEditModal(ledgerRowActionMenu.row)}
+            >
+              Editar
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={actionMenuItemClassDestructive}
+              onClick={() => deleteLedgerRow(ledgerRowActionMenu.row)}
+            >
+              Eliminar
+            </Button>
+          </div>
+        )}
+      </ActionMenu>
     </div>
   );
 }
