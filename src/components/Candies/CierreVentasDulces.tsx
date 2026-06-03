@@ -584,6 +584,70 @@ type RoleCandies =
   | "supervisor_pollo"
   | "contador";
 
+type CierreSaleTableTotals = {
+  n: number;
+  packs: number;
+  amount: number;
+  unTotal: number;
+  uvTotal: number;
+  comm: number;
+  uNeta: number;
+};
+
+function CierreTransaccionesCollapsedTotals({
+  totals,
+  isAdmin,
+}: {
+  totals: CierreSaleTableTotals;
+  isAdmin: boolean;
+}) {
+  if (totals.n === 0) {
+    return (
+      <p className="mt-1 text-xs font-normal text-slate-500">Sin ventas</p>
+    );
+  }
+
+  return (
+    <div
+      className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-normal text-slate-600 tabular-nums"
+      aria-label={`Totales: ${totals.n} ventas`}
+    >
+      <span className="font-medium text-slate-700">
+        Totales ({totals.n} ventas)
+      </span>
+      <span>
+        <span className="text-slate-500">Paq </span>
+        {qty3(totals.packs)}
+      </span>
+      <span className="font-semibold text-emerald-700">
+        Monto C${money(totals.amount)}
+      </span>
+      {isAdmin && totals.unTotal > 0 && (
+        <span>
+          <span className="text-slate-500">UN </span>
+          C${money(round2(totals.unTotal))}
+        </span>
+      )}
+      {totals.uvTotal > 0 && (
+        <span>
+          <span className="text-slate-500">UV </span>
+          C${money(round2(totals.uvTotal))}
+        </span>
+      )}
+      {totals.comm > 0 && (
+        <span className="font-semibold text-emerald-700">
+          Com. C${money(round2(totals.comm))}
+        </span>
+      )}
+      {isAdmin && totals.uNeta > 0 && (
+        <span className="font-semibold text-emerald-700">
+          U. neta C${money(round2(totals.uNeta))}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function CierreVentasDulces({
   role,
   currentUserEmail,
@@ -3453,13 +3517,19 @@ export default function CierreVentasDulces({
             <Button
               type="button"
               variant="ghost"
-              className="w-full justify-between !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
+              className="w-full !h-auto items-start justify-between gap-3 !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
               onClick={() => setCashCardOpen((v) => !v)}
               aria-expanded={cashCardOpen}
             >
-              <span>Transacciones Cash</span>
+              <div className="min-w-0 flex-1">
+                <span>Transacciones Cash</span>
+                <CierreTransaccionesCollapsedTotals
+                  totals={cashSalesTableTotals}
+                  isAdmin={isAdmin}
+                />
+              </div>
               <span
-                className={`text-slate-400 transition-transform ${cashCardOpen ? "rotate-180" : ""}`}
+                className={`shrink-0 pt-0.5 text-slate-400 transition-transform ${cashCardOpen ? "rotate-180" : ""}`}
               >
                 ▼
               </span>
@@ -3908,13 +3978,19 @@ export default function CierreVentasDulces({
             <Button
               type="button"
               variant="ghost"
-              className="w-full justify-between !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
+              className="w-full !h-auto items-start justify-between gap-3 !rounded-none px-4 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50/90"
               onClick={() => setCreditCardOpen((v) => !v)}
               aria-expanded={creditCardOpen}
             >
-              <span>Transacciones Crédito</span>
+              <div className="min-w-0 flex-1">
+                <span>Transacciones Crédito</span>
+                <CierreTransaccionesCollapsedTotals
+                  totals={creditSalesTableTotals}
+                  isAdmin={isAdmin}
+                />
+              </div>
               <span
-                className={`text-slate-400 transition-transform ${creditCardOpen ? "rotate-180" : ""}`}
+                className={`shrink-0 pt-0.5 text-slate-400 transition-transform ${creditCardOpen ? "rotate-180" : ""}`}
               >
                 ▼
               </span>
