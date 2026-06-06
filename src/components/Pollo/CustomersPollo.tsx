@@ -1571,6 +1571,60 @@ export default function CustomersPollo({
     }
   };
 
+  const isCustomerRowSelected = (customerId: string) =>
+    showStatement && stCustomer?.id === customerId;
+
+  const handleCustomerRowActivate = (customer: CustomerRow) => {
+    setCustomerRowMenu(null);
+    void openStatement(customer);
+  };
+
+  const customerTableRowClass = (c: CustomerRow, isEditing: boolean) => {
+    if (isEditing) {
+      return "text-center bg-amber-50/40 transition";
+    }
+    if (isCustomerRowSelected(c.id)) {
+      return "text-center bg-indigo-100 hover:bg-indigo-100 ring-2 ring-inset ring-indigo-400 transition cursor-pointer";
+    }
+    return "text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition cursor-pointer";
+  };
+
+  const customerMobileCardClass = (c: CustomerRow) => {
+    if (isCustomerRowSelected(c.id)) {
+      return "rounded-xl border-2 border-indigo-400 bg-indigo-50/70 p-3 shadow-md ring-2 ring-indigo-300 cursor-pointer";
+    }
+    return "rounded-xl border-2 border-slate-200 bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 p-3 shadow-md cursor-pointer active:bg-slate-50/80";
+  };
+
+  const renderLastAbonoCell = (c: CustomerRow) => {
+    if (!c.lastAbonoDate) return "—";
+    const when = c.lastAbonoDateTime || c.lastAbonoDate;
+    const hasAmt =
+      typeof c.lastAbonoAmount === "number" && c.lastAbonoAmount > 0;
+    if (!hasAmt) return when;
+    return (
+      <>
+        {when}{" "}
+        <span className="font-bold text-green-700 tabular-nums">
+          ({money(c.lastAbonoAmount!)})
+        </span>
+      </>
+    );
+  };
+
+  const isStatementSaleSelected = (saleId: string) =>
+    itemsDrawerOpen && itemsModalSaleId === saleId;
+
+  const statementSaleTableRowClass = (saleId: string) =>
+    isStatementSaleSelected(saleId)
+      ? "text-center cursor-pointer bg-indigo-100 hover:bg-indigo-100 ring-2 ring-inset ring-indigo-400 transition-colors"
+      : "text-center cursor-pointer hover:bg-slate-50/90 transition-colors";
+
+  const statementSaleCardClass = (saleId: string) =>
+    isStatementSaleSelected(saleId)
+      ? "rounded-xl border-2 border-indigo-400 bg-indigo-50/70 p-3 shadow-md ring-2 ring-indigo-300 cursor-pointer outline-none"
+      : "rounded-xl border-2 border-sky-200 bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/50 p-3 shadow-md cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-sky-400";
+
   const refreshStatement = async () => {
     if (!stCustomer) return;
     setStLoading(true);
@@ -3149,14 +3203,9 @@ export default function CustomersPollo({
                   <th className="p-3 border-b text-left">Creado</th>
 
                   <th className="p-3 border-b text-left">Ult. Compra</th>
-                  <th className="p-3 border-b text-left">Ult. Abono</th>
                   <th className="p-3 border-b text-left">Nombre</th>
-                  {/* <th className="p-3 border-b text-left">Teléfono</th> */}
-                  <th className="p-3 border-b text-left">Vendedor</th>
-                  <th className="p-3 border-b text-left">Lugar</th>
-                  {/* <th className="p-3 border-b text-right">Límite</th> */}
+                  <th className="p-3 border-b text-left">Ult. Abono</th>
                   <th className="p-3 border-b text-right">Saldo</th>
-                  <th className="p-3 border-b text-left">Comentario</th>
                   <th className="p-3 border-b text-right">Acciones</th>
                 </tr>
               </thead>
@@ -3164,13 +3213,13 @@ export default function CustomersPollo({
               <tbody>
                 {loading ? (
                   <tr>
-                    <td className="p-4 text-center" colSpan={12}>
+                    <td className="p-4 text-center" colSpan={7}>
                       Cargando…
                     </td>
                   </tr>
                 ) : filteredRows.length === 0 ? (
                   <tr>
-                    <td className="p-4 text-center" colSpan={12}>
+                    <td className="p-4 text-center" colSpan={7}>
                       Sin clientes
                     </td>
                   </tr>
@@ -3180,7 +3229,10 @@ export default function CustomersPollo({
                     return (
                       <tr
                         key={c.id}
-                        className="text-center odd:bg-white even:bg-slate-50 hover:bg-amber-50/60 transition"
+                        className={customerTableRowClass(c, isEditing)}
+                        onClick={() => {
+                          if (!isEditing) handleCustomerRowActivate(c);
+                        }}
                       >
                         <td className="p-3 border-b text-left">
                           {isEditing ? (
@@ -3215,117 +3267,66 @@ export default function CustomersPollo({
                           {c.lastSaleDate ? c.lastSaleDate : "—"}
                         </td>
                         <td className="p-3 border-b text-left">
-                          {c.lastAbonoDate ? c.lastAbonoDate : "—"}
-                        </td>
-                        <td className="p-3 border-b text-left">
                           {isEditing ? (
-                            <input
-                              className="w-full border p-1 rounded"
-                              value={eName}
-                              onChange={(e) => setEName(e.target.value)}
-                            />
+                            <div className="space-y-2">
+                              <input
+                                className="w-full border p-1 rounded"
+                                value={eName}
+                                onChange={(e) => setEName(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <MobileHtmlSelect
+                                value={isVendor ? sellerIdSafe : eVendorId}
+                                onChange={setEVendorId}
+                                disabled={isVendor}
+                                options={[
+                                  {
+                                    value: "",
+                                    label: "— Sin vendedor —",
+                                  },
+                                  ...sellers.map((s) => ({
+                                    value: s.id,
+                                    label: s.name,
+                                  })),
+                                ]}
+                                selectClassName="w-full border p-1 rounded text-xs"
+                                buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
+                                sheetTitle="Vendedor"
+                              />
+                              <MobileHtmlSelect
+                                value={ePlace}
+                                onChange={(v) => setEPlace(v as Place | "")}
+                                options={[
+                                  { value: "", label: "—" },
+                                  ...PLACES.map((p) => ({
+                                    value: p,
+                                    label: p,
+                                  })),
+                                ]}
+                                selectClassName="w-full border p-1 rounded text-xs"
+                                buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
+                                sheetTitle="Lugar"
+                              />
+                              <textarea
+                                className="w-full border p-1 rounded resize-y min-h-12 text-xs"
+                                value={eNotes}
+                                onChange={(e) => setENotes(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                maxLength={500}
+                                placeholder="Comentario"
+                              />
+                            </div>
                           ) : (
                             <div className="font-medium text-slate-900">
                               {c.name}
                             </div>
                           )}
                         </td>
-                        {/* <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <input
-                              className="w-full border p-1 rounded"
-                              value={ePhone}
-                              onChange={(e) =>
-                                setEPhone(normalizePhone(e.target.value))
-                              }
-                            />
-                          ) : (
-                            c.phone
-                          )}
-                        </td> */}
-                        <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <MobileHtmlSelect
-                              value={isVendor ? sellerIdSafe : eVendorId}
-                              onChange={setEVendorId}
-                              disabled={isVendor}
-                              options={[
-                                {
-                                  value: "",
-                                  label: "— Sin vendedor —",
-                                },
-                                ...sellers.map((s) => ({
-                                  value: s.id,
-                                  label: s.name,
-                                })),
-                              ]}
-                              selectClassName="w-full border p-1 rounded text-xs"
-                              buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
-                              sheetTitle="Vendedor"
-                            />
-                          ) : (
-                            c.vendorName || "—"
-                          )}
+                        <td className="p-3 border-b text-left whitespace-nowrap">
+                          {renderLastAbonoCell(c)}
                         </td>
-                        <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <MobileHtmlSelect
-                              value={ePlace}
-                              onChange={(v) => setEPlace(v as Place | "")}
-                              options={[
-                                { value: "", label: "—" },
-                                ...PLACES.map((p) => ({
-                                  value: p,
-                                  label: p,
-                                })),
-                              ]}
-                              selectClassName="w-full border p-1 rounded text-xs"
-                              buttonClassName="w-full border p-1 rounded text-xs text-left flex items-center justify-between gap-1 bg-white"
-                              sheetTitle="Lugar"
-                            />
-                          ) : (
-                            c.place || "—"
-                          )}
-                        </td>
-
-                        {/* <td className="p-3 border-b text-right">
-                          {isEditing ? (
-                            <input
-                              type="number"
-                              step="0.01"
-                              inputMode="decimal"
-                              className="w-full border p-1 rounded text-right"
-                              value={
-                                Number.isNaN(eCreditLimit) ? "" : eCreditLimit
-                              }
-                              onChange={(e) =>
-                                setECreditLimit(
-                                  Math.max(0, Number(e.target.value || 0)),
-                                )
-                              }
-                            />
-                          ) : (
-                            money(c.creditLimit || 0)
-                          )}
-                        </td> */}
                         <td className="p-3 border-b text-right font-semibold">
                           {money(c.balance || 0)}
-                        </td>
-                        <td className="p-3 border-b text-left">
-                          {isEditing ? (
-                            <textarea
-                              className="w-full border p-1 rounded resize-y min-h-12"
-                              value={eNotes}
-                              onChange={(e) => setENotes(e.target.value)}
-                              maxLength={500}
-                            />
-                          ) : (
-                            <span title={c.notes || ""}>
-                              {(c.notes || "").length > 40
-                                ? (c.notes || "").slice(0, 40) + "…"
-                                : c.notes || "—"}
-                            </span>
-                          )}
                         </td>
                         <td className="p-3 border-b text-right">
                           {isEditing ? (
@@ -3335,7 +3336,10 @@ export default function CustomersPollo({
                                 variant="primary"
                                 size="sm"
                                 className="!rounded-lg px-2 py-1"
-                                onClick={saveEdit}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  saveEdit();
+                                }}
                               >
                                 Guardar
                               </Button>
@@ -3344,24 +3348,29 @@ export default function CustomersPollo({
                                 variant="secondary"
                                 size="sm"
                                 className="!rounded-lg px-2 py-1"
-                                onClick={cancelEdit}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  cancelEdit();
+                                }}
                               >
                                 Cancelar
                               </Button>
                             </div>
                           ) : (
-                            <ActionMenuTrigger
-                              aria-label="Acciones del cliente"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setCustomerRowMenu({
-                                  id: c.id,
-                                  rect: (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect(),
-                                });
-                              }}
-                            />
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <ActionMenuTrigger
+                                aria-label="Acciones del cliente"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCustomerRowMenu({
+                                    id: c.id,
+                                    rect: (
+                                      e.currentTarget as HTMLElement
+                                    ).getBoundingClientRect(),
+                                  });
+                                }}
+                              />
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -3386,7 +3395,17 @@ export default function CustomersPollo({
             filteredRows.map((c) => (
               <div
                 key={c.id}
-                className="rounded-xl border-2 border-slate-200 bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 p-3 shadow-md"
+                role="button"
+                tabIndex={0}
+                className={customerMobileCardClass(c)}
+                aria-pressed={isCustomerRowSelected(c.id)}
+                onClick={() => handleCustomerRowActivate(c)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleCustomerRowActivate(c);
+                  }
+                }}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -3447,17 +3466,21 @@ export default function CustomersPollo({
                   </div>
                 ) : null}
 
-                <div className="mt-3 flex justify-end">
+                <div
+                  className="mt-3 flex justify-end"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <ActionMenuTrigger
                     aria-label="Acciones del cliente"
-                    onClick={(e) =>
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setCustomerRowMenu({
                         id: c.id,
                         rect: (
                           e.currentTarget as HTMLElement
                         ).getBoundingClientRect(),
-                      })
-                    }
+                      });
+                    }}
                   />
                 </div>
               </div>
@@ -3491,7 +3514,7 @@ export default function CustomersPollo({
                   className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
                   onClick={() => {
                     setCustomerRowMenu(null);
-                    void openStatement(c);
+                    handleCustomerRowActivate(c);
                   }}
                 >
                   Ver consignaciones
@@ -3712,27 +3735,41 @@ export default function CustomersPollo({
       {showStatement && (
         <>
           {createPortal(
-          <div className="fixed inset-0 z-[50]" style={{ zIndex: 50 }}>
-            {/* overlay */}
+          <div
+            className="fixed inset-0 z-[50] flex items-center justify-center p-4 md:items-stretch md:justify-end md:p-0"
+            style={{ zIndex: 50 }}
+          >
+            {/* overlay — en desktop deja ver la tabla y la fila seleccionada */}
             <div
               className="absolute inset-0 bg-black/40"
               onClick={closeStatement}
             />
 
-            {/* modal */}
-            <div className="absolute inset-0 flex items-center justify-center p-4">
-              <div className="bg-white rounded-lg shadow-xl border w-full max-w-5xl max-h-[92vh] overflow-auto p-4">
+            {/* panel: modal centrado en móvil, drawer lateral en desktop */}
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="pollo-statement-panel-title"
+              className="relative z-10 bg-white shadow-2xl border w-full max-w-5xl max-h-[92vh] overflow-auto p-4 rounded-lg md:h-full md:max-h-none md:rounded-none md:border-l md:border-t-0 md:border-b-0 md:border-r-0"
+              onClick={(e) => e.stopPropagation()}
+            >
                 <div className="flex items-center justify-between mb-3 gap-3">
                   <div className="min-w-0 flex-1 pr-2">
                     <div className="md:hidden">
-                      <h3 className="text-lg font-bold leading-tight">
+                      <h3
+                        id="pollo-statement-panel-title"
+                        className="text-lg font-bold leading-tight"
+                      >
                         Estado de cuenta
                       </h3>
                       <p className="text-sm text-gray-600 mt-0.5 break-words">
                         {stCustomer?.name || ""}
                       </p>
                     </div>
-                    <h3 className="text-lg font-bold hidden md:block truncate">
+                    <h3
+                      id="pollo-statement-panel-title"
+                      className="text-lg font-bold hidden md:block truncate"
+                    >
                       Estado de cuenta: {stCustomer?.name || ""}
                     </h3>
                   </div>
@@ -3932,7 +3969,8 @@ export default function CustomersPollo({
                             return (
                               <tr
                                 key={m.id}
-                                className="text-center cursor-pointer hover:bg-slate-50/90 transition-colors"
+                                className={statementSaleTableRowClass(saleId)}
+                                aria-selected={isStatementSaleSelected(saleId)}
                                 onClick={() => void openItemsDrawer(saleId)}
                               >
                                 <td className="p-2 border">{m.date || "—"}</td>
@@ -4120,7 +4158,8 @@ export default function CustomersPollo({
                               key={m.id}
                               role="button"
                               tabIndex={0}
-                              className="rounded-xl border-2 border-sky-200 bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/50 p-3 shadow-md cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                              className={statementSaleCardClass(saleId)}
+                              aria-pressed={isStatementSaleSelected(saleId)}
                               onClick={() => void openItemsDrawer(saleId)}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" || e.key === " ") {
@@ -4194,7 +4233,6 @@ export default function CustomersPollo({
                 </div>
 
                 {editMovId && !ledgerInlineEdit && renderEditMovementPanel()}
-              </div>
             </div>
 
             <ActionMenu

@@ -560,6 +560,14 @@ export default function InventoryBatches({
   const toggleGroupExpand = (groupId: string) =>
     setExpandedGroupId((prev) => (prev === groupId ? null : groupId));
 
+  const isInventoryGroupSelected = (groupId: string) =>
+    desktopDrawerGroup?.groupId === groupId;
+
+  const inventoryGroupTableRowClass = (groupId: string) =>
+    isInventoryGroupSelected(groupId)
+      ? "bg-indigo-100 hover:bg-indigo-100 ring-2 ring-inset ring-indigo-400 cursor-pointer transition-colors"
+      : "hover:bg-gray-50 cursor-pointer transition-colors";
+
   // estado para KPIs colapsable
   /** Panel de KPIs (Resumen / Finanzas / Cobros): colapsado por defecto. */
   const [kpisExpanded, setKpisExpanded] = useState<boolean>(false);
@@ -3489,7 +3497,8 @@ export default function InventoryBatches({
                   }
                   role="button"
                   tabIndex={0}
-                  className="hover:bg-gray-50 cursor-pointer transition-colors"
+                  className={inventoryGroupTableRowClass(g.groupId)}
+                  aria-selected={isInventoryGroupSelected(g.groupId)}
                   onClick={() => setDesktopDrawerGroup(g)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {

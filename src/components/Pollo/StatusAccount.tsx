@@ -237,6 +237,24 @@ type AbonoRow = {
   customerId?: string;
 };
 
+function parseAbonoRowFromFirestore(
+  id: string,
+  raw: Record<string, unknown>,
+): AbonoRow | null {
+  if (String(raw.type ?? "").trim().toUpperCase() !== "ABONO") return null;
+  const ref = raw.ref as { saleId?: string } | undefined;
+  const refSale = ref?.saleId ? String(ref.saleId) : undefined;
+  return {
+    id,
+    date: String(raw.date || ""),
+    customer: String(raw.customerName || raw.customer || "—"),
+    amount: Math.abs(Number(raw.amount ?? 0)),
+    comment: String(raw.comment || ""),
+    saleId: refSale,
+    customerId: raw.customerId ? String(raw.customerId) : undefined,
+  };
+}
+
 /** Línea para drawer “ventas cash del día” (CONTADO). */
 type CashSaleLine = {
   id: string;
@@ -517,6 +535,14 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const [saldoDrawerTab, setSaldoDrawerTab] = useState<"ventas" | "abonos">(
     "ventas",
   );
+  /** Drawer CORTE: pestaña Ventas cash vs Abonos del periodo */
+  const [corteDrawerTab, setCorteDrawerTab] = useState<"ventas" | "abonos">(
+    "ventas",
+  );
+  /** Abonos del rango corteDesde→corteHasta (consulta directa a Firestore) */
+  const [corteDrawerAbonos, setCorteDrawerAbonos] = useState<AbonoRow[]>([]);
+  const [corteDrawerAbonosLoading, setCorteDrawerAbonosLoading] =
+    useState(false);
   /** yyyy-MM-dd: drawer con listado de abonos AR de ese día + ventas */
   const [abonoDiaDrawerDate, setAbonoDiaDrawerDate] = useState<string | null>(
     null,
@@ -924,20 +950,11 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         const arSnap = await getDocs(qar);
         const abonos: AbonoRow[] = [];
         arSnap.forEach((d) => {
-          const m = d.data() as any;
-          if (String(m.type ?? "").trim().toUpperCase() !== "ABONO") return;
-          const refSale = m.ref?.saleId
-            ? String(m.ref.saleId)
-            : undefined;
-          abonos.push({
-            id: d.id,
-            date: m.date || "",
-            customer: m.customerName || m.customer || "—",
-            amount: Math.abs(Number(m.amount ?? 0)),
-            comment: String(m.comment || ""),
-            saleId: refSale,
-            customerId: m.customerId ? String(m.customerId) : undefined,
-          });
+          const row = parseAbonoRowFromFirestore(
+            d.id,
+            d.data() as Record<string, unknown>,
+          );
+          if (row) abonos.push(row);
         });
 
         if (!mounted) return;
@@ -1349,6 +1366,126 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     () => aggregateCashSaleLinesForDrawer(corteDrawerLines),
     [corteDrawerLines],
   );
+
+  const corteDrawerAbonosTotal = useMemo(
+    () =>
+      round2(
+        corteDrawerAbonos.reduce((s, a) => s + Number(a.amount || 0), 0),
+      ),
+    [corteDrawerAbonos],
+  );
+
+  /** Abonos y ventas asociadas del periodo exacto del corte (Desde → Hasta). */
+  useEffect(() => {
+    if (!movimientoDrawerRow || movimientoDrawerRow.type !== "CORTE") {
+      setCorteDrawerAbonos([]);
+      setCorteDrawerAbonosLoading(false);
+      return;
+    }
+    if (!corteAssocRange) {
+      setCorteDrawerAbonos([]);
+      setCorteDrawerAbonosLoading(false);
+      return;
+    }
+    const { desde, hasta } = corteAssocRange;
+    let cancelled = false;
+    setCorteDrawerAbonosLoading(true);
+    (async () => {
+      try {
+        const qar = query(
+          collection(db, "ar_movements_pollo"),
+          where("date", ">=", desde),
+          where("date", "<=", hasta),
+        );
+        const arSnap = await getDocs(qar);
+        const abonos: AbonoRow[] = [];
+        arSnap.forEach((docSnap) => {
+          const row = parseAbonoRowFromFirestore(
+            docSnap.id,
+            docSnap.data() as Record<string, unknown>,
+          );
+          if (row) abonos.push(row);
+        });
+        abonos.sort((a, b) => a.date.localeCompare(b.date));
+
+        const saleIds = [
+          ...new Set(
+            abonos
+              .map((a) => a.saleId)
+              .filter((x): x is string => Boolean(x)),
+          ),
+        ];
+        const customerIdsNeedingName = [
+          ...new Set(
+            abonos
+              .filter((a) => a.customer === "—" && a.customerId)
+              .map((a) => a.customerId as string),
+          ),
+        ];
+
+        const saleById: Record<
+          string,
+          Record<string, unknown> & { id?: string }
+        > = {};
+        await Promise.all([
+          ...saleIds.map(async (sid) => {
+            try {
+              const snap = await getDoc(doc(db, "salesV2", sid));
+              if (snap.exists()) {
+                saleById[sid] = { id: snap.id, ...snap.data() };
+              } else {
+                saleById[sid] = { id: sid, _missing: true };
+              }
+            } catch {
+              saleById[sid] = { id: sid, _missing: true };
+            }
+          }),
+          ...customerIdsNeedingName.map(async (cid) => {
+            try {
+              const snap = await getDoc(doc(db, "customers_pollo", cid));
+              if (!snap.exists()) return;
+              const name = String(
+                snap.data()?.name || snap.data()?.customerName || "",
+              ).trim();
+              if (!name) return;
+              for (const a of abonos) {
+                if (a.customerId === cid && a.customer === "—") {
+                  a.customer = name;
+                }
+              }
+            } catch {
+              /* ignore */
+            }
+          }),
+        ]);
+
+        for (const a of abonos) {
+          if (a.customer !== "—" || !a.saleId) continue;
+          const sale = saleById[a.saleId];
+          if (!sale || (sale as Record<string, unknown>)._missing) continue;
+          const saleCustomer = String(
+            sale.customerName || sale.customer || "",
+          ).trim();
+          if (saleCustomer) a.customer = saleCustomer;
+        }
+
+        if (!cancelled) {
+          setCorteDrawerAbonos(abonos);
+          if (Object.keys(saleById).length > 0) {
+            setSaleCache((prev) => ({ ...prev, ...saleById }));
+          }
+        }
+      } catch (e) {
+        console.error("Corte drawer abonos:", e);
+        if (!cancelled) setCorteDrawerAbonos([]);
+      } finally {
+        if (!cancelled) setCorteDrawerAbonosLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [movimientoDrawerRow, corteAssocRange]);
 
   useEffect(() => {
     if (!abonoDiaDrawerDate) return;
@@ -1949,10 +2086,20 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
   // close modal/menu on outside click or Escape
   useEffect(() => {
+    const isInsidePortaledOverlay = (target: Node): boolean => {
+      if (!(target instanceof Element)) return false;
+      if (target.closest("[data-mobile-html-select-dropdown]")) return true;
+      if (target.closest("[data-action-menu-root]")) return true;
+      const dialog = target.closest('[role="dialog"][aria-modal="true"]');
+      if (!dialog || !modalRef.current) return false;
+      return !modalRef.current.contains(dialog);
+    };
+
     const onDocMouseDown = (ev: MouseEvent) => {
       const target = ev.target as Node;
       if (modalOpen) {
         if (modalRef.current && !modalRef.current.contains(target)) {
+          if (isInsidePortaledOverlay(target)) return;
           setModalOpen(false);
           setEditingId(null);
         }
@@ -1960,7 +2107,15 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     };
 
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") {
+      if (ev.key !== "Escape") return;
+      if (document.querySelector("[data-mobile-html-select-dropdown]")) {
+        return;
+      }
+      if (modalOpen && modalRef.current) {
+        const hasExternalDialog = Array.from(
+          document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+        ).some((d) => !modalRef.current!.contains(d));
+        if (hasExternalDialog) return;
         setModalOpen(false);
         setEditingId(null);
       }
@@ -2630,8 +2785,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     />
                   </div>
                   <p className="sm:col-span-2 text-xs text-gray-500">
-                    El detalle del movimiento mostrará las ventas cash (CONTADO) con
-                    fecha de venta entre Desde y Hasta, según el periodo cargado.
+                    La vista previa y el detalle del corte incluyen ventas cash
+                    (CONTADO) y abonos con fecha entre Desde y Hasta.
                   </p>
                   <div className="sm:col-span-2 rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/95 via-white to-violet-50/60 p-3 shadow-sm">
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-900 mb-2">
@@ -3535,11 +3690,18 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
       <SlideOverDrawer
         open={movimientoDrawerRow !== null}
-        onClose={() => setMovimientoDrawerRow(null)}
+        onClose={() => {
+          setMovimientoDrawerRow(null);
+          setCorteDrawerTab("ventas");
+          setCorteDrawerAbonos([]);
+          setCorteDrawerAbonosLoading(false);
+        }}
         title="Detalle del movimiento"
         subtitle={
           movimientoDrawerRow
-            ? String(movimientoDrawerRow.date || "")
+            ? movimientoDrawerRow.type === "CORTE" && corteAssocRange
+              ? `${corteAssocRange.desde} → ${corteAssocRange.hasta}`
+              : String(movimientoDrawerRow.date || "")
             : undefined
         }
         titleId="drawer-movimiento-caja-title"
@@ -3724,92 +3886,247 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               </>
             ) : null}
             {movimientoDrawerRow.type === "CORTE" && corteAssocRange ? (
-              <>
-                <DrawerSectionTitle className="mt-4 mb-2">
-                  Ventas del corte · {corteAssocRange.desde} →{" "}
-                  {corteAssocRange.hasta}
-                </DrawerSectionTitle>
-                {corteDrawerLines.length === 0 ? (
-                  <p className="text-sm text-gray-500 px-1">
-                    Sin ventas CONTADO en ese rango en el periodo cargado (ampliá
-                    Desde/Hasta en filtros o recargá).
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    <DrawerStatGrid
-                      items={[
-                        {
-                          label: "Cant. productos (distintos)",
-                          value: corteDrawerKpis.productCount,
-                          tone: "slate",
-                        },
-                        {
-                          label: "Líneas",
-                          value: corteDrawerKpis.lineCount,
-                          tone: "sky",
-                        },
-                        {
-                          label: "Libras (tipo libra)",
-                          value: qty3(corteDrawerKpis.lbs),
-                          tone: "amber",
-                        },
-                        {
-                          label: "Unidades (no libra)",
-                          value: qty3(corteDrawerKpis.units),
-                          tone: "violet",
-                        },
-                        {
-                          label: "Monto",
-                          value: money(corteDrawerKpis.amount),
-                          tone: "indigo",
-                        },
-                        {
-                          label: "Utilidad bruta",
-                          value: money(corteDrawerKpis.grossProfit),
-                          tone: "emerald",
-                        },
-                      ]}
-                    />
-                    <DrawerSectionTitle className="mt-0">
-                      {corteDrawerLines.length} línea(s) · solo cash (CONTADO)
+              <div className="mt-8 flex flex-col gap-8 border-t border-gray-100 pt-8">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:gap-5">
+                  <div className="rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-3.5">
+                    <div className="text-[11px] text-blue-800">Ventas cash</div>
+                    <div className="text-base font-bold text-blue-950 tabular-nums">
+                      {money(corteDrawerKpis.amount)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-emerald-100 bg-emerald-50/80 px-3 py-3.5">
+                    <div className="text-[11px] text-emerald-800">
+                      Abonos periodo
+                    </div>
+                    <div className="text-base font-bold text-emerald-900 tabular-nums">
+                      {corteDrawerAbonosLoading
+                        ? "…"
+                        : money(corteDrawerAbonosTotal)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3.5">
+                    <div className="text-[11px] text-slate-600">Utilidad bruta</div>
+                    <div className="text-base font-semibold text-slate-900 tabular-nums">
+                      {money(corteDrawerKpis.grossProfit)}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  className="flex flex-wrap gap-3 py-1"
+                  role="tablist"
+                  aria-label="Sección del corte"
+                >
+                  <Button
+                    type="button"
+                    role="tab"
+                    aria-selected={corteDrawerTab === "ventas"}
+                    variant={corteDrawerTab === "ventas" ? "primary" : "outline"}
+                    size="sm"
+                    className={`!rounded-full !text-xs !font-semibold ${
+                      corteDrawerTab === "ventas"
+                        ? ""
+                        : "!bg-white !text-slate-700 !border-slate-200 hover:!bg-slate-50"
+                    }`}
+                    onClick={() => setCorteDrawerTab("ventas")}
+                  >
+                    Ventas cash
+                  </Button>
+                  <Button
+                    type="button"
+                    role="tab"
+                    aria-selected={corteDrawerTab === "abonos"}
+                    variant={corteDrawerTab === "abonos" ? "primary" : "outline"}
+                    size="sm"
+                    className={`!rounded-full !text-xs !font-semibold ${
+                      corteDrawerTab === "abonos"
+                        ? ""
+                        : "!bg-white !text-slate-700 !border-slate-200 hover:!bg-slate-50"
+                    }`}
+                    onClick={() => setCorteDrawerTab("abonos")}
+                  >
+                    Abonos
+                  </Button>
+                </div>
+
+                {corteDrawerTab === "ventas" ? (
+                  <div className="flex flex-col gap-6">
+                    <DrawerSectionTitle className="mt-0 mb-0">
+                      Ventas cash · {corteAssocRange.desde} →{" "}
+                      {corteAssocRange.hasta}
                     </DrawerSectionTitle>
-                    {corteDrawerLines.map((line, corteLineIdx) => (
-                      <DrawerDetailDlCard
-                        key={`${line.id}-${line.date}-${corteLineIdx}`}
-                        title={line.productName}
-                        rows={[
-                          { label: "Fecha venta", value: line.date },
-                          {
-                            label: "Precio",
-                            value: money(line.unitPrice),
-                            ddClassName: "tabular-nums",
-                          },
-                          {
-                            label: "Cantidad",
-                            value: line.qtyLabel,
-                          },
-                          {
-                            label: "Monto",
-                            value: money(line.amount),
-                            ddClassName: "tabular-nums font-semibold",
-                          },
-                          {
-                            label: "U. bruta",
-                            value: money(line.grossProfit),
-                            ddClassName:
-                              "tabular-nums text-violet-800 font-semibold",
-                          },
-                          {
-                            label: "Vendedor",
-                            value: line.seller,
-                            ddClassName: "text-sm break-all",
-                          },
-                        ]}
-                      />
-                    ))}
+                    {corteDrawerLines.length === 0 ? (
+                      <p className="text-sm text-gray-500 px-1">
+                        Sin ventas CONTADO en ese rango en el periodo cargado
+                        (ampliá Desde/Hasta en filtros o recargá).
+                      </p>
+                    ) : (
+                      <div className="flex flex-col gap-5">
+                        <DrawerStatGrid
+                          items={[
+                            {
+                              label: "Cant. productos (distintos)",
+                              value: corteDrawerKpis.productCount,
+                              tone: "slate",
+                            },
+                            {
+                              label: "Líneas",
+                              value: corteDrawerKpis.lineCount,
+                              tone: "sky",
+                            },
+                            {
+                              label: "Libras (tipo libra)",
+                              value: qty3(corteDrawerKpis.lbs),
+                              tone: "amber",
+                            },
+                            {
+                              label: "Unidades (no libra)",
+                              value: qty3(corteDrawerKpis.units),
+                              tone: "violet",
+                            },
+                            {
+                              label: "Monto",
+                              value: money(corteDrawerKpis.amount),
+                              tone: "indigo",
+                            },
+                            {
+                              label: "Utilidad bruta",
+                              value: money(corteDrawerKpis.grossProfit),
+                              tone: "emerald",
+                            },
+                          ]}
+                        />
+                        <DrawerSectionTitle className="mt-0 mb-0">
+                          {corteDrawerLines.length} línea(s) · solo cash (CONTADO)
+                        </DrawerSectionTitle>
+                        <div className="flex flex-col gap-3">
+                        {corteDrawerLines.map((line, corteLineIdx) => (
+                          <DrawerDetailDlCard
+                            key={`${line.id}-${line.date}-${corteLineIdx}`}
+                            title={line.productName}
+                            rows={[
+                              { label: "Fecha venta", value: line.date },
+                              {
+                                label: "Precio",
+                                value: money(line.unitPrice),
+                                ddClassName: "tabular-nums",
+                              },
+                              {
+                                label: "Cantidad",
+                                value: line.qtyLabel,
+                              },
+                              {
+                                label: "Monto",
+                                value: money(line.amount),
+                                ddClassName: "tabular-nums font-semibold",
+                              },
+                              {
+                                label: "U. bruta",
+                                value: money(line.grossProfit),
+                                ddClassName:
+                                  "tabular-nums text-violet-800 font-semibold",
+                              },
+                              {
+                                label: "Vendedor",
+                                value: line.seller,
+                                ddClassName: "text-sm break-all",
+                              },
+                            ]}
+                          />
+                        ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-6">
+                    <DrawerSectionTitle className="mt-0 mb-0">
+                      Abonos del periodo · {corteAssocRange.desde} →{" "}
+                      {corteAssocRange.hasta}
+                    </DrawerSectionTitle>
+                    {corteDrawerAbonosLoading ? (
+                      <p className="text-sm text-gray-500 px-1">
+                        Cargando abonos del periodo…
+                      </p>
+                    ) : corteDrawerAbonos.length === 0 ? (
+                      <p className="text-sm text-gray-500 px-1">
+                        Sin abonos registrados entre{" "}
+                        {corteAssocRange.desde} y {corteAssocRange.hasta}.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {corteDrawerAbonos.map((a) => {
+                          const sale = a.saleId ? saleCache[a.saleId] : undefined;
+                          return (
+                            <div
+                              key={a.id}
+                              className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-3"
+                            >
+                              <div className="flex justify-between gap-2 items-start">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-900">
+                                    {a.customer}
+                                  </div>
+                                  <div className="text-xs text-slate-500 mt-0.5">
+                                    Abono · {a.date}
+                                  </div>
+                                </div>
+                                <div className="text-base font-bold tabular-nums text-emerald-800 shrink-0">
+                                  {money(a.amount)}
+                                </div>
+                              </div>
+                              {a.comment ? (
+                                <p className="text-xs text-slate-600 leading-snug">
+                                  {a.comment}
+                                </p>
+                              ) : null}
+                              {a.saleId ? (
+                                <div className="border-t border-slate-200/80 pt-3">
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                                    Venta abonada
+                                  </div>
+                                  {sale ? (
+                                    (sale as Record<string, unknown>)._missing ? (
+                                      <p className="text-sm text-amber-800">
+                                        No se encontró la venta{" "}
+                                        <span className="font-mono text-xs">
+                                          {a.saleId}
+                                        </span>
+                                        .
+                                      </p>
+                                    ) : (
+                                      <DrawerDetailDlCard
+                                        title={String(
+                                          sale.customerName ||
+                                            sale.customer ||
+                                            "Venta",
+                                        )}
+                                        rows={buildSaleDetailRows(
+                                          sale as Record<string, unknown> & {
+                                            id?: string;
+                                          },
+                                        )}
+                                      />
+                                    )
+                                  ) : (
+                                    <p className="text-sm text-gray-500">
+                                      Cargando venta…
+                                    </p>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-slate-500 border-t border-slate-200/80 pt-3">
+                                  Abono general (sin venta ligada).
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
-              </>
+              </div>
             ) : movimientoDrawerRow.type === "CORTE" ? (
               <p className="text-sm text-amber-800 px-1 mt-4">
                 Guardá Desde y Hasta válidos en el movimiento para listar las
