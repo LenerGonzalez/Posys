@@ -6,6 +6,7 @@ import {
   serverTimestamp,
   getDoc,
   doc as fsDoc,
+  getDocs,
   type DocumentSnapshot,
 } from "firebase/firestore";
 import { format } from "date-fns";
@@ -115,6 +116,242 @@ const normKeyLocal = (s: unknown) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .trim();
+
+type MoveLotLink = {
+  batchId: string;
+  qty: number;
+  date: string;
+  orderName?: string;
+};
+
+type MoveLotContexto =
+  | "lote_anterior"
+  | "lote_actual"
+  | "transicion"
+  | "ingreso"
+  | "none";
+
+type MoveLotDisplay = {
+  links: MoveLotLink[];
+  contexto: MoveLotContexto;
+};
+
+function batchDateFromFirestoreData(b: Record<string, unknown>): string {
+  const toDateKey = (v: unknown): string => {
+    if (v == null) return "";
+    const anyV = v as { toDate?: () => Date };
+    if (typeof anyV.toDate === "function") {
+      const d = anyV.toDate();
+      if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    }
+    const s = String(v).trim().slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+  };
+  return (
+    toDateKey(b.date) ||
+    toDateKey(b.createdAt) ||
+    toDateKey(b.created_at) ||
+    toDateKey(b.paidAt) ||
+    toDateKey(b.batchDate) ||
+    toDateKey(b.batch_date) ||
+    ""
+  );
+}
+
+function batchMatchesProduct(
+  b: Record<string, unknown>,
+  productKey: string,
+  productId?: string,
+  productName?: string,
+): boolean {
+  const pName = String(b.productName ?? "");
+  const pId = String(b.productId ?? "").trim();
+  return (
+    (productId && pId && pId === productId) ||
+    (pId && pId === productKey) ||
+    normKeyLocal(pName) === normKeyLocal(productName) ||
+    normKeyLocal(pName) === normKeyLocal(productKey)
+  );
+}
+
+function parseSaleProductAllocations(
+  s: Record<string, unknown>,
+  selId: string,
+  selKey: string,
+  selName: string,
+): { batchId: string; qty: number }[] {
+  const byBatch = new Map<string, number>();
+  const matchItem = (it: Record<string, unknown>) => {
+    const itPid = String(it.productId ?? "").trim();
+    const itName = normKeyLocal(it.productName);
+    return (
+      (selId && itPid && itPid === selId) ||
+      (itPid && itPid === selKey) ||
+      itName === normKeyLocal(selName) ||
+      itName === normKeyLocal(selKey)
+    );
+  };
+
+  const addAllocs = (it: Record<string, unknown>) => {
+    const raw = it.allocations;
+    if (!Array.isArray(raw)) return;
+    for (const a of raw) {
+      const row = a as Record<string, unknown>;
+      const bid = String(row.batchId ?? "").trim();
+      const qty = Number(row.qty ?? 0);
+      if (bid && qty > 0) {
+        byBatch.set(bid, round2((byBatch.get(bid) || 0) + qty));
+      }
+    }
+  };
+
+  if (Array.isArray(s.items) && s.items.length > 0) {
+    for (const raw of s.items) {
+      const it = raw as Record<string, unknown>;
+      if (!matchItem(it)) continue;
+      addAllocs(it);
+    }
+  } else if (matchItem(s)) {
+    addAllocs(s);
+  }
+
+  return [...byBatch.entries()].map(([batchId, qty]) => ({ batchId, qty }));
+}
+
+function sortMoveLotLinks(links: MoveLotLink[]): MoveLotLink[] {
+  return [...links].sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      a.batchId.localeCompare(b.batchId),
+  );
+}
+
+function computeMoveLotContexto(
+  links: MoveLotLink[],
+  latestBatchId: string | null,
+): MoveLotContexto {
+  if (!links.length) return "none";
+  if (!latestBatchId) return "none";
+  const ids = new Set(links.map((l) => l.batchId));
+  const hasLatest = ids.has(latestBatchId);
+  const hasOther = [...ids].some((id) => id !== latestBatchId);
+  if (hasLatest && hasOther) return "transicion";
+  if (hasLatest) return "lote_actual";
+  return "lote_anterior";
+}
+
+function resolveMoveLotDisplay(
+  m: InvMove,
+  saleLotsBySaleId: Record<string, MoveLotLink[]>,
+  adjFifoDetailById: Record<
+    string,
+    | {
+        fifoAllocations: { batchId: string; qty: number }[];
+      }
+    | { error: string }
+  >,
+  batchMetaById: Record<string, { date: string; orderName?: string }>,
+  latestBatchId: string | null,
+): MoveLotDisplay {
+  if (m.type === "INGRESO" && m.ref) {
+    const bid = String(m.ref);
+    const meta = batchMetaById[bid];
+    return {
+      links: [
+        {
+          batchId: bid,
+          qty: Number(m.qtyIn || 0),
+          date: meta?.date || m.date || "—",
+          orderName: meta?.orderName,
+        },
+      ],
+      contexto: "ingreso",
+    };
+  }
+
+  if ((m.type === "MERMA" || m.type === "ROBO") && m.ref) {
+    const det = adjFifoDetailById[String(m.ref)];
+    if (!det || "error" in det) return { links: [], contexto: "none" };
+    const links: MoveLotLink[] = det.fifoAllocations
+      .filter((a) => a.batchId)
+      .map((a) => {
+        const meta = batchMetaById[a.batchId];
+        return {
+          batchId: a.batchId,
+          qty: Number(a.qty || 0),
+          date: meta?.date || "—",
+          orderName: meta?.orderName,
+        };
+      });
+    const sorted = sortMoveLotLinks(links);
+    return {
+      links: sorted,
+      contexto: computeMoveLotContexto(sorted, latestBatchId),
+    };
+  }
+
+  if ((m.type === "VENTA_CASH" || m.type === "VENTA_CREDITO") && m.ref) {
+    const links = sortMoveLotLinks(saleLotsBySaleId[String(m.ref)] || []);
+    return {
+      links,
+      contexto: computeMoveLotContexto(links, latestBatchId),
+    };
+  }
+
+  return { links: [], contexto: "none" };
+}
+
+function contextoChipProps(
+  ctx: MoveLotContexto,
+): { label: string; variant: PolloChipVariant } {
+  switch (ctx) {
+    case "lote_anterior":
+      return { label: "Lote anterior", variant: "amber" };
+    case "lote_actual":
+      return { label: "Lote actual", variant: "emerald" };
+    case "transicion":
+      return { label: "Transición", variant: "violet" };
+    case "ingreso":
+      return { label: "Ingreso", variant: "emerald" };
+    default:
+      return { label: "—", variant: "neutral" };
+  }
+}
+
+function MoveLotIdCell({
+  links,
+  onShowMore,
+}: {
+  links: MoveLotLink[];
+  onShowMore: (links: MoveLotLink[]) => void;
+}) {
+  if (!links.length) {
+    return <span className="text-gray-400 text-xs">—</span>;
+  }
+  const sorted = sortMoveLotLinks(links);
+  const oldest = sorted[0];
+  const rest = sorted.length - 1;
+  return (
+    <div className="flex items-center justify-center gap-1 mx-auto whitespace-nowrap">
+      <span className="font-mono text-[10px] text-indigo-900">
+        {oldest.batchId}
+      </span>
+      {rest > 0 ? (
+        <button
+          type="button"
+          className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold text-indigo-800 hover:bg-indigo-100"
+          title={`Ver ${rest} lote(s) más`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onShowMore(sorted);
+          }}
+        >
+          +{rest}
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 function lotProductChipKeyFromLine(l: LotBatchLine): string {
   return String(l.productId || "").trim() || normKeyLocal(l.productName);
@@ -272,7 +509,7 @@ function LotExpandedDailySubtable({
     : "border border-gray-200 px-2 py-2 text-xs sm:text-sm";
   return (
     <div className="w-full min-w-0 overflow-x-auto rounded-lg border border-violet-200/90 bg-white shadow-inner">
-      <table className="w-full border-collapse border border-gray-200">
+      <table className="min-w-full w-max border-collapse border border-gray-200">
         <thead className="bg-violet-100/90">
           <tr>
             <th
@@ -327,8 +564,7 @@ function LotExpandedDailySubtable({
                 {row.date}
               </td>
               <td
-                className={`${cell} text-left text-gray-800 max-w-[14rem] truncate`}
-                title={row.productLabel}
+                className={`${cell} text-left text-gray-800 whitespace-nowrap`}
               >
                 {row.productLabel}
               </td>
@@ -633,6 +869,21 @@ export default function EvolutivoInventarioPollo({
 
   // mapa saleId -> unit price calculado para el producto seleccionado
   const [salePrices, setSalePrices] = useState<Record<string, number>>({});
+  /** saleId → lotes FIFO del producto seleccionado en esa venta */
+  const [saleLotsBySaleId, setSaleLotsBySaleId] = useState<
+    Record<string, MoveLotLink[]>
+  >({});
+  /** batchId → fecha ingreso (misma lógica que fila INGRESO) */
+  const [batchMetaById, setBatchMetaById] = useState<
+    Record<string, { date: string; orderName?: string }>
+  >({});
+  /** Lote más reciente ingresado del producto (para chip Contexto) */
+  const [latestProductBatchId, setLatestProductBatchId] = useState<
+    string | null
+  >(null);
+  const [linkedLotsDrawer, setLinkedLotsDrawer] = useState<
+    MoveLotLink[] | null
+  >(null);
 
   // Manual movement form
   const [adjDate, setAdjDate] = useState(today());
@@ -795,8 +1046,11 @@ export default function EvolutivoInventarioPollo({
         setMoves(res.moves);
         setOpeningBalance(Number(res.openingBalance ?? 0));
         setProductKpis(res.productKpis);
+        setSaleLotsBySaleId({});
+        setBatchMetaById({});
+        setLatestProductBatchId(null);
 
-        // Precios de venta + FIFO merma en paralelo
+        // Precios de venta + FIFO merma + lotes vinculados
         try {
           const saleIds = Array.from(
             new Set(
@@ -814,30 +1068,42 @@ export default function EvolutivoInventarioPollo({
                 .map((m) => String(m.ref)),
             ),
           );
+          const ingresoBatchIds = Array.from(
+            new Set(
+              (res.moves || [])
+                .filter((m) => m.type === "INGRESO" && m.ref)
+                .map((m) => String(m.ref)),
+            ),
+          );
 
           const selName = (selected?.productName || "").toLowerCase();
           const selId = (selected as any)?.productId || "";
+          const selKey = selected?.key || "";
 
-          const [pricesMap, adjPartial] = await Promise.all([
+          const [salesData, adjPartial, productBatchMeta] = await Promise.all([
             (async () => {
               const pricesMap: Record<string, number> = {};
+              const lotsPartial: Record<string, MoveLotLink[]> = {};
               await Promise.all(
                 saleIds.map(async (sid) => {
                   try {
                     const sSnap = await getDoc(fsDoc(db, "salesV2", sid));
                     if (!sSnap.exists()) return;
-                    const s = sSnap.data() as any;
+                    const s = sSnap.data() as Record<string, unknown>;
                     let unitPrice: number | null = null;
                     if (Array.isArray(s.items) && s.items.length > 0) {
                       for (const it of s.items) {
-                        const itPid = String(it.productId ?? "").trim();
-                        const itName = String(it.productName ?? "").toLowerCase();
+                        const row = it as Record<string, unknown>;
+                        const itPid = String(row.productId ?? "").trim();
+                        const itName = String(
+                          row.productName ?? "",
+                        ).toLowerCase();
                         if (
                           (selId && itPid && itPid === selId) ||
                           itName === selName
                         ) {
                           unitPrice = Number(
-                            it.unitPrice ?? it.price ?? it.regularPrice ?? 0,
+                            row.unitPrice ?? row.price ?? row.regularPrice ?? 0,
                           );
                           break;
                         }
@@ -853,12 +1119,26 @@ export default function EvolutivoInventarioPollo({
                       if (q > 0 && a) unitPrice = Number((a / q).toFixed(2));
                     }
                     pricesMap[sid] = unitPrice ?? 0;
+
+                    const rawAllocs = parseSaleProductAllocations(
+                      s,
+                      selId,
+                      selKey,
+                      selected?.productName || "",
+                    );
+                    if (rawAllocs.length) {
+                      lotsPartial[sid] = rawAllocs.map((a) => ({
+                        batchId: a.batchId,
+                        qty: a.qty,
+                        date: "—",
+                      }));
+                    }
                   } catch {
                     /* ignore */
                   }
                 }),
               );
-              return pricesMap;
+              return { pricesMap, lotsPartial };
             })(),
             (async () => {
               if (!mermaIds.length) return {} as Record<string, AdjFifoParsed>;
@@ -879,9 +1159,91 @@ export default function EvolutivoInventarioPollo({
               );
               return Object.fromEntries(entries) as Record<string, AdjFifoParsed>;
             })(),
+            (async () => {
+              const meta: Record<
+                string,
+                { date: string; orderName?: string }
+              > = {};
+              let latestId: string | null = null;
+              let latestDate = "";
+              try {
+                const snap = await getDocs(collection(db, "inventory_batches"));
+                snap.forEach((d) => {
+                  const b = d.data() as Record<string, unknown>;
+                  if (
+                    !batchMatchesProduct(
+                      b,
+                      selKey,
+                      selId || undefined,
+                      selected?.productName,
+                    )
+                  ) {
+                    return;
+                  }
+                  const date = batchDateFromFirestoreData(b);
+                  meta[d.id] = {
+                    date: date || "—",
+                    orderName: String(b.orderName ?? "").trim() || undefined,
+                  };
+                  if (date && date >= latestDate) {
+                    latestDate = date;
+                    latestId = d.id;
+                  }
+                });
+              } catch {
+                /* ignore */
+              }
+              return { meta, latestId };
+            })(),
           ]);
 
-          setSalePrices(pricesMap);
+          const batchIdsNeeded = new Set<string>([
+            ...ingresoBatchIds,
+            ...Object.values(salesData.lotsPartial).flatMap((links) =>
+              links.map((l) => l.batchId),
+            ),
+          ]);
+          for (const det of Object.values(adjPartial)) {
+            if (!det || "error" in det) continue;
+            for (const a of det.fifoAllocations) {
+              if (a.batchId) batchIdsNeeded.add(a.batchId);
+            }
+          }
+
+          const mergedMeta: Record<
+            string,
+            { date: string; orderName?: string }
+          > = { ...productBatchMeta.meta };
+          await Promise.all(
+            [...batchIdsNeeded].map(async (bid) => {
+              if (mergedMeta[bid]?.date && mergedMeta[bid].date !== "—") return;
+              try {
+                const s = await getDoc(fsDoc(db, "inventory_batches", bid));
+                if (!s.exists()) return;
+                const b = s.data() as Record<string, unknown>;
+                mergedMeta[bid] = {
+                  date: batchDateFromFirestoreData(b) || "—",
+                  orderName: String(b.orderName ?? "").trim() || undefined,
+                };
+              } catch {
+                /* ignore */
+              }
+            }),
+          );
+
+          const saleLotsFilled: Record<string, MoveLotLink[]> = {};
+          for (const [sid, links] of Object.entries(salesData.lotsPartial)) {
+            saleLotsFilled[sid] = links.map((l) => ({
+              ...l,
+              date: mergedMeta[l.batchId]?.date || "—",
+              orderName: mergedMeta[l.batchId]?.orderName,
+            }));
+          }
+
+          setSalePrices(salesData.pricesMap);
+          setSaleLotsBySaleId(saleLotsFilled);
+          setBatchMetaById(mergedMeta);
+          setLatestProductBatchId(productBatchMeta.latestId);
           if (Object.keys(adjPartial).length) {
             setAdjFifoDetailById((prev) => ({ ...prev, ...adjPartial }));
           }
@@ -1377,6 +1739,15 @@ export default function EvolutivoInventarioPollo({
   const handleExportExcel = () => {
     const rows = (displayedMoves || []).map((m) => {
       const { price, monto } = rowPriceAndMonto(m as InvMove);
+      const lot = resolveMoveLotDisplay(
+        m as InvMove,
+        saleLotsBySaleId,
+        adjFifoDetailById,
+        batchMetaById,
+        latestProductBatchId,
+      );
+      const sorted = sortMoveLotLinks(lot.links);
+      const ctx = contextoChipProps(lot.contexto).label;
       return {
         Fecha: m.date || "",
         Tipo: m.type || "",
@@ -1387,6 +1758,16 @@ export default function EvolutivoInventarioPollo({
         Precio: `C$ ${price.toFixed(2)}`,
         Monto: `C$ ${monto.toFixed(2)}`,
         Balance: Number((m as any).balance || 0),
+        "Lote ID": sorted[0]?.batchId || "",
+        "Lotes adicionales":
+          sorted.length > 1
+            ? sorted
+                .slice(1)
+                .map((l) => l.batchId)
+                .join(", ")
+            : "",
+        "Fecha lote": sorted[0]?.date || "",
+        Contexto: ctx,
       };
     });
 
@@ -1401,6 +1782,10 @@ export default function EvolutivoInventarioPollo({
         "Precio",
         "Monto",
         "Balance",
+        "Lote ID",
+        "Lotes adicionales",
+        "Fecha lote",
+        "Contexto",
       ],
     });
     const wb = XLSX.utils.book_new();
@@ -1904,6 +2289,15 @@ export default function EvolutivoInventarioPollo({
                 ) : (
                   (displayedMoves || []).map((m, idx) => {
                 const { price, monto } = rowPriceAndMonto(m as InvMove);
+                const lotDisplay = resolveMoveLotDisplay(
+                  m as InvMove,
+                  saleLotsBySaleId,
+                  adjFifoDetailById,
+                  batchMetaById,
+                  latestProductBatchId,
+                );
+                const lotSorted = sortMoveLotLinks(lotDisplay.links);
+                const ctxChip = contextoChipProps(lotDisplay.contexto);
                 const openIngreso =
                   m.type === "INGRESO" && m.ref
                     ? () => setIngresoBatchId(String(m.ref))
@@ -1989,6 +2383,34 @@ export default function EvolutivoInventarioPollo({
                         Monto: C$ {monto.toFixed(2)}
                       </div>
                     </div>
+                    {lotSorted.length > 0 || lotDisplay.contexto !== "none" ? (
+                      <div
+                        className="mt-2 pt-2 border-t border-gray-100 grid grid-cols-2 gap-2 text-[11px]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div>
+                          <div className="text-gray-500">Lote ID</div>
+                          <MoveLotIdCell
+                            links={lotSorted}
+                            onShowMore={setLinkedLotsDrawer}
+                          />
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Fecha lote</div>
+                          <div className="font-mono tabular-nums">
+                            {lotSorted[0]?.date || "—"}
+                          </div>
+                        </div>
+                        {lotDisplay.contexto !== "none" ? (
+                          <div className="col-span-2">
+                            <div className="text-gray-500 mb-0.5">Contexto</div>
+                            <PolloChip variant={ctxChip.variant}>
+                              {ctxChip.label}
+                            </PolloChip>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {(m.type === "MERMA" || m.type === "ROBO") &&
                     selected &&
                     m.ref ? (
@@ -2476,43 +2898,55 @@ export default function EvolutivoInventarioPollo({
             </p>
           </div>
         ) : null}
-        <div className="sm:overflow-x-auto">
-        <table className="min-w-full border text-sm">
-          <thead className="bg-gray-100">
+        <div className="w-full overflow-x-auto overflow-y-visible rounded-lg border border-violet-200/90 bg-white shadow-inner overscroll-x-contain [scrollbar-gutter:stable]">
+        <table className="w-max min-w-full border-collapse text-xs md:text-sm">
+          <thead className="bg-violet-100/90 sticky top-0 z-10">
             <tr>
-              <th className="border p-2">Fecha</th>
-              <th className="border p-2">Tipo</th>
-              <th className="border p-2">Descripción</th>
-              <th className="border p-2">Entrada (+)</th>
-              <th className="border p-2">Salida (−)</th>
-              <th className="border p-2">Precio</th>
-              <th className="border p-2">Monto</th>
-              <th className="border p-2">Balance (rango)</th>
-              <th className="border p-2">Inventario</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-left text-xs font-semibold whitespace-nowrap min-w-[6.5rem]">Fecha</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-left text-xs font-semibold whitespace-nowrap">Tipo</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-left text-xs font-semibold whitespace-nowrap min-w-[10rem]">Descripción</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-right text-xs font-semibold whitespace-nowrap">Entrada (+)</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-right text-xs font-semibold whitespace-nowrap">Salida (−)</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[5.5rem]">Precio</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[5.5rem]">Monto</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[7.5rem]">Balance (rango)</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-left text-xs font-semibold whitespace-nowrap">Lote ID</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-left text-xs font-semibold whitespace-nowrap">Fecha lote</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-center text-xs font-semibold whitespace-nowrap">Contexto</th>
+              <th className="border border-gray-200 px-2 py-2.5 text-center text-xs font-semibold whitespace-nowrap">Inventario</th>
             </tr>
           </thead>
           <tbody>
             {!selected ? (
               <tr>
-                <td colSpan={9} className="p-4 text-center text-gray-500">
+                <td colSpan={12} className="p-4 text-center text-gray-500">
                   Seleccioná un producto para ver su evolutivo.
                 </td>
               </tr>
             ) : loading ? (
               <tr>
-                <td colSpan={9} className="p-4 text-center text-gray-500">
+                <td colSpan={12} className="p-4 text-center text-gray-500">
                   Cargando movimientos…
                 </td>
               </tr>
             ) : displayedMoves.length === 0 ? (
               <tr>
-                <td colSpan={9} className="p-4 text-center text-gray-500">
+                <td colSpan={12} className="p-4 text-center text-gray-500">
                   No hay movimientos en el rango para este producto.
                 </td>
               </tr>
             ) : (
               displayedMoves.map((m, idx) => {
                 const { price, monto } = rowPriceAndMonto(m as InvMove);
+                const lotDisplay = resolveMoveLotDisplay(
+                  m as InvMove,
+                  saleLotsBySaleId,
+                  adjFifoDetailById,
+                  batchMetaById,
+                  latestProductBatchId,
+                );
+                const lotSorted = sortMoveLotLinks(lotDisplay.links);
+                const ctxChip = contextoChipProps(lotDisplay.contexto);
                 const openVenta =
                   (m.type === "VENTA_CASH" || m.type === "VENTA_CREDITO") &&
                   m.ref
@@ -2525,7 +2959,7 @@ export default function EvolutivoInventarioPollo({
                 return (
                 <React.Fragment key={`${m.ref || idx}-${m.date}`}>
                   <tr
-                    className={`text-center ${
+                    className={`text-center odd:bg-white even:bg-violet-50/35 ${
                       m.type === "INGRESO" && m.ref
                         ? "cursor-pointer hover:bg-sky-50/80"
                         : (m.type === "MERMA" || m.type === "ROBO") && m.ref
@@ -2545,8 +2979,8 @@ export default function EvolutivoInventarioPollo({
                       else if (openVenta) openVenta();
                     }}
                   >
-                    <td className="border p-1">{m.date}</td>
-                    <td className="border p-1">
+                    <td className="border border-gray-200 px-2 py-2 align-middle whitespace-nowrap font-mono tabular-nums">{m.date}</td>
+                    <td className="border border-gray-200 px-2 py-2 align-middle whitespace-nowrap">
                       <div className="flex justify-center">
                         <PolloChip
                           variant={tipoMoveChipVariant(String(m.type))}
@@ -2555,8 +2989,8 @@ export default function EvolutivoInventarioPollo({
                         </PolloChip>
                       </div>
                     </td>
-                    <td className="border p-1 text-left">{m.description}</td>
-                    <td className="border p-1">
+                    <td className="border border-gray-200 px-2 py-2 text-left align-middle whitespace-nowrap">{m.description}</td>
+                    <td className="border border-gray-200 px-2 py-2 align-middle whitespace-nowrap tabular-nums">
                       <span
                         className={
                           Number(m.qtyIn || 0) > 0
@@ -2567,7 +3001,7 @@ export default function EvolutivoInventarioPollo({
                         {qty3(m.qtyIn)}
                       </span>
                     </td>
-                    <td className="border p-1">
+                    <td className="border border-gray-200 px-2 py-2 align-middle whitespace-nowrap tabular-nums">
                       <span
                         className={
                           Number(m.qtyOut || 0) > 0
@@ -2578,19 +3012,42 @@ export default function EvolutivoInventarioPollo({
                         {qty3(m.qtyOut)}
                       </span>
                     </td>
-                    <td className="border p-1 font-semibold text-black">
+                    <td className="border border-gray-200 px-2 py-2 font-semibold text-black align-middle whitespace-nowrap tabular-nums">
                       {m.type === "MERMA" || m.type === "ROBO"
                         ? `C$ ${price.toFixed(4)}`
                         : `C$ ${price.toFixed(2)}`}
                     </td>
-                    <td className="border p-1 font-semibold text-black">
+                    <td className="border border-gray-200 px-2 py-2 font-semibold text-black align-middle whitespace-nowrap tabular-nums">
                       {`C$ ${monto.toFixed(2)}`}
                     </td>
-                    <td className="border p-1 font-semibold">
+                    <td className="border border-gray-200 px-2 py-2 font-semibold align-middle whitespace-nowrap tabular-nums">
                       {qty3((m as any).balance)}
                     </td>
                     <td
-                      className="border p-1"
+                      className="border border-gray-200 px-2 py-2 align-middle whitespace-nowrap"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoveLotIdCell
+                        links={lotSorted}
+                        onShowMore={setLinkedLotsDrawer}
+                      />
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 font-mono text-[11px] whitespace-nowrap tabular-nums align-middle">
+                      {lotSorted[0]?.date || "—"}
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 align-middle whitespace-nowrap">
+                      {lotDisplay.contexto === "none" ? (
+                        <span className="text-gray-400 text-xs">—</span>
+                      ) : (
+                        <div className="flex justify-center">
+                          <PolloChip variant={ctxChip.variant}>
+                            {ctxChip.label}
+                          </PolloChip>
+                        </div>
+                      )}
+                    </td>
+                    <td
+                      className="border border-gray-200 px-2 py-2 align-middle whitespace-nowrap"
                       onClick={(e) => e.stopPropagation()}
                     >
                       {(m.type === "MERMA" || m.type === "ROBO") && m.ref ? (
@@ -2621,17 +3078,17 @@ export default function EvolutivoInventarioPollo({
       </div>
       </>
       ) : inventoryView === "lotes" ? (
-      <div className="hidden sm:block w-full overflow-x-auto overflow-y-visible rounded-lg border border-gray-200 bg-white shadow-sm mb-4 overscroll-x-contain [scrollbar-gutter:stable]">
-        <p className="px-2 py-1.5 text-[11px] text-gray-500 border-b border-gray-100 bg-gray-50/80">
+      <div className="hidden sm:block w-full overflow-x-auto overflow-y-visible rounded-lg border border-violet-200/90 bg-white shadow-inner mb-4 overscroll-x-contain [scrollbar-gutter:stable]">
+        <p className="px-2 py-1.5 text-[11px] text-gray-600 border-b border-violet-100 bg-violet-50/60">
           Lotes ingresados en el rango. Al expandir uno se cierra el anterior.
         </p>
         {lotLoading ? (
           <p className="p-4 text-sm text-gray-500">Cargando lotes…</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1020px] border-collapse border border-gray-200 text-sm">
-              <thead className="bg-gray-100 sticky top-0 z-10">
-                <tr>
+            <table className="w-full min-w-[1020px] border-collapse text-xs md:text-sm">
+              <thead className="bg-violet-100/90 sticky top-0 z-10">
+                <tr className="whitespace-nowrap">
                   <th
                     className="border border-gray-200 px-2 py-2.5 text-center text-xs font-semibold whitespace-nowrap w-12"
                     aria-label="Expandir"
@@ -2719,12 +3176,10 @@ export default function EvolutivoInventarioPollo({
                         vis.map((l) => l.productName || "").filter(Boolean),
                       ),
                     ];
-                    const zebra =
-                      rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50/50";
                     return (
                       <React.Fragment key={g.groupId}>
                         <tr
-                          className={`text-center ${zebra} border-t border-gray-100 hover:bg-sky-50/40 transition-colors`}
+                          className="text-center odd:bg-white even:bg-violet-50/35 border-t border-gray-100 hover:bg-sky-50/40 transition-colors"
                         >
                           <td className="border border-gray-200 px-2 py-2.5 align-middle">
                             <button
@@ -2751,13 +3206,8 @@ export default function EvolutivoInventarioPollo({
                           <td className="border border-gray-200 px-3 py-2.5 text-sm align-middle text-left font-medium text-gray-900">
                             {g.orderName}
                           </td>
-                          <td className="border border-gray-200 px-3 py-2.5 text-xs align-middle text-left text-gray-700 min-w-0">
-                            <span
-                              className="line-clamp-2"
-                              title={names.join(" · ")}
-                            >
-                              {names.join(" · ") || "—"}
-                            </span>
+                          <td className="border border-gray-200 px-3 py-2.5 text-xs align-middle text-left text-gray-700 whitespace-nowrap">
+                            {names.join(" · ") || "—"}
                           </td>
                           <td className="border border-gray-200 px-3 py-2.5 text-sm align-middle tabular-nums text-right">
                             {qty3(inicial)}
@@ -2873,6 +3323,41 @@ export default function EvolutivoInventarioPollo({
               },
             ]}
           />
+        )}
+      </SlideOverDrawer>
+
+      <SlideOverDrawer
+        open={linkedLotsDrawer !== null}
+        onClose={() => setLinkedLotsDrawer(null)}
+        title="Lotes vinculados"
+        subtitle="Del más antiguo al más reciente"
+        titleId="status-inv-linked-lots-title"
+        panelMaxWidthClassName="max-w-md"
+      >
+        {!linkedLotsDrawer?.length ? (
+          <p className="text-sm text-gray-500">Sin lotes.</p>
+        ) : (
+          <div className="space-y-3">
+            {sortMoveLotLinks(linkedLotsDrawer).map((l, i) => (
+              <DrawerDetailDlCard
+                key={`${l.batchId}-${i}`}
+                title={l.orderName || `Lote ${i + 1}`}
+                rows={[
+                  {
+                    label: "Lote ID",
+                    value: l.batchId,
+                    ddClassName: "font-mono text-xs break-all",
+                  },
+                  { label: "Fecha ingreso", value: l.date || "—" },
+                  {
+                    label: "Cantidad",
+                    value: l.qty > 0 ? qty3(l.qty) : "—",
+                    ddClassName: "tabular-nums",
+                  },
+                ]}
+              />
+            ))}
+          </div>
         )}
       </SlideOverDrawer>
 
@@ -3080,21 +3565,13 @@ export default function EvolutivoInventarioPollo({
                               key={`${row.batchId}-${i}`}
                               className="border-t border-rose-100"
                             >
-                              <td className="p-2 text-gray-900 max-w-[10rem]">
-                                <span
-                                  className="line-clamp-2"
-                                  title={lotTitle}
-                                >
-                                  {lotTitle}
-                                </span>
+                              <td className="p-2 text-gray-900 whitespace-nowrap">
+                                {lotTitle}
                               </td>
                               <td className="p-2 tabular-nums whitespace-nowrap">
                                 {meta?.date ?? "—"}
                               </td>
-                              <td
-                                className="p-2 font-mono text-[10px] text-slate-600 max-w-[5rem] truncate"
-                                title={row.batchId}
-                              >
+                              <td className="p-2 font-mono text-[10px] text-slate-600 whitespace-nowrap">
                                 {row.batchId}
                               </td>
                               <td className="p-2 text-right tabular-nums">

@@ -49,6 +49,12 @@ import {
   DrawerSectionTitle,
   DrawerStatGrid,
 } from "../common/DrawerContentCards";
+import {
+  fetchSalesV2ForLotView,
+  collectLotSaleAllocHits,
+  allocLineAmount,
+  type LotSaleAllocHit,
+} from "../../Services/inventory_lotes_pollo";
 
 const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
 
@@ -403,6 +409,181 @@ function groupHasStockRemaining(g: GroupRow): boolean {
   return g.lbsRem > 0 || g.udsRem > 0 || g.cajillasRem > 0;
 }
 
+function sortLotSaleHitsChronological(
+  hits: LotSaleAllocHit[],
+): LotSaleAllocHit[] {
+  return [...hits].sort((a, b) => {
+    const d = a.saleDate.localeCompare(b.saleDate);
+    if (d !== 0) return d;
+    const s = a.saleId.localeCompare(b.saleId);
+    if (s !== 0) return s;
+    return a.itemIndex - b.itemIndex;
+  });
+}
+
+function lotSaleHitsForBatchIds(
+  lotSales: Array<{ id: string; data: Record<string, unknown> }>,
+  batchIds: string[],
+): LotSaleAllocHit[] {
+  if (!batchIds.length) return [];
+  const set = new Set(batchIds);
+  return sortLotSaleHitsChronological(collectLotSaleAllocHits(lotSales, set));
+}
+
+type BatchLinkMeta = {
+  date: string;
+  createdAtLabel: string;
+};
+
+/** Ventas con asignación FIFO a lotes del pedido (scroll horizontal). */
+function BatchLinkedSalesTable({
+  hits,
+  periodHint,
+  batchMetaById = {},
+}: {
+  hits: LotSaleAllocHit[];
+  periodHint?: string;
+  batchMetaById?: Record<string, BatchLinkMeta>;
+}) {
+  if (hits.length === 0) {
+    return (
+      <p className="text-sm text-gray-500 leading-snug">
+        Sin ventas con asignación FIFO a estos lotes
+        {periodHint ? ` (${periodHint})` : ""}. Las ventas sin{" "}
+        <span className="font-medium">allocations</span> en el ítem no aparecen.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-lg border border-violet-200/90 bg-white shadow-inner">
+      <table className="min-w-[1280px] w-full border-collapse text-xs md:text-sm">
+        <thead className="bg-violet-100/90">
+          <tr className="whitespace-nowrap">
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold">
+              Fecha venta
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold">
+              Id venta
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold whitespace-nowrap">
+              Ingreso venta
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-mono font-semibold min-w-[9rem]">
+              LoteID
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold whitespace-nowrap">
+              Ingreso lote
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold min-w-[8rem]">
+              Producto
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-right font-semibold">
+              Precio venta
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-right font-semibold">
+              Cantidad
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-right font-semibold">
+              Monto
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-center font-semibold">
+              Tipo
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold min-w-[8rem]">
+              Cliente
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold min-w-[6rem]">
+              Vendedor
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {hits.map((h, i) => {
+            const lotMeta = batchMetaById[h.batchId];
+            const lotIngreso =
+              lotMeta?.createdAtLabel && lotMeta.createdAtLabel !== "—"
+                ? lotMeta.createdAtLabel
+                : lotMeta?.date || "—";
+            return (
+            <tr
+              key={`${h.saleId}-${h.itemIndex}-${h.batchId}-${i}`}
+              className="odd:bg-white even:bg-violet-50/35"
+            >
+              <td className="border border-gray-200 px-2 py-2 font-mono tabular-nums whitespace-nowrap">
+                {h.saleDate}
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 font-mono text-[11px] max-w-[7rem] truncate"
+                title={h.saleId}
+              >
+                {h.saleId}
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 font-mono text-[11px] whitespace-nowrap tabular-nums"
+                title={h.saleCreatedAt}
+              >
+                {h.saleCreatedAt || "—"}
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 font-mono text-[11px] max-w-[10rem] truncate text-indigo-900"
+                title={h.batchId}
+              >
+                {h.batchId}
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 font-mono text-[11px] whitespace-nowrap tabular-nums"
+                title={lotIngreso}
+              >
+                {lotIngreso}
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 text-left max-w-[12rem] truncate"
+                title={h.productName}
+              >
+                {h.productName || "—"}
+              </td>
+              <td className="border border-gray-200 px-2 py-2 text-right tabular-nums whitespace-nowrap">
+                {money(h.unitPrice)}
+              </td>
+              <td className="border border-gray-200 px-2 py-2 text-right tabular-nums whitespace-nowrap">
+                {Number(h.allocQty).toFixed(3)}
+                {h.measurement ? ` ${h.measurement}` : ""}
+              </td>
+              <td className="border border-gray-200 px-2 py-2 text-right tabular-nums font-medium whitespace-nowrap">
+                {money(allocLineAmount(h))}
+              </td>
+              <td className="border border-gray-200 px-2 py-2 text-center whitespace-nowrap">
+                <span
+                  className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                    h.isCash
+                      ? "bg-amber-100 text-amber-900"
+                      : "bg-violet-100 text-violet-900"
+                  }`}
+                >
+                  {h.isCash ? "Cash" : "Crédito"}
+                </span>
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 text-left max-w-[10rem] truncate"
+                title={h.customerLabel}
+              >
+                {h.customerLabel || "—"}
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 text-left text-[11px] max-w-[8rem] truncate"
+                title={h.seller}
+              >
+                {h.seller}
+              </td>
+            </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /** Chips Mermado + Al ciclo en fila de pedido (listado principal). */
 function groupMermaAndCycleChips(
   g: GroupRow,
@@ -519,6 +700,8 @@ export default function InventoryBatches({
   // items agregados al pedido
   type OrderItem = {
     tempId: string;
+    /** Id Firestore del lote (solo al editar pedido existente). */
+    batchId?: string;
     productId: string;
     productName: string;
     category: string;
@@ -937,6 +1120,60 @@ export default function InventoryBatches({
   const [ventasCount, setVentasCount] = useState<number>(0);
   const [abonosFecha, setAbonosFecha] = useState<number>(0);
   const [cuentasPorCobrar, setCuentasPorCobrar] = useState<number>(0);
+  /** Ventas salesV2 en rango — trazabilidad FIFO por LoteID */
+  const [lotSalesTrace, setLotSalesTrace] = useState<
+    Array<{ id: string; data: Record<string, unknown> }>
+  >([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!fromDate || !toDate) {
+        if (!cancelled) setLotSalesTrace([]);
+        return;
+      }
+      try {
+        const sales = await fetchSalesV2ForLotView(fromDate, toDate);
+        if (!cancelled) setLotSalesTrace(sales);
+      } catch (e) {
+        console.error("lotSalesTrace:", e);
+        if (!cancelled) setLotSalesTrace([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fromDate, toDate, refreshKey]);
+
+  const desktopDrawerSalesHits = useMemo(() => {
+    if (!desktopDrawerGroup) return [];
+    return lotSaleHitsForBatchIds(
+      lotSalesTrace,
+      desktopDrawerGroup.items.map((b) => b.id),
+    );
+  }, [desktopDrawerGroup, lotSalesTrace]);
+
+  const detailGroupSalesHits = useMemo(() => {
+    if (!detailGroup) return [];
+    return lotSaleHitsForBatchIds(
+      lotSalesTrace,
+      detailGroup.items.map((b) => b.id),
+    );
+  }, [detailGroup, lotSalesTrace]);
+
+  const salesTracePeriodHint =
+    fromDate && toDate ? `${fromDate} → ${toDate}` : undefined;
+
+  const batchMetaById = useMemo(() => {
+    const map: Record<string, BatchLinkMeta> = {};
+    for (const b of batches) {
+      map[b.id] = {
+        date: String(b.date || "").slice(0, 10),
+        createdAtLabel: formatInventoryCreatedAt(b.createdAt),
+      };
+    }
+    return map;
+  }, [batches]);
 
   useEffect(() => {
     let mounted = true;
@@ -1778,6 +2015,7 @@ export default function InventoryBatches({
       const exp = Number(b.expectedTotal || 0);
       return {
         tempId: uid("IT"),
+        batchId: b.id,
         productId: b.productId,
         productName: b.productName,
         category: b.category,
@@ -3351,7 +3589,7 @@ export default function InventoryBatches({
                                         <div
                                           key={item.id}
                                           id={`inv-focus-batch-${item.id}`}
-                                          className="flex items-center text-xs justify-between gap-2 scroll-mt-24"
+                                          className="flex items-start text-xs justify-between gap-2 scroll-mt-24 border-b border-gray-100 pb-1 last:border-0"
                                         >
                                           <div className="font-semibold text-gray-800 min-w-0">
                                             <BatchLotTitleRow
@@ -3363,6 +3601,12 @@ export default function InventoryBatches({
                                                 setMermaModalBatch(item)
                                               }
                                             />
+                                            <div
+                                              className="font-mono text-[10px] text-indigo-900 truncate mt-0.5"
+                                              title={item.id}
+                                            >
+                                              LoteID: {item.id}
+                                            </div>
                                           </div>
                                           <div className="text-gray-600 text-right">
                                             <div>
@@ -3379,6 +3623,20 @@ export default function InventoryBatches({
                                     </div>
                                   </div>
                                 )}
+                              </div>
+
+                              <div className="mt-3 overflow-x-auto">
+                                <div className="text-[11px] font-semibold text-gray-700 mb-1">
+                                  Ventas vinculadas (FIFO)
+                                </div>
+                                <BatchLinkedSalesTable
+                                  hits={lotSaleHitsForBatchIds(
+                                    lotSalesTrace,
+                                    g.items.map((it) => it.id),
+                                  )}
+                                  periodHint={salesTracePeriodHint}
+                                  batchMetaById={batchMetaById}
+                                />
                               </div>
 
                               <div className="mt-3 flex justify-end">
@@ -3758,6 +4016,11 @@ export default function InventoryBatches({
                     }
                     rows={[
                       {
+                        label: "LoteID",
+                        value: b.id,
+                        ddClassName: "font-mono text-[11px] break-all text-indigo-900",
+                      },
+                      {
                         label: "Unidad",
                         value: (b.unit || "").toUpperCase(),
                         ddClassName: "text-sm font-medium text-gray-900",
@@ -3808,6 +4071,19 @@ export default function InventoryBatches({
                 );
               })}
             </div>
+
+            <DrawerSectionTitle className="mt-6">
+              Ventas vinculadas (FIFO)
+            </DrawerSectionTitle>
+            <p className="text-[11px] text-gray-500 mb-2 leading-snug">
+              Cada fila muestra de qué lote salió la existencia al venderse.
+              Periodo del filtro: {salesTracePeriodHint || "—"}.
+            </p>
+            <BatchLinkedSalesTable
+              hits={desktopDrawerSalesHits}
+              periodHint={salesTracePeriodHint}
+              batchMetaById={batchMetaById}
+            />
           </>
         ) : null}
       </SlideOverDrawer>
@@ -4225,10 +4501,11 @@ export default function InventoryBatches({
               </div>
 
               <div className="bg-white rounded border overflow-x-auto">
-                <table className="min-w-[1200px] text-xs md:text-sm">
+                <table className="min-w-[1320px] text-xs md:text-sm">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
                       <th className="p-2 border">Producto</th>
+                      <th className="p-2 border font-mono">LoteID</th>
                       <th className="p-2 border">Ingresado</th>
                       <th className="p-2 border">Existencias</th>
                       <th className="p-2 border">Precio proveedor</th>
@@ -4245,7 +4522,7 @@ export default function InventoryBatches({
                     {orderItems.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={11}
                           className="p-4 text-center text-gray-500"
                         >
                           No hay productos agregados.
@@ -4262,6 +4539,13 @@ export default function InventoryBatches({
                             <div className="text-[11px] text-gray-500">
                               {it.category} — {it.unit}
                             </div>
+                          </td>
+
+                          <td
+                            className="p-2 border font-mono text-[11px] text-left max-w-[10rem] truncate"
+                            title={it.batchId || ""}
+                          >
+                            {it.batchId || "—"}
                           </td>
 
                           <td className="p-2 border">
@@ -4778,10 +5062,11 @@ export default function InventoryBatches({
               </div>
 
               <div className="bg-white rounded border overflow-x-auto">
-                <table className="min-w-[1200px] text-xs md:text-sm">
+                <table className="min-w-[1320px] text-xs md:text-sm">
                   <thead className="bg-gray-100">
                     <tr className="whitespace-nowrap">
                       <th className="p-2 border">Producto</th>
+                      <th className="p-2 border font-mono">LoteID</th>
                       <th className="p-2 border">Unidad</th>
                       <th className="p-2 border">Ingresado</th>
                       <th className="p-2 border">Restantes</th>
@@ -4811,6 +5096,12 @@ export default function InventoryBatches({
                               showEstadoChip={false}
                             />
                           </td>
+                          <td
+                            className="p-2 border font-mono text-[11px] text-left max-w-[10rem] truncate"
+                            title={b.id}
+                          >
+                            {b.id}
+                          </td>
                           <td className="p-2 border">
                             {(b.unit || "").toUpperCase()}
                           </td>
@@ -4836,6 +5127,21 @@ export default function InventoryBatches({
                     })}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="mt-4">
+                <h4 className="text-sm font-semibold text-gray-800 mb-1">
+                  Ventas vinculadas (FIFO)
+                </h4>
+                <p className="text-[11px] text-gray-500 mb-2 leading-snug">
+                  Trazabilidad: lote de origen al vender. Periodo del filtro:{" "}
+                  {salesTracePeriodHint || "—"}.
+                </p>
+                <BatchLinkedSalesTable
+                  hits={detailGroupSalesHits}
+                  periodHint={salesTracePeriodHint}
+                  batchMetaById={batchMetaById}
+                />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">

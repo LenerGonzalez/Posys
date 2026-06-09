@@ -135,6 +135,42 @@ function resolvedSaleClientName(
   return "";
 }
 
+/** Lote(s) FIFO asociados a la línea de venta. */
+function saleLoteIdsLabel(
+  allocations?: { batchId: string; qty: number }[],
+): string {
+  if (!allocations?.length) return "—";
+  const ids = [
+    ...new Set(
+      allocations
+        .map((a) => String(a.batchId || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!ids.length) return "—";
+  return ids.join(", ");
+}
+
+function saleLoteIds(s: Pick<SaleData, "allocations">): string[] {
+  if (!s.allocations?.length) return [];
+  return [
+    ...new Set(
+      s.allocations
+        .map((a) => String(a.batchId || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function saleMatchesLoteIdFilter(
+  s: Pick<SaleData, "allocations">,
+  loteId: string,
+): boolean {
+  const lf = loteId.trim();
+  if (!lf) return true;
+  return saleLoteIds(s).some((id) => id === lf);
+}
+
 interface ClosureData {
   id: string;
   date: string;
@@ -418,6 +454,10 @@ export default function CierreVentas({
 
   // ✅ NUEVO: filtro por producto
   const [productFilter, setProductFilter] = useState<string>("");
+  /** LoteID seleccionado (allocations[].batchId). */
+  const [loteIdFilter, setLoteIdFilter] = useState<string>("");
+  /** Busca lotes antes de abrir el selector. */
+  const [loteIdSearch, setLoteIdSearch] = useState<string>("");
 
   // paginacion (tabla contado y credito)
   const PAGE_SIZE = 25;
@@ -807,6 +847,78 @@ export default function CierreVentas({
     if (!ok) setProductFilter("");
   }, [productFilterOptions, productFilter]);
 
+  const availableLoteIds = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const s of salesBaseWithoutProductFilter) {
+      for (const id of saleLoteIds(s)) set.add(id);
+    }
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [salesBaseWithoutProductFilter]);
+
+  const loteIdFilterOptions = React.useMemo(() => {
+    const q = loteIdSearch.trim().toLowerCase();
+    let ids = availableLoteIds;
+    if (q) {
+      ids = availableLoteIds.filter((id) => id.toLowerCase().includes(q));
+    }
+    const lf = loteIdFilter.trim();
+    if (lf && !ids.includes(lf)) {
+      ids = [lf, ...ids];
+    }
+    return [
+      {
+        value: "",
+        label: `Todos los lotes (${availableLoteIds.length})`,
+      },
+      ...ids.map((id) => ({ value: id, label: id })),
+    ];
+  }, [availableLoteIds, loteIdSearch, loteIdFilter]);
+
+  useEffect(() => {
+    const lf = loteIdFilter.trim();
+    if (!lf) return;
+    if (!availableLoteIds.includes(lf)) setLoteIdFilter("");
+  }, [availableLoteIds, loteIdFilter]);
+
+  const renderSaleFiltersRow = () => (
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full min-w-0">
+      <div className="min-w-0">
+        <MobileHtmlSelect
+          label="Producto"
+          value={productFilter}
+          onChange={setProductFilter}
+          options={productFilterOptions}
+          sheetTitle="Producto"
+          selectClassName="border rounded px-2 py-2 w-full"
+        />
+      </div>
+      <div className="min-w-0 flex flex-col gap-1">
+        <label className="block text-xs font-semibold text-gray-700">
+          Buscar lote
+        </label>
+        <input
+          type="text"
+          className="border rounded px-2 py-2 w-full text-sm font-mono"
+          placeholder="Buscar LoteID…"
+          value={loteIdSearch}
+          onChange={(e) => setLoteIdSearch(e.target.value)}
+        />
+      </div>
+      <div className="min-w-0">
+        <MobileHtmlSelect
+          label="LoteID"
+          value={loteIdFilter}
+          onChange={setLoteIdFilter}
+          options={loteIdFilterOptions}
+          sheetTitle="LoteID"
+          selectClassName="border rounded px-2 py-2 w-full font-mono text-sm"
+          buttonClassName="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-left flex items-center justify-between gap-2 bg-white text-gray-900 font-mono"
+          disabled={availableLoteIds.length === 0}
+        />
+      </div>
+    </div>
+  );
+
   // Ventas visibles (con filtro por producto = selección exacta)
   const visibleSales = React.useMemo(() => {
     let base = salesBaseWithoutProductFilter;
@@ -818,8 +930,13 @@ export default function CierreVentas({
       );
     }
 
+    const lf = loteIdFilter.trim();
+    if (lf) {
+      base = base.filter((s) => saleMatchesLoteIdFilter(s, lf));
+    }
+
     return base;
-  }, [salesBaseWithoutProductFilter, productFilter]);
+  }, [salesBaseWithoutProductFilter, productFilter, loteIdFilter]);
 
   const visibleSalesSorted = React.useMemo(
     () => [...visibleSales].sort(compareSaleNewestFirst),
@@ -1836,6 +1953,7 @@ export default function CierreVentas({
               <th className="p-3 border-b text-left whitespace-nowrap">Estado</th>
               <th className="p-3 border-b text-left whitespace-nowrap">Fecha ingreso</th>
               <th className="p-3 border-b text-left whitespace-nowrap">Fecha venta</th>
+              <th className="p-3 border-b text-left whitespace-nowrap font-mono">LoteID</th>
               <th className="p-3 border-b text-left whitespace-nowrap">Tipo</th>
               <th className="p-3 border-b text-left whitespace-nowrap max-w-[10rem]">Cliente</th>
               <th className="p-3 border-b text-left whitespace-nowrap">Producto</th>
@@ -1883,6 +2001,12 @@ export default function CierreVentas({
                 </td>
                 <td className="p-3 border-b text-left whitespace-nowrap">{s.createdAt || "—"}</td>
                 <td className="p-3 border-b text-left whitespace-nowrap">{s.date}</td>
+                <td
+                  className="p-3 border-b text-left font-mono text-[11px] max-w-[10rem] truncate whitespace-nowrap text-indigo-900"
+                  title={saleLoteIdsLabel(s.allocations)}
+                >
+                  {saleLoteIdsLabel(s.allocations)}
+                </td>
                 <td className="p-3 border-b text-left whitespace-nowrap">
                   {s.type === "CREDITO" ? "Crédito" : "Cash"}
                 </td>
@@ -1922,7 +2046,7 @@ export default function CierreVentas({
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={12} className="p-3 text-center text-gray-500">
+                <td colSpan={13} className="p-3 text-center text-gray-500">
                   Sin ventas para mostrar.
                 </td>
               </tr>
@@ -1931,7 +2055,7 @@ export default function CierreVentas({
             {rows.length > 0 && (
               <tr className="text-center bg-slate-100/70">
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="p-3 border-b text-left font-semibold whitespace-nowrap"
                 >
                   <span>Totales</span>
@@ -2189,6 +2313,12 @@ export default function CierreVentas({
           </strong>
         </div>
         <div className="flex justify-between gap-3">
+          <span className="text-gray-600">LoteID</span>
+          <strong className="text-right font-mono text-[10px] break-all text-indigo-900">
+            {saleLoteIdsLabel(s.allocations)}
+          </strong>
+        </div>
+        <div className="flex justify-between gap-3">
           <span className="text-gray-600">Fecha ingreso</span>
           <strong className="text-right break-all">{s.createdAt || "—"}</strong>
         </div>
@@ -2412,13 +2542,16 @@ export default function CierreVentas({
               {productFilter.trim()
                 ? ` • ${productFilter.trim()}`
                 : ""}
+              {loteIdFilter.trim()
+                ? ` • Lote: ${loteIdFilter.trim()}`
+                : ""}
             </span>
           }
         />
 
         {filtersOpen && (
           <div className="mt-3 border rounded-xl p-3 bg-white">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-gray-600">Periodo desde</label>
                 <input
@@ -2469,15 +2602,8 @@ export default function CierreVentas({
                 />
               </div>
 
-              <div className="flex flex-col gap-1">
-                <MobileHtmlSelect
-                  label="Producto"
-                  value={productFilter}
-                  onChange={setProductFilter}
-                  options={productFilterOptions}
-                  sheetTitle="Producto"
-                  selectClassName="border rounded px-2 py-2 w-full"
-                />
+              <div className="flex flex-col gap-1 sm:col-span-2 lg:col-span-3">
+                {renderSaleFiltersRow()}
               </div>
             </div>
           </div>
@@ -2954,16 +3080,7 @@ export default function CierreVentas({
                   </div>
 
                   <div className="mt-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/40 p-4 shadow-sm">
-                    <div className="max-w-sm">
-                      <MobileHtmlSelect
-                        label="Producto"
-                        value={productFilter}
-                        onChange={setProductFilter}
-                        options={productFilterOptions}
-                        sheetTitle="Producto"
-                        selectClassName="border rounded px-2 py-2 w-full"
-                      />
-                    </div>
+                    {renderSaleFiltersRow()}
 
                     {renderDailyTransactionsBlock(
                       "Consolidado Ventas contado por dia",
@@ -3279,16 +3396,7 @@ export default function CierreVentas({
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50/40 p-3 shadow-sm space-y-3">
-                  <div className="max-w-sm">
-                    <MobileHtmlSelect
-                      label="Producto"
-                      value={productFilter}
-                      onChange={setProductFilter}
-                      options={productFilterOptions}
-                      sheetTitle="Producto"
-                      selectClassName="border rounded px-2 py-2 w-full"
-                    />
-                  </div>
+                  {renderSaleFiltersRow()}
 
                   {renderMobileDailyTransactionsBlock(
                     "Transacciones Contado",

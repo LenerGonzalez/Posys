@@ -137,6 +137,8 @@ export async function fetchLotGroupsInRange(
 export type LotSaleAllocHit = {
   saleId: string;
   saleDate: string;
+  /** Fecha+hora de creación de la venta (timestamp / createdAt). */
+  saleCreatedAt: string;
   isCash: boolean;
   itemIndex: number;
   batchId: string;
@@ -179,6 +181,27 @@ function extractAllocationsFromItem(
   return out;
 }
 
+function formatSaleDocCreatedAt(x: Record<string, unknown>): string {
+  const fromTs = (v: unknown): string => {
+    if (v == null) return "";
+    const anyV = v as { toDate?: () => Date };
+    if (typeof anyV.toDate === "function") {
+      const d = anyV.toDate();
+      if (!Number.isNaN(d.getTime())) {
+        const pad = (n: number) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    }
+    return "";
+  };
+  return (
+    fromTs(x.timestamp) ||
+    fromTs(x.createdAt) ||
+    String(x.date ?? "").trim().slice(0, 10) ||
+    "—"
+  );
+}
+
 /** Ventas en [from, to] con items; se filtran asignaciones a batchIds después. */
 export async function fetchSalesV2ForLotView(
   from: string,
@@ -209,6 +232,8 @@ export function collectLotSaleAllocHits(
       .trim()
       .slice(0, 10);
     if (!saleDate) continue;
+
+    const saleCreatedAt = formatSaleDocCreatedAt(x);
 
     const saleType = String(x.type ?? "CONTADO").toUpperCase();
     const isCash = saleType === "CONTADO";
@@ -258,6 +283,7 @@ export function collectLotSaleAllocHits(
         hits.push({
           saleId,
           saleDate,
+          saleCreatedAt,
           isCash,
           itemIndex,
           batchId: a.batchId,

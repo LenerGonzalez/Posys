@@ -237,6 +237,182 @@ type AbonoRow = {
   customerId?: string;
 };
 
+/** Tabla estilo ventas vinculadas (InventoryBatches). */
+function AbonosArTable({
+  rows,
+  showFooter = true,
+  fullComment = false,
+}: {
+  rows: AbonoRow[];
+  showFooter?: boolean;
+  /** En drawer: comentario completo sin truncar. */
+  fullComment?: boolean;
+}) {
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-gray-500 leading-snug px-1">
+        Sin abonos registrados.
+      </p>
+    );
+  }
+  const total = round2(rows.reduce((s, a) => s + Number(a.amount || 0), 0));
+  return (
+    <div className="overflow-x-auto rounded-lg border border-violet-200/90 bg-white shadow-inner">
+      <table className="min-w-[720px] w-full border-collapse text-xs md:text-sm">
+        <thead className="bg-violet-100/90">
+          <tr className="whitespace-nowrap">
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold">
+              Fecha
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold min-w-[8rem]">
+              Cliente
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-right font-semibold">
+              Monto
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-semibold min-w-[10rem]">
+              Comentario
+            </th>
+            <th className="border border-gray-200 px-2 py-2 text-left font-mono font-semibold min-w-[7rem]">
+              Id venta
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((a) => (
+            <tr
+              key={a.id}
+              className="odd:bg-white even:bg-violet-50/35 text-left"
+            >
+              <td className="border border-gray-200 px-2 py-2 font-mono tabular-nums whitespace-nowrap">
+                {a.date}
+              </td>
+              <td
+                className="border border-gray-200 px-2 py-2 max-w-[12rem] truncate"
+                title={a.customer}
+              >
+                {a.customer || "—"}
+              </td>
+              <td className="border border-gray-200 px-2 py-2 text-right tabular-nums font-semibold text-emerald-800 whitespace-nowrap">
+                {money(a.amount)}
+              </td>
+              <td
+                className={
+                  fullComment
+                    ? "border border-gray-200 px-2 py-2 text-[11px] text-left align-top whitespace-pre-wrap break-words min-w-[12rem]"
+                    : "border border-gray-200 px-2 py-2 text-[11px] max-w-[14rem] truncate"
+                }
+                title={fullComment ? undefined : a.comment || ""}
+              >
+                {a.comment || "—"}
+              </td>
+              <td
+                className={
+                  fullComment
+                    ? "border border-gray-200 px-2 py-2 font-mono text-[10px] break-all align-top"
+                    : "border border-gray-200 px-2 py-2 font-mono text-[10px] max-w-[8rem] truncate"
+                }
+                title={fullComment ? undefined : a.saleId || ""}
+              >
+                {a.saleId || "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        {showFooter ? (
+          <tfoot className="bg-violet-100/80">
+            <tr>
+              <td
+                colSpan={2}
+                className="border border-gray-200 px-2 py-2 text-right font-semibold text-violet-950"
+              >
+                Total ({rows.length})
+              </td>
+              <td className="border border-gray-200 px-2 py-2 text-right font-bold tabular-nums text-emerald-900">
+                {money(total)}
+              </td>
+              <td colSpan={2} className="border border-gray-200 px-2 py-2" />
+            </tr>
+          </tfoot>
+        ) : null}
+      </table>
+    </div>
+  );
+}
+
+/** Drawer abonos: tabla + ventas vinculadas (mismo patrón que ventas cash del día). */
+function AbonosDrawerPanel({
+  rows,
+  saleCache,
+}: {
+  rows: AbonoRow[];
+  saleCache: Record<string, Record<string, unknown> & { id?: string }>;
+}) {
+  const linkedSaleIds = useMemo(
+    () =>
+      [
+        ...new Set(
+          rows.map((a) => a.saleId).filter((x): x is string => Boolean(x)),
+        ),
+      ],
+    [rows],
+  );
+
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-gray-500 leading-snug px-1">
+        Sin abonos registrados.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <AbonosArTable rows={rows} fullComment />
+      {linkedSaleIds.length > 0 ? (
+        <div className="space-y-3">
+          <DrawerSectionTitle className="mt-0">
+            Ventas abonadas ({linkedSaleIds.length})
+          </DrawerSectionTitle>
+          {linkedSaleIds.map((sid) => {
+            const sale = saleCache[sid];
+            if (!sale) {
+              return (
+                <p key={sid} className="text-sm text-gray-500 px-1">
+                  Cargando venta{" "}
+                  <span className="font-mono text-xs">{sid}</span>…
+                </p>
+              );
+            }
+            if ((sale as Record<string, unknown>)._missing) {
+              return (
+                <div
+                  key={sid}
+                  className="rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm text-amber-900"
+                >
+                  No se encontró la venta{" "}
+                  <span className="font-mono text-xs">{sid}</span>.
+                </div>
+              );
+            }
+            return (
+              <AbonoLinkedSaleBlock
+                key={sid}
+                sid={sid}
+                sale={sale as Record<string, unknown> & { id?: string }}
+              />
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500 px-1 leading-snug">
+          Estos abonos no tienen venta vinculada (abonos generales).
+        </p>
+      )}
+    </div>
+  );
+}
+
 function parseAbonoRowFromFirestore(
   id: string,
   raw: Record<string, unknown>,
@@ -430,41 +606,114 @@ function appendCashSaleLinesForDoc(
   });
 }
 
-/** Filas para el drawer: datos de salesV2 asociados a un abono */
-function buildSaleDetailRows(sale: Record<string, unknown> & { id?: string }): {
-  label: string;
-  value: string;
-}[] {
-  const items = Array.isArray(sale.items) ? (sale.items as any[]) : [];
-  const total =
-    items.length > 0
-      ? items.reduce((acc, it) => acc + Number(it.lineFinal ?? 0), 0)
-      : Number(sale.amount ?? sale.amountCharged ?? 0);
-  const first = items[0];
-  const rows: { label: string; value: string }[] = [
-    { label: "ID venta", value: String(sale.id || "—") },
-    { label: "Fecha venta", value: String(sale.date || "—") },
-    {
-      label: "Cliente",
-      value: String(sale.customerName || sale.customer || "—"),
-    },
-    { label: "Tipo", value: String(sale.type || "—") },
-    { label: "Monto venta", value: money(total) },
-  ];
-  if (first) {
-    rows.push(
-      { label: "Producto", value: String(first.productName || "—") },
-      {
-        label: "Cantidad",
-        value:
-          `${Number(first.qty ?? first.quantity ?? 0).toFixed(3)} ${String(first.unit || "").trim()}`.trim(),
-      },
-    );
-  }
-  if (items.length > 1) {
-    rows.push({ label: "Ítems", value: `${items.length} líneas` });
-  }
-  return rows;
+/** Líneas de una venta (salesV2) para drawer de abonos — todas las líneas del documento. */
+function buildSaleLinesFromDoc(
+  docId: string,
+  x: Record<string, unknown>,
+): CashSaleLine[] {
+  const byDay: Record<string, CashSaleLine[]> = {};
+  appendCashSaleLinesForDoc(docId, x, byDay);
+  return Object.values(byDay).flat();
+}
+
+function AbonoLinkedSaleBlock({
+  sid,
+  sale,
+}: {
+  sid: string;
+  sale: Record<string, unknown> & { id?: string };
+}) {
+  const lines = buildSaleLinesFromDoc(sid, sale);
+  const kpis = aggregateCashSaleLinesForDrawer(lines);
+  const customer = String(
+    sale.customerName || sale.customer || "Venta abonada",
+  );
+  const saleType = String(sale.type || "—");
+
+  return (
+    <div className="space-y-3 rounded-xl border border-violet-200/80 bg-violet-50/30 p-3">
+      <div>
+        <div className="text-sm font-semibold text-violet-950">{customer}</div>
+        <div className="text-xs text-slate-600 mt-0.5">
+          <span className="font-mono">{sid}</span>
+          {" · "}
+          {saleType}
+          {String(sale.date || "").trim() ? (
+            <>
+              {" · "}
+              <span className="font-mono tabular-nums">
+                {String(sale.date).slice(0, 10)}
+              </span>
+            </>
+          ) : null}
+        </div>
+      </div>
+      <DrawerStatGrid
+        items={[
+          {
+            label: "Cant. productos (distintos)",
+            value: kpis.productCount,
+            tone: "slate",
+          },
+          { label: "Líneas", value: kpis.lineCount, tone: "sky" },
+          {
+            label: "Libras (tipo libra)",
+            value: qty3(kpis.lbs),
+            tone: "amber",
+          },
+          {
+            label: "Unidades (no libra)",
+            value: qty3(kpis.units),
+            tone: "violet",
+          },
+          {
+            label: "Monto",
+            value: money(kpis.amount),
+            tone: "indigo",
+          },
+          {
+            label: "Utilidad bruta",
+            value: money(kpis.grossProfit),
+            tone: "emerald",
+          },
+        ]}
+      />
+      {lines.length === 0 ? (
+        <p className="text-sm text-gray-500">Sin líneas en esta venta.</p>
+      ) : (
+        lines.map((line) => (
+          <DrawerDetailDlCard
+            key={line.id}
+            title={line.productName}
+            rows={[
+              { label: "Fecha venta", value: line.date },
+              {
+                label: "Precio",
+                value: money(line.unitPrice),
+                ddClassName: "tabular-nums",
+              },
+              { label: "Cantidad", value: line.qtyLabel },
+              {
+                label: "Monto",
+                value: money(line.amount),
+                ddClassName: "tabular-nums font-semibold",
+              },
+              {
+                label: "U. bruta",
+                value: money(line.grossProfit),
+                ddClassName: "tabular-nums text-violet-800 font-semibold",
+              },
+              {
+                label: "Vendedor",
+                value: line.seller,
+                ddClassName: "text-sm break-all",
+              },
+            ]}
+          />
+        ))
+      )}
+    </div>
+  );
 }
 
 type LedgerType =
@@ -502,7 +751,8 @@ type LedgerRow = {
 type DisplayLedgerItem =
   | { kind: "mov"; row: any; origIndex: number }
   | { kind: "cash_sales"; date: string; cashTotal: number }
-  | { kind: "ub"; date: string; dayGross: number; cumUb: number };
+  | { kind: "ub"; date: string; dayGross: number; cumUb: number }
+  | { kind: "abono_day"; date: string; abonoTotal: number };
 
 export default function EstadoCuentaPollo(): React.ReactElement {
   const [from, setFrom] = useState(firstOfMonth());
@@ -1247,6 +1497,10 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     }
     for (const k of Object.keys(grossProfitByDay)) dateSet.add(k);
     for (const k of Object.keys(cashSalesTotalByDay)) dateSet.add(k);
+    for (const a of abonosRows) {
+      const d = String(a.date || "").trim().slice(0, 10);
+      if (d) dateSet.add(d);
+    }
 
     const allDates = [...dateSet]
       .filter((d) => d >= fromKey && d <= toKey)
@@ -1266,6 +1520,10 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       const dayGross = round2(grossProfitByDay[d] ?? 0);
       const cumUb = cumUbThroughDate(d);
       out.push({ kind: "ub", date: d, dayGross, cumUb });
+      const abonoTotal = round2(abonosPorDia.get(d) ?? 0);
+      if (abonoTotal > 0) {
+        out.push({ kind: "abono_day", date: d, abonoTotal });
+      }
       const dayEntries = byDay.get(d) ?? [];
       for (const { row, origIndex } of dayEntries) {
         out.push({ kind: "mov", row, origIndex });
@@ -1276,9 +1534,29 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     filteredLedgerWithBalance,
     grossProfitByDay,
     cashSalesTotalByDay,
+    abonosPorDia,
+    abonosRows,
     from,
     to,
   ]);
+
+  /** Saldo caja corrido: ventas cash + abonos + movimientos de caja, fila a fila. */
+  const displayLedgerWithUbAndBalance = useMemo(() => {
+    let bal = 0;
+    return displayLedgerWithUb.map((item) => {
+      if (item.kind === "cash_sales") {
+        bal = round2(bal + Number(item.cashTotal || 0));
+      } else if (item.kind === "abono_day") {
+        bal = round2(bal + Number(item.abonoTotal || 0));
+      } else if (item.kind === "mov") {
+        const r = item.row;
+        const cashIn = affectsCash(r.type) ? Number(r.inAmount || 0) : 0;
+        const cashOut = affectsCash(r.type) ? Number(r.outAmount || 0) : 0;
+        bal = round2(bal + cashIn - cashOut);
+      }
+      return { ...item, runningBalance: bal };
+    });
+  }, [displayLedgerWithUb]);
 
   const totalUbrutaPeriodo = useMemo(
     () =>
@@ -1488,10 +1766,17 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   }, [movimientoDrawerRow, corteAssocRange]);
 
   useEffect(() => {
-    if (!abonoDiaDrawerDate) return;
-    const list = abonosRows.filter(
-      (a) => String(a.date || "").trim().slice(0, 10) === abonoDiaDrawerDate,
-    );
+    let list: AbonoRow[] = [];
+    if (abonoDiaDrawerDate) {
+      list = abonosRows.filter(
+        (a) =>
+          String(a.date || "").trim().slice(0, 10) === abonoDiaDrawerDate,
+      );
+    } else if (kpiDrawer === "saldo" && saldoDrawerTab === "abonos") {
+      list = abonosRows;
+    } else {
+      return;
+    }
     const ids = [
       ...new Set(list.map((a) => a.saleId).filter((x): x is string => Boolean(x))),
     ];
@@ -1521,7 +1806,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [abonoDiaDrawerDate, abonosRows]);
+  }, [abonoDiaDrawerDate, abonosRows, kpiDrawer, saldoDrawerTab]);
 
   // Display totals depend on filter (para no romper tu lógica)
   const displayTotals = useMemo(() => {
@@ -3014,18 +3299,18 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         </div>
       )}
 
-      {/* Tabla ledger (desktop): ancho natural + scroll horizontal */}
-      <div className="hidden md:block w-full overflow-x-auto overflow-y-visible rounded-lg border border-gray-200 bg-white shadow-sm overscroll-x-contain [scrollbar-gutter:stable]">
-        <p className="px-2 py-1.5 text-[11px] text-gray-500 border-b border-gray-100 bg-gray-50/80">
-          Tocá el chip <strong>Mov.</strong> para ver
-          descripción, referencia y usuario. U.B. cash = utilidad bruta solo de ventas CONTADO
-          (crédito no suma hasta cobrar). La fila verde &quot;Ventas del día&quot; abre el
-          detalle de esas ventas.
+      {/* Tabla ledger (desktop): estilo grid violeta (ventas vinculadas) */}
+      <div className="hidden md:block w-full overflow-x-auto overflow-y-visible rounded-lg border border-violet-200/90 bg-white shadow-inner overscroll-x-contain [scrollbar-gutter:stable]">
+        <p className="px-2 py-1.5 text-[11px] text-gray-600 border-b border-violet-100 bg-violet-50/60">
+          Tocá el chip <strong>Mov.</strong> para ver descripción y usuario. La fila verde
+          &quot;Ventas del día&quot; abre el detalle cash. La fila{" "}
+          <strong>Abonos AR</strong> muestra cobranzas del día (ingreso a caja aunque no
+          haya ventas ni movimientos de caja).
         </p>
-        <table className="w-max min-w-[1040px] border-collapse border border-gray-200 text-sm">
-          <thead className="bg-gray-100 sticky top-0 z-10">
-            <tr>
-              <th className="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold whitespace-nowrap min-w-[6.5rem]">Fecha</th>
+        <table className="w-full min-w-[1040px] border-collapse text-xs md:text-sm">
+          <thead className="bg-violet-100/90 sticky top-0 z-10">
+            <tr className="whitespace-nowrap">
+              <th className="border border-gray-200 px-2 py-2 text-left font-semibold min-w-[6.5rem]">Fecha</th>
               <th
                 className="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold whitespace-nowrap min-w-[7rem]"
                 title="Tipo de movimiento (clic para ver descripción, referencia y usuario)"
@@ -3036,7 +3321,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               <th className="border border-gray-200 px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[7.5rem]" title="Salida">Salida</th>
               <th
                 className="border border-gray-200 px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap min-w-[7.5rem]"
-                title="Suma AR del día (solo en la primera fila del día; tocar para detalle)"
+                title="Abonos AR del día (ingreso a caja; fila dedicada)"
               >
                 Abonos
               </th>
@@ -3057,23 +3342,29 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             </tr>
           </thead>
           <tbody>
-            <tr className="text-center bg-indigo-50">
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">
+            <tr className="text-center bg-indigo-50/90 odd:bg-indigo-50/90">
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle">
                 {from} → {to}
               </td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-left">
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-left">
                 SALDO_INICIAL
               </td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">{money(saldoBase)}</td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">{money(0)}</td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">—</td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle font-semibold">{money(saldoBase)}</td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400 bg-violet-50/40">—</td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400 bg-violet-50/40">—</td>
-              <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">—</td>
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle tabular-nums">{money(saldoBase)}</td>
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle tabular-nums">{money(0)}</td>
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400">—</td>
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle font-semibold tabular-nums text-gray-500">
+                {money(0)}
+              </td>
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400 bg-violet-50/30">—</td>
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400 bg-violet-50/30">—</td>
+              <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle">—</td>
             </tr>
 
-            {displayLedgerWithUb.map((item, rowIdx) => {
+            {displayLedgerWithUbAndBalance.map((item, rowIdx) => {
+              const saldoCellClass = (v: number) =>
+                `border border-gray-200 px-2 py-2 whitespace-nowrap align-middle font-bold tabular-nums ${
+                  Number(v) < 0 ? "text-red-700" : "text-gray-900"
+                }`;
               if (item.kind === "cash_sales") {
                 return (
                   <tr
@@ -3108,8 +3399,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">
                       —
                     </td>
-                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">
-                      —
+                    <td className={saldoCellClass(item.runningBalance)}>
+                      {money(item.runningBalance)}
                     </td>
                     <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400 bg-violet-50/30">
                       —
@@ -3137,52 +3428,92 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                         U.Bruta del día
                       </span>
                     </td>
-                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">—</td>
-                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">—</td>
-                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">—</td>
-                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">—</td>
+                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">
+                      —
+                    </td>
+                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">
+                      —
+                    </td>
+                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">
+                      —
+                    </td>
+                    <td className={saldoCellClass(item.runningBalance)}>
+                      {money(item.runningBalance)}
+                    </td>
                     <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle font-bold tabular-nums text-violet-900 bg-violet-100/60">
                       {money(item.dayGross)}
                     </td>
                     <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle font-bold tabular-nums text-violet-950 bg-violet-100/80">
                       {money(item.cumUb)}
                     </td>
-                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">—</td>
+                    <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-400">
+                      —
+                    </td>
+                  </tr>
+                );
+              }
+              if (item.kind === "abono_day") {
+                return (
+                  <tr
+                    key={`abono-${item.date}-${item.abonoTotal}-${rowIdx}`}
+                    role="button"
+                    tabIndex={0}
+                    className="text-center bg-teal-50/90 border-t border-teal-200 cursor-pointer hover:bg-teal-100/90 odd:bg-teal-50/90 even:bg-teal-50/90"
+                    onClick={() => setAbonoDiaDrawerDate(item.date)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ")
+                        setAbonoDiaDrawerDate(item.date);
+                    }}
+                    title="Clic para ver el detalle de abonos AR (ingreso a caja)"
+                  >
+                    <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle font-medium text-teal-900">
+                      {item.date}
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-left">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-teal-800">
+                        Abonos AR
+                      </span>
+                    </td>
+                    <td
+                      className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle tabular-nums font-bold text-green-700 bg-teal-100/60"
+                      title="Ingreso a caja por cobranzas del día"
+                    >
+                      {money(item.abonoTotal)}
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400">
+                      —
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle tabular-nums font-bold text-emerald-800">
+                      {money(item.abonoTotal)}
+                    </td>
+                    <td className={saldoCellClass(item.runningBalance)}>
+                      {money(item.runningBalance)}
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400 bg-violet-50/30">
+                      —
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400 bg-violet-50/30">
+                      —
+                    </td>
+                    <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400">
+                      —
+                    </td>
                   </tr>
                 );
               }
               const r = item.row;
-              const index = item.origIndex;
-              const dk = String(r.date || "").trim().slice(0, 10);
-              const abonoDia = dk ? abonosPorDia.get(dk) ?? 0 : 0;
-              const isFirstOfDay = abonoColFirstRowOfDay[index] ?? false;
               return (
-              <tr key={r.id} className={`text-center ${rowBgByType(r.type)}`}>
-                <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">{r.date}</td>
-                <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">
+              <tr key={r.id} className={`text-center odd:bg-white even:bg-violet-50/35 ${rowBgByType(r.type)}`}>
+                <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle">{r.date}</td>
+                <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle">
                   {typeBadgeButton(r.type, () => setMovimientoDrawerRow(r))}
                 </td>
-                <td className={`border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle tabular-nums ${Number(r.inAmount || 0) > 0 ? "text-green-700 font-semibold" : "text-gray-300"}`}>{money(r.inAmount)}</td>
-                <td className={`border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle tabular-nums ${Number(r.outAmount || 0) > 0 ? "text-red-700 font-semibold" : "text-gray-300"}`}>{money(r.outAmount)}</td>
-                <td className={`border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle ${!isFirstOfDay ? "bg-gray-50/40" : ""}`}>
-                  {isFirstOfDay ? (
-                    abonoDia > 0 ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="w-full max-w-[140px] mx-auto !rounded-lg !px-1 !py-0.5 tabular-nums text-xs !text-emerald-800 !font-medium hover:!bg-emerald-50 focus-visible:!ring-2 focus-visible:!ring-emerald-300"
-                        title="Ver abonos y ventas de este día"
-                        onClick={() => setAbonoDiaDrawerDate(dk)}
-                      >
-                        {money(abonoDia)}
-                      </Button>
-                    ) : (
-                      <span className="text-gray-400 tabular-nums text-xs">—</span>
-                    )
-                  ) : null}
+                <td className={`border border-gray-200 px-2 py-2 whitespace-nowrap align-middle tabular-nums ${Number(r.inAmount || 0) > 0 ? "text-green-700 font-semibold" : "text-gray-300"}`}>{money(r.inAmount)}</td>
+                <td className={`border border-gray-200 px-2 py-2 whitespace-nowrap align-middle tabular-nums ${Number(r.outAmount || 0) > 0 ? "text-red-700 font-semibold" : "text-gray-300"}`}>{money(r.outAmount)}</td>
+                <td className="border border-gray-200 px-2 py-2 whitespace-nowrap align-middle text-gray-400 text-xs">
+                  —
                 </td>
-                <td className={`border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle font-bold tabular-nums ${Number(r.balance) < 0 ? "text-red-700" : "text-gray-900"}`}>{money(r.balance)}</td>
+                <td className={`border border-gray-200 px-2 py-2 whitespace-nowrap align-middle font-bold tabular-nums ${Number(r.balance) < 0 ? "text-red-700" : "text-gray-900"}`}>{money(item.runningBalance)}</td>
                 <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-300 bg-violet-50/20">—</td>
                 <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle text-gray-300 bg-violet-50/20">—</td>
                 <td className="border border-gray-200 px-3 py-2.5 text-sm whitespace-nowrap align-middle">
@@ -3208,10 +3539,11 @@ export default function EstadoCuentaPollo(): React.ReactElement {
             })}
 
             {filteredLedgerWithBalance.length === 0 &&
-              displayLedgerWithUb.length === 0 && (
+              displayLedgerWithUbAndBalance.length === 0 &&
+              totalAbonosArPeriodo <= 0 && (
               <tr>
                 <td colSpan={9} className="p-3 text-center text-gray-500">
-                  No hay movimientos ni ventas cash en este rango.
+                  No hay movimientos, ventas cash ni abonos en este rango.
                 </td>
               </tr>
             )}
@@ -3248,12 +3580,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
 
       {/* Mobile: ledger as cards */}
       <div className="md:hidden space-y-3">
-        {displayLedgerWithUb.length === 0 ? (
+        {displayLedgerWithUbAndBalance.length === 0 ? (
           <div className="text-center text-gray-500 text-sm py-6">
-            Sin movimientos ni ventas cash en este rango.
+            Sin movimientos, ventas cash ni abonos en este rango.
           </div>
         ) : (
-          displayLedgerWithUb.map((item, index) => {
+          displayLedgerWithUbAndBalance.map((item, index) => {
             if (item.kind === "cash_sales") {
               return (
                 <div
@@ -3282,6 +3614,14 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                         {money(item.cashTotal)}
                       </div>
                     </div>
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-emerald-200 flex justify-between text-sm">
+                    <span className="text-emerald-700">Saldo (CAJA)</span>
+                    <span
+                      className={`font-bold tabular-nums ${Number(item.runningBalance) < 0 ? "text-red-700" : "text-gray-900"}`}
+                    >
+                      {money(item.runningBalance)}
+                    </span>
                   </div>
                 </div>
               );
@@ -3314,14 +3654,58 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                       {money(item.cumUb)}
                     </span>
                   </div>
+                  <div className="mt-2 pt-2 border-t border-violet-200 flex justify-between text-sm">
+                    <span className="text-violet-700">Saldo (CAJA)</span>
+                    <span
+                      className={`font-bold tabular-nums ${Number(item.runningBalance) < 0 ? "text-red-700" : "text-gray-900"}`}
+                    >
+                      {money(item.runningBalance)}
+                    </span>
+                  </div>
+                </div>
+              );
+            }
+            if (item.kind === "abono_day") {
+              return (
+                <div
+                  key={`abono-m-${item.date}-${item.abonoTotal}-${index}`}
+                  role="button"
+                  tabIndex={0}
+                  className="rounded-xl p-3 bg-teal-50 border border-teal-200 shadow-sm cursor-pointer active:bg-teal-100"
+                  onClick={() => setAbonoDiaDrawerDate(item.date)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ")
+                      setAbonoDiaDrawerDate(item.date);
+                  }}
+                >
+                  <div className="flex justify-between items-center gap-2">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase text-teal-800">
+                        Abonos AR · {item.date}
+                      </div>
+                      <div className="text-xs text-teal-700 mt-0.5">
+                        Ingreso a caja (cuentas por cobrar)
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[10px] text-teal-600">Total día</div>
+                      <div className="font-bold tabular-nums text-emerald-800">
+                        {money(item.abonoTotal)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-teal-200 flex justify-between text-sm">
+                    <span className="text-teal-700">Saldo (CAJA)</span>
+                    <span
+                      className={`font-bold tabular-nums ${Number(item.runningBalance) < 0 ? "text-red-700" : "text-gray-900"}`}
+                    >
+                      {money(item.runningBalance)}
+                    </span>
+                  </div>
                 </div>
               );
             }
             const r = item.row;
-            const origIndex = item.origIndex;
-            const dk = String(r.date || "").trim().slice(0, 10);
-            const abonoDia = dk ? abonosPorDia.get(dk) ?? 0 : 0;
-            const isFirstOfDay = abonoColFirstRowOfDay[origIndex] ?? false;
             return (
             <div
               key={r.id}
@@ -3371,31 +3755,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Saldo (CAJA)</div>
-                  <div className={`font-bold tabular-nums ${Number(r.balance) < 0 ? "text-red-700" : "text-gray-900"}`}>{money(r.balance)}</div>
+                  <div className={`font-bold tabular-nums ${Number(item.runningBalance) < 0 ? "text-red-700" : "text-gray-900"}`}>{money(item.runningBalance)}</div>
                 </div>
-                {isFirstOfDay ? (
-                  <div className="col-span-2">
-                    <div className="text-xs text-gray-500">
-                      AR del día{" "}
-                      <span className="text-gray-400 font-normal">
-                        (suma; tocar si hay monto)
-                      </span>
-                    </div>
-                    {abonoDia > 0 ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="text-left w-full !rounded-lg tabular-nums !text-emerald-800 !font-medium !py-0.5 hover:!bg-emerald-50 !justify-start"
-                        onClick={() => setAbonoDiaDrawerDate(dk)}
-                      >
-                        {money(abonoDia)}
-                      </Button>
-                    ) : (
-                      <div className="tabular-nums text-gray-400">—</div>
-                    )}
-                  </div>
-                ) : null}
               </div>
 
               <div className="mt-2 text-sm text-gray-700">
@@ -3413,7 +3774,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           })
         )}
 
-        {displayLedgerWithUb.length > 0 && (
+        {displayLedgerWithUbAndBalance.length > 0 && (
           <div className="rounded-xl p-3 bg-gray-800 text-white shadow-sm border-l-4 border-l-gray-800 mt-1">
             <div className="flex justify-between items-center">
               <div className="text-sm font-semibold">Totales</div>
@@ -3580,28 +3941,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         ) : (
           <>
             <DrawerSectionTitle>Abonos ({abonosRows.length})</DrawerSectionTitle>
-            <div className="mt-2 space-y-2">
-              {abonosRows.length === 0 ? (
-                <div className="text-sm text-gray-500 text-center py-4">
-                  Sin abonos en este periodo.
-                </div>
-              ) : (
-                abonosRows.map((a) => (
-                  <DrawerDetailDlCard
-                    key={a.id}
-                    title={a.customer}
-                    rows={[
-                      { label: "Fecha", value: a.date },
-                      {
-                        label: "Monto abono",
-                        value: money(a.amount),
-                        ddClassName:
-                          "text-sm font-bold tabular-nums text-emerald-700",
-                      },
-                    ]}
-                  />
-                ))
-              )}
+            <div className="mt-2">
+              <AbonosDrawerPanel rows={abonosRows} saleCache={saleCache} />
             </div>
           </>
         )}
@@ -3613,79 +3954,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
         title="Abonos del día"
         subtitle={abonoDiaDrawerDate || ""}
         titleId="drawer-abono-dia-title"
-        panelMaxWidthClassName="max-w-2xl"
+        panelMaxWidthClassName="max-w-3xl"
       >
-        {abonosDelDiaSeleccionado.length === 0 ? (
-          <p className="text-sm text-gray-500 px-1">
-            Sin abonos registrados para esta fecha.
-          </p>
-        ) : (
-          <div className="space-y-6">
-            {abonosDelDiaSeleccionado.map((a) => {
-              const sale = a.saleId ? saleCache[a.saleId] : undefined;
-              return (
-                <div
-                  key={a.id}
-                  className="border-b border-gray-100 pb-4 last:border-0 last:pb-0"
-                >
-                  <DrawerSectionTitle className="mt-0 mb-2">
-                    {a.customer} · {money(a.amount)}
-                  </DrawerSectionTitle>
-                  <DrawerDetailDlCard
-                    title="Abono"
-                    rows={[
-                      { label: "Fecha", value: a.date },
-                      {
-                        label: "Monto",
-                        value: money(a.amount),
-                        ddClassName:
-                          "text-sm font-bold tabular-nums text-emerald-700",
-                      },
-                      { label: "Comentario", value: a.comment || "—" },
-                      ...(a.saleId
-                        ? [
-                            {
-                              label: "ID venta",
-                              value: a.saleId,
-                            },
-                          ]
-                        : []),
-                    ]}
-                  />
-                  {a.saleId ? (
-                    <>
-                      <DrawerSectionTitle className="mt-3 mb-2">
-                        Venta asociada
-                      </DrawerSectionTitle>
-                      {sale ? (
-                        (sale as Record<string, unknown>)._missing ? (
-                          <p className="text-sm text-amber-800 px-1">
-                            No se encontró la venta{" "}
-                            <span className="font-mono text-xs">{a.saleId}</span>{" "}
-                            en salesV2.
-                          </p>
-                        ) : (
-                          <DrawerDetailDlCard
-                            title={String(
-                              sale.customerName || sale.customer || "Venta",
-                            )}
-                            rows={buildSaleDetailRows(
-                              sale as Record<string, unknown> & { id?: string },
-                            )}
-                          />
-                        )
-                      ) : (
-                        <p className="text-sm text-gray-500 px-1">
-                          Cargando venta…
-                        </p>
-                      )}
-                    </>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <AbonosDrawerPanel
+          rows={abonosDelDiaSeleccionado}
+          saleCache={saleCache}
+        />
       </SlideOverDrawer>
 
       <SlideOverDrawer
@@ -4054,75 +4328,10 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                         {corteAssocRange.desde} y {corteAssocRange.hasta}.
                       </p>
                     ) : (
-                      <div className="space-y-4">
-                        {corteDrawerAbonos.map((a) => {
-                          const sale = a.saleId ? saleCache[a.saleId] : undefined;
-                          return (
-                            <div
-                              key={a.id}
-                              className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-3"
-                            >
-                              <div className="flex justify-between gap-2 items-start">
-                                <div>
-                                  <div className="text-sm font-semibold text-slate-900">
-                                    {a.customer}
-                                  </div>
-                                  <div className="text-xs text-slate-500 mt-0.5">
-                                    Abono · {a.date}
-                                  </div>
-                                </div>
-                                <div className="text-base font-bold tabular-nums text-emerald-800 shrink-0">
-                                  {money(a.amount)}
-                                </div>
-                              </div>
-                              {a.comment ? (
-                                <p className="text-xs text-slate-600 leading-snug">
-                                  {a.comment}
-                                </p>
-                              ) : null}
-                              {a.saleId ? (
-                                <div className="border-t border-slate-200/80 pt-3">
-                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                                    Venta abonada
-                                  </div>
-                                  {sale ? (
-                                    (sale as Record<string, unknown>)._missing ? (
-                                      <p className="text-sm text-amber-800">
-                                        No se encontró la venta{" "}
-                                        <span className="font-mono text-xs">
-                                          {a.saleId}
-                                        </span>
-                                        .
-                                      </p>
-                                    ) : (
-                                      <DrawerDetailDlCard
-                                        title={String(
-                                          sale.customerName ||
-                                            sale.customer ||
-                                            "Venta",
-                                        )}
-                                        rows={buildSaleDetailRows(
-                                          sale as Record<string, unknown> & {
-                                            id?: string;
-                                          },
-                                        )}
-                                      />
-                                    )
-                                  ) : (
-                                    <p className="text-sm text-gray-500">
-                                      Cargando venta…
-                                    </p>
-                                  )}
-                                </div>
-                              ) : (
-                                <p className="text-xs text-slate-500 border-t border-slate-200/80 pt-3">
-                                  Abono general (sin venta ligada).
-                                </p>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
+                      <AbonosDrawerPanel
+                        rows={corteDrawerAbonos}
+                        saleCache={saleCache}
+                      />
                     )}
                   </div>
                 )}
