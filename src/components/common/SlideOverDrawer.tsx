@@ -83,7 +83,7 @@ export default function SlideOverDrawer({
             {(subtitle != null && subtitle !== "") || badge != null ? (
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
                 {subtitle != null && subtitle !== "" && (
-                  <span className="text-sm text-gray-600">{subtitle}</span>
+                  <div className="text-sm text-gray-600">{subtitle}</div>
                 )}
                 {badge != null ? (
                   <span className="inline-flex shrink-0 items-center">

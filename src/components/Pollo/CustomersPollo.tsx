@@ -1,5 +1,5 @@
 // src/components/Pollo/CustomersPollo.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   addDoc,
@@ -32,9 +32,9 @@ import {
   DrawerSectionTitle,
 } from "../common/DrawerContentCards";
 import {
+  computeEffectiveSaleBalances,
   distribuirAbonoEntrePendientes,
   getOldestPendingSaleId,
-  listPendingSaleIdsOldestFirst,
   mergeDistribucionConPendientesSinCobro,
   type AbonoDistribuido,
 } from "../../utils/creditAccountAbono";
@@ -103,7 +103,11 @@ interface SellerRow {
   status?: string;
 }
 
-const money = (n: number) => `C$ ${(Number(n) || 0).toFixed(2)}`;
+const money = (n: number) => {
+  let v = Number(n) || 0;
+  if (Math.abs(v) < 0.005) v = 0;
+  return `C$ ${v.toFixed(2)}`;
+};
 
 function sanitizeFilename(s: string): string {
   return String(s || "cliente")
@@ -203,7 +207,14 @@ function lastAbonoDateTimeLabelFrom(
 
 async function loadSaleDetailRows(
   saleId: string,
-): Promise<{ rows: SaleItemRow[]; saleDateLabel: string } | null> {
+): Promise<{
+  rows: SaleItemRow[];
+  /** Fecha/hora de registro (ingreso) */
+  saleDateLabel: string;
+  ingresoDateTime: string;
+  /** Fecha comercial de la venta yyyy-MM-dd */
+  saleDateOnly: string;
+} | null> {
   const byId = await getDoc(doc(db, "salesV2", saleId));
   let data: any = null;
 
@@ -404,7 +415,7 @@ async function loadSaleDetailRows(
     return { productName, qty, unitPrice, discount, total };
   });
 
-  const saleDateLabel =
+  const ingresoDateTime =
     formatLocalDateTime(data.timestamp) ||
     formatLocalDateTime(data.createdAt) ||
     (typeof data.date === "string" && /^\d{4}-\d{2}-\d{2}/.test(data.date)
@@ -412,7 +423,16 @@ async function loadSaleDetailRows(
       : formatLocalDateTime(data.date)) ||
     "";
 
-  return { rows, saleDateLabel };
+  let saleDateOnly = "";
+  if (typeof data.date === "string" && data.date.trim()) {
+    saleDateOnly = data.date.trim().slice(0, 10);
+  } else if (data.date) {
+    saleDateOnly = formatLocalDate(data.date).slice(0, 10);
+  }
+
+  const saleDateLabel = ingresoDateTime;
+
+  return { rows, saleDateLabel, ingresoDateTime, saleDateOnly };
 }
 
 const PAID_DEBT_FLAGS = new Set([
@@ -463,6 +483,38 @@ function getCargoSaleDate(rows: MovementRow[], saleId: string): string {
       Number(m.amount) > 0,
   );
   return (c?.date || "").trim().slice(0, 10);
+}
+
+function abonoFechaConVenta(
+  rows: MovementRow[],
+  abonoDate: string,
+  saleId?: string,
+): { abono: string; venta: string | null } {
+  const abono = String(abonoDate || "").trim().slice(0, 10) || "—";
+  const sid = String(saleId || "").trim();
+  if (!sid) return { abono, venta: null };
+  const venta = getCargoSaleDate(rows, sid);
+  return { abono, venta: venta || null };
+}
+
+function AbonoFechaConVentaCell({
+  rows,
+  abonoDate,
+  saleId,
+}: {
+  rows: MovementRow[];
+  abonoDate: string;
+  saleId?: string;
+}) {
+  const { abono, venta } = abonoFechaConVenta(rows, abonoDate, saleId);
+  return (
+    <span className="whitespace-nowrap">
+      {abono}
+      {venta ? (
+        <span className="text-slate-500 font-normal"> · {venta}</span>
+      ) : null}
+    </span>
+  );
 }
 
 /** Fecha mínima del abono: cargo en lista o documento salesV2. */
@@ -658,6 +710,199 @@ function buildSaleAbonoLedger(
   return chronological.slice().reverse();
 }
 
+type SaleEvolutivoRow = {
+  id: string;
+  dateTime: string;
+  concepto: string;
+  saldoAnterior: number;
+  abono: number | null;
+  saldoFinal: number;
+};
+
+function buildSaleEvolutivoLedger(
+  rows: MovementRow[],
+  saleId: string,
+): SaleEvolutivoRow[] {
+  const cargo = rows.find(
+    (m) =>
+      m.type === "CARGO" &&
+      m.ref?.saleId === saleId &&
+      Number(m.amount) > 0,
+  );
+  if (!cargo) return [];
+
+  const cargoAmount = roundCurrency(Number(cargo.amount));
+  const result: SaleEvolutivoRow[] = [
+    {
+      id: `cargo-${cargo.id}`,
+      dateTime:
+        formatLocalDateTime(cargo.createdAt) ||
+        String(cargo.date || "").slice(0, 10),
+      concepto: "Consignación",
+      saldoAnterior: 0,
+      abono: null,
+      saldoFinal: cargoAmount,
+    },
+  ];
+
+  let running = cargoAmount;
+  const abonos = rows
+    .filter(
+      (m) =>
+        m.type === "ABONO" &&
+        m.ref?.saleId === saleId &&
+        Number(m.amount) < 0,
+    )
+    .slice()
+    .sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const as = a.createdAt?.seconds || 0;
+      const bs = b.createdAt?.seconds || 0;
+      if (as !== bs) return as - bs;
+      const ans = a.createdAt?.nanoseconds || 0;
+      const bns = b.createdAt?.nanoseconds || 0;
+      return ans - bns;
+    });
+
+  for (const ab of abonos) {
+    const saldoAnterior = roundCurrency(running);
+    const monto = Math.abs(Number(ab.amount) || 0);
+    running = roundCurrency(running - monto);
+    result.push({
+      id: ab.id,
+      dateTime:
+        formatLocalDateTime(ab.createdAt) ||
+        String(ab.date || "").slice(0, 10),
+      concepto: ab.comment?.trim() || "Abono",
+      saldoAnterior,
+      abono: monto,
+      saldoFinal: running,
+    });
+  }
+
+  return result;
+}
+
+type CustomerAbonoLedgerRow = {
+  id: string;
+  date: string;
+  comment?: string;
+  saleId?: string;
+  saldoInicial: number;
+  montoAbono: number;
+  saldoFinal: number;
+  isMultiAbono?: boolean;
+  /** Agrupa filas del mismo registro de abono múltiple (fecha + createdAt). */
+  batchKey?: string;
+};
+
+const MULTI_ABONO_COMMENT_MARK = "Abono múltiple";
+
+function isMultiAbonoComment(comment?: string): boolean {
+  return String(comment || "").includes(MULTI_ABONO_COMMENT_MARK);
+}
+
+function multiAbonoBatchKeyFromMovement(m: MovementRow): string | undefined {
+  if (!isMultiAbonoComment(m.comment)) return undefined;
+  const date = String(m.date || "").slice(0, 10);
+  const sec = m.createdAt?.seconds ?? 0;
+  const ns = m.createdAt?.nanoseconds ?? 0;
+  return `${date}|${sec}|${ns}`;
+}
+
+type MultiAbonoLoteSaleLine = {
+  abonoId: string;
+  saleId: string;
+  montoAbono: number;
+  saleDate: string;
+  saleTotal: number;
+  saldoRestante: number;
+  status: "PENDIENTE" | "PAGADA";
+  lines: SaleItemRow[];
+};
+
+/** Abonos del cliente con saldo de cuenta antes/después (orden cronológico global). */
+function buildCustomerAbonoLedger(
+  rows: MovementRow[],
+  initialDebt: number,
+): CustomerAbonoLedgerRow[] {
+  const sorted = [...rows].sort(compareMovementRowsChrono);
+  let running = roundCurrency(Number(initialDebt || 0));
+  const out: CustomerAbonoLedgerRow[] = [];
+
+  for (const m of sorted) {
+    const amt = Number(m.amount || 0);
+    if (m.type === "ABONO" && amt < 0) {
+      const monto = Math.abs(amt);
+      const saldoInicial = running;
+      running = roundCurrency(running + amt);
+      const isMulti = isMultiAbonoComment(m.comment);
+      out.push({
+        id: m.id,
+        date: m.date,
+        comment: m.comment,
+        saleId: m.ref?.saleId,
+        saldoInicial,
+        montoAbono: roundCurrency(monto),
+        saldoFinal: running,
+        isMultiAbono: isMulti,
+        batchKey: isMulti ? multiAbonoBatchKeyFromMovement(m) : undefined,
+      });
+      continue;
+    }
+    running = roundCurrency(running + amt);
+  }
+
+  return out.slice().reverse();
+}
+
+type CustomerAbonoTotalRow = {
+  id: string;
+  date: string;
+  saldoInicial: number;
+  montoTotal: number;
+  saldoFinal: number;
+  isMultiAbono?: boolean;
+  batchKey?: string;
+  /** Primera fila distribuida (para modales Ventas / Lote). */
+  representative: CustomerAbonoLedgerRow;
+};
+
+/** Abonos agrupados por registro (lote múltiple = una fila con monto total). */
+function buildCustomerAbonoTotalLedger(
+  rows: MovementRow[],
+  initialDebt: number,
+): CustomerAbonoTotalRow[] {
+  const distributed = buildCustomerAbonoLedger(rows, initialDebt).slice().reverse();
+  const out: CustomerAbonoTotalRow[] = [];
+  const batchIndex = new Map<string, number>();
+
+  for (const row of distributed) {
+    const key = row.batchKey ?? `single:${row.id}`;
+    if (row.batchKey && batchIndex.has(key)) {
+      const idx = batchIndex.get(key)!;
+      const g = out[idx]!;
+      g.montoTotal = roundCurrency(g.montoTotal + row.montoAbono);
+      g.saldoFinal = row.saldoFinal;
+      continue;
+    }
+    const entry: CustomerAbonoTotalRow = {
+      id: key,
+      date: row.date,
+      saldoInicial: row.saldoInicial,
+      montoTotal: row.montoAbono,
+      saldoFinal: row.saldoFinal,
+      isMultiAbono: row.isMultiAbono,
+      batchKey: row.batchKey,
+      representative: row,
+    };
+    if (row.batchKey) batchIndex.set(key, out.length);
+    out.push(entry);
+  }
+
+  return out.slice().reverse();
+}
+
 /** Abonos creados con el botón "Pagar" (reversibles). */
 const FULL_PAYMENT_COMMENT_PREFIX = "Pago total factura";
 
@@ -673,6 +918,36 @@ function computeDebtStatusFromPendingForSale(
   return getPendingForSale(list, saleId) <= 0.005 ? "PAGADA" : "PENDIENTE";
 }
 
+function consignacionEstadoBadgeClass(status: "PENDIENTE" | "PAGADA"): string {
+  return status === "PAGADA"
+    ? "bg-green-100 text-green-700"
+    : "bg-orange-100 text-orange-700";
+}
+
+function ConsignacionEstadoBadge({
+  status,
+}: {
+  status: "PENDIENTE" | "PAGADA";
+}) {
+  return (
+    <span
+      className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${consignacionEstadoBadgeClass(status)}`}
+    >
+      {status === "PAGADA" ? "Pagada" : "Pendiente"}
+    </span>
+  );
+}
+
+function consignacionEstadoForSale(
+  rows: MovementRow[],
+  saleId: string,
+): { saldoRestante: number; status: "PENDIENTE" | "PAGADA" } {
+  const eff = computeEffectiveSaleBalances(rows, getCargoSaleDate).get(saleId);
+  const saldoRestante = eff?.pendiente ?? getPendingForSale(rows, saleId);
+  const status = saldoRestante <= 0.005 ? "PAGADA" : "PENDIENTE";
+  return { saldoRestante, status };
+}
+
 async function syncCargoDebtStatusForSaleId(
   list: MovementRow[],
   saleId: string,
@@ -684,7 +959,9 @@ async function syncCargoDebtStatusForSaleId(
       Number(m.amount) > 0,
   );
   if (!cargo) return list;
-  const next = computeDebtStatusFromPendingForSale(list, saleId);
+  const eff = computeEffectiveSaleBalances(list, getCargoSaleDate).get(saleId);
+  const pend = eff?.pendiente ?? getPendingForSale(list, saleId);
+  const next: "PENDIENTE" | "PAGADA" = pend <= 0.005 ? "PAGADA" : "PENDIENTE";
   const normalized = normalizeDebtStatus(cargo.debtStatus);
   if (normalized !== next) {
     await updateDoc(doc(db, "ar_movements_pollo", cargo.id), {
@@ -777,6 +1054,8 @@ export default function CustomersPollo({
     saleAmount: number;
     lineCount: number;
     saleDate?: string;
+    ingresoDateTime?: string;
+    saleDateOnly?: string;
   } | null>(null);
   /** Drawer detalle venta: pestaña Ventas (productos) vs Abonos. */
   const [drawerSaleTab, setDrawerSaleTab] = useState<"ventas" | "abonos">(
@@ -793,6 +1072,17 @@ export default function CustomersPollo({
 
     try {
       const res = await loadSaleDetailRows(saleId);
+      const cargo = stRows.find(
+        (m) =>
+          m.type === "CARGO" &&
+          m.ref?.saleId === saleId &&
+          Number(m.amount) > 0,
+      );
+      const ingresoFromCargo = cargo
+        ? formatLocalDateTime(cargo.createdAt) ||
+          String(cargo.date || "").trim()
+        : "";
+      const ventaFromCargo = getCargoSaleDate(stRows, saleId);
       if (res) {
         setItemsModalRows(res.rows);
         const totalQty = res.rows.reduce((a, r) => a + Number(r.qty || 0), 0);
@@ -805,6 +1095,8 @@ export default function CustomersPollo({
           saleAmount: roundCurrency(saleAmount),
           lineCount: res.rows.length,
           saleDate: res.saleDateLabel,
+          ingresoDateTime: res.ingresoDateTime || ingresoFromCargo || undefined,
+          saleDateOnly: res.saleDateOnly || ventaFromCargo || undefined,
         });
       } else {
         setItemsModalRows([]);
@@ -813,6 +1105,8 @@ export default function CustomersPollo({
           saleAmount: 0,
           lineCount: 0,
           saleDate: undefined,
+          ingresoDateTime: ingresoFromCargo || undefined,
+          saleDateOnly: ventaFromCargo || undefined,
         });
       }
     } catch (e) {
@@ -884,6 +1178,9 @@ export default function CustomersPollo({
     rect: DOMRect;
   } | null>(null);
   const [saleLedgerSaleId, setSaleLedgerSaleId] = useState<string | null>(null);
+  const [evolutivoModalSaleId, setEvolutivoModalSaleId] = useState<
+    string | null
+  >(null);
 
   // editar/eliminar mov
   const [editMovId, setEditMovId] = useState<string | null>(null);
@@ -920,6 +1217,28 @@ export default function CustomersPollo({
     null,
   );
   const [stOpenAccount, setStOpenAccount] = useState(false);
+  /** Estado de cuenta: consignaciones vs abonos */
+  const [stStatementTab, setStStatementTab] = useState<
+    "consignaciones" | "abonos"
+  >("consignaciones");
+  const [abonoVentasModal, setAbonoVentasModal] =
+    useState<CustomerAbonoLedgerRow | null>(null);
+  const [abonoVentasModalLoading, setAbonoVentasModalLoading] = useState(false);
+  const [abonoVentasModalLines, setAbonoVentasModalLines] = useState<
+    SaleItemRow[]
+  >([]);
+  const [abonoVentasModalSaleDate, setAbonoVentasModalSaleDate] = useState("");
+  const [abonoVentasModalSaleTotal, setAbonoVentasModalSaleTotal] = useState(0);
+  /** Abono múltiple: modal con todas las ventas del mismo lote. */
+  const [abonoLoteModal, setAbonoLoteModal] = useState<{
+    batchKey: string;
+    date: string;
+    rows: CustomerAbonoLedgerRow[];
+  } | null>(null);
+  const [abonoLoteModalLoading, setAbonoLoteModalLoading] = useState(false);
+  const [abonoLoteModalSales, setAbonoLoteModalSales] = useState<
+    MultiAbonoLoteSaleLine[]
+  >([]);
   const [stOpenMovements, setStOpenMovements] = useState(false);
   const [expandedMovementId, setExpandedMovementId] = useState<string | null>(
     null,
@@ -1004,19 +1323,11 @@ export default function CustomersPollo({
 
             let sumMov = 0;
             let lastAbono: any = null;
-            let hasPendingCargo = false;
 
             mSnap.forEach((m) => {
               const x = m.data() as any;
               const amt = Number(x.amount || 0);
               sumMov += amt;
-
-              if (amt > 0) {
-                const status = normalizeDebtStatus(
-                  x.debtStatus ?? x.creditStatus ?? x.cycleStatus ?? x.status,
-                );
-                if (status === "PENDIENTE") hasPendingCargo = true;
-              }
 
               if (amt < 0) {
                 const d = x.date ?? formatLocalDate(x.createdAt);
@@ -1038,9 +1349,7 @@ export default function CustomersPollo({
             const init = Number(c.initialDebt || 0);
             const currentBalance = roundCurrency(init + sumMov);
             c.balance = currentBalance;
-            const hasOutstanding = hasPendingCargo || currentBalance > 0;
-
-            if (hasOutstanding && lastAbono) {
+            if (lastAbono) {
               c.lastAbonoDate = lastAbono.date;
               c.lastAbonoAmount = lastAbono.amount;
               c.lastAbonoDateTime = lastAbonoDateTimeLabelFrom({
@@ -1494,13 +1803,15 @@ export default function CustomersPollo({
       .filter((x) => Number(x.amount) > 0)
       .reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
 
-    const saldoActual = Number(initialDebtValue || 0) + sumMov;
+    const saldoActual = roundCurrency(
+      Number(initialDebtValue || 0) + sumMov,
+    );
 
     setStKpis({
       saldoActual,
       totalAbonado: totalAbonos,
       totalCargos: Number(initialDebtValue || 0) + totalCargosMov,
-      saldoRestante: saldoActual,
+      saldoRestante: Math.abs(saldoActual) < 0.005 ? 0 : saldoActual,
     });
   };
 
@@ -1528,6 +1839,15 @@ export default function CustomersPollo({
     setShowPagoTotalModal(false);
     setPagoTotalSaleId(null);
     setPagoTotalComment("");
+    setStStatementTab("consignaciones");
+    setAbonoVentasModal(null);
+    setAbonoVentasModalLines([]);
+    setAbonoVentasModalSaleDate("");
+    setAbonoVentasModalSaleTotal(0);
+    setAbonoVentasModalLoading(false);
+    setAbonoLoteModal(null);
+    setAbonoLoteModalSales([]);
+    setAbonoLoteModalLoading(false);
   };
 
   const openStatement = async (customer: CustomerRow) => {
@@ -1557,6 +1877,9 @@ export default function CustomersPollo({
     const { from: pFrom, to: pTo } = getMonthBounds();
     setStPeriodFrom(pFrom);
     setStPeriodTo(pTo);
+    setStStatementTab("consignaciones");
+    setAbonoVentasModal(null);
+    setAbonoLoteModal(null);
 
     setStLoading(true);
     try {
@@ -1641,18 +1964,6 @@ export default function CustomersPollo({
     }
   };
 
-  const hasOpenDebt = (
-    list: MovementRow[],
-    outstandingBalance: number,
-  ): boolean => {
-    if (roundCurrency(outstandingBalance || 0) > 0) return true;
-    return list.some(
-      (row) =>
-        row.type === "CARGO" &&
-        normalizeDebtStatus(row.debtStatus) === "PENDIENTE",
-    );
-  };
-
   const getLastAbonoFromList = (list: MovementRow[]) => {
     const abonos = list
       .filter((x) => Number(x.amount) < 0)
@@ -1664,6 +1975,22 @@ export default function CustomersPollo({
       }))
       .sort((a, b) => (a.ts || 0) - (b.ts || 0));
     return abonos.length ? abonos[abonos.length - 1] : null;
+  };
+
+  const lastAbonoFieldsForList = (list: MovementRow[]) => {
+    const last = getLastAbonoFromList(list);
+    if (!last) {
+      return {
+        lastAbonoDate: "",
+        lastAbonoAmount: 0,
+        lastAbonoDateTime: "",
+      };
+    }
+    return {
+      lastAbonoDate: last.date,
+      lastAbonoAmount: last.amount,
+      lastAbonoDateTime: lastAbonoDateTimeLabelFrom(last),
+    };
   };
 
   /** Ventas a crédito (CARGO con venta) mostradas en el estado de cuenta. */
@@ -1708,6 +2035,177 @@ export default function CustomersPollo({
     };
   }, [stCustomer, stRows, stPeriodFrom, stPeriodTo]);
 
+  const customerAbonosLedger = useMemo(() => {
+    if (!stCustomer) return [];
+    return buildCustomerAbonoLedger(
+      stRows,
+      Number(stCustomer.initialDebt || 0),
+    );
+  }, [stRows, stCustomer]);
+
+  const customerAbonoTotalLedger = useMemo(() => {
+    if (!stCustomer) return [];
+    return buildCustomerAbonoTotalLedger(
+      stRows,
+      Number(stCustomer.initialDebt || 0),
+    );
+  }, [stRows, stCustomer]);
+
+  /** Pendiente por venta incluyendo abonos generales aplicados FIFO. */
+  const effectiveSaleBalances = useMemo(
+    () => computeEffectiveSaleBalances(stRows, getCargoSaleDate),
+    [stRows],
+  );
+
+  const getPendingForSaleEffective = useCallback(
+    (_rows: MovementRow[], saleId: string) =>
+      effectiveSaleBalances.get(saleId)?.pendiente ??
+      getPendingForSale(stRows, saleId),
+    [effectiveSaleBalances, stRows],
+  );
+
+  const getAbonadoForSaleEffective = useCallback(
+    (saleId: string) =>
+      effectiveSaleBalances.get(saleId)?.abonoEfectivo ??
+      getTotalAbonadoForSale(stRows, saleId),
+    [effectiveSaleBalances, stRows],
+  );
+
+  /** Filas del mismo abono múltiple (misma fecha + mismo createdAt). */
+  const multiAbonoBatchByKey = useMemo(() => {
+    const map = new Map<string, CustomerAbonoLedgerRow[]>();
+    for (const row of customerAbonosLedger) {
+      if (!row.isMultiAbono || !row.batchKey) continue;
+      const list = map.get(row.batchKey) ?? [];
+      list.push(row);
+      map.set(row.batchKey, list);
+    }
+    for (const [k, list] of map) {
+      map.set(
+        k,
+        list.slice().sort((a, b) => {
+          const sa = a.saleId || "";
+          const sb = b.saleId || "";
+          return sa.localeCompare(sb);
+        }),
+      );
+    }
+    return map;
+  }, [customerAbonosLedger]);
+
+  const openAbonoLoteModal = (row: CustomerAbonoLedgerRow) => {
+    if (!row.batchKey) return;
+    const batch = multiAbonoBatchByKey.get(row.batchKey) ?? [row];
+    setAbonoLoteModal({
+      batchKey: row.batchKey,
+      date: row.date,
+      rows: batch,
+    });
+  };
+
+  useEffect(() => {
+    if (!abonoVentasModal?.saleId) {
+      setAbonoVentasModalLines([]);
+      setAbonoVentasModalSaleDate("");
+      setAbonoVentasModalSaleTotal(0);
+      setAbonoVentasModalLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setAbonoVentasModalLoading(true);
+      try {
+        const res = await loadSaleDetailRows(abonoVentasModal.saleId!);
+        const cargo = stRows.find(
+          (m) =>
+            m.type === "CARGO" &&
+            m.ref?.saleId === abonoVentasModal.saleId &&
+            Number(m.amount) > 0,
+        );
+        if (!cancelled) {
+          setAbonoVentasModalLines(res?.rows ?? []);
+          setAbonoVentasModalSaleDate(res?.saleDateLabel ?? "");
+          setAbonoVentasModalSaleTotal(Number(cargo?.amount ?? 0));
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setAbonoVentasModalLines([]);
+      } finally {
+        if (!cancelled) setAbonoVentasModalLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [abonoVentasModal, stRows]);
+
+  const abonoVentasModalSaleMeta = useMemo(() => {
+    const sid = abonoVentasModal?.saleId;
+    if (!sid) return null;
+    return consignacionEstadoForSale(stRows, sid);
+  }, [abonoVentasModal?.saleId, stRows]);
+
+  useEffect(() => {
+    if (!abonoLoteModal) {
+      setAbonoLoteModalSales([]);
+      setAbonoLoteModalLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setAbonoLoteModalLoading(true);
+      try {
+        const entries = await Promise.all(
+          abonoLoteModal.rows.map(async (row) => {
+            const saleId = row.saleId || "";
+            if (!saleId) {
+              return {
+                abonoId: row.id,
+                saleId: "",
+                montoAbono: row.montoAbono,
+                saleDate: "",
+                saleTotal: 0,
+                saldoRestante: 0,
+                status: "PENDIENTE" as const,
+                lines: [] as SaleItemRow[],
+              };
+            }
+            const res = await loadSaleDetailRows(saleId);
+            const cargo = stRows.find(
+              (m) =>
+                m.type === "CARGO" &&
+                m.ref?.saleId === saleId &&
+                Number(m.amount) > 0,
+            );
+            const { saldoRestante, status } = consignacionEstadoForSale(
+              stRows,
+              saleId,
+            );
+            return {
+              abonoId: row.id,
+              saleId,
+              montoAbono: row.montoAbono,
+              saleDate: res?.saleDateLabel ?? "",
+              saleTotal: Number(cargo?.amount ?? 0),
+              saldoRestante,
+              status,
+              lines: res?.rows ?? [],
+            };
+          }),
+        );
+        if (!cancelled) setAbonoLoteModalSales(entries);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setAbonoLoteModalSales([]);
+      } finally {
+        if (!cancelled) setAbonoLoteModalLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [abonoLoteModal, stRows]);
+
   /** Abonos de la venta en el drawer, del más antiguo al más reciente. */
   const drawerAbonosChronological = useMemo(() => {
     if (!itemsModalSaleId) return [];
@@ -1719,6 +2217,11 @@ export default function CustomersPollo({
     if (!saleLedgerSaleId) return [];
     return buildSaleAbonoLedger(stRows, saleLedgerSaleId);
   }, [stRows, saleLedgerSaleId]);
+
+  const evolutivoRows = useMemo(() => {
+    if (!evolutivoModalSaleId) return [];
+    return buildSaleEvolutivoLedger(stRows, evolutivoModalSaleId);
+  }, [stRows, evolutivoModalSaleId]);
 
   // Id de la consignación más antigua con saldo (antes usado para bloquear pagos hasta liquidarla primero).
   // const oldestPendingSaleId = useMemo(
@@ -1733,21 +2236,24 @@ export default function CustomersPollo({
   // );
 
   const pendingCreditKpi = useMemo(() => {
-    const ids = listPendingSaleIdsOldestFirst(
-      stRows,
-      normalizeDebtStatus,
-      getPendingForSale,
-      getCargoSaleDate,
-    );
+    const ids = [...effectiveSaleBalances.values()]
+      .filter((b) => b.pendiente > 0.005)
+      .sort((a, b) => {
+        const da = getCargoSaleDate(stRows, a.saleId) || a.saleId;
+        const db = getCargoSaleDate(stRows, b.saleId) || b.saleId;
+        if (da !== db) return da.localeCompare(db);
+        return a.saleId.localeCompare(b.saleId);
+      })
+      .map((b) => b.saleId);
     let totalPend = 0;
     for (const sid of ids) {
-      totalPend += getPendingForSale(stRows, sid);
+      totalPend += effectiveSaleBalances.get(sid)?.pendiente ?? 0;
     }
     return {
       count: ids.length,
       totalPendiente: roundCurrency(totalPend),
     };
-  }, [stRows]);
+  }, [stRows, effectiveSaleBalances]);
 
   const saveAbono = async () => {
     if (!stCustomer) return;
@@ -1781,7 +2287,7 @@ export default function CustomersPollo({
     // }
 
     if (abonoTargetSaleId) {
-      const pend = getPendingForSale(stRows, abonoTargetSaleId);
+      const pend = getPendingForSaleEffective(stRows, abonoTargetSaleId);
       if (safeAmt > pend + 0.005) {
         setMsg(
           `El abono no puede superar el saldo pendiente (${money(pend)}) de esta venta.`,
@@ -1847,20 +2353,15 @@ export default function CustomersPollo({
       const nuevoSaldo = roundCurrency(
         Number(stCustomer.initialDebt || 0) + sumMov,
       );
-      const openDebt = hasOpenDebt(newList, nuevoSaldo);
+      const lastAbonoFields = lastAbonoFieldsForList(newList);
 
       setRows((prev) =>
         prev.map((c) => {
           if (c.id !== stCustomer.id) return c;
-          const nextBal = roundCurrency((c.balance || 0) - safeAmt);
           return {
             ...c,
-            balance: nextBal,
-            lastAbonoDate: openDebt ? abonoDate : "",
-            lastAbonoAmount: openDebt ? safeAmt : 0,
-            lastAbonoDateTime: openDebt
-              ? formatLocalDateTime(abonoAt) || abonoDate
-              : "",
+            balance: nuevoSaldo,
+            ...lastAbonoFields,
           };
         }),
       );
@@ -1869,12 +2370,8 @@ export default function CustomersPollo({
         prev
           ? {
               ...prev,
-              balance: roundCurrency((prev.balance || 0) - safeAmt),
-              lastAbonoDate: openDebt ? abonoDate : "",
-              lastAbonoAmount: openDebt ? safeAmt : 0,
-              lastAbonoDateTime: openDebt
-                ? formatLocalDateTime(abonoAt) || abonoDate
-                : "",
+              balance: nuevoSaldo,
+              ...lastAbonoFields,
             }
           : prev,
       );
@@ -1896,7 +2393,7 @@ export default function CustomersPollo({
   const openPagoTotalModal = (saleId: string) => {
     if (!stCustomer) return;
     setMsg("");
-    const pending = getPendingForSale(stRows, saleId);
+    const pending = getPendingForSaleEffective(stRows, saleId);
     if (!(pending > 0.005)) {
       setMsg("No hay saldo pendiente para esta venta.");
       return;
@@ -1939,7 +2436,7 @@ export default function CustomersPollo({
     const saleId = pagoTotalSaleId;
     if (!saleId || !stCustomer) return;
     setMsg("");
-    const pending = getPendingForSale(stRows, saleId);
+    const pending = getPendingForSaleEffective(stRows, saleId);
     if (!(pending > 0.005)) {
       setMsg("No hay saldo pendiente para esta venta.");
       setShowPagoTotalModal(false);
@@ -2028,8 +2525,7 @@ export default function CustomersPollo({
       const nuevoSaldo = roundCurrency(
         Number(stCustomer.initialDebt || 0) + sumMov,
       );
-      const openDebt = hasOpenDebt(newList, nuevoSaldo);
-      const last = openDebt ? getLastAbonoFromList(newList) : null;
+      const lastAbonoFields = lastAbonoFieldsForList(newList);
 
       setRows((prev) =>
         prev.map((c) =>
@@ -2037,10 +2533,7 @@ export default function CustomersPollo({
             ? {
                 ...c,
                 balance: nuevoSaldo,
-                lastAbonoDate: openDebt && last ? last.date : "",
-                lastAbonoAmount: openDebt && last ? last.amount : 0,
-                lastAbonoDateTime:
-                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+                ...lastAbonoFields,
               }
             : c,
         ),
@@ -2050,10 +2543,7 @@ export default function CustomersPollo({
           ? {
               ...prev,
               balance: nuevoSaldo,
-              lastAbonoDate: openDebt && last ? last.date : "",
-              lastAbonoAmount: openDebt && last ? last.amount : 0,
-              lastAbonoDateTime:
-                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+              ...lastAbonoFields,
             }
           : prev,
       );
@@ -2093,14 +2583,14 @@ export default function CustomersPollo({
       stRows,
       n,
       normalizeDebtStatus,
-      getPendingForSale,
+      getPendingForSaleEffective,
       getCargoSaleDate,
     );
     const merged = mergeDistribucionConPendientesSinCobro(
       stRows,
       dist,
       normalizeDebtStatus,
-      getPendingForSale,
+      getPendingForSaleEffective,
       getCargoSaleDate,
     );
     setMultiAbonoDistrib(merged);
@@ -2189,14 +2679,28 @@ export default function CustomersPollo({
       const nuevoSaldo = roundCurrency(
         Number(stCustomer.initialDebt || 0) + sumMov,
       );
+      const lastAbonoFields = lastAbonoFieldsForList(newList);
       setRows((prev) =>
         prev.map((c) =>
-          c.id === stCustomer.id ? { ...c, balance: nuevoSaldo } : c,
+          c.id === stCustomer.id
+            ? {
+                ...c,
+                balance: nuevoSaldo,
+                ...lastAbonoFields,
+              }
+            : c,
         ),
       );
       setStCustomer((prev) =>
-        prev ? { ...prev, balance: nuevoSaldo } : prev,
+        prev
+          ? {
+              ...prev,
+              balance: nuevoSaldo,
+              ...lastAbonoFields,
+            }
+          : prev,
       );
+
       setMultiAbonoDistrib(null);
       setMultiAbonoInput("");
       setMultiAbonoComment("");
@@ -2257,8 +2761,7 @@ export default function CustomersPollo({
       const nuevoSaldo = roundCurrency(
         Number(stCustomer.initialDebt || 0) + sumMov,
       );
-      const openDebt = hasOpenDebt(newList, nuevoSaldo);
-      const last = openDebt ? getLastAbonoFromList(newList) : null;
+      const lastAbonoFields = lastAbonoFieldsForList(newList);
 
       setRows((prev) =>
         prev.map((c) =>
@@ -2266,10 +2769,7 @@ export default function CustomersPollo({
             ? {
                 ...c,
                 balance: nuevoSaldo,
-                lastAbonoDate: openDebt && last ? last.date : "",
-                lastAbonoAmount: openDebt && last ? last.amount : 0,
-                lastAbonoDateTime:
-                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+                ...lastAbonoFields,
               }
             : c,
         ),
@@ -2279,10 +2779,7 @@ export default function CustomersPollo({
           ? {
               ...prev,
               balance: nuevoSaldo,
-              lastAbonoDate: openDebt && last ? last.date : "",
-              lastAbonoAmount: openDebt && last ? last.amount : 0,
-              lastAbonoDateTime:
-                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+              ...lastAbonoFields,
             }
           : prev,
       );
@@ -2371,8 +2868,7 @@ export default function CustomersPollo({
         Number(stCustomer.initialDebt || 0) + sumMov,
       );
 
-      const openDebt = hasOpenDebt(newList, nuevoSaldo);
-      const last = openDebt ? getLastAbonoFromList(newList) : null;
+      const lastAbonoFields = lastAbonoFieldsForList(newList);
 
       setRows((prev) =>
         prev.map((c) =>
@@ -2380,10 +2876,7 @@ export default function CustomersPollo({
             ? {
                 ...c,
                 balance: nuevoSaldo,
-                lastAbonoDate: openDebt && last ? last.date : "",
-                lastAbonoAmount: openDebt && last ? last.amount : 0,
-                lastAbonoDateTime:
-                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+                ...lastAbonoFields,
               }
             : c,
         ),
@@ -2393,10 +2886,7 @@ export default function CustomersPollo({
           ? {
               ...prev,
               balance: nuevoSaldo,
-              lastAbonoDate: openDebt && last ? last.date : "",
-              lastAbonoAmount: openDebt && last ? last.amount : 0,
-              lastAbonoDateTime:
-                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+              ...lastAbonoFields,
             }
           : prev,
       );
@@ -2714,8 +3204,7 @@ export default function CustomersPollo({
         Number(stCustomer.initialDebt || 0) + sumMov,
       );
 
-      const openDebt = hasOpenDebt(newList, nuevoSaldo);
-      const last = openDebt ? getLastAbonoFromList(newList) : null;
+      const lastAbonoFields = lastAbonoFieldsForList(newList);
 
       setRows((prev) =>
         prev.map((c) =>
@@ -2723,10 +3212,7 @@ export default function CustomersPollo({
             ? {
                 ...c,
                 balance: nuevoSaldo,
-                lastAbonoDate: openDebt && last ? last.date : "",
-                lastAbonoAmount: openDebt && last ? last.amount : 0,
-                lastAbonoDateTime:
-                  openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+                ...lastAbonoFields,
               }
             : c,
         ),
@@ -2736,10 +3222,7 @@ export default function CustomersPollo({
           ? {
               ...prev,
               balance: nuevoSaldo,
-              lastAbonoDate: openDebt && last ? last.date : "",
-              lastAbonoAmount: openDebt && last ? last.amount : 0,
-              lastAbonoDateTime:
-                openDebt && last ? lastAbonoDateTimeLabelFrom(last) : "",
+              ...lastAbonoFields,
             }
           : prev,
       );
@@ -3896,6 +4379,14 @@ export default function CustomersPollo({
                       <p className="mt-2 text-xs text-emerald-800/90 leading-snug">
                         Deuda inicial más compras registradas a cuenta.
                       </p>
+                      <div className="mt-3 pt-3 border-t border-emerald-200/70">
+                        <div className="text-xs text-emerald-900/90">
+                          Facturas pendientes:
+                        </div>
+                        <div className="text-xl font-bold tabular-nums text-emerald-950">
+                          {pendingCreditKpi.count}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -3909,7 +4400,7 @@ export default function CustomersPollo({
                         const oldestId = getOldestPendingSaleId(
                           stRows,
                           normalizeDebtStatus,
-                          getPendingForSale,
+                          getPendingForSaleEffective,
                           getCargoSaleDate,
                         );
                         setAbonoTargetSaleId(oldestId);
@@ -3923,6 +4414,44 @@ export default function CustomersPollo({
                     </Button>
                   </div>
 
+                  <div
+                    className="flex gap-2 mb-3"
+                    role="tablist"
+                    aria-label="Sección del estado de cuenta"
+                  >
+                    <Button
+                      type="button"
+                      role="tab"
+                      aria-selected={stStatementTab === "consignaciones"}
+                      variant="outline"
+                      size="sm"
+                      className={`!rounded-full px-3 py-1 text-xs border transition-colors ${
+                        stStatementTab === "consignaciones"
+                          ? "!bg-blue-600 !text-white border-blue-600"
+                          : "!bg-white !text-slate-700 border-slate-200 hover:!bg-slate-50"
+                      }`}
+                      onClick={() => setStStatementTab("consignaciones")}
+                    >
+                      Consignaciones
+                    </Button>
+                    <Button
+                      type="button"
+                      role="tab"
+                      aria-selected={stStatementTab === "abonos"}
+                      variant="outline"
+                      size="sm"
+                      className={`!rounded-full px-3 py-1 text-xs border transition-colors ${
+                        stStatementTab === "abonos"
+                          ? "!bg-blue-600 !text-white border-blue-600"
+                          : "!bg-white !text-slate-700 border-slate-200 hover:!bg-slate-50"
+                      }`}
+                      onClick={() => setStStatementTab("abonos")}
+                    >
+                      Abonos
+                    </Button>
+                  </div>
+
+                  {stStatementTab === "consignaciones" ? (
                   <div
                     className={`bg-white rounded border overflow-x-auto mb-3 ${
                       saleVentasRows.length >= 10
@@ -3958,14 +4487,11 @@ export default function CustomersPollo({
                         ) : (
                           saleVentasRows.map((m) => {
                             const saleId = m.ref!.saleId!;
-                            const pending = getPendingForSale(stRows, saleId);
-                            const abonoVenta = getTotalAbonadoForSale(
-                              stRows,
-                              saleId,
-                            );
-                            const normalizedDebt = normalizeDebtStatus(
-                              m.debtStatus,
-                            );
+                            const eff = effectiveSaleBalances.get(saleId);
+                            const pending = eff?.pendiente ?? 0;
+                            const abonoVenta = eff?.abonoEfectivo ?? 0;
+                            const normalizedDebt =
+                              pending <= 0.005 ? "PAGADA" : "PENDIENTE";
                             return (
                               <tr
                                 key={m.id}
@@ -4013,6 +4539,212 @@ export default function CustomersPollo({
                       </tbody>
                     </table>
                   </div>
+                  ) : (
+                  <>
+                  <p className="text-xs font-medium text-slate-600 mb-2">
+                    Abonos distribuidos (por venta)
+                  </p>
+                  <div
+                    className={`bg-white rounded border overflow-x-auto mb-3 ${
+                      customerAbonosLedger.length >= 10
+                        ? "max-h-[min(420px,70vh)] overflow-y-auto"
+                        : ""
+                    }`}
+                  >
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-100 sticky top-0 z-10 shadow-[0_1px_0_0_rgb(229,231,235)]">
+                        <tr>
+                          <th className="p-2 border whitespace-nowrap">
+                            Fecha abono / venta
+                          </th>
+                          <th className="p-2 border whitespace-nowrap">Saldo</th>
+                          <th className="p-2 border whitespace-nowrap">Abono</th>
+                          <th className="p-2 border whitespace-nowrap">
+                            Saldo final
+                          </th>
+                          <th className="p-2 border w-32 whitespace-nowrap">
+                            {" "}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stLoading ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Cargando…
+                            </td>
+                          </tr>
+                        ) : customerAbonosLedger.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Sin abonos registrados
+                            </td>
+                          </tr>
+                        ) : (
+                          customerAbonosLedger.map((row) => {
+                            const loteSize = row.batchKey
+                              ? (multiAbonoBatchByKey.get(row.batchKey)
+                                  ?.length ?? 0)
+                              : 0;
+                            const showLoteBtn =
+                              row.isMultiAbono && loteSize >= 2;
+                            return (
+                            <tr key={row.id}>
+                              <td className="p-2 border whitespace-nowrap">
+                                <AbonoFechaConVentaCell
+                                  rows={stRows}
+                                  abonoDate={row.date}
+                                  saleId={row.saleId}
+                                />
+                              </td>
+                              <td className="p-2 border tabular-nums whitespace-nowrap">
+                                {money(row.saldoInicial)}
+                              </td>
+                              <td className="p-2 border font-semibold text-emerald-800 tabular-nums whitespace-nowrap">
+                                {money(row.montoAbono)}
+                              </td>
+                              <td className="p-2 border font-medium tabular-nums whitespace-nowrap">
+                                {money(row.saldoFinal)}
+                              </td>
+                              <td className="p-2 border whitespace-nowrap">
+                                <div className="flex flex-wrap gap-1 justify-center">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="!rounded-lg !text-xs !py-1 !px-2"
+                                    onClick={() => setAbonoVentasModal(row)}
+                                  >
+                                    Ventas
+                                  </Button>
+                                  {showLoteBtn ? (
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="!rounded-lg !text-xs !py-1 !px-2 !border-violet-300 !text-violet-900 hover:!bg-violet-50"
+                                      title={`Ver las ${loteSize} ventas de este abono múltiple`}
+                                      onClick={() => openAbonoLoteModal(row)}
+                                    >
+                                      Lote
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="text-xs font-medium text-slate-600 mb-2 mt-4">
+                    Abonos totales (monto recibido por fecha)
+                  </p>
+                  <div
+                    className={`bg-white rounded border overflow-x-auto mb-3 ${
+                      customerAbonoTotalLedger.length >= 10
+                        ? "max-h-[min(420px,70vh)] overflow-y-auto"
+                        : ""
+                    }`}
+                  >
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-100 sticky top-0 z-10 shadow-[0_1px_0_0_rgb(229,231,235)]">
+                        <tr>
+                          <th className="p-2 border whitespace-nowrap">
+                            Fecha abono / venta
+                          </th>
+                          <th className="p-2 border whitespace-nowrap">Saldo</th>
+                          <th className="p-2 border whitespace-nowrap">
+                            Abono total
+                          </th>
+                          <th className="p-2 border whitespace-nowrap">
+                            Saldo final
+                          </th>
+                          <th className="p-2 border w-32 whitespace-nowrap">
+                            {" "}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stLoading ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Cargando…
+                            </td>
+                          </tr>
+                        ) : customerAbonoTotalLedger.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center">
+                              Sin abonos registrados
+                            </td>
+                          </tr>
+                        ) : (
+                          customerAbonoTotalLedger.map((row) => {
+                            const rep = row.representative;
+                            const loteSize = row.batchKey
+                              ? (multiAbonoBatchByKey.get(row.batchKey)
+                                  ?.length ?? 0)
+                              : 0;
+                            const showLoteBtn =
+                              row.isMultiAbono && loteSize >= 2;
+                            return (
+                              <tr key={row.id}>
+                                <td className="p-2 border whitespace-nowrap">
+                                  {showLoteBtn ? (
+                                    row.date || "—"
+                                  ) : (
+                                    <AbonoFechaConVentaCell
+                                      rows={stRows}
+                                      abonoDate={row.date}
+                                      saleId={rep.saleId}
+                                    />
+                                  )}
+                                </td>
+                                <td className="p-2 border tabular-nums whitespace-nowrap">
+                                  {money(row.saldoInicial)}
+                                </td>
+                                <td className="p-2 border font-semibold text-emerald-800 tabular-nums whitespace-nowrap">
+                                  {money(row.montoTotal)}
+                                </td>
+                                <td className="p-2 border font-medium tabular-nums whitespace-nowrap">
+                                  {money(row.saldoFinal)}
+                                </td>
+                                <td className="p-2 border whitespace-nowrap">
+                                  <div className="flex flex-wrap gap-1 justify-center">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="!rounded-lg !text-xs !py-1 !px-2"
+                                      onClick={() => setAbonoVentasModal(rep)}
+                                    >
+                                      Ventas
+                                    </Button>
+                                    {showLoteBtn ? (
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="!rounded-lg !text-xs !py-1 !px-2 !border-violet-300 !text-violet-900 hover:!bg-violet-50"
+                                        title={`Ver las ${loteSize} ventas de este abono múltiple`}
+                                        onClick={() => openAbonoLoteModal(rep)}
+                                      >
+                                        Lote
+                                      </Button>
+                                    ) : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  </>
+                  )}
                 </div>
 
                 {/* ================= MOBILE (KPI colapsable + ventas) ================= */}
@@ -4126,16 +4858,65 @@ export default function CustomersPollo({
                           <p className="mt-1 text-[11px] text-emerald-800/90">
                             Deuda inicial más compras a cuenta.
                           </p>
+                          <div className="mt-2 pt-2 border-t border-emerald-200/70">
+                            <div className="text-[11px] text-emerald-900/90">
+                              Facturas pendientes:
+                            </div>
+                            <div className="text-lg font-bold tabular-nums text-emerald-950">
+                              {pendingCreditKpi.count}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}
                   </div>
 
+                  <div
+                    className="flex gap-2 px-3 pt-2"
+                    role="tablist"
+                    aria-label="Sección del estado de cuenta"
+                  >
+                    <Button
+                      type="button"
+                      role="tab"
+                      aria-selected={stStatementTab === "consignaciones"}
+                      variant="outline"
+                      size="sm"
+                      className={`!rounded-full px-3 py-1 text-xs border transition-colors ${
+                        stStatementTab === "consignaciones"
+                          ? "!bg-blue-600 !text-white border-blue-600"
+                          : "!bg-white !text-slate-700 border-slate-200 hover:!bg-slate-50"
+                      }`}
+                      onClick={() => setStStatementTab("consignaciones")}
+                    >
+                      Consignaciones
+                    </Button>
+                    <Button
+                      type="button"
+                      role="tab"
+                      aria-selected={stStatementTab === "abonos"}
+                      variant="outline"
+                      size="sm"
+                      className={`!rounded-full px-3 py-1 text-xs border transition-colors ${
+                        stStatementTab === "abonos"
+                          ? "!bg-blue-600 !text-white border-blue-600"
+                          : "!bg-white !text-slate-700 border-slate-200 hover:!bg-slate-50"
+                      }`}
+                      onClick={() => setStStatementTab("abonos")}
+                    >
+                      Abonos
+                    </Button>
+                  </div>
+
                   <div className="border rounded-2xl overflow-hidden">
                     <div className="px-3 py-2 text-sm font-semibold border-b bg-slate-50">
-                      Ventas a crédito
+                      {stStatementTab === "consignaciones"
+                        ? "Ventas a crédito"
+                        : "Abonos realizados"}
                     </div>
                     <div className="p-3 space-y-3">
+                      {stStatementTab === "consignaciones" ? (
+                        <>
                       {stLoading ? (
                         <div className="text-center text-sm">Cargando…</div>
                       ) : saleVentasRows.length === 0 ? (
@@ -4145,14 +4926,11 @@ export default function CustomersPollo({
                       ) : (
                         saleVentasRows.map((m) => {
                           const saleId = m.ref!.saleId!;
-                          const pending = getPendingForSale(stRows, saleId);
-                          const abonoVenta = getTotalAbonadoForSale(
-                            stRows,
-                            saleId,
-                          );
-                          const normalizedDebt = normalizeDebtStatus(
-                            m.debtStatus,
-                          );
+                          const eff = effectiveSaleBalances.get(saleId);
+                          const pending = eff?.pendiente ?? 0;
+                          const abonoVenta = eff?.abonoEfectivo ?? 0;
+                          const normalizedDebt =
+                            pending <= 0.005 ? "PAGADA" : "PENDIENTE";
                           return (
                             <div
                               key={m.id}
@@ -4228,6 +5006,163 @@ export default function CustomersPollo({
                           );
                         })
                       )}
+                        </>
+                      ) : stLoading ? (
+                        <div className="text-center text-sm">Cargando…</div>
+                      ) : (
+                        <>
+                          <p className="text-xs font-medium text-slate-600 mb-2">
+                            Abonos distribuidos (por venta)
+                          </p>
+                          {customerAbonosLedger.length === 0 ? (
+                            <div className="text-center text-sm text-gray-500">
+                              Sin abonos registrados
+                            </div>
+                          ) : (
+                            customerAbonosLedger.map((row) => {
+                              const loteSize = row.batchKey
+                                ? (multiAbonoBatchByKey.get(row.batchKey)
+                                    ?.length ?? 0)
+                                : 0;
+                              const showLoteBtn =
+                                row.isMultiAbono && loteSize >= 2;
+                              return (
+                                <div
+                                  key={row.id}
+                                  className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+                                >
+                                  <div className="flex justify-between gap-2 items-start">
+                                    <div>
+                                      <div className="text-sm font-semibold text-slate-900">
+                                        <AbonoFechaConVentaCell
+                                          rows={stRows}
+                                          abonoDate={row.date}
+                                          saleId={row.saleId}
+                                        />
+                                      </div>
+                                      <div className="text-xs text-slate-600 mt-1">
+                                        Saldo:{" "}
+                                        <span className="tabular-nums">
+                                          {money(row.saldoInicial)}
+                                        </span>
+                                      </div>
+                                      <div className="text-xs text-emerald-800 mt-0.5 font-semibold">
+                                        Abono: {money(row.montoAbono)}
+                                      </div>
+                                      <div className="text-xs text-slate-700 mt-0.5">
+                                        Saldo final:{" "}
+                                        <span className="font-semibold tabular-nums">
+                                          {money(row.saldoFinal)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-col gap-1 shrink-0">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="!rounded-lg !text-xs"
+                                        onClick={() => setAbonoVentasModal(row)}
+                                      >
+                                        Ventas
+                                      </Button>
+                                      {showLoteBtn ? (
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="!rounded-lg !text-xs !border-violet-300 !text-violet-900"
+                                          onClick={() => openAbonoLoteModal(row)}
+                                        >
+                                          Lote ({loteSize})
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+
+                          <p className="text-xs font-medium text-slate-600 mb-2 mt-4 pt-2 border-t border-slate-200">
+                            Abonos totales (monto recibido por fecha)
+                          </p>
+                          {customerAbonoTotalLedger.length === 0 ? (
+                            <div className="text-center text-sm text-gray-500">
+                              Sin abonos registrados
+                            </div>
+                          ) : (
+                            customerAbonoTotalLedger.map((row) => {
+                              const rep = row.representative;
+                              const loteSize = row.batchKey
+                                ? (multiAbonoBatchByKey.get(row.batchKey)
+                                    ?.length ?? 0)
+                                : 0;
+                              const showLoteBtn =
+                                row.isMultiAbono && loteSize >= 2;
+                              return (
+                                <div
+                                  key={row.id}
+                                  className="rounded-xl border border-violet-100 bg-violet-50/40 p-3 shadow-sm"
+                                >
+                                  <div className="flex justify-between gap-2 items-start">
+                                    <div>
+                                      <div className="text-sm font-semibold text-slate-900">
+                                        {showLoteBtn ? (
+                                          row.date || "—"
+                                        ) : (
+                                          <AbonoFechaConVentaCell
+                                            rows={stRows}
+                                            abonoDate={row.date}
+                                            saleId={rep.saleId}
+                                          />
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-slate-600 mt-1">
+                                        Saldo:{" "}
+                                        <span className="tabular-nums">
+                                          {money(row.saldoInicial)}
+                                        </span>
+                                      </div>
+                                      <div className="text-xs text-emerald-800 mt-0.5 font-semibold">
+                                        Abono total: {money(row.montoTotal)}
+                                      </div>
+                                      <div className="text-xs text-slate-700 mt-0.5">
+                                        Saldo final:{" "}
+                                        <span className="font-semibold tabular-nums">
+                                          {money(row.saldoFinal)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-col gap-1 shrink-0">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="!rounded-lg !text-xs"
+                                        onClick={() => setAbonoVentasModal(rep)}
+                                      >
+                                        Ventas
+                                      </Button>
+                                      {showLoteBtn ? (
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="!rounded-lg !text-xs !border-violet-300 !text-violet-900"
+                                          onClick={() => openAbonoLoteModal(rep)}
+                                        >
+                                          Lote ({loteSize})
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -4257,7 +5192,7 @@ export default function CustomersPollo({
                       </div>
                     );
                   }
-                  const pend = getPendingForSale(stRows, sid);
+                  const pend = getPendingForSaleEffective(stRows, sid);
                   // Antes: bloqueaba Pagar/Abonar si no era la consignación más antigua pendiente.
                   // const bloqueadoPorOrden =
                   //   oldestPendingSaleId &&
@@ -4325,6 +5260,18 @@ export default function CustomersPollo({
                         }}
                       >
                         Ver abonos
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="w-full !justify-start !rounded-lg px-3 py-2 text-sm !font-normal"
+                        onClick={() => {
+                          setSaleMenuAnchor(null);
+                          setEvolutivoModalSaleId(sid);
+                        }}
+                      >
+                        Evolutivo
                       </Button>
                       {stRows.some(
                         (m) =>
@@ -4423,7 +5370,7 @@ export default function CustomersPollo({
                         </span>
                         <span className="text-center text-lg font-bold text-emerald-950 mt-2 tabular-nums">
                           {money(
-                            getPendingForSale(stRows, saleLedgerSaleId),
+                            getPendingForSaleEffective(stRows, saleLedgerSaleId),
                           )}
                         </span>
                         <span className="text-[10px] text-center text-emerald-800/80 mt-1">
@@ -4436,7 +5383,7 @@ export default function CustomersPollo({
                         </span>
                         <span className="text-center text-lg font-bold text-rose-950 mt-2 tabular-nums">
                           {money(
-                            getTotalAbonadoForSale(stRows, saleLedgerSaleId),
+                            getAbonadoForSaleEffective(saleLedgerSaleId),
                           )}
                         </span>
                         <span className="text-[10px] text-center text-rose-800/80 mt-1">
@@ -4607,6 +5554,149 @@ export default function CustomersPollo({
               </div>
             )}
 
+            {evolutivoModalSaleId && (
+              <div className="fixed inset-0 z-[62] flex items-center justify-center p-4">
+                <div
+                  className="absolute inset-0 bg-black/40"
+                  onClick={() => setEvolutivoModalSaleId(null)}
+                />
+                <div
+                  className="relative z-10 bg-white rounded-lg shadow-xl border w-[95%] max-w-3xl max-h-[85vh] overflow-auto p-4"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div>
+                      <h3 className="text-lg font-bold">
+                        Evolutivo de saldo
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        Cliente: {stCustomer?.name || "—"}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Consignación #
+                        {evolutivoModalSaleId.slice(0, 8).toUpperCase()}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="!rounded-lg px-3 py-1 shrink-0"
+                      onClick={() => setEvolutivoModalSaleId(null)}
+                    >
+                      Cerrar
+                    </Button>
+                  </div>
+
+                  <div className="hidden md:block border rounded overflow-x-auto">
+                    <table className="min-w-full text-sm whitespace-nowrap">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="p-2 border text-left align-middle">
+                            Fecha y hora
+                          </th>
+                          <th className="p-2 border text-left align-middle min-w-[120px]">
+                            Concepto
+                          </th>
+                          <th className="p-2 border text-right align-middle">
+                            Saldo anterior
+                          </th>
+                          <th className="p-2 border text-right align-middle">
+                            Abono
+                          </th>
+                          <th className="p-2 border text-right align-middle">
+                            Saldo final
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {evolutivoRows.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={5}
+                              className="p-4 text-center text-gray-500 whitespace-normal"
+                            >
+                              Sin movimientos para esta consignación.
+                            </td>
+                          </tr>
+                        ) : (
+                          evolutivoRows.map((row) => (
+                            <tr key={row.id}>
+                              <td className="p-2 border tabular-nums">
+                                {row.dateTime || "—"}
+                              </td>
+                              <td className="p-2 border text-left text-xs max-w-[220px] whitespace-normal break-words align-top">
+                                {row.concepto}
+                              </td>
+                              <td className="p-2 border text-right tabular-nums">
+                                {money(row.saldoAnterior)}
+                              </td>
+                              <td className="p-2 border text-right tabular-nums font-medium text-emerald-700">
+                                {row.abono == null ? "—" : money(row.abono)}
+                              </td>
+                              <td className="p-2 border text-right tabular-nums font-semibold">
+                                {money(row.saldoFinal)}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="md:hidden space-y-3 mt-1">
+                    {evolutivoRows.length === 0 ? (
+                      <div className="p-3 text-sm text-gray-500 border rounded">
+                        Sin movimientos para esta consignación.
+                      </div>
+                    ) : (
+                      evolutivoRows.map((row) => (
+                        <div
+                          key={row.id}
+                          className="rounded-xl border-2 border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 shadow-md"
+                        >
+                          <div className="flex justify-between gap-2 text-sm">
+                            <span className="font-medium tabular-nums">
+                              {row.dateTime || "—"}
+                            </span>
+                            <span className="text-xs text-gray-500 shrink-0">
+                              {row.concepto}
+                            </span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                            <div>
+                              <div className="text-[11px] text-gray-500">
+                                Saldo anterior
+                              </div>
+                              <div className="font-medium text-gray-900 tabular-nums">
+                                {money(row.saldoAnterior)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-gray-500">
+                                Abono
+                              </div>
+                              <div className="font-medium text-emerald-700 tabular-nums">
+                                {row.abono == null ? "—" : money(row.abono)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-gray-500">
+                                Saldo final
+                              </div>
+                              <div className="font-semibold text-gray-900 tabular-nums">
+                                {money(row.saldoFinal)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
           </div>,
           document.body,
         )}
@@ -4682,9 +5772,24 @@ export default function CustomersPollo({
           </>
         }
         subtitle={
-          itemsDrawerMeta?.saleDate
-            ? `Compra: ${itemsDrawerMeta.saleDate}`
-            : "Detalle de la venta"
+          itemsDrawerMeta ? (
+            <div className="space-y-0.5 leading-snug">
+              <div>
+                <span className="font-medium text-gray-700">
+                  Fecha de ingreso:
+                </span>{" "}
+                {itemsDrawerMeta.ingresoDateTime || "—"}
+              </div>
+              <div>
+                <span className="font-medium text-gray-700">
+                  Fecha de venta:
+                </span>{" "}
+                {itemsDrawerMeta.saleDateOnly || "—"}
+              </div>
+            </div>
+          ) : (
+            "Detalle de la venta"
+          )
         }
         badge={
           itemsModalSaleId ? (
@@ -4749,7 +5854,7 @@ export default function CustomersPollo({
                   {
                     label: "Abonos",
                     value: money(
-                      getTotalAbonadoForSale(stRows, itemsModalSaleId),
+                      getAbonadoForSaleEffective(itemsModalSaleId),
                     ),
                     tone: "emerald",
                   },
@@ -5072,7 +6177,7 @@ export default function CustomersPollo({
               <p className="text-sm text-gray-600 mt-1">
                 Máximo pendiente de esta venta:{" "}
                 <span className="font-semibold">
-                  {money(getPendingForSale(stRows, abonoTargetSaleId))}
+                  {money(getPendingForSaleEffective(stRows, abonoTargetSaleId))}
                 </span>
               </p>
             )}
@@ -5169,6 +6274,244 @@ export default function CustomersPollo({
         </div>
       )}
 
+      {abonoLoteModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[93] p-4">
+          <div className="bg-white rounded-lg shadow-2xl border w-full max-w-2xl max-h-[90vh] overflow-auto p-4">
+            <h3 className="text-lg font-bold">Abono múltiple — lote completo</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              Fecha: {abonoLoteModal.date || "—"} ·{" "}
+              {abonoLoteModal.rows.length} venta(s)
+            </p>
+            <DrawerMoneyStrip
+              items={[
+                {
+                  label: "Ventas en el lote",
+                  value: String(abonoLoteModal.rows.length),
+                  tone: "slate",
+                },
+                {
+                  label: "Total abonado (lote)",
+                  value: money(
+                    abonoLoteModal.rows.reduce(
+                      (s, r) => s + r.montoAbono,
+                      0,
+                    ),
+                  ),
+                  tone: "emerald",
+                },
+              ]}
+            />
+            {abonoLoteModalLoading ? (
+              <p className="mt-4 text-sm text-gray-600">Cargando ventas…</p>
+            ) : (
+              <div className="mt-4 space-y-4">
+                {abonoLoteModalSales.map((sale) => (
+                  <div
+                    key={sale.abonoId}
+                    className="rounded-xl border border-violet-200/80 bg-violet-50/30 p-3 space-y-2"
+                  >
+                    <div className="flex flex-wrap justify-between gap-2 text-sm">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="font-semibold text-violet-950">
+                            Venta{" "}
+                            <span className="font-mono text-xs">
+                              {sale.saleId
+                                ? `${sale.saleId.slice(0, 12)}…`
+                                : "—"}
+                            </span>
+                          </div>
+                          {sale.saleId ? (
+                            <ConsignacionEstadoBadge status={sale.status} />
+                          ) : null}
+                        </div>
+                        <div className="text-xs text-slate-600 mt-0.5">
+                          {sale.saleDate || "—"}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[11px] text-slate-500">
+                          Total venta
+                        </div>
+                        <div className="font-semibold tabular-nums">
+                          {money(sale.saleTotal)}
+                        </div>
+                        <div className="text-[11px] text-emerald-800 mt-1">
+                          Abono aplicado
+                        </div>
+                        <div className="font-bold tabular-nums text-emerald-900">
+                          {money(sale.montoAbono)}
+                        </div>
+                        <div className="text-[11px] text-orange-800 mt-1">
+                          Saldo restante
+                        </div>
+                        <div className="font-bold tabular-nums text-orange-900">
+                          {money(sale.saldoRestante)}
+                        </div>
+                      </div>
+                    </div>
+                    {sale.lines.length > 0 ? (
+                      <div className="space-y-2 pt-2 border-t border-violet-200/60">
+                        {sale.lines.map((it, idx) => (
+                          <DrawerDetailDlCard
+                            key={idx}
+                            title={it.productName || `Producto ${idx + 1}`}
+                            rows={[
+                              { label: "Cantidad", value: String(it.qty) },
+                              {
+                                label: "Precio unit.",
+                                value: money(it.unitPrice),
+                              },
+                              {
+                                label: "Monto",
+                                value: money(it.total),
+                              },
+                            ]}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-500">
+                        Sin líneas de producto.
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                className="!rounded-lg px-3 py-2"
+                onClick={() => setAbonoLoteModal(null)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {abonoVentasModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[92] p-4">
+          <div className="bg-white rounded-lg shadow-2xl border w-full max-w-lg max-h-[90vh] overflow-auto p-4">
+            <h3 className="text-lg font-bold">Ventas del abono</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              Fecha abono: {abonoVentasModal.date || "—"}
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2">
+                <div className="text-[11px] text-slate-500">Saldo antes</div>
+                <div className="font-semibold tabular-nums">
+                  {money(abonoVentasModal.saldoInicial)}
+                </div>
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 p-2">
+                <div className="text-[11px] text-emerald-800">Abono</div>
+                <div className="font-semibold tabular-nums text-emerald-900">
+                  {money(abonoVentasModal.montoAbono)}
+                </div>
+              </div>
+            </div>
+            {abonoVentasModal.comment ? (
+              <p className="mt-2 text-xs text-slate-600 leading-snug">
+                {abonoVentasModal.comment}
+              </p>
+            ) : null}
+
+            {!abonoVentasModal.saleId ? (
+              <p className="mt-4 text-sm text-gray-600">
+                Abono general sin venta vinculada.
+              </p>
+            ) : abonoVentasModalLoading ? (
+              <p className="mt-4 text-sm text-gray-600">Cargando venta…</p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-slate-700">
+                    Consignación
+                  </span>
+                  {abonoVentasModalSaleMeta ? (
+                    <ConsignacionEstadoBadge
+                      status={abonoVentasModalSaleMeta.status}
+                    />
+                  ) : null}
+                </div>
+                <DrawerMoneyStrip
+                  items={[
+                    {
+                      label: "Venta",
+                      value: `#${abonoVentasModal.saleId.slice(0, 10)}…`,
+                      tone: "slate",
+                    },
+                    {
+                      label: "Fecha venta",
+                      value: abonoVentasModalSaleDate || "—",
+                      tone: "blue",
+                    },
+                    {
+                      label: "Total venta",
+                      value: money(abonoVentasModalSaleTotal),
+                      tone: "slate",
+                    },
+                    {
+                      label: "Abono recibido",
+                      value: money(abonoVentasModal.montoAbono),
+                      tone: "emerald",
+                    },
+                    {
+                      label: "Saldo restante",
+                      value: money(
+                        abonoVentasModalSaleMeta?.saldoRestante ?? 0,
+                      ),
+                      tone: "slate",
+                    },
+                  ]}
+                />
+                <DrawerSectionTitle className="mt-0">
+                  Líneas de la venta
+                </DrawerSectionTitle>
+                {abonoVentasModalLines.length === 0 ? (
+                  <p className="text-sm text-gray-600">
+                    Sin líneas de producto en esta venta.
+                  </p>
+                ) : (
+                  abonoVentasModalLines.map((it, idx) => (
+                    <DrawerDetailDlCard
+                      key={idx}
+                      title={it.productName || `Producto ${idx + 1}`}
+                      rows={[
+                        { label: "Cantidad", value: String(it.qty) },
+                        { label: "Precio unit.", value: money(it.unitPrice) },
+                        {
+                          label: "Descuento",
+                          value: it.discount ? money(it.discount) : "—",
+                        },
+                        { label: "Monto", value: money(it.total) },
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+            )}
+
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                className="!rounded-lg px-3 py-2"
+                onClick={() => setAbonoVentasModal(null)}
+              >
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showPagoTotalModal && pagoTotalSaleId && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[92]">
           <div className="bg-white rounded-lg shadow-2xl border w-[95%] max-w-md p-4">
@@ -5179,7 +6522,7 @@ export default function CustomersPollo({
             <p className="text-sm mt-2">
               Monto a pagar:{" "}
               <span className="font-semibold tabular-nums">
-                {money(getPendingForSale(stRows, pagoTotalSaleId))}
+                {money(getPendingForSaleEffective(stRows, pagoTotalSaleId))}
               </span>
             </p>
             <div className="mt-3">

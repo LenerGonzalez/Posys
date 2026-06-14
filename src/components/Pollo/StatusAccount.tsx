@@ -234,6 +234,8 @@ type AbonoRow = {
   comment?: string;
   /** Venta a la que aplica el abono (ar_movements_pollo.ref.saleId) */
   saleId?: string;
+  /** Fecha de la venta/consignación (yyyy-MM-dd) */
+  saleDate?: string;
   customerId?: string;
 };
 
@@ -262,7 +264,7 @@ function AbonosArTable({
         <thead className="bg-violet-100/90">
           <tr className="whitespace-nowrap">
             <th className="border border-gray-200 px-2 py-2 text-left font-semibold">
-              Fecha
+              Fecha abono / venta
             </th>
             <th className="border border-gray-200 px-2 py-2 text-left font-semibold min-w-[8rem]">
               Cliente
@@ -286,6 +288,12 @@ function AbonosArTable({
             >
               <td className="border border-gray-200 px-2 py-2 font-mono tabular-nums whitespace-nowrap">
                 {a.date}
+                {a.saleDate ? (
+                  <span className="text-slate-500 font-sans font-normal">
+                    {" "}
+                    · {a.saleDate}
+                  </span>
+                ) : null}
               </td>
               <td
                 className="border border-gray-200 px-2 py-2 max-w-[12rem] truncate"
@@ -740,6 +748,10 @@ type LedgerRow = {
   outAmount: number; // salida -
   /** DEPÓSITO: día (yyyy-MM-dd) cuyo resumen “Ventas del día” se asocia (opcional). */
   associatedVentasDia?: string | null;
+  /** DEPÓSITO: ids de abonos AR (ar_movements_pollo) asociados al depósito (opcional). */
+  associatedAbonoIds?: string[] | null;
+  /** @deprecated usar associatedAbonoIds */
+  associatedAbonoId?: string | null;
   /** CORTE: rango de fechas de ventas cash incluidas en el corte (yyyy-MM-dd). */
   corteDesde?: string | null;
   corteHasta?: string | null;
@@ -753,6 +765,17 @@ type DisplayLedgerItem =
   | { kind: "cash_sales"; date: string; cashTotal: number }
   | { kind: "ub"; date: string; dayGross: number; cumUb: number }
   | { kind: "abono_day"; date: string; abonoTotal: number };
+
+function readAssociatedAbonoIds(
+  row: Partial<LedgerRow> | Record<string, unknown>,
+): string[] {
+  const arr = (row as LedgerRow).associatedAbonoIds;
+  if (Array.isArray(arr)) {
+    return arr.map((x) => String(x || "").trim()).filter(Boolean);
+  }
+  const single = String((row as LedgerRow).associatedAbonoId || "").trim();
+  return single ? [single] : [];
+}
 
 export default function EstadoCuentaPollo(): React.ReactElement {
   const [from, setFrom] = useState(firstOfMonth());
@@ -818,6 +841,8 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   const [outAmount, setOutAmount] = useState<string>("");
   /** DEPÓSITO: opcional, fecha del resumen “Ventas del día” (mismo día que `date` o el elegido). */
   const [associatedVentasDia, setAssociatedVentasDia] = useState<string>("");
+  /** DEPÓSITO: opcional, abonos AR del mismo día que `date` (multi-select). */
+  const [associatedAbonoIds, setAssociatedAbonoIds] = useState<string[]>([]);
   /** CORTE: ventas cash desde / hasta (inclusive). */
   const [corteDesde, setCorteDesde] = useState<string>("");
   const [corteHasta, setCorteHasta] = useState<string>("");
@@ -1207,6 +1232,39 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           if (row) abonos.push(row);
         });
 
+        const saleDateById = new Map<string, string>();
+        sSnap.forEach((d) => {
+          const x = d.data() as Record<string, unknown>;
+          const sd = String(x.date || "").trim().slice(0, 10);
+          if (sd) saleDateById.set(d.id, sd);
+        });
+        const missingSaleIds = [
+          ...new Set(
+            abonos
+              .map((a) => a.saleId)
+              .filter((sid): sid is string => Boolean(sid && !saleDateById.has(sid))),
+          ),
+        ];
+        await Promise.all(
+          missingSaleIds.map(async (sid) => {
+            try {
+              const snap = await getDoc(doc(db, "salesV2", sid));
+              if (!snap.exists()) return;
+              const x = snap.data() as Record<string, unknown>;
+              const sd = String(x.date || "").trim().slice(0, 10);
+              if (sd) saleDateById.set(sid, sd);
+            } catch {
+              /* ignore */
+            }
+          }),
+        );
+        for (const a of abonos) {
+          if (a.saleId) {
+            const sd = saleDateById.get(a.saleId);
+            if (sd) a.saleDate = sd;
+          }
+        }
+
         if (!mounted) return;
         setSalesRows(sales.sort((a, b) => a.date.localeCompare(b.date)));
         setAbonosRows(abonos.sort((a, b) => a.date.localeCompare(b.date)));
@@ -1385,6 +1443,67 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     });
     return opts;
   }, [date, cashSalesTotalByDay]);
+
+  function abonoSelectLabel(a: AbonoRow): string {
+    const cust =
+      a.customer && a.customer !== "—" ? a.customer : "Abono sin cliente";
+    const comment = String(a.comment || "").trim();
+    const commentShort = comment
+      ? ` · ${comment.slice(0, 36)}${comment.length > 36 ? "…" : ""}`
+      : "";
+    return `${cust}: ${money(a.amount)}${commentShort}`;
+  }
+
+  /** Abonos AR del día del formulario (depósito). */
+  const abonosDelDiaForDeposito = useMemo(() => {
+    const d = String(date || "").trim().slice(0, 10);
+    if (!d) return [];
+    return abonosRows.filter(
+      (a) => String(a.date || "").trim().slice(0, 10) === d,
+    );
+  }, [date, abonosRows]);
+
+  const applyDepositoOutAmount = (
+    ventasDia: string,
+    abonoIds: string[],
+  ) => {
+    if (abonoIds.length > 0) {
+      const total = round2(
+        abonoIds.reduce((sum, id) => {
+          const ab = abonosRows.find((a) => a.id === id);
+          return sum + Number(ab?.amount || 0);
+        }, 0),
+      );
+      if (total > 0) setOutAmount(String(total));
+      return;
+    }
+    const d = ventasDia.trim().slice(0, 10);
+    if (!d) return;
+    const total = round2(cashSalesTotalByDay[d] ?? 0);
+    if (total > 0) setOutAmount(String(total));
+  };
+
+  const onAssociatedVentasDiaChange = (v: string) => {
+    setAssociatedVentasDia(v);
+    if (type !== "DEPOSITO") return;
+    if (associatedAbonoIds.length > 0) return;
+    const d = v.trim().slice(0, 10);
+    if (!d) return;
+    const total = round2(cashSalesTotalByDay[d] ?? 0);
+    if (total > 0) setOutAmount(String(total));
+  };
+
+  const toggleAssociatedAbonoId = (id: string) => {
+    setAssociatedAbonoIds((prev) => {
+      const next = prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : [...prev, id];
+      if (type === "DEPOSITO") {
+        applyDepositoOutAmount(associatedVentasDia, next);
+      }
+      return next;
+    });
+  };
 
   const modalMovementTypeOptions = useMemo(
     () => [
@@ -1613,6 +1732,16 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     () => aggregateCashSaleLinesForDrawer(depositoDrawerLines),
     [depositoDrawerLines],
   );
+
+  const depositoAssocAbonos = useMemo(() => {
+    if (!movimientoDrawerRow || movimientoDrawerRow.type !== "DEPOSITO")
+      return [];
+    const ids = readAssociatedAbonoIds(movimientoDrawerRow as LedgerRow);
+    if (!ids.length) return [];
+    return ids
+      .map((id) => abonosRows.find((a) => a.id === id))
+      .filter((a): a is AbonoRow => Boolean(a));
+  }, [movimientoDrawerRow, abonosRows]);
 
   const corteAssocRange = useMemo(() => {
     if (!movimientoDrawerRow || movimientoDrawerRow.type !== "CORTE")
@@ -2037,6 +2166,9 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     const user = auth.currentUser;
 
     const assocTrim = associatedVentasDia.trim().slice(0, 10);
+    const assocAbonoIds = associatedAbonoIds
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
 
     const basePayload = {
       date,
@@ -2068,8 +2200,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       const up: Record<string, unknown> = { ...basePayload };
       if (type === "DEPOSITO") {
         up.associatedVentasDia = assocTrim || null;
+        up.associatedAbonoIds = assocAbonoIds.length ? assocAbonoIds : null;
+        up.associatedAbonoId = deleteField();
       } else {
         up.associatedVentasDia = deleteField();
+        up.associatedAbonoIds = deleteField();
+        up.associatedAbonoId = deleteField();
       }
       if (type === "CORTE") {
         up.corteDesde = corteDTrim;
@@ -2124,6 +2260,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
       const add: Record<string, unknown> = { ...basePayload };
       if (type === "DEPOSITO") {
         add.associatedVentasDia = assocTrim || null;
+        add.associatedAbonoIds = assocAbonoIds.length ? assocAbonoIds : null;
       }
       if (type === "CORTE") {
         add.corteDesde = corteDTrim;
@@ -2170,6 +2307,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     setInAmount("");
     setOutAmount("");
     setAssociatedVentasDia("");
+    setAssociatedAbonoIds([]);
     setCorteDesde("");
     setCorteHasta("");
 
@@ -2202,7 +2340,10 @@ export default function EstadoCuentaPollo(): React.ReactElement {
   }, [type]);
 
   useEffect(() => {
-    if (type !== "DEPOSITO") setAssociatedVentasDia("");
+    if (type !== "DEPOSITO") {
+      setAssociatedVentasDia("");
+      setAssociatedAbonoIds([]);
+    }
   }, [type]);
 
   useEffect(() => {
@@ -2360,14 +2501,22 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     };
   }, [modalOpen, type, corteDesde, corteHasta]);
 
-  /** Si cambia la fecha del formulario, quitar asociación que ya no coincide con ese día. */
+  /** Si cambia la fecha del formulario, quitar asociaciones que ya no coinciden con ese día. */
   useEffect(() => {
     const d = String(date || "").trim().slice(0, 10);
     setAssociatedVentasDia((prev) => {
       if (!prev || !d) return prev;
       return prev !== d ? "" : prev;
     });
-  }, [date]);
+    setAssociatedAbonoIds((prev) => {
+      if (!prev.length || !d) return prev;
+      return prev.filter((id) => {
+        const ab = abonosRows.find((a) => a.id === id);
+        if (!ab) return false;
+        return String(ab.date || "").trim().slice(0, 10) === d;
+      });
+    });
+  }, [date, abonosRows]);
 
   // close modal/menu on outside click or Escape
   useEffect(() => {
@@ -2423,6 +2572,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
     setAssociatedVentasDia(
       String((r as LedgerRow).associatedVentasDia || "").slice(0, 10),
     );
+    setAssociatedAbonoIds(readAssociatedAbonoIds(r as LedgerRow));
     setCorteDesde(String((r as LedgerRow).corteDesde || "").slice(0, 10));
     setCorteHasta(String((r as LedgerRow).corteHasta || "").slice(0, 10));
     const inStr =
@@ -2916,6 +3066,7 @@ export default function EstadoCuentaPollo(): React.ReactElement {
           onClick={() => {
             setEditingId(null);
             setAssociatedVentasDia("");
+            setAssociatedAbonoIds([]);
             setCorteDesde("");
             setCorteHasta("");
             setModalOpen(true);
@@ -3027,11 +3178,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
               </div>
 
               {type === "DEPOSITO" && (
+                <>
                 <div className="sm:col-span-2 lg:col-span-3">
                   <MobileHtmlSelect
                     label="Asociar ventas"
                     value={associatedVentasDia}
-                    onChange={setAssociatedVentasDia}
+                    onChange={onAssociatedVentasDiaChange}
                     options={asociarVentasDelDiaOptions}
                     sheetTitle="Asociar ventas del día"
                     triggerIcon="menu"
@@ -3043,6 +3195,55 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     mismo día indicado arriba en Fecha.
                   </p>
                 </div>
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <div className="text-sm font-medium text-gray-700 mb-2">
+                    Asociar abonos
+                  </div>
+                  {abonosDelDiaForDeposito.length === 0 ? (
+                    <p className="text-xs text-gray-500 rounded-lg border border-dashed border-gray-200 px-3 py-2">
+                      No hay abonos registrados para la fecha elegida.
+                    </p>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+                      {abonosDelDiaForDeposito.map((a) => {
+                        const checked = associatedAbonoIds.includes(a.id);
+                        return (
+                          <label
+                            key={a.id}
+                            className={`flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-violet-50/50 ${
+                              checked ? "bg-violet-50/80" : "bg-white"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-1 shrink-0"
+                              checked={checked}
+                              onChange={() => toggleAssociatedAbonoId(a.id)}
+                            />
+                            <span className="min-w-0 text-sm leading-snug">
+                              <span className="font-medium text-gray-900">
+                                {abonoSelectLabel(a)}
+                              </span>
+                              {a.saleDate ? (
+                                <span className="block text-xs text-slate-500 mt-0.5">
+                                  Venta: {a.saleDate}
+                                </span>
+                              ) : null}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="mt-1 text-xs text-gray-500">
+                    Opcional. Podés seleccionar uno o varios abonos AR del mismo
+                    día; la salida se suma automáticamente (editable).
+                    {associatedAbonoIds.length > 0
+                      ? ` Seleccionados: ${associatedAbonoIds.length}.`
+                      : ""}
+                  </p>
+                </div>
+                </>
               )}
 
               {type === "CORTE" && (
@@ -3273,6 +3474,12 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                     "COMPRA DIRECTA POR DUENO (NO ENTRA A CAJA)",
                   ].includes(String(type))}
                 />
+                {type === "DEPOSITO" ? (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Se rellena automáticamente al asociar ventas o abono; podés
+                    editarlo manualmente.
+                  </p>
+                ) : null}
               </div>
 
               <div className="sm:col-span-3 flex gap-2 justify-end mt-2">
@@ -4012,6 +4219,23 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                         ),
                         ddClassName: "text-sm font-medium text-emerald-800",
                       },
+                      {
+                        label: "Asociar abonos",
+                        value:
+                          depositoAssocAbonos.length > 0
+                            ? `${depositoAssocAbonos.length} abono(s) · ${money(
+                                round2(
+                                  depositoAssocAbonos.reduce(
+                                    (s, a) => s + Number(a.amount || 0),
+                                    0,
+                                  ),
+                                ),
+                              )}`
+                            : readAssociatedAbonoIds(
+                                movimientoDrawerRow as LedgerRow,
+                              ).join(", ") || "—",
+                        ddClassName: "text-sm font-medium text-violet-900",
+                      },
                     ]
                   : []),
                 ...(movimientoDrawerRow.type === "CORTE"
@@ -4156,6 +4380,33 @@ export default function EstadoCuentaPollo(): React.ReactElement {
                       />
                     ))}
                   </div>
+                )}
+              </>
+            ) : null}
+            {movimientoDrawerRow.type === "DEPOSITO" &&
+            readAssociatedAbonoIds(movimientoDrawerRow as LedgerRow).length >
+              0 ? (
+              <>
+                <DrawerSectionTitle className="mt-4 mb-2">
+                  Abonos asociados (
+                  {readAssociatedAbonoIds(movimientoDrawerRow as LedgerRow)
+                    .length}
+                  )
+                </DrawerSectionTitle>
+                {depositoAssocAbonos.length > 0 ? (
+                  <AbonosArTable
+                    rows={depositoAssocAbonos}
+                    showFooter
+                    fullComment
+                  />
+                ) : (
+                  <p className="text-sm text-gray-500 px-1 leading-snug">
+                    Los abonos{" "}
+                    {readAssociatedAbonoIds(movimientoDrawerRow as LedgerRow).join(
+                      ", ",
+                    )}{" "}
+                    no están visibles en el periodo cargado.
+                  </p>
                 )}
               </>
             ) : null}
