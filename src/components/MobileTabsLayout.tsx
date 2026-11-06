@@ -15,6 +15,7 @@ import {
 } from "react-icons/fa";
 import { hasRole } from "../utils/roles";
 import { canPath, PathKey } from "../utils/access";
+import { PRICING_MENU, pricingHref } from "../PricingSystemComponents/pricingMenu";
 
 type Role =
   | ""
@@ -23,7 +24,8 @@ type Role =
   | "contador"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "prices_admin";
 
 type Rubro = "POLLO" | "DULCES";
 
@@ -71,7 +73,28 @@ export default function MobileTabsLayout({
     canPath(subject, "estadoCuentaCandies", "view") ||
     canPath(subject, "stockPedidosCandies", "view") ||
     canPath(subject, "mainordersCandies", "view") ||
+    canPath(subject, "pricingSystem", "view") ||
     canPath(subject, "reporteCierresCandies", "view");
+
+  const hasDulcesBesidesPricing =
+    canPath(subject, "salesCandies", "view") ||
+    canPath(subject, "productsVendorsCandies", "view") ||
+    canPath(subject, "customersCandies", "view") ||
+    canPath(subject, "productsPricesCandies", "view") ||
+    canPath(subject, "transactionCandies", "view") ||
+    canPath(subject, "cierreVentasCandies", "view") ||
+    canPath(subject, "estadoCuentaCandies", "view") ||
+    canPath(subject, "stockPedidosCandies", "view") ||
+    canPath(subject, "mainordersCandies", "view") ||
+    canPath(subject, "reporteCierresCandies", "view");
+
+  const isPricesAdmin = hasRole(subject, "prices_admin");
+  const pricesOnly =
+    isPricesAdmin &&
+    !isAdmin &&
+    !hasPollo &&
+    !hasDulcesBesidesPricing &&
+    !hasRole(subject, "vendedor_ropa");
 
   // Mostrar selector cuando el usuario tenga acceso a ambos rubros
   const hasBoth = hasPollo && hasDulces;
@@ -90,6 +113,7 @@ export default function MobileTabsLayout({
 
   // Drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [pricingMenuOpen, setPricingMenuOpen] = useState(false);
   const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -97,8 +121,13 @@ export default function MobileTabsLayout({
   const tabs = useMemo(() => {
     let built: Array<{ key: string; label: string; to: string }> = [];
 
-    // Si el usuario es admin O tiene ambos rubros, respetamos rubro
-    if (isAdmin || hasBoth) {
+    if (pricesOnly) {
+      built = PRICING_MENU.map((item) => ({
+        key: item.slug,
+        label: item.label,
+        to: pricingHref(base, item.slug),
+      }));
+    } else if (isAdmin || hasBoth) {
       if (rubro === "POLLO") {
         // ADMIN - POLLO
         if (isAdmin) {
@@ -258,6 +287,11 @@ export default function MobileTabsLayout({
             },
 
             {
+              key: "pricing-group",
+              label: "Gestión comercial",
+              to: `${base}/pricingSystem`,
+            },
+            {
               key: "maes",
               label: "Inventario Maestro",
               to: `${base}/mainordersCandies`,
@@ -316,7 +350,11 @@ export default function MobileTabsLayout({
             },
             { key: "trx", label: "Ventas", to: `${base}/transactionCandies` },
             { key: "cier", label: "Cierre", to: `${base}/cierreVentasCandies` },
-
+            {
+              key: "pricing-group",
+              label: "Gestión comercial",
+              to: `${base}/pricingSystem`,
+            },
             {
               key: "ped",
               label: "Inventario",
@@ -399,6 +437,13 @@ export default function MobileTabsLayout({
               key: "stockPedidos",
               label: "Stock Pedidos",
               to: `${base}/stockPedidosCandies`,
+            });
+          }
+          if (canPath(subject, "pricingSystem", "view")) {
+            dulcesTabs.push({
+              key: "pricing-group",
+              label: "Gestión comercial",
+              to: `${base}/pricingSystem`,
             });
           }
           if (canPath(subject, "mainordersCandies", "view")) {
@@ -516,6 +561,11 @@ export default function MobileTabsLayout({
             to: `${base}/stockPedidosCandies`,
           },
           {
+            key: "pricing-group",
+            label: "Gestión comercial",
+            to: `${base}/pricingSystem`,
+          },
+          {
             key: "ped",
             label: "Inventario",
             to: `${base}/productsVendorsCandies`,
@@ -556,10 +606,12 @@ export default function MobileTabsLayout({
       "estadoCuentaCandies",
       "stockPedidosCandies",
       "mainordersCandies",
+      "pricingSystem",
       "reporteCierresCandies",
     ]);
 
     const filtered = built.filter((t) => {
+      if (t.key === "pricing-group") return canPath(subject, "pricingSystem", "view");
       const raw = t.to.replace(`${base}/`, "");
       const key = raw as PathKey;
       if (controlled.has(key)) return canPath(subject, key, "view");
@@ -576,8 +628,13 @@ export default function MobileTabsLayout({
     isVendPollo,
     isVendDulces,
     isContPollo,
+    pricesOnly,
     subject,
   ]);
+
+  useEffect(() => {
+    if (location.pathname.includes("/pricingSystem")) setPricingMenuOpen(true);
+  }, [location.pathname]);
 
   useEffect(() => {
     // cuando cambia rubro (admin o usuario con ambos rubros), mandalo a la primera tab de ese rubro
@@ -649,8 +706,10 @@ export default function MobileTabsLayout({
     ({ isActive }: { isActive: boolean }) => {
       const meta = tabMeta(to);
       return cn(
-        "flex-1 text-center text-[11px] py-1.5 rounded-lg",
-        "leading-none select-none",
+        tabs.length > 3
+          ? "shrink-0 whitespace-nowrap px-3 text-center text-[11px] py-1.5 rounded-lg"
+          : "flex-1 text-center text-[11px] py-1.5 rounded-lg",
+        "leading-tight select-none",
         isActive
           ? `${meta.activeBg} ${meta.activeText}`
           : "text-gray-700 hover:bg-gray-100",
@@ -658,7 +717,7 @@ export default function MobileTabsLayout({
     };
 
   // ✅ Regla: si hay muchos tabs, ocultamos barra de abajo y usamos Drawer
-  const showBottomTabs = tabs.length <= 2;
+  const showBottomTabs = pricesOnly || tabs.length <= 2;
 
   const drawerLinkCls =
     (to: string) =>
@@ -700,6 +759,7 @@ export default function MobileTabsLayout({
     vendedor_pollo: "Vendedor Pollo",
     vendedor_ropa: "Vendedor Ropa",
     vendedor_dulces: "Vendedor Dulces",
+    prices_admin: "Administrador de precios",
     vendedor: "Vendedor Pollo",
   };
   const roleList = Array.isArray(subject)
@@ -712,6 +772,16 @@ export default function MobileTabsLayout({
     : "Sin rol";
 
   const tabMeta = (to: string) => {
+    if (to.includes("pricingSystem")) {
+      return {
+        icon: <FaThLarge className="h-3.5 w-3.5" />,
+        dot: "bg-sky-600",
+        border: "border-sky-400",
+        activeBg: "bg-sky-100",
+        activeBorder: "border-sky-400",
+        activeText: "text-sky-900",
+      };
+    }
     if (to.includes("notebooksInventory")) {
       return {
         icon: <FaBook className="h-3.5 w-3.5" />,
@@ -954,10 +1024,49 @@ export default function MobileTabsLayout({
             <div className="p-3 flex-1 overflow-y-auto space-y-2">
               {tabs.map((t) => {
                 const meta = tabMeta(t.to);
+                if (t.key === "pricing-group") {
+                  const pricingLinks = PRICING_MENU.map((item) => ({
+                    label: item.label,
+                    to: pricingHref(base, item.slug),
+                    end: item.slug !== "inventarios",
+                  }));
+                  return (
+                    <div key={t.key} className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => setPricingMenuOpen((open) => !open)}
+                        className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-l-4 border-sky-400 bg-white text-gray-800"
+                      >
+                        <span className="flex items-center gap-3">
+                          <span className="inline-flex h-7 w-7 items-center justify-center rounded-full text-white bg-sky-600">
+                            {meta.icon}
+                          </span>
+                          <span className="font-semibold">Gestión comercial</span>
+                        </span>
+                        <span className="text-sm opacity-80">
+                          {pricingMenuOpen ? "▾" : "▸"}
+                        </span>
+                      </button>
+                      {pricingMenuOpen &&
+                        pricingLinks.map((link) => (
+                          <NavLink
+                            key={link.to}
+                            to={link.to}
+                            end={link.end}
+                            className={drawerLinkCls(link.to)}
+                          >
+                            <span className="pl-8 font-semibold">{link.label}</span>
+                            <span className="text-sm opacity-80">›</span>
+                          </NavLink>
+                        ))}
+                    </div>
+                  );
+                }
                 return (
                   <NavLink
                     key={t.key}
                     to={t.to}
+                    end={t.to.includes("/pricingSystem/") && !t.to.endsWith("/inventarios")}
                     className={drawerLinkCls(t.to)}
                   >
                     <span className="flex items-center gap-3">
@@ -1043,9 +1152,14 @@ export default function MobileTabsLayout({
       {/* Bottom Tabs (solo si hay pocos tabs) */}
       {showBottomTabs && (
         <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-md pb-[env(safe-area-inset-bottom)]">
-          <div className="max-w-3xl mx-auto px-2 py-1.5 flex gap-1.5">
+          <div className="max-w-5xl mx-auto px-2 py-1.5 flex gap-1.5 overflow-x-auto">
             {tabs.map((t) => (
-              <NavLink key={t.key} to={t.to} className={tabCls(t.to)}>
+              <NavLink
+                key={t.key}
+                to={t.to}
+                end={t.to.includes("/pricingSystem/") ? !t.to.endsWith("/inventarios") : false}
+                className={tabCls(t.to)}
+              >
                 {t.label}
               </NavLink>
             ))}

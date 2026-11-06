@@ -19,7 +19,8 @@ type AllowedRole =
   | "vendedor_ropa"
   | "vendedor_dulces"
   | "supervisor_pollo"
-  | "contador";
+  | "contador"
+  | "prices_admin";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -114,6 +115,8 @@ export default function Login() {
       return navigate("/admin/salesCandies");
     if (hasRole(role, "supervisor_pollo")) return navigate("/admin/batches");
     if (hasRole(role, "contador")) return navigate("/admin/batches");
+    if (hasRole(role, "prices_admin"))
+      return navigate("/admin/pricingSystem/inventarios");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -187,6 +190,7 @@ export default function Login() {
         "vendedor_dulces",
         "supervisor_pollo",
         "contador",
+        "prices_admin",
       ];
       if (!roles.some((r) => allowed.includes(r as AllowedRole))) {
         setMsg("Rol no válido. Consulta al administrador.");

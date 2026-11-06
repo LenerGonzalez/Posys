@@ -5,6 +5,7 @@ export type Role =
   | "vendedor_pollo"
   | "vendedor_ropa"
   | "vendedor_dulces"
+  | "prices_admin"
   | "vendedor";
 
 export function hasRole(

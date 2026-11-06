@@ -68,6 +68,7 @@ import EntregasCash from "./components/Candies/EntregasCash";
 import PreciosVenta from "./components/Candies/PreciosVenta";
 import EstadoCuentaCandies from "./components/Candies/EstadoCuentaCandies";
 import CandyStockPedidosPage from "./components/Candies/CandyStockPedidosPage";
+import PricingApp from "./PricingSystemComponents/PricingApp";
 import PublicConsultLayout from "./components/common/PublicConsultLayout";
 // Overlay “sin internet”: desactivado — navigator.offline + parche de fetch
 // disparaban avisos al salir de la pantalla o por fallos puntuales, no solo sin red.
@@ -85,7 +86,8 @@ type Role =
   | "vendedor_ropa"
   | "vendedor_dulces"
   | "supervisor_pollo"
-  | "contador";
+  | "contador"
+  | "prices_admin";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(false);
@@ -288,6 +290,8 @@ export default function App() {
 
     if (hasRole(subject, "vendedor_dulces"))
       return <Navigate to="salesCandies" replace />;
+    if (hasRole(subject, "prices_admin"))
+      return <Navigate to="pricingSystem/inventarios" replace />;
     return <Navigate to="/" replace />;
   };
 
@@ -325,6 +329,7 @@ export default function App() {
                 "vendedor_dulces",
                 "supervisor_pollo",
                 "contador",
+                "prices_admin",
               ]}
             >
               {Layout}
@@ -567,6 +572,16 @@ export default function App() {
                 allowedRoles={["admin", "vendedor_dulces", "contador"]}
               >
                 <ProductMainOrder />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="pricingSystem/*"
+            element={
+              <PrivateRoute
+                allowedRoles={["admin", "vendedor_dulces", "contador", "prices_admin"]}
+              >
+                <PricingApp />
               </PrivateRoute>
             }
           />

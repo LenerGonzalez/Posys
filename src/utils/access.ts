@@ -7,7 +7,8 @@ export type Role =
   | "contador"
   | "vendedor_pollo"
   | "vendedor_ropa"
-  | "vendedor_dulces";
+  | "vendedor_dulces"
+  | "prices_admin";
 
 export type Action = "view" | "edit";
 
@@ -34,6 +35,7 @@ export type PathKey =
   | "auditProductsPollo"
   | "stockPedidosCandies"
   | "mainordersCandies"
+  | "pricingSystem"
   | "reporteCierresCandies";
 
 type Permission = Partial<Record<Action, boolean>>;
@@ -74,6 +76,7 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     auditProductsPollo: { view: true, edit: true },
     stockPedidosCandies: { view: true, edit: true },
     mainordersCandies: { view: true, edit: true },
+    pricingSystem: { view: true, edit: true },
     productsPricesCandies: { view: true, edit: false },
     reporteCierresCandies: { view: true, edit: true },
   },
@@ -97,9 +100,14 @@ const PERMISSIONS: Record<Role, Partial<Record<PathKey, Permission>>> = {
     customersCandies: { view: true, edit: true },
     estadoCuentaCandies: { view: true, edit: false },
     stockPedidosCandies: { view: true, edit: true },
+    pricingSystem: { view: true, edit: true },
   },
 
   vendedor_ropa: {},
+
+  prices_admin: {
+    pricingSystem: { view: true, edit: true },
+  },
 };
 
 function normalizeRoles(subject: any): Role[] {
@@ -165,6 +173,8 @@ const FINE_PERMISSIONS: Record<Role, Partial<Record<PathKey, FinePerm>>> = {
   },
 
   vendedor_ropa: {},
+
+  prices_admin: {},
 };
 
 export function canAction(

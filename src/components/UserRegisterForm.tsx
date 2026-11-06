@@ -23,6 +23,7 @@ type Role =
   | "vendedor_pollo"
   | "vendedor_ropa"
   | "vendedor_dulces"
+  | "prices_admin"
   | "vendedor"; // compatibilidad vieja
 
 interface UserRow {
@@ -82,7 +83,8 @@ export default function UserRegisterForm() {
       r === "contador" ||
       r === "vendedor_pollo" ||
       r === "vendedor_ropa" ||
-      r === "vendedor_dulces"
+      r === "vendedor_dulces" ||
+      r === "prices_admin"
     ) {
       return r;
     }
@@ -324,7 +326,9 @@ export default function UserRegisterForm() {
               ? "vendedor_ropa"
               : r === "vendedor_dulces"
                 ? "vendedor_dulces"
-                : "vendedor_pollo";
+                : r === "prices_admin"
+                  ? "prices_admin"
+                  : "vendedor_pollo";
 
     const cls =
       label === "admin"
@@ -337,7 +341,9 @@ export default function UserRegisterForm() {
               ? "bg-indigo-100 text-indigo-700"
               : label === "vendedor_dulces"
                 ? "bg-pink-100 text-pink-700"
-                : "bg-green-100 text-green-700";
+                : label === "prices_admin"
+                  ? "bg-sky-100 text-sky-800"
+                  : "bg-green-100 text-green-700";
 
     return (
       <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>
@@ -451,6 +457,7 @@ export default function UserRegisterForm() {
                             "vendedor_pollo",
                             "vendedor_ropa",
                             "vendedor_dulces",
+                            "prices_admin",
                           ].map((opt) => (
                             <label
                               key={opt}
@@ -666,6 +673,7 @@ export default function UserRegisterForm() {
                     "vendedor_pollo",
                     "vendedor_ropa",
                     "vendedor_dulces",
+                    "prices_admin",
                   ].map((opt) => (
                     <label
                       key={opt}

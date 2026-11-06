@@ -1,5 +1,5 @@
 // src/components/AdminLayout.tsx
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { useEffect, useMemo, useState } from "react";
@@ -15,6 +15,7 @@ import {
 } from "react-icons/fa";
 import { hasRole } from "../utils/roles";
 import { canPath } from "../utils/access";
+import { PRICING_MENU, pricingHref } from "../PricingSystemComponents/pricingMenu";
 
 /** Texto buscable: minúsculas, sin tildes, rutas camelCase partidas (p. ej. stockPedidos → stock pedidos). */
 function normalizeMenuSearchText(s: string): string {
@@ -38,6 +39,7 @@ export default function AdminLayout({
   roles?: any[];
 }) {
   const base = "/admin";
+  const location = useLocation();
   const linkCls = ({ isActive }: { isActive: boolean }) =>
     `block rounded-lg px-3 py-2 text-sm transition ${
       isActive
@@ -80,6 +82,7 @@ export default function AdminLayout({
   const [openReportes, setOpenReportes] = useState(false);
   const [openDulces, setOpenDulces] = useState(false);
   const [openDulcesInv, setOpenDulcesInv] = useState(false);
+  const [openPricing, setOpenPricing] = useState(false);
   const [openDulcesVendors, setOpenDulcesVendors] = useState(false);
   const [openDulcesFin, setOpenDulcesFin] = useState(false);
 
@@ -269,8 +272,35 @@ export default function AdminLayout({
     canPath(subject, "cierreVentasCandies", "view") ||
     canPath(subject, "estadoCuentaCandies", "view") ||
     canPath(subject, "mainordersCandies", "view") ||
+    canPath(subject, "pricingSystem", "view") ||
     canPath(subject, "stockPedidosCandies", "view") ||
     canPath(subject, "reporteCierresCandies", "view");
+
+  const hasDulcesBesidesPricing =
+    canPath(subject, "salesCandies", "view") ||
+    canPath(subject, "productsVendorsCandies", "view") ||
+    canPath(subject, "customersCandies", "view") ||
+    canPath(subject, "productsPricesCandies", "view") ||
+    canPath(subject, "transactionCandies", "view") ||
+    canPath(subject, "cierreVentasCandies", "view") ||
+    canPath(subject, "estadoCuentaCandies", "view") ||
+    canPath(subject, "mainordersCandies", "view") ||
+    canPath(subject, "stockPedidosCandies", "view") ||
+    canPath(subject, "reporteCierresCandies", "view");
+
+  const isPricesAdmin = hasRole(subject, "prices_admin");
+  const pricesOnly =
+    isPricesAdmin &&
+    !isAdmin &&
+    !hasPolloAccess &&
+    !hasDulcesBesidesPricing &&
+    !isVendRopa;
+
+  useEffect(() => {
+    if (!location.pathname.includes("/pricingSystem")) return;
+    setOpenPricing(true);
+    setOpenDulces(true);
+  }, [location.pathname]);
 
   const storedUserName =
     typeof window !== "undefined" ? localStorage.getItem("user_name") : null;
@@ -297,6 +327,7 @@ export default function AdminLayout({
     vendedor_pollo: "Vendedor Pollo",
     vendedor_ropa: "Vendedor Ropa",
     vendedor_dulces: "Vendedor Dulces",
+    prices_admin: "Administrador de precios",
     vendedor: "Vendedor Pollo",
   };
   const roleList = Array.isArray(subject)
@@ -319,6 +350,16 @@ export default function AdminLayout({
   };
 
   const searchItems = useMemo(() => {
+    if (pricesOnly) {
+      return PRICING_MENU.map((item) => ({
+        label: item.label,
+        to: pricingHref(base, item.slug),
+        module: "dulces" as const,
+        section: "Gestión comercial",
+        pathLabel: `Gestión comercial > ${item.label}`,
+        keywords: "",
+      }));
+    }
     const items: SearchItem[] = [];
     const add = (cond: boolean, item: SearchItem) => {
       if (cond) items.push(item);
@@ -408,6 +449,9 @@ export default function AdminLayout({
       addDulces("Precios Venta", `${base}/productsPricesCandies`, "Vendedores");
 
       addDulces("Ordenes Maestras", `${base}/mainordersCandies`, "Inventario");
+      PRICING_MENU.forEach((item) => {
+        addDulces(item.label, pricingHref(base, item.slug), "Gestión comercial");
+      });
       addDulces(
         "Stock - Pedidos",
         `${base}/stockPedidosCandies`,
@@ -613,6 +657,15 @@ export default function AdminLayout({
         section: "Operaciones",
         pathLabel: "Dulces > Operaciones > Orden Maestra",
       });
+      PRICING_MENU.forEach((item) => {
+        add(can("pricingSystem"), {
+          label: item.label,
+          to: pricingHref(base, item.slug),
+          module: "dulces",
+          section: "Gestión comercial",
+          pathLabel: `Gestión comercial > ${item.label}`,
+        });
+      });
       add(can("stockPedidosCandies"), {
         label: "Stock - Pedidos",
         to: `${base}/stockPedidosCandies`,
@@ -638,7 +691,7 @@ export default function AdminLayout({
     }
 
     return items;
-  }, [base, hasDulcesAccess, hasPolloAccess, isAdmin, isVendRopa, subject]);
+  }, [base, hasDulcesAccess, hasPolloAccess, isAdmin, isVendRopa, pricesOnly, subject]);
 
   const filteredSearchItems = useMemo(() => {
     if (!searchQuery) return [] as SearchItem[];
@@ -671,6 +724,9 @@ export default function AdminLayout({
       if (!openDulces) toggleModule("dulces");
       if (item.section === "Vendedores") setOpenDulcesVendors(true);
       if (item.section === "Inventario") setOpenDulcesInv(true);
+      if (item.section === "Gestión comercial") {
+        setOpenPricing(true);
+      }
       if (item.section === "Finanzas") setOpenDulcesFin(true);
       if (item.section === "Operaciones") setOpenDulcesVendors(true);
     }
@@ -898,8 +954,25 @@ export default function AdminLayout({
 
             {!searchQuery && (
               <nav className="space-y-2">
+                {pricesOnly && (
+                  <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-sky-500 p-2 space-y-1">
+                    <div className="px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Gestión comercial
+                    </div>
+                    {PRICING_MENU.map((item) => (
+                      <NavLink
+                        key={item.slug}
+                        to={pricingHref(base, item.slug)}
+                        end={item.slug !== "inventarios"}
+                        className={linkCls}
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
                 {/* ================== ADMIN ================== */}
-                {isAdmin && (
+                {isAdmin && !pricesOnly && (
                   <>
                     {/* -------- Operaciones Pollo -------- */}
                     <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-amber-400">
@@ -1185,6 +1258,25 @@ export default function AdminLayout({
                             </div>
                           )}
                           <SubSectionBtn
+                            open={openPricing}
+                            onClick={() => setOpenPricing((v) => !v)}
+                            title="Gestión comercial"
+                          />
+                          {openPricing && (
+                            <div className="ml-4 mt-1 space-y-1">
+                              {PRICING_MENU.map((item) => (
+                                <NavLink
+                                  key={item.slug}
+                                  to={pricingHref(base, item.slug)}
+                                  end={item.slug !== "inventarios"}
+                                  className={linkCls}
+                                >
+                                  {item.label}
+                                </NavLink>
+                              ))}
+                            </div>
+                          )}
+                          <SubSectionBtn
                             open={openDulcesInv}
                             onClick={() => setOpenDulcesInv((v) => !v)}
                             title="Inventario"
@@ -1403,7 +1495,7 @@ export default function AdminLayout({
                 )}
 
                 {/* ================== POLLO (supervisor/contador/vendedor o multi-rol) ================== */}
-                {!isAdmin && hasPolloAccess && (
+                {!isAdmin && !pricesOnly && hasPolloAccess && (
                   <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-amber-400">
                     <SectionBtn
                       open={openPollo}
@@ -1547,7 +1639,7 @@ export default function AdminLayout({
                 )}
 
                 {/* ================== DULCES (vendedor_dulces o multi-rol) ================== */}
-                {!isAdmin && hasDulcesAccess && (
+                {!isAdmin && !pricesOnly && hasDulcesAccess && (
                   <div className="border rounded-xl mb-2 shadow-sm bg-white border-l-4 border-pink-400">
                     <SectionBtn
                       open={openDulces}
@@ -1596,6 +1688,29 @@ export default function AdminLayout({
                           )}
                         </div>
 
+                        {canPath(subject, "pricingSystem") && (
+                          <div className="ml-4 mt-1 space-y-1">
+                            <SubSectionBtn
+                              open={openPricing}
+                              onClick={() => setOpenPricing((v) => !v)}
+                              title="Gestión comercial"
+                            />
+                            {openPricing && (
+                              <div className="ml-4 mt-1 space-y-1">
+                                {PRICING_MENU.map((item) => (
+                                  <NavLink
+                                    key={item.slug}
+                                    to={pricingHref(base, item.slug)}
+                                    end={item.slug !== "inventarios"}
+                                    className={linkCls}
+                                  >
+                                    {item.label}
+                                  </NavLink>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <div className="ml-4 mt-1 space-y-1">
                           {canPath(subject, "productsVendorsCandies") && (
                             <NavLink
