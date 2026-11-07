@@ -160,7 +160,20 @@ function soldMap(stock: StockBalance[], ownerUid: string): Map<string, number> {
     if (!Number.isInteger(balance.soldPackages) || balance.soldPackages < 0) {
       throw new Error("El saldo de paquetes vendidos no es válido.");
     }
-    sold.set(stockKey(balance.inventoryId, balance.productId), balance.soldPackages);
+    const key = stockKey(balance.inventoryId, balance.productId);
+    sold.set(key, (sold.get(key) || 0) + balance.soldPackages);
+  }
+  return sold;
+}
+
+function soldTotals(stock: StockBalance[]): Map<string, number> {
+  const sold = new Map<string, number>();
+  for (const balance of stock) {
+    if (!Number.isInteger(balance.soldPackages) || balance.soldPackages < 0) {
+      throw new Error("El saldo de paquetes vendidos no es válido.");
+    }
+    const key = stockKey(balance.inventoryId, balance.productId);
+    sold.set(key, (sold.get(key) || 0) + balance.soldPackages);
   }
   return sold;
 }
@@ -307,14 +320,15 @@ export function commitSale(request: SaleCommitRequest, state: SaleCommitState): 
   }
 
   let sold: Map<string, number>;
+  let ownSold: Map<string, number>;
   try {
-    sold = soldMap(state.stock, request.ownerUid);
+    sold = soldTotals(state.stock);
+    ownSold = soldMap(state.stock, request.ownerUid);
   } catch (error) {
     return { status: "rejected", message: error instanceof Error ? error.message : "El saldo de paquetes vendidos no es válido." };
   }
 
-  const owned = state.inventories.filter((inventory) => inventory.ownerUid === request.ownerUid);
-  const products = productMap(saleProducts(owned));
+  const products = productMap(saleProducts(state.inventories));
   const demand = new Map<string, number>();
   for (const line of request.lines) {
     if (!isSaleQuantity(line.quantity)) {
@@ -364,7 +378,7 @@ export function commitSale(request: SaleCommitRequest, state: SaleCommitState): 
       ownerUid: request.ownerUid,
       inventoryId: product.inventoryId,
       productId: product.productId,
-      soldPackages: (sold.get(key) || 0) + quantity,
+      soldPackages: (ownSold.get(key) || 0) + quantity,
       updatedAt: request.soldAt,
     };
   });

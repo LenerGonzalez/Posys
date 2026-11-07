@@ -60,7 +60,7 @@ export default function ProductProfitability({
   const inScope = scopeInventories(inventories, filters).length > 0;
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
         <Box>
           <Typography variant="h5">Rentabilidad por producto</Typography>
@@ -74,7 +74,7 @@ export default function ProductProfitability({
       </Box>
 
       <Card>
-        <CardContent sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(3, 1fr)" } }}>
+        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", lg: "repeat(3, 1fr)" } }}>
           <TextField
             label="Desde"
             type="date"
@@ -133,7 +133,7 @@ export default function ProductProfitability({
 
       {!inScope ? <Alert severity="warning">No hay inventarios en este filtro.</Alert> : null}
 
-      <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(5, 1fr)" } }}>
+      <Box sx={{ display: "grid", gap: { xs: 0.75, md: 1.5 }, gridTemplateColumns: { xs: "1fr 1fr", lg: "repeat(5, 1fr)" }, "& > :last-child:nth-child(odd)": { gridColumn: { xs: "1 / -1", lg: "auto" } } }}>
         <Kpi label="Productos analizados" value={qty(report.totalProducts)} />
         <Kpi label="Rentables" value={qty(report.profitable)} hint="Neta positiva y margen mayor a 5%" />
         <Kpi label="Margen bajo" value={qty(report.lowMargin)} hint="Neta positiva y margen de 0% a 5%" />

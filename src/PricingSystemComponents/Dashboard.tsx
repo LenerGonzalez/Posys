@@ -1,5 +1,6 @@
 import { Box, Card, CardContent, Typography } from "@mui/material";
 import { money, percent, qty } from "./format";
+import { metricCellSx, metricGridSx } from "./screen";
 import { commissionMethodLabel, type ComputedTotals, type InventorySnapshot } from "./types";
 
 function Kpi({
@@ -12,21 +13,19 @@ function Kpi({
   hint?: string;
 }) {
   return (
-    <Card>
-      <CardContent>
-        <Typography variant="overline" color="text.secondary">
-          {label}
+    <Box sx={metricCellSx}>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.2 }}>
+        {label}
+      </Typography>
+      <Typography sx={{ mt: 0.25, fontWeight: 800, fontSize: { xs: "0.95rem", md: "1.25rem" }, overflowWrap: "anywhere" }}>
+        {value}
+      </Typography>
+      {hint ? (
+        <Typography variant="caption" color="text.secondary">
+          {hint}
         </Typography>
-        <Typography variant="h5" sx={{ mt: 0.5 }}>
-          {value}
-        </Typography>
-        {hint ? (
-          <Typography variant="caption" color="text.secondary">
-            {hint}
-          </Typography>
-        ) : null}
-      </CardContent>
-    </Card>
+      ) : null}
+    </Box>
   );
 }
 
@@ -42,12 +41,11 @@ export default function Dashboard({
   const poolLabel = method3 ? "Base para comisión" : "Inversionista antes de logística";
   const poolValue = method3 ? totals.commissionBase : totals.investorBeforeLogistics;
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box
         sx={{
-          display: "grid",
-          gap: 2,
-          gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(4, 1fr)" },
+          ...metricGridSx,
+          gridTemplateColumns: { xs: "1fr 1fr", lg: "repeat(4, 1fr)" },
         }}
       >
         <Kpi label="Productos" value={qty(totals.productCount)} hint={`${qty(totals.packages)} paquetes`} />
@@ -67,14 +65,14 @@ export default function Dashboard({
           </Typography>
           <Box
             sx={{
-              mt: 2,
+              mt: { xs: 1, md: 2 },
               display: "grid",
-              gap: 1.5,
+              gap: { xs: 0.5, md: 1.5 },
               gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
             }}
           >
             {[
-              ["Ganancia total antes de repartir", money(totals.grossProfit)],
+              ["Ganancia Bruta Total", money(totals.grossProfit)],
               ["Ganancia del vendedor", money(totals.vendorProfit)],
               [poolLabel, money(poolValue)],
               ["Gastos logísticos", money(totals.logisticsCost)],

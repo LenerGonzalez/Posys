@@ -44,6 +44,7 @@ import SalesRegister from "./SalesRegister";
 import { computeInventory } from "./pricingEngine";
 import { dialogActionsSx, useNarrowScreen } from "./screen";
 import { pricingTheme } from "./theme";
+import "./mobileDensity.css";
 import { DEFAULT_SETTINGS, type ImportPreview, type PricingInventory } from "./types";
 
 function pricingSection(pathname: string): "inventarios" | "rentabilidad" | "ranking" | "productos" | "comparacion" | "simulador" | "historial" | "ventas" | "comisiones" | "ventas-comisiones" {
@@ -197,7 +198,7 @@ export default function PricingApp() {
 
   return (
     <ThemeProvider theme={pricingTheme}>
-      <Container maxWidth="lg" sx={{ py: { xs: 1.5, sm: 3 }, px: { xs: 1.5, sm: 3 }, pb: { xs: "calc(12px + env(safe-area-inset-bottom))", sm: 3 }, minWidth: 0 }}>
+      <Container className="pricing-shell" maxWidth="lg" sx={{ py: { xs: 1, sm: 3 }, px: { xs: 0, sm: 3 }, pb: { xs: "calc(8px + env(safe-area-inset-bottom))", sm: 3 }, minWidth: 0 }}>
         {!ready ? <Alert severity="info">Conectando…</Alert> : null}
         {ready && !user ? (
           <Alert severity="warning">Inicia sesión para ver y guardar tus inventarios.</Alert>
@@ -309,7 +310,14 @@ export default function PricingApp() {
             }}
             onImportFile={(file) => void readFile(file)}
             onDownloadTemplate={downloadInvoiceTemplate}
-            onExport={() => downloadInventoryWorkbook(open, computed)}
+            onExport={() => {
+              try {
+                const filename = downloadInventoryWorkbook(open, computed);
+                setToast(`Se descargó ${filename}.`);
+              } catch (error) {
+                setToast(error instanceof Error ? error.message : "No se pudo exportar el inventario.");
+              }
+            }}
           />
         ) : null}
       </Container>

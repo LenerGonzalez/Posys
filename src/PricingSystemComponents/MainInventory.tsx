@@ -40,14 +40,14 @@ import { stockKey } from "./saleCommit";
 import { dateTimeLabel, money, percent, qty } from "./format";
 import { productProfitStatus, productStatusLabel } from "./productRanking";
 import NumericField from "./NumericField";
-import { dialogActionsSx, useNarrowScreen } from "./screen";
+import { dialogActionsSx, dialogFormSx, useNarrowScreen } from "./screen";
 import type { ComputedLine, PricingInventory, ProductInput } from "./types";
 
 function FileButton({
   label,
   onFile,
 }: {
-  label: string;
+  label: ReactNode;
   onFile: (file: File) => void;
 }) {
   return (
@@ -64,43 +64,6 @@ function FileButton({
         }}
       />
     </Button>
-  );
-}
-
-const SUMMARY_TONES = {
-  subtotal: { background: "#E8F0FE", color: "#0842A0" },
-  logistics: { background: "#FEF4D6", color: "#6B3E00" },
-  sales: { background: "#E6F4EA", color: "#0D652D" },
-} as const;
-
-function SummaryChip({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: keyof typeof SUMMARY_TONES;
-}) {
-  const palette = SUMMARY_TONES[tone];
-  return (
-    <Chip
-      size="small"
-      label={label}
-      sx={{
-        height: "auto",
-        maxWidth: "100%",
-        borderRadius: "999px",
-        bgcolor: palette.background,
-        color: palette.color,
-        boxShadow: "none",
-        "& .MuiChip-label": {
-          px: 1.25,
-          py: 0.5,
-          fontWeight: 500,
-          whiteSpace: "normal",
-          overflowWrap: "anywhere",
-        },
-      }}
-    />
   );
 }
 
@@ -148,11 +111,11 @@ function Metric({
   valueColor?: string;
 }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, minWidth: 0, px: 1.5, py: 1.25, borderRadius: 3, bgcolor: background }}>
-      <Box sx={{ color, display: "flex", flexShrink: 0 }}>{icon}</Box>
+    <Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.75, md: 1.25 }, minWidth: 0, px: { xs: 0.75, md: 1.5 }, py: { xs: 0.75, md: 1.25 }, borderRadius: { xs: "10px", md: 3 }, bgcolor: background }}>
+      <Box sx={{ color, display: { xs: "none", sm: "flex" }, flexShrink: 0 }}>{icon}</Box>
       <Box sx={{ minWidth: 0 }}>
-        <Typography variant="caption" sx={{ color, display: "block", lineHeight: 1.2 }}>{label}</Typography>
-        <Typography sx={{ fontWeight: 700, fontSize: "1.05rem", lineHeight: 1.3, color: valueColor || "text.primary", overflowWrap: "anywhere" }}>{value}</Typography>
+        <Typography variant="caption" sx={{ color, display: "block", lineHeight: 1.15 }}>{label}</Typography>
+        <Typography sx={{ fontWeight: 700, fontSize: { xs: "0.92rem", md: "1.05rem" }, lineHeight: 1.25, color: valueColor || "text.primary", overflowWrap: "anywhere" }}>{value}</Typography>
       </Box>
     </Box>
   );
@@ -172,8 +135,8 @@ function FinanceSection({
   children: ReactNode;
 }) {
   return (
-    <Box sx={{ minWidth: 0, p: 1.75, borderRadius: 3, bgcolor: background }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5, color }}>
+    <Box sx={{ minWidth: 0, p: { xs: 1.25, md: 1.75 }, borderRadius: { xs: "12px", md: 3 }, bgcolor: background }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: { xs: 1, md: 1.5 }, color }}>
         {icon}
         <Typography variant="subtitle2" sx={{ color }}>{title}</Typography>
       </Box>
@@ -202,16 +165,16 @@ function ProductCard({
   const statusBackground = status === "rentable" ? "#E6F4EA" : status === "perdida" || status === "margen_negativo" ? "#FCE8E6" : "#FEF4D6";
   return (
     <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)", borderColor: "rgba(26, 28, 30, 0.08)" }}>
-      <CardContent sx={{ display: "grid", gap: 1.75, p: { xs: 1.75, sm: 2.25 } }}>
-        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.25, flexWrap: "wrap" }}>
-          <Box sx={{ width: 40, height: 40, borderRadius: 2.5, bgcolor: "#E8F0FE", color: "#1A56DB", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <CardContent sx={{ display: "grid", gap: { xs: 0.75, md: 1.75 }, p: { xs: 1.25, md: 2.25 } }}>
+        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, flexWrap: "wrap" }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: "10px", bgcolor: "#E8F0FE", color: "#1A56DB", display: { xs: "none", md: "flex" }, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Inventory2OutlinedIcon fontSize="small" />
           </Box>
           <Box sx={{ flex: "1 1 160px", minWidth: 0 }}>
-            <Typography variant="h6" title={product.name || "Sin nombre"} sx={{ fontSize: { xs: "1.05rem", sm: "1.2rem" }, lineHeight: 1.25, overflowWrap: "anywhere" }}>
+            <Typography variant="h6" title={product.name || "Sin nombre"} sx={{ fontSize: { xs: "0.98rem", md: "1.2rem" }, lineHeight: 1.25, overflowWrap: "anywhere" }}>
               {product.name || "Sin nombre"}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
               Orden: {product.orderCode || "Sin orden"}
             </Typography>
           </Box>
@@ -236,7 +199,7 @@ function ProductCard({
           </Box>
         </Box>
         {line ? (
-          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" } }}>
+          <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
             <Metric icon={<StorageOutlinedIcon fontSize="small" />} label="Subtotal" value={money(line.purchaseSubtotal)} background="#E8F0FE" color="#1A56DB" />
             <Metric icon={<LocalShippingOutlinedIcon fontSize="small" />} label="Logística" value={money(line.logisticsAllocated)} background="#FEF4D6" color="#B06000" />
             <Metric icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(line.salesTotal)} background="#E6F4EA" color="#0D652D" />
@@ -245,7 +208,7 @@ function ProductCard({
           <Typography variant="caption" color="text.secondary">Completa el nombre para calcular esta línea.</Typography>
         )}
         <Collapse in={open}>
-          <Box sx={{ display: "grid", gap: 1.5, pt: 0.5 }}>
+          <Box sx={{ display: "grid", gap: { xs: 1, md: 1.5 }, pt: 0.5 }}>
             {line ? (
               <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr 1fr" }, p: 1.25, borderRadius: 3, bgcolor: "#F8F9FB" }}>
                 <Metric icon={<ShowChartOutlinedIcon fontSize="small" />} label="Utilidad bruta" value={money(line.grossProfit)} background="transparent" color="#1A1C1E" />
@@ -254,9 +217,9 @@ function ProductCard({
                 <Metric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Ganancia neta inversionista" value={money(line.investorNet)} background="transparent" color="#1A1C1E" />
               </Box>
             ) : null}
-            <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
+            <Box sx={{ display: "grid", gap: { xs: 1, md: 1.5 }, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
               <FinanceSection title="Compra y precios" icon={<ShoppingCartOutlinedIcon fontSize="small" />} background="#F3F7FE" color="#1A56DB">
-                <Box sx={{ display: "grid", gap: 1.25, mb: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                <Box sx={{ display: "grid", gap: 1, mb: 1.25, gridTemplateColumns: "1fr 1fr" }}>
                   <TextField label="Orden" value={product.orderCode} onChange={(event) => onPatch({ orderCode: event.target.value })} />
                   <TextField label="Producto" value={product.name} onChange={(event) => onPatch({ name: event.target.value })} />
                   <NumericField
@@ -313,7 +276,7 @@ function ProductCard({
               ) : null}
               {line ? (
                 <FinanceSection title="Ganancias del vendedor" icon={<PersonOutlineOutlinedIcon fontSize="small" />} background="#F7F4FC" color="#6D4BA1">
-                  <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                  <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "1fr 1fr" }}>
                     <Fact label="Comisión manual" value={product.vendorSharePercent == null ? "—" : percent(product.vendorSharePercent, 0)} />
                     <Fact label="Comisión aplicada" value={percent(line.vendorSharePercent, 0)} />
                     <HighlightValue label="Ganancia total del vendedor" value={money(line.vendorProfit)} color="#5B3D91" background="#E9E0F6" />
@@ -323,7 +286,7 @@ function ProductCard({
               ) : null}
               {line ? (
                 <FinanceSection title="Ganancias del inversionista" icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} background="#FFF7F0" color="#C05A12">
-                  <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                  <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "1fr 1fr" }}>
                     <Fact label="Antes de logística" value={money(line.investorBeforeLogistics)} />
                     <Fact label="Antes de logística / paquete" value={money(line.investorBeforeLogisticsPerPack)} />
                     <HighlightValue label="Ganancia neta total" value={money(line.investorNet)} color="#C05A12" background="#FDE7D4" />
@@ -391,10 +354,10 @@ export function OrderProductsPanel({
   };
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Paper
         variant="outlined"
-        sx={{ p: 2.5, borderStyle: "dashed", display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center", justifyContent: "space-between" }}
+        sx={{ p: { xs: 1.5, md: 2.5 }, borderStyle: "dashed", display: "flex", flexWrap: "wrap", gap: 1.25, alignItems: "center", justifyContent: "space-between" }}
       >
         <Box sx={{ display: "flex", gap: 1.5, alignItems: "center" }}>
           <UploadFileIcon color="primary" />
@@ -405,15 +368,15 @@ export function OrderProductsPanel({
             </Typography>
           </Box>
         </Box>
-        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", width: { xs: "100%", sm: "auto" }, "& .MuiButton-root": { minHeight: 44, flex: { xs: "1 1 140px", sm: "0 0 auto" } } }}>
+        <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", width: { xs: "100%", sm: "auto" }, "& .MuiButton-root": { minHeight: { xs: 32, md: 40 }, flex: { xs: "1 1 0", sm: "0 0 auto" }, px: { xs: 1, md: 2 } } }}>
           <Button variant="outlined" startIcon={<DownloadIcon />} onClick={onDownloadTemplate}>
             Plantilla
           </Button>
           <FileButton label="Importar Excel" onFile={onImportFile} />
         </Box>
       </Paper>
-      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
-        <TextField placeholder="Buscar producto u orden" value={search} onChange={(event) => setSearch(event.target.value)} sx={{ minWidth: 0, flex: "1 1 180px", width: { xs: "100%", sm: "auto" } }} />
+      <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "minmax(0, 1fr) auto", md: "minmax(0, 1fr) auto auto auto auto" }, alignItems: "center" }}>
+        <TextField placeholder="Buscar producto u orden" value={search} onChange={(event) => setSearch(event.target.value)} sx={{ minWidth: 0 }} />
         <Button
           variant="contained"
           startIcon={<AddIcon />}
@@ -421,15 +384,17 @@ export function OrderProductsPanel({
             setDraftError("");
             setDraftOpen(true);
           }}
-          sx={{ minHeight: 44, width: { xs: "100%", sm: "auto" } }}
+          sx={{ minHeight: { xs: 32, md: 40 }, whiteSpace: "nowrap", px: { xs: 1.25, md: 2 } }}
         >
           Producto
         </Button>
-        <Chip label={`${qty(lines.length)} productos`} />
-        <Chip label={`${qty(lines.reduce((sum, line) => sum + line.packages, 0))} paquetes`} />
-        <Chip label={money(lines.reduce((sum, line) => sum + line.purchaseSubtotal, 0))} />
+        <Box sx={{ gridColumn: { xs: "1 / -1", md: "auto" }, display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center" }}>
+          <Chip size="small" label={`${qty(lines.length)} productos`} />
+          <Chip size="small" label={`${qty(lines.reduce((sum, line) => sum + line.packages, 0))} paquetes`} />
+          <Chip size="small" label={money(lines.reduce((sum, line) => sum + line.purchaseSubtotal, 0))} />
+        </Box>
       </Box>
-      <Box sx={{ display: "grid", gap: 1.5 }}>
+      <Box sx={{ display: "grid", gap: { xs: 0.75, md: 1.5 } }}>
         {filtered.map((product) => (
           <ProductCard
             key={product.id}
@@ -444,25 +409,27 @@ export function OrderProductsPanel({
       </Box>
       <Dialog open={draftOpen} onClose={() => setDraftOpen(false)} fullScreen={narrow} fullWidth maxWidth="xs">
         <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Agregar producto</DialogTitle>
-        <DialogContent sx={{ display: "grid", gap: 2, pt: "8px !important" }}>
+        <DialogContent sx={dialogFormSx}>
           <TextField label="Orden / factura" value={draft.orderCode} onChange={(event) => setDraft({ ...draft, orderCode: event.target.value })} />
           <TextField label="Producto" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-          <NumericField
-            label="Costo por paquete"
-            kind="cost"
-            value={draft.costPerPack}
-            adornment="C$"
-            adornmentPosition="start"
-            onCommit={(value) => setDraft({ ...draft, costPerPack: value ?? 0 })}
-          />
-          <NumericField
-            label="Paquetes"
-            kind="packages"
-            value={draft.packages}
-            onCommit={(value) => {
-              if (value != null && value > 0) setDraft({ ...draft, packages: value });
-            }}
-          />
+          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "1fr 1fr" }}>
+            <NumericField
+              label="Costo por paquete"
+              kind="cost"
+              value={draft.costPerPack}
+              adornment="C$"
+              adornmentPosition="start"
+              onCommit={(value) => setDraft({ ...draft, costPerPack: value ?? 0 })}
+            />
+            <NumericField
+              label="Paquetes"
+              kind="packages"
+              value={draft.packages}
+              onCommit={(value) => {
+                if (value != null && value > 0) setDraft({ ...draft, packages: value });
+              }}
+            />
+          </Box>
           {draftError ? <Alert severity="error">{draftError}</Alert> : null}
         </DialogContent>
         <DialogActions sx={dialogActionsSx}>
@@ -540,7 +507,7 @@ export default function MainInventory({
   const narrow = useNarrowScreen();
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
         <Box>
           <Typography variant="h5">Inventarios</Typography>
@@ -548,13 +515,13 @@ export default function MainInventory({
             Cada inventario conserva su factura, configuración y resultados.
           </Typography>
         </Box>
-        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", width: { xs: "100%", sm: "auto" }, "& .MuiButton-root": { minHeight: 44, flex: { xs: "1 1 140px", sm: "0 0 auto" } } }}>
+        <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", width: { xs: "100%", md: "auto" }, "& .MuiButton-root": { minHeight: { xs: 36, md: 44 }, flex: { xs: "1 1 0", md: "0 0 auto" }, px: { xs: 1, md: 2 } } }}>
           <Button variant="outlined" startIcon={<DownloadIcon />} onClick={onDownloadTemplate}>
-            Descargar plantilla
+            <Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>Descargar </Box>plantilla
           </Button>
-          <FileButton label="Importar factura" onFile={onImportFile} />
+          <FileButton label={<><Box component="span" sx={{ display: { md: "none" } }}>Importar</Box><Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>Importar factura</Box></>} onFile={onImportFile} />
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-            Nuevo inventario
+            Nuevo<Box component="span" sx={{ display: { xs: "none", md: "inline" } }}> inventario</Box>
           </Button>
         </Box>
       </Box>
@@ -566,47 +533,51 @@ export default function MainInventory({
           <Typography variant="body2" color="text.secondary">Crea uno o importa una factura Excel.</Typography>
         </Paper>
       ) : null}
-      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
+      <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 }, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
         {inventories.map((inventory) => {
           const latest = inventory.history[inventory.history.length - 1];
           const invoices = [...new Set(inventory.products.map((product) => product.orderCode).filter(Boolean))];
           return (
             <Card key={inventory.id}>
-              <CardContent sx={{ display: "grid", gap: 1.25 }}>
+              <CardContent sx={{ display: "grid", gap: { xs: 0.75, md: 1.25 } }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "flex-start" }}>
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
-                    <Typography variant="h6" title={inventory.name} sx={{ overflowWrap: "anywhere" }}>{inventory.name}</Typography>
-                    <IconButton
-                      aria-label={`Editar nombre de ${inventory.name}`}
-                      size="small"
-                      onClick={() => {
-                        setRenaming(inventory);
-                        setRenameName(inventory.name);
-                      }}
-                    >
-                      <EditOutlinedIcon fontSize="small" />
-                    </IconButton>
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.25, minWidth: 0 }}>
+                      <Typography variant="h6" title={inventory.name} sx={{ fontSize: { xs: "1rem", md: "1.15rem" }, overflowWrap: "anywhere" }}>{inventory.name}</Typography>
+                      <IconButton
+                        aria-label={`Editar nombre de ${inventory.name}`}
+                        size="small"
+                        onClick={() => {
+                          setRenaming(inventory);
+                          setRenameName(inventory.name);
+                        }}
+                      >
+                        <EditOutlinedIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                      {qty(inventory.products.length)} productos{invoices.length ? ` · ${invoices.slice(0, 2).join(", ")}` : ""} · {dateTimeLabel(inventory.updatedAt)}
+                    </Typography>
                   </Box>
-                  <Typography variant="caption" color="text.secondary">{dateTimeLabel(inventory.updatedAt)}</Typography>
+                  <Button variant="contained" onClick={() => onOpen(inventory)} sx={{ minHeight: 36, flexShrink: 0, alignSelf: "center" }}>Abrir</Button>
                 </Box>
-                <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap" }}>
-                  <SummaryChip tone="subtotal" label={`${qty(inventory.products.length)} productos`} />
-                  {invoices.slice(0, 3).map((code) => (
-                    <SummaryChip key={code} tone="logistics" label={code} />
-                  ))}
-                  {latest ? (
-                    <SummaryChip
-                      tone="sales"
-                      label={`Último resultado · Venta ${money(latest.projectedSales)} · Neta ${money(latest.investorNet)}`}
-                    />
-                  ) : (
-                    <Typography variant="body2" color="text.secondary">Sin guardados todavía.</Typography>
-                  )}
-                </Box>
-                <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
-                  <IconButton aria-label="Duplicar" onClick={() => onDuplicate(inventory.id)}><ContentCopyIcon /></IconButton>
-                  <IconButton aria-label="Eliminar" onClick={() => setPendingDelete(inventory)}><DeleteOutlinedIcon /></IconButton>
-                  <Button variant="contained" onClick={() => onOpen(inventory)}>Abrir</Button>
+                {latest ? (
+                  <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
+                    <Box sx={{ minWidth: 0, px: 1, py: 0.6, borderRadius: "10px", bgcolor: "#E8F0FE" }}>
+                      <Typography variant="caption" sx={{ color: "#1A56DB", display: "block", lineHeight: 1.15 }}>Venta</Typography>
+                      <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "0.95rem", overflowWrap: "anywhere" }}>{money(latest.projectedSales)}</Typography>
+                    </Box>
+                    <Box sx={{ minWidth: 0, px: 1, py: 0.6, borderRadius: "10px", bgcolor: "#E6F4EA" }}>
+                      <Typography variant="caption" sx={{ color: "#0D652D", display: "block", lineHeight: 1.15 }}>Neta</Typography>
+                      <Typography sx={{ fontWeight: 800, color: "#0D652D", fontSize: "0.95rem", overflowWrap: "anywhere" }}>{money(latest.investorNet)}</Typography>
+                    </Box>
+                  </Box>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">Sin guardados todavía.</Typography>
+                )}
+                <Box sx={{ display: "flex", gap: 0.5, justifyContent: "flex-end" }}>
+                  <IconButton size="small" aria-label="Duplicar" onClick={() => onDuplicate(inventory.id)}><ContentCopyIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" aria-label="Eliminar" onClick={() => setPendingDelete(inventory)}><DeleteOutlinedIcon fontSize="small" /></IconButton>
                 </Box>
               </CardContent>
             </Card>

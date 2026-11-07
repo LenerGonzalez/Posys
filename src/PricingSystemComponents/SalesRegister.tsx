@@ -107,7 +107,7 @@ function SummaryMetric({
   emphasis?: boolean;
 }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, minWidth: 0, px: 1.5, py: emphasis ? 1.5 : 1.25, borderRadius: 3, bgcolor: background }}>
+    <Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.75, md: 1.25 }, minWidth: 0, px: { xs: 1, md: 1.5 }, py: emphasis ? { xs: 0.85, md: 1.5 } : { xs: 0.75, md: 1.25 }, borderRadius: { xs: "10px", md: 3 }, bgcolor: background }}>
       <Box sx={{ color, display: "flex", flexShrink: 0 }}>{icon}</Box>
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="caption" sx={{ color, display: "block", lineHeight: 1.2 }}>{label}</Typography>
@@ -131,25 +131,25 @@ function LineCard({
   const availableTone = row.available != null && row.available > 0 ? { background: "#E6F4EA", color: "#0D652D" } : { background: "#FEF4D6", color: "#8D4E00" };
   return (
     <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)", borderColor: "rgba(26, 28, 30, 0.08)" }}>
-      <CardContent sx={{ display: "grid", gap: 1.75, p: { xs: 1.75, sm: 2.25 } }}>
-        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.25, flexWrap: "wrap" }}>
-          <Box sx={{ width: 40, height: 40, borderRadius: 2.5, bgcolor: "#E8F0FE", color: "#1A56DB", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <CardContent sx={{ display: "grid", gap: { xs: 0.75, md: 1.75 }, p: { xs: 1.25, md: 2.25 } }}>
+        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+          <Box sx={{ width: 36, height: 36, borderRadius: "10px", bgcolor: "#E8F0FE", color: "#1A56DB", display: { xs: "none", md: "flex" }, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Inventory2OutlinedIcon fontSize="small" />
           </Box>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography variant="h6" sx={{ fontSize: { xs: "1.05rem", sm: "1.2rem" }, lineHeight: 1.25 }}>
+            <Typography variant="h6" sx={{ fontSize: { xs: "0.98rem", md: "1.2rem" }, lineHeight: 1.2 }}>
               {product?.productName || "Producto no disponible"}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>
               {product ? `${product.inventoryName} · Factura ${product.invoiceNumber || "sin número"}` : "Selecciona el producto de nuevo."}
             </Typography>
           </Box>
-          <IconButton aria-label="Quitar línea" onClick={onRemove} sx={{ border: "1px solid", borderColor: "divider", borderRadius: 2.5 }}>
+          <IconButton size="small" aria-label="Quitar línea" onClick={onRemove}>
             <DeleteOutlinedIcon fontSize="small" />
           </IconButton>
         </Box>
         {product ? (
-          <Box sx={{ display: "grid", gap: 1.25, gridTemplateColumns: { xs: "1fr 1fr", sm: "1fr 1fr 1fr", md: "repeat(5, 1fr)" }, p: 1.5, borderRadius: "12px", bgcolor: "#F8F9FB" }}>
+          <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", sm: "1fr 1fr 1fr", md: "repeat(5, 1fr)" }, p: { xs: 1, md: 1.5 }, borderRadius: "12px", bgcolor: "#F8F9FB" }}>
             <Fact label="Paquetes iniciales" value={qty(product.initialPackages)} />
             <Fact label="Vendidos antes" value={qty(row.soldPackages)} />
             <Fact label="Disponibles" value={availableLabel || "—"} />
@@ -164,9 +164,9 @@ function LineCard({
             {commissionMethodLabel(product.commissionMethod)} · Comisión aplicada {percent(product.vendorSharePercent, Number.isInteger(product.vendorSharePercent) ? 0 : 2)}
           </Typography>
         ) : null}
-        <Box sx={{ display: "grid", gap: 1, p: { xs: 1.5, sm: 1.75 }, borderRadius: "12px", bgcolor: "#F3F7FE" }}>
+        <Box sx={{ display: "grid", gap: 0.75, p: { xs: 0, md: 1.75 }, borderRadius: { xs: 0, md: "12px" }, bgcolor: { xs: "transparent", md: "#F3F7FE" } }}>
           {availableLabel != null ? (
-            <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+            <Box sx={{ display: { xs: "none", md: "flex" }, justifyContent: "flex-end" }}>
               <Box sx={{ px: 1.25, py: 0.4, borderRadius: 999, bgcolor: availableTone.background }}>
                 <Typography variant="caption" sx={{ fontWeight: 700, color: availableTone.color }}>Disponibles: {availableLabel}</Typography>
               </Box>
@@ -179,14 +179,14 @@ function LineCard({
             maximum={row.available == null ? undefined : Math.max(0, row.available)}
             onCommit={onQuantity}
             sx={{
-              "& .MuiInputBase-root": { bgcolor: "#FFFFFF", fontSize: "1.15rem" },
+              "& .MuiInputBase-root": { bgcolor: "#FFFFFF", fontSize: { xs: "1.05rem", md: "1.15rem" } },
               "& .MuiFormHelperText-root.Mui-error": { color: "#A50E0E", mx: 0, mt: 0.75 },
             }}
           />
           {row.message ? <Notice tone="warning">{row.message}</Notice> : null}
         </Box>
         {row.financials && !row.message ? (
-          <Box sx={{ display: "grid", gap: 1.25, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(3, 1fr)" } }}>
+          <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(3, 1fr)" } }}>
             <Fact label="Venta de la línea" value={money(row.financials.salesTotal)} />
             <Fact label="Utilidad bruta" value={money(row.financials.grossProfit)} />
             <Fact label="Ganancia del vendedor" value={money(row.financials.vendorProfit)} />
@@ -328,7 +328,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
   };
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box>
         <Typography variant="h5">Ventas</Typography>
         <Typography variant="body2" color="text.secondary">
@@ -364,7 +364,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
               <MenuItem key={inventory.id} value={inventory.id}>{inventory.name}</MenuItem>
             ))}
           </TextField>
-          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", "@media (min-width: 768px)": "1fr auto" }, alignItems: "center" }}>
+          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center" }}>
             <TextField select label="Producto" value={productsToAdd.some((product) => stockKey(product.inventoryId, product.productId) === addId) ? addId : ""} onChange={(event) => setAddId(event.target.value)} disabled={!productsToAdd.length}>
               {productsToAdd.map((product) => (
                 <MenuItem key={stockKey(product.inventoryId, product.productId)} value={stockKey(product.inventoryId, product.productId)} sx={{ whiteSpace: "normal" }}>
@@ -372,7 +372,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
                 </MenuItem>
               ))}
             </TextField>
-            <Button variant="outlined" startIcon={<AddIcon />} onClick={addLine} disabled={!addId} sx={{ minHeight: 48 }}>
+            <Button variant="outlined" startIcon={<AddIcon />} onClick={addLine} disabled={!addId} sx={{ minHeight: 40, whiteSpace: "nowrap", px: { xs: 1.25, md: 2 } }}>
               Agregar
             </Button>
           </Box>
@@ -383,11 +383,11 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
         <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)", borderColor: "rgba(26, 28, 30, 0.08)" }}>
           <CardContent sx={{ display: "grid", gap: 1 }}>
             <Typography variant="subtitle2">Resumen de la venta</Typography>
-            <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", "@media (min-width: 768px)": "1fr 1fr" } }}>
+            <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
               <SummaryMetric icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(review.totals.salesTotal)} background="#E6F4EA" color="#0D652D" emphasis />
               <SummaryMetric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Ganancia del inversionista" value={money(review.totals.investorNet)} background="#FFF7F0" color="#C05A12" emphasis />
             </Box>
-            <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", "@media (min-width: 768px)": "1fr 1fr 1fr" } }}>
+            <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", "@media (min-width: 768px)": "1fr 1fr 1fr" }, "& > :last-child:nth-child(odd)": { "@media (max-width: 767px)": { gridColumn: "1 / -1" } } }}>
               <SummaryMetric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Paquetes de la venta" value={qty(review.totals.packageCount)} background="#F8F9FB" color="#44474E" />
               <SummaryMetric icon={<ShowChartOutlinedIcon fontSize="small" />} label="Utilidad bruta" value={money(review.totals.grossProfit)} background="#F8F9FB" color="#44474E" />
               <SummaryMetric icon={<PersonOutlineOutlinedIcon fontSize="small" />} label="Ganancia del vendedor" value={money(review.totals.vendorProfit)} background="#F7F4FC" color="#6D4BA1" />
@@ -395,7 +395,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
           </CardContent>
         </Card>
       ) : null}
-      <Box sx={{ display: "grid", gap: 2 }}>
+      <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
         {lines.map((line, index) => {
           const row = review.rows[index];
           return (
@@ -541,7 +541,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
         slotProps={{ paper: { sx: { borderRadius: narrow ? 0 : "20px", boxShadow: "0 12px 32px rgba(26, 28, 30, 0.12)" } } }}
       >
         {voucher ? (
-          <DialogContent sx={{ display: "grid", justifyItems: "center", gap: 1.25, pt: narrow ? "calc(24px + env(safe-area-inset-top))" : 3, textAlign: "center" }}>
+          <DialogContent sx={{ display: "grid", alignContent: "start", gridAutoRows: "min-content", justifyItems: "center", gap: 1, pt: narrow ? "calc(16px + env(safe-area-inset-top))" : 3, textAlign: "center" }}>
             <Box sx={{ width: 56, height: 56, borderRadius: "16px", bgcolor: "#E6F4EA", color: "#0D652D", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <CheckCircleOutlinedIcon />
             </Box>

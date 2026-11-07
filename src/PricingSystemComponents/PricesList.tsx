@@ -1,9 +1,12 @@
+import { useState } from "react";
 import {
   Alert,
   Box,
+  Button,
   Card,
   CardContent,
   Chip,
+  Collapse,
   MenuItem,
   Table,
   TableBody,
@@ -15,7 +18,7 @@ import {
 } from "@mui/material";
 import { money, percent, qty } from "./format";
 import NumericField from "./NumericField";
-import { upDesktop } from "./screen";
+import { upDesktop, useNarrowScreen } from "./screen";
 import { commissionMethodLabel, type CommissionMethod, type ComputedLine, type PriceMethod, type ProductInput } from "./types";
 
 function PriceCard({
@@ -33,38 +36,29 @@ function PriceCard({
 }) {
   return (
     <Card variant="outlined" sx={{ minWidth: 0 }}>
-      <CardContent sx={{ display: "grid", gap: 1.25, p: { xs: 1.75, sm: 2 } }}>
-        <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1 }}>
-          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", fontSize: "1.05rem" }}>{line.name}</Typography>
+      <CardContent sx={{ display: "grid", gap: 1, p: 1.25 }}>
+        <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "flex-start" }}>
+          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", fontSize: "0.95rem" }}>{line.name}</Typography>
           <Chip size="small" label={line.priceMethod} />
         </Box>
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
-          <Chip size="small" variant="outlined" label={`Costo ${money(line.costPerPack)}`} sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" } }} />
-          <Chip size="small" variant="outlined" label={`Logística ${money(line.logisticsPerPack)}`} sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" } }} />
-          <Chip size="small" variant="outlined" label={`Paquetes ${qty(line.packages)}`} sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" } }} />
-          <Chip size="small" variant="outlined" label={`Precio Costo ${money(line.costPlusLogisticsPerPack)}`} sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" } }} />
-          <Chip size="small" variant="outlined" label={`Costo + logística total ${money(line.purchaseSubtotal + line.logisticsAllocated)}`} sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" } }} />
+        <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
+          {[
+            ["Paquetes", qty(line.packages)],
+            ["Costo proveedor", money(line.costPerPack)],
+            ["Logística / paquete", money(line.logisticsPerPack)],
+            ["Precio costo", money(line.costPlusLogisticsPerPack)],
+            ["Costo + logística", money(line.purchaseSubtotal + line.logisticsAllocated)],
+            ["Precio de venta", money(line.appliedPrice, 0)],
+            ["Margen real", percent(line.realMarginPercent)],
+            ["Venta total", money(line.salesTotal)],
+          ].map(([label, value]) => (
+            <Box key={label} sx={{ minWidth: 0 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.15 }}>{label}</Typography>
+              <Typography sx={{ fontWeight: 700, fontSize: "0.9rem", overflowWrap: "anywhere", color: label === "Precio de venta" ? "#1A56DB" : "text.primary" }}>{value}</Typography>
+            </Box>
+          ))}
         </Box>
         <PriceFields product={product} onChange={onChange} spacious={spacious} generalMarginPercent={generalMarginPercent} />
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
-          <Chip
-            size="small"
-            color={line.alerts.priceAtOrBelowCost ? "error" : "default"}
-            label={`Precio ${money(line.appliedPrice, 0)}`}
-            sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" }, fontWeight: 700 }}
-          />
-          <Chip
-            size="small"
-            color={line.alerts.lowMargin ? "warning" : "success"}
-            label={`Margen ${percent(line.realMarginPercent)}`}
-            sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" }, fontWeight: 700 }}
-          />
-          <Chip
-            size="small"
-            label={`Venta ${money(line.salesTotal)}`}
-            sx={{ "& .MuiChip-label": { whiteSpace: "nowrap" }, fontWeight: 700 }}
-          />
-        </Box>
         <AlertRow line={line} />
       </CardContent>
     </Card>
@@ -93,7 +87,7 @@ function PriceFields({
 }) {
   const generalHelp = usesGeneralMargin(product, generalMarginPercent) ? generalMarginHelp(generalMarginPercent) : undefined;
   return (
-    <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: spacious ? { xs: "1fr", [upDesktop]: "minmax(150px, 0.7fr) minmax(220px, 1fr) minmax(260px, 1fr)" } : { xs: "1fr", [upDesktop]: "140px 1fr 1fr" } }}>
+    <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: spacious ? { xs: "1fr", [upDesktop]: "minmax(150px, 0.7fr) minmax(220px, 1fr) minmax(260px, 1fr)" } : { xs: "1fr 1fr", [upDesktop]: "140px 1fr 1fr" }, "& > :first-of-type": { gridColumn: { xs: "1 / -1", [upDesktop]: "auto" } } }}>
       <TextField
         select
         label="Método"
@@ -160,12 +154,24 @@ export default function PricesList({
   generalMarginPercent?: number;
 }) {
   const byId = new Map(products.map((product) => [product.id, product]));
+  const narrow = useNarrowScreen();
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const rules = `En MARGEN, un margen vacío usa el de la configuración. En PRECIO, el precio manual tiene prioridad si es mayor que cero. El rojo marca un precio que no cubre costo más logística. Método en uso: ${commissionMethodLabel(commissionMethod)}. Los precios y el margen no cambian al elegir el método.`;
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
-      <Alert severity="info">
-        En MARGEN, un margen vacío usa el de la configuración. En PRECIO, el precio manual tiene prioridad si es mayor que cero. El rojo marca un precio que no cubre costo más logística. Método en uso: {commissionMethodLabel(commissionMethod)}. Los precios y el margen no cambian al elegir el método.
-      </Alert>
-      <Box sx={{ display: "grid", gap: 1.5, [upDesktop]: { display: "none" } }}>
+    <Box sx={{ display: "grid", gap: { xs: 1, md: 2 } }}>
+      {narrow ? (
+        <>
+          <Button size="small" onClick={() => setRulesOpen((current) => !current)} sx={{ justifyContent: "flex-start", px: 0, minHeight: 32 }}>
+            {rulesOpen ? "Ocultar reglas de precio" : "Ver reglas de precio"}
+          </Button>
+          <Collapse in={rulesOpen}>
+            <Alert severity="info">{rules}</Alert>
+          </Collapse>
+        </>
+      ) : (
+        <Alert severity="info">{rules}</Alert>
+      )}
+      <Box sx={{ display: "grid", gap: 0.75, [upDesktop]: { display: "none" } }}>
         {lines.map((line) => {
           const product = byId.get(line.id);
           if (!product) return null;

@@ -57,6 +57,7 @@ export default function InventoryWorkspace({
   const [tab, setTab] = useState(initialTab);
   const [historyOpen, setHistoryOpen] = useState(false);
   const narrow = useNarrowScreen();
+  const [exporting, setExporting] = useState(false);
   const patchProduct = (id: string, patch: Partial<ProductInput>) => {
     onChange({
       ...inventory,
@@ -67,9 +68,9 @@ export default function InventoryWorkspace({
   };
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <AppBar position="static" color="inherit" elevation={0} sx={{ borderRadius: "16px", border: "1px solid", borderColor: "divider" }}>
-        <Toolbar sx={{ gap: 1, flexWrap: "wrap", alignItems: "center", px: { xs: 1, sm: 2 }, py: { xs: 1, sm: 1 } }}>
+        <Toolbar sx={{ gap: 0.75, flexWrap: "wrap", alignItems: "center", px: { xs: 1, sm: 2 }, py: { xs: 0.75, sm: 1 }, minHeight: { xs: 0, sm: 64 } }}>
           <IconButton aria-label="Volver" onClick={onBack}><ArrowBackIcon /></IconButton>
           <Box sx={{ flex: "1 1 200px", minWidth: 0, width: { xs: "calc(100% - 52px)", sm: "auto" } }}>
             <TextField
@@ -85,9 +86,25 @@ export default function InventoryWorkspace({
               {dirty ? "Cambios sin guardar" : "Guardado"} · {dateTimeLabel(inventory.updatedAt)}
             </Typography>
           </Box>
-          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", width: { xs: "100%", sm: "auto" }, "& .MuiButton-root": { minHeight: 44, flex: { xs: "1 1 120px", sm: "0 0 auto" } } }}>
+          <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", width: { xs: "100%", sm: "auto" }, "& .MuiButton-root": { minHeight: { xs: 32, md: 40 }, fontSize: { xs: "0.8125rem", md: "0.875rem" }, flex: { xs: "1 1 0", sm: "0 0 auto" }, px: { xs: 0.75, md: 2 } } }}>
           <Button startIcon={<HistoryIcon />} onClick={() => setHistoryOpen(true)}>Historial</Button>
-          <Button startIcon={<FileDownloadIcon />} onClick={onExport}>Exportar</Button>
+          <Button
+            startIcon={<FileDownloadIcon />}
+            disabled={exporting}
+            onClick={() => {
+              if (exporting) return;
+              setExporting(true);
+              window.setTimeout(() => {
+                try {
+                  onExport();
+                } finally {
+                  setExporting(false);
+                }
+              }, 0);
+            }}
+          >
+            {exporting ? "Generando…" : "Exportar Excel"}
+          </Button>
           <Button variant="contained" startIcon={<SaveIcon />} disabled={!dirty || saving || !inventory.name.trim()} onClick={onSave}>
             {saving ? "Guardando" : "Guardar"}
           </Button>
@@ -100,6 +117,7 @@ export default function InventoryWorkspace({
         variant="scrollable"
         scrollButtons="auto"
         allowScrollButtonsMobile
+        sx={{ minHeight: { xs: 36, md: 48 }, "& .MuiTabs-flexContainer": { gap: 0.25 } }}
       >
         {TABS.map((label) => (
           <Tab key={label} label={label} />

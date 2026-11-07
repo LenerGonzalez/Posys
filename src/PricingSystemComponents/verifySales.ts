@@ -190,6 +190,23 @@ if (!enough.ok || enough.rows[0]?.available !== 1 || enough.rows[0]?.availableAf
   failures.push("la revisión debía separar disponibilidad por inventario y sumar el consolidado");
 }
 
+const sharedInventory = {
+  ...inventory({ id: "inv-a", name: "Factura compartida", products: [product({ packages: 4 })] }),
+  ownerUid: "otro-usuario",
+};
+const shared = commitSale(
+  request([{ inventoryId: "inv-a", productId: "prod-1", quantity: 1 }], "op-shared"),
+  state([sharedInventory], [{ ownerUid: "otro-usuario", inventoryId: "inv-a", productId: "prod-1", soldPackages: 2, updatedAt: "" }]),
+);
+if (shared.status !== "created" || shared.stock[0]?.ownerUid !== "owner-1" || shared.stock[0]?.soldPackages !== 1) {
+  failures.push("una venta debía ver los paquetes vendidos por otro usuario y sumar solo los propios");
+}
+const sharedOver = commitSale(
+  request([{ inventoryId: "inv-a", productId: "prod-1", quantity: 3 }], "op-shared-over"),
+  state([sharedInventory], [{ ownerUid: "otro-usuario", inventoryId: "inv-a", productId: "prod-1", soldPackages: 2, updatedAt: "" }]),
+);
+if (sharedOver.status !== "rejected") failures.push("la disponibilidad debía incluir lo vendido por otros usuarios");
+
 if (failures.length) {
   console.error(failures.join("\n"));
   process.exit(1);

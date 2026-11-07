@@ -59,7 +59,7 @@ export default function ChangeHistory({
   }, [options, inventoryId]);
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
         <Box>
           <Typography variant="h5">Historial de cambios</Typography>
@@ -72,7 +72,7 @@ export default function ChangeHistory({
         </Button>
       </Box>
       <Card>
-        <CardContent sx={{ display: "grid", gap: 2 }}>
+        <CardContent sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
           <TextField
             select
             label="Inventario"
@@ -119,7 +119,7 @@ export default function ChangeHistory({
         </CardContent>
       </Card>
       <Card>
-        <CardContent sx={{ display: "grid", gap: 2 }}>
+        <CardContent sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
           <Typography variant="h6">Cambios de precio</Typography>
           {!priceChanges.length ? (
             <Alert severity="info">Todavía no hay cambios individuales de precio.</Alert>

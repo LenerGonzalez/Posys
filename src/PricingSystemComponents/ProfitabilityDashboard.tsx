@@ -33,7 +33,7 @@ import {
   type ProfitabilityEvolution,
   type ProfitabilityFilters,
 } from "./profitability";
-import { upDesktop, upTablet } from "./screen";
+import { metricCellSx, upDesktop } from "./screen";
 import type { PricingInventory } from "./types";
 
 /** Grosor, en píxeles, de las barras horizontales de costos y de venta. */
@@ -71,24 +71,22 @@ function Kpi({
   help: string;
 }) {
   return (
-    <Card>
-      <CardContent>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-          <Typography variant="overline" color="text.secondary">
-            {label}
-          </Typography>
-          <HelpTip label={label} help={help} />
-        </Box>
-        <Typography variant="h5" sx={{ mt: 0.5, overflowWrap: "anywhere", fontSize: { xs: "1.25rem", sm: "1.5rem" } }}>
-          {value}
+    <Box sx={metricCellSx}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
+          {label}
         </Typography>
-        {hint ? (
-          <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
-            {hint}
-          </Typography>
-        ) : null}
-      </CardContent>
-    </Card>
+        <HelpTip label={label} help={help} />
+      </Box>
+      <Typography sx={{ mt: 0.25, fontWeight: 800, overflowWrap: "anywhere", fontSize: { xs: "0.95rem", md: "1.35rem" } }}>
+        {value}
+      </Typography>
+      {hint ? (
+        <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.25 }}>
+          {hint}
+        </Typography>
+      ) : null}
+    </Box>
   );
 }
 
@@ -299,7 +297,7 @@ function KpiGroup({
   return (
     <Box sx={{ display: "grid", gap: 1.25 }}>
       <ChartTitle title={title} help={help} />
-      <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: columns }}>{children}</Box>
+      <Box sx={{ display: "grid", gap: { xs: 0, md: 1.5 }, gridTemplateColumns: columns, border: { xs: "1px solid rgba(26, 28, 30, 0.08)", md: "none" }, borderRadius: { xs: "14px", md: 0 }, overflow: "hidden", bgcolor: { xs: "#FFFFFF", md: "transparent" }, "& > :last-child:nth-child(odd)": { gridColumn: { xs: "1 / -1", md: "auto" } } }}>{children}</Box>
     </Box>
   );
 }
@@ -414,7 +412,7 @@ export default function ProfitabilityDashboard({
   const location = useLocation();
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
         <Box>
           <Typography variant="h5">Dashboard de rentabilidad</Typography>
@@ -433,7 +431,7 @@ export default function ProfitabilityDashboard({
       </Box>
 
       <Card>
-        <CardContent sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", [upTablet]: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" } }}>
+        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" } }}>
           <TextField
             label="Desde"
             type="date"
@@ -491,7 +489,7 @@ export default function ProfitabilityDashboard({
       <KpiGroup
         title="Volumen de operación"
         help="Cuánto se está moviendo: inventarios, productos, paquetes y el dinero invertido en compras."
-        columns={{ xs: "1fr", [upTablet]: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" }}
+        columns={{ xs: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" }}
       >
         <Kpi label="Inventarios" value={qty(report.inventoryCount)} help="Cantidad de inventarios del filtro. Un mismo documento no se cuenta dos veces." />
         <Kpi label="Productos" value={qty(report.productCount)} help="Productos incluidos en el cálculo actual de esos inventarios." />
@@ -502,7 +500,7 @@ export default function ProfitabilityDashboard({
       <KpiGroup
         title="Resultado comercial"
         help="Lo que se proyecta vender, la utilidad antes de repartir y el rendimiento sobre la inversión."
-        columns={{ xs: "1fr", [upTablet]: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" }}
+        columns={{ xs: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" }}
       >
         <Kpi label="Venta proyectada" value={money(report.projectedSales)} help="Suma de la venta proyectada con el precio aplicado de cada producto." />
         <Kpi label="Utilidad bruta" value={money(report.grossProfit)} help="Venta proyectada menos el costo de compra, antes de comisión y logística." />
@@ -528,14 +526,14 @@ export default function ProfitabilityDashboard({
       <KpiGroup
         title="Distribución de ganancias"
         help="En qué se reparte la operación: logística, comisión del vendedor y lo que queda para el inversionista."
-        columns={{ xs: "1fr", [upTablet]: "1fr 1fr", [upDesktop]: "repeat(3, 1fr)" }}
+        columns={{ xs: "1fr 1fr", [upDesktop]: "repeat(3, 1fr)" }}
       >
         <Kpi label="Gastos logísticos" value={money(report.logisticsCost)} help="Gasto logístico del inventario. Si filtras por factura, es solo la parte que el motor ya asignó a esos productos." />
         <Kpi label="Comisión del vendedor" value={money(report.vendorProfit)} help="Comisión del vendedor. Cada inventario usa su método 2 o 3 y el porcentaje general o el del producto." />
         <Kpi label="Ganancia neta del inversionista" value={money(report.investorNet)} hint="Cálculo actual" help="Lo que queda para el inversionista después de la comisión y la logística, según el método de cada inventario." />
       </KpiGroup>
 
-      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", [upDesktop]: "1fr 1fr" } }}>
+      <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 }, gridTemplateColumns: { xs: "1fr", [upDesktop]: "1fr 1fr" } }}>
         <Card>
           <CardContent>
             <ChartTitle
@@ -622,7 +620,7 @@ export default function ProfitabilityDashboard({
                   Línea continua: utilidad bruta. Línea punteada: ganancia neta.
                 </Typography>
               ) : null}
-              <Box sx={{ width: "100%", height: { xs: 240, sm: 300 }, minWidth: 0 }}>
+              <Box sx={{ width: "100%", height: { xs: 188, sm: 300 }, minWidth: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={series.flatMap((item) => item.points)} margin={{ top: 12, right: 8, left: 0, bottom: 8 }}>
                     <CartesianGrid stroke={COLORS.track} vertical={false} />

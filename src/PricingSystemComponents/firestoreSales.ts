@@ -88,12 +88,10 @@ function commissionQueuePayload(queue: ReturnType<typeof emptyQueue>, updatedAt:
 }
 
 export async function listPricingSales(): Promise<PricingSale[]> {
-  const user = requireUser();
-  const snap = await getDocs(query(collection(db, SALES_COLLECTION), where("ownerUid", "==", user.uid)));
+  requireUser();
+  const snap = await getDocs(query(collection(db, SALES_COLLECTION), where("type", "==", "sale")));
   return snap.docs
-    .map((item) => ({ id: item.id, data: item.data() as Record<string, unknown> }))
-    .filter((item) => item.data.type === "sale" && item.data.ownerUid === user.uid)
-    .map((item) => saleFromDoc(item.id, item.data))
+    .map((item) => saleFromDoc(item.id, item.data() as Record<string, unknown>))
     .sort((left, right) => right.soldAt.localeCompare(left.soldAt));
 }
 
@@ -107,23 +105,23 @@ export async function readSellerName(): Promise<string> {
 export async function readSoldPackages(
   keys: Array<{ inventoryId: string; productId: string }>,
 ): Promise<Record<string, number>> {
-  const user = requireUser();
-  const entries = await Promise.all(
-    keys.map(async (key) => {
-      const snap = await getDoc(doc(db, SALES_COLLECTION, stockDocumentId(user.uid, key.inventoryId, key.productId)));
-      if (!snap.exists()) return [stockKey(key.inventoryId, key.productId), 0] as const;
-      const data = snap.data() as { type?: unknown; ownerUid?: unknown; soldPackages?: unknown };
-      if (data.type !== "stock" || data.ownerUid !== user.uid) {
-        throw new Error("El saldo de paquetes no corresponde a este usuario.");
-      }
+  requireUser();
+  const wanted = new Set(keys.map((key) => stockKey(key.inventoryId, key.productId)));
+  const totals = new Map<string, number>();
+  if (wanted.size) {
+    const snap = await getDocs(query(collection(db, SALES_COLLECTION), where("type", "==", "stock")));
+    for (const item of snap.docs) {
+      const data = item.data() as { inventoryId?: unknown; productId?: unknown; soldPackages?: unknown };
+      const key = stockKey(String(data.inventoryId || ""), String(data.productId || ""));
+      if (!wanted.has(key)) continue;
       const sold = Number(data.soldPackages || 0);
       if (!Number.isInteger(sold) || sold < 0) {
         throw new Error("El saldo de paquetes vendidos no es válido.");
       }
-      return [stockKey(key.inventoryId, key.productId), sold] as const;
-    }),
-  );
-  return Object.fromEntries(entries);
+      totals.set(key, (totals.get(key) || 0) + sold);
+    }
+  }
+  return Object.fromEntries([...wanted].map((key) => [key, totals.get(key) || 0]));
 }
 
 export async function registerSale(
@@ -132,6 +130,7 @@ export async function registerSale(
 ): Promise<PricingSale> {
   const user = requireUser();
   const saleRef = doc(db, SALES_COLLECTION, operationId);
+  const stockCatalog = await getDocs(query(collection(db, SALES_COLLECTION), where("type", "==", "stock")));
   return runTransaction(db, async (transaction) => {
     const existing = await transaction.get(saleRef);
     if (existing.exists()) {
@@ -156,19 +155,32 @@ export async function registerSale(
     );
     const grouped = new Map<string, { inventoryId: string; productId: string }>();
     for (const line of lines) grouped.set(stockKey(line.inventoryId, line.productId), line);
-    const stock: StockBalance[] = [];
+    const stockRefs = new Map<string, ReturnType<typeof doc>>();
+    for (const item of stockCatalog.docs) {
+      const data = item.data() as { inventoryId?: unknown; productId?: unknown };
+      const key = stockKey(String(data.inventoryId || ""), String(data.productId || ""));
+      if (!grouped.has(key)) continue;
+      stockRefs.set(item.id, item.ref);
+    }
     for (const key of grouped.values()) {
-      const snap = await transaction.get(doc(db, SALES_COLLECTION, stockDocumentId(user.uid, key.inventoryId, key.productId)));
+      const id = stockDocumentId(user.uid, key.inventoryId, key.productId);
+      if (!stockRefs.has(id)) stockRefs.set(id, doc(db, SALES_COLLECTION, id));
+    }
+    const stock: StockBalance[] = [];
+    for (const ref of stockRefs.values()) {
+      const snap = await transaction.get(ref);
       if (!snap.exists()) continue;
       const data = snap.data() as Partial<StockBalance> & { type?: unknown };
-      if (data.type !== "stock" || data.ownerUid !== user.uid) {
-        throw new Error("El saldo de paquetes no corresponde a este usuario.");
+      if (data.type !== "stock") continue;
+      const soldPackages = Number(data.soldPackages || 0);
+      if (!Number.isInteger(soldPackages) || soldPackages < 0) {
+        throw new Error("El saldo de paquetes vendidos no es válido.");
       }
       stock.push({
-        ownerUid: user.uid,
-        inventoryId: key.inventoryId,
-        productId: key.productId,
-        soldPackages: Number(data.soldPackages || 0),
+        ownerUid: String(data.ownerUid || ""),
+        inventoryId: String(data.inventoryId || ""),
+        productId: String(data.productId || ""),
+        soldPackages,
         updatedAt: String(data.updatedAt || ""),
       });
     }

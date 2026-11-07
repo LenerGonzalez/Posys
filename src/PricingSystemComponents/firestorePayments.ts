@@ -15,7 +15,7 @@ import {
   type CommissionQueue,
   type PaymentApplication,
 } from "./commissionCommit";
-import { SALES_COLLECTION, saleFromDoc } from "./firestoreSales";
+import { listPricingSales, SALES_COLLECTION, saleFromDoc } from "./firestoreSales";
 import type { PricingSale } from "./saleCommit";
 
 function requireUser() {
@@ -80,11 +80,11 @@ function paymentPayload(payment: CommissionPayment): Record<string, unknown> {
 }
 
 async function salesForOwner(ownerUid: string): Promise<PricingSale[]> {
-  const snap = await getDocs(query(collection(db, SALES_COLLECTION), where("ownerUid", "==", ownerUid)));
-  return snap.docs
-    .map((item) => ({ id: item.id, data: item.data() as Record<string, unknown> }))
-    .filter((item) => item.data.type === "sale")
-    .map((item) => saleFromDoc(item.id, item.data));
+  const snap = await getDocs(query(collection(db, SALES_COLLECTION), where("type", "==", "sale")));
+  const sales = snap.docs
+    .map((item) => saleFromDoc(item.id, item.data() as Record<string, unknown>))
+    .filter((sale) => sale.ownerUid === ownerUid);
+  return sales;
 }
 
 export async function ensureCommissionBalances(): Promise<void> {
@@ -132,13 +132,12 @@ export interface CommissionBook {
 }
 
 export async function listCommissionActivity(): Promise<{ balances: CommissionBalance[]; payments: CommissionPayment[] }> {
-  const user = requireUser();
-  const snap = await getDocs(query(collection(db, PAYMENTS_COLLECTION), where("ownerUid", "==", user.uid)));
+  requireUser();
+  const snap = await getDocs(collection(db, PAYMENTS_COLLECTION));
   const balances: CommissionBalance[] = [];
   const payments: CommissionPayment[] = [];
   for (const item of snap.docs) {
     const data = item.data() as Record<string, unknown>;
-    if (data.ownerUid !== user.uid) continue;
     if (data.type === "balance") balances.push(balanceFromDoc(data));
     if (data.type === "payment") payments.push(paymentFromDoc(item.id, data));
   }
@@ -146,11 +145,11 @@ export async function listCommissionActivity(): Promise<{ balances: CommissionBa
 }
 
 export async function readCommissionBook(): Promise<CommissionBook> {
-  const user = requireUser();
+  requireUser();
   await ensureCommissionBalances();
   const [sales, snap] = await Promise.all([
-    salesForOwner(user.uid),
-    getDocs(query(collection(db, PAYMENTS_COLLECTION), where("ownerUid", "==", user.uid))),
+    listPricingSales(),
+    getDocs(collection(db, PAYMENTS_COLLECTION)),
   ]);
   const sellers = new Map<string, string>();
   for (const sale of sales) {
@@ -161,7 +160,6 @@ export async function readCommissionBook(): Promise<CommissionBook> {
   const queues: CommissionQueue[] = [];
   for (const item of snap.docs) {
     const data = item.data() as Record<string, unknown>;
-    if (data.ownerUid !== user.uid) continue;
     if (data.type === "balance") balances.push(balanceFromDoc(data));
     if (data.type === "payment") payments.push(paymentFromDoc(item.id, data));
     if (data.type === "queue") queues.push(queueFromDoc(String(data.ownerUid), String(data.sellerUid), data));
@@ -175,24 +173,25 @@ export async function readCommissionBook(): Promise<CommissionBook> {
 }
 
 export async function registerPayment(operationId: string, sellerUid: string, amount: number): Promise<CommissionPayment> {
-  const user = requireUser();
+  requireUser();
+  const ledgerOwner = sellerUid;
   const paymentRef = doc(db, PAYMENTS_COLLECTION, operationId);
-  const queueRef = doc(db, PAYMENTS_COLLECTION, queueDocumentId(user.uid, sellerUid));
-  const listed = await getDocs(query(collection(db, PAYMENTS_COLLECTION), where("ownerUid", "==", user.uid)));
+  const queueRef = doc(db, PAYMENTS_COLLECTION, queueDocumentId(ledgerOwner, sellerUid));
+  const listed = await getDocs(query(collection(db, PAYMENTS_COLLECTION), where("ownerUid", "==", ledgerOwner)));
   const paymentRefs = listed.docs.filter((item) => {
     const data = item.data() as { type?: unknown; ownerUid?: unknown; sellerUid?: unknown };
-    return data.type === "payment" && data.ownerUid === user.uid && data.sellerUid === sellerUid && item.id !== operationId;
+    return data.type === "payment" && data.ownerUid === ledgerOwner && data.sellerUid === sellerUid && item.id !== operationId;
   }).map((item) => item.ref);
   const balanceRefs = listed.docs.filter((item) => {
     const data = item.data() as { type?: unknown; ownerUid?: unknown; sellerUid?: unknown };
-    return data.type === "balance" && data.ownerUid === user.uid && data.sellerUid === sellerUid;
+    return data.type === "balance" && data.ownerUid === ledgerOwner && data.sellerUid === sellerUid;
   }).map((item) => item.ref);
   return runTransaction(db, async (transaction) => {
     const existing = await transaction.get(paymentRef);
     if (existing.exists()) {
       const data = existing.data() as Record<string, unknown>;
-      if (data.type !== "payment" || data.ownerUid !== user.uid) {
-        throw new Error("Este pago pertenece a otro usuario.");
+      if (data.type !== "payment") {
+        throw new Error("Esta operación no corresponde a un pago.");
       }
       return paymentFromDoc(existing.id, data);
     }
@@ -201,11 +200,11 @@ export async function registerPayment(operationId: string, sellerUid: string, am
       ? String((profile.data() as { name?: unknown }).name || "").trim()
       : "";
     const queueSnap = await transaction.get(queueRef);
-    const queue = queueFromDoc(user.uid, sellerUid, queueSnap.exists() ? queueSnap.data() as Record<string, unknown> : null);
+    const queue = queueFromDoc(ledgerOwner, sellerUid, queueSnap.exists() ? queueSnap.data() as Record<string, unknown> : null);
     const seenBalances = new Set(balanceRefs.map((item) => item.id));
     const balanceReads = [...balanceRefs];
     for (const line of queue.lines) {
-      const id = balanceDocumentId(user.uid, line.saleId, line.lineIndex);
+      const id = balanceDocumentId(ledgerOwner, line.saleId, line.lineIndex);
       if (seenBalances.has(id)) continue;
       seenBalances.add(id);
       balanceReads.push(doc(db, PAYMENTS_COLLECTION, id));
@@ -215,7 +214,7 @@ export async function registerPayment(operationId: string, sellerUid: string, am
       const snap = await transaction.get(ref);
       if (!snap.exists()) continue;
       const data = snap.data() as Record<string, unknown>;
-      if (data.type !== "payment" || data.ownerUid !== user.uid || data.sellerUid !== sellerUid) continue;
+      if (data.type !== "payment" || data.ownerUid !== ledgerOwner || data.sellerUid !== sellerUid) continue;
       payments.push(paymentFromDoc(snap.id, data));
     }
     const balances: CommissionBalance[] = [];
@@ -223,7 +222,7 @@ export async function registerPayment(operationId: string, sellerUid: string, am
       const snap = await transaction.get(ref);
       if (!snap.exists()) continue;
       const data = snap.data() as Record<string, unknown>;
-      if (data.type !== "balance" || data.ownerUid !== user.uid || data.sellerUid !== sellerUid) continue;
+      if (data.type !== "balance" || data.ownerUid !== ledgerOwner || data.sellerUid !== sellerUid) continue;
       balances.push(balanceFromDoc(data));
     }
     const rounding = assessHistoricalRounding(payments, balances);
@@ -231,7 +230,7 @@ export async function registerPayment(operationId: string, sellerUid: string, am
     const result = commitPayment(
       {
         operationId,
-        ownerUid: user.uid,
+        ownerUid: ledgerOwner,
         sellerUid,
         sellerName,
         paidAt: new Date().toISOString(),

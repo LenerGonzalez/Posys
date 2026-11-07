@@ -5,10 +5,8 @@ import {
   doc,
   getDoc,
   getDocs,
-  query,
   serverTimestamp,
   updateDoc,
-  where,
   type Timestamp,
 } from "firebase/firestore";
 import { auth, db } from "../firebase";
@@ -126,28 +124,22 @@ function payload(inventory: PricingInventory, includeHistory: boolean) {
 }
 
 export async function listPricingInventories(): Promise<PricingInventory[]> {
-  const user = requireUser();
-  const snap = await getDocs(
-    query(collection(db, PRICING_COLLECTION), where("ownerUid", "==", user.uid)),
-  );
+  requireUser();
+  const snap = await getDocs(collection(db, PRICING_COLLECTION));
   return snap.docs
     .map((item) => inventoryFromDoc(item.id, item.data() as Record<string, unknown>))
     .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
 }
 
-async function readOwnedInventory(id: string): Promise<PricingInventory> {
-  const user = requireUser();
+async function readInventory(id: string): Promise<PricingInventory> {
+  requireUser();
   const snap = await getDoc(doc(db, PRICING_COLLECTION, id));
   if (!snap.exists()) throw new Error("Ese inventario ya no existe.");
-  const inventory = inventoryFromDoc(snap.id, snap.data() as Record<string, unknown>);
-  if (inventory.ownerUid !== user.uid) {
-    throw new Error("Este inventario pertenece a otro usuario.");
-  }
-  return inventory;
+  return inventoryFromDoc(snap.id, snap.data() as Record<string, unknown>);
 }
 
 export async function getPricingInventory(id: string): Promise<PricingInventory> {
-  return readOwnedInventory(id);
+  return readInventory(id);
 }
 
 export async function createPricingInventory(
@@ -179,11 +171,8 @@ export async function createPricingInventory(
 export async function savePricingInventory(
   inventory: PricingInventory,
 ): Promise<PricingInventory> {
-  const user = requireUser();
-  const stored = await readOwnedInventory(inventory.id);
-  if (stored.ownerUid !== user.uid) {
-    throw new Error("Este inventario pertenece a otro usuario.");
-  }
+  requireUser();
+  const stored = await readInventory(inventory.id);
   const savedAt = new Date().toISOString();
   const totals = computeInventory(inventory).totals;
   const history = [
@@ -208,7 +197,7 @@ export async function saveProductPrice(
   draft: PriceDraft,
 ): Promise<PricingInventory> {
   const user = requireUser();
-  const stored = await readOwnedInventory(inventoryId);
+  const stored = await readInventory(inventoryId);
   const edited = applyProductPriceEdit(
     stored,
     productId,

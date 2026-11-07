@@ -10,6 +10,7 @@ import {
   Typography,
 } from "@mui/material";
 import { money, percent, qty } from "./format";
+import { metricCellSx, metricGridSx } from "./screen";
 import NumericField from "./NumericField";
 import { commissionMethodLabel, type ComputedLine, type ComputedTotals, type ProductInput } from "./types";
 
@@ -29,43 +30,38 @@ export default function Comissions({
   const poolLabel = method3 ? "Base para comisión" : "Inversionista antes de logística";
   const poolValue = method3 ? totals.commissionBase : totals.investorBeforeLogistics;
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Typography variant="body2" color="text.secondary">
         Método en uso: {commissionMethodLabel(totals.commissionMethod)}
       </Typography>
-      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr 1fr" } }}>
-        <Card>
-          <CardContent>
-            <Typography variant="overline" color="text.secondary">Vendedor</Typography>
-            <Typography variant="h5">{money(totals.vendorProfit)}</Typography>
-            <Typography variant="body2" color="text.secondary">Comisión general {percent(totals.vendorSharePercent, 0)}</Typography>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent>
-            <Typography variant="overline" color="text.secondary">{poolLabel}</Typography>
-            <Typography variant="h5">{money(poolValue)}</Typography>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent>
-            <Typography variant="overline" color="text.secondary">Inversionista neto</Typography>
-            <Typography variant="h5" color={totals.investorNet < 0 ? "error" : "success.main"}>
-              {money(totals.investorNet)}
-            </Typography>
-          </CardContent>
-        </Card>
+      <Box sx={{ ...metricGridSx, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr" } }}>
+        <Box sx={metricCellSx}>
+          <Typography variant="caption" color="text.secondary">Vendedor</Typography>
+          <Typography sx={{ fontWeight: 800, fontSize: { xs: "0.95rem", md: "1.25rem" } }}>{money(totals.vendorProfit)}</Typography>
+          <Typography variant="caption" color="text.secondary">Comisión general {percent(totals.vendorSharePercent, 0)}</Typography>
+        </Box>
+        <Box sx={metricCellSx}>
+          <Typography variant="caption" color="text.secondary">{poolLabel}</Typography>
+          <Typography sx={{ fontWeight: 800, fontSize: { xs: "0.95rem", md: "1.25rem" } }}>{money(poolValue)}</Typography>
+        </Box>
+        <Box sx={{ ...metricCellSx, gridColumn: { xs: "1 / -1", md: "auto" } }}>
+          <Typography variant="caption" color="text.secondary">Inversionista neto</Typography>
+          <Typography sx={{ fontWeight: 800, fontSize: { xs: "0.95rem", md: "1.25rem" }, color: totals.investorNet < 0 ? "error.main" : "success.main" }}>
+            {money(totals.investorNet)}
+          </Typography>
+        </Box>
       </Box>
-      <Box sx={{ display: { xs: "grid", md: "none" }, gap: 1.5 }}>
+      <Box sx={{ display: { xs: "grid", md: "none" }, gap: 0.75 }}>
         {lines.map((line) => {
           const product = byId.get(line.id);
           return (
             <Card key={line.id} variant="outlined">
-              <CardContent>
-                <Typography variant="subtitle2">{line.name}</Typography>
-                <Typography variant="body2" color="text.secondary">{qty(line.packages)} paquetes</Typography>
+              <CardContent sx={{ display: "grid", gap: 0.75 }}>
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontSize: "0.95rem" }}>{line.name}</Typography>
+                  <Typography variant="caption" color="text.secondary">{qty(line.packages)} paquetes</Typography>
+                </Box>
                 <NumericField
-                  sx={{ mt: 1 }}
                   label="Comisión del producto"
                   kind="optionalCommission"
                   placeholder={`${totals.vendorSharePercent}`}
@@ -73,13 +69,13 @@ export default function Comissions({
                   adornment="%"
                   onCommit={(value) => onChangeProduct(line.id, { vendorSharePercent: value })}
                 />
-                <Typography variant="body2" sx={{ mt: 1 }}>
-                  {method3 ? "Base" : "Base de comisión"} {money(line.commissionBase)}
-                </Typography>
-                <Typography variant="body2" sx={{ mt: 0.5 }}>Vendedor {money(line.vendorProfit)}</Typography>
-                <Typography variant="body2" color={line.alerts.investorBelowVendor ? "error" : "text.primary"}>
-                  Inversionista neto {money(line.investorNet)}
-                </Typography>
+                <Box sx={{ display: "grid", gap: 0.25 }}>
+                  <Typography variant="caption">{method3 ? "Base" : "Base de comisión"} {money(line.commissionBase)}</Typography>
+                  <Typography variant="caption">Vendedor {money(line.vendorProfit)}</Typography>
+                  <Typography variant="caption" color={line.alerts.investorBelowVendor ? "error" : "text.primary"}>
+                    Inversionista neto {money(line.investorNet)}
+                  </Typography>
+                </Box>
               </CardContent>
             </Card>
           );

@@ -62,13 +62,13 @@ function Metric({
   color: string;
 }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, minWidth: 0, px: 1.5, py: 1.5, borderRadius: "12px", bgcolor: background }}>
-      <Box sx={{ width: 36, height: 36, borderRadius: "10px", bgcolor: "#FFFFFF", color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0, px: { xs: 1, md: 1.5 }, py: { xs: 1, md: 1.5 }, borderRadius: "12px", bgcolor: background }}>
+      <Box sx={{ width: { xs: 28, md: 36 }, height: { xs: 28, md: 36 }, borderRadius: "10px", bgcolor: "#FFFFFF", color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
         {icon}
       </Box>
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="caption" sx={{ color, display: "block", lineHeight: 1.2 }}>{label}</Typography>
-        <Typography sx={{ fontWeight: 800, color, fontSize: { xs: "1.25rem", sm: "1.45rem" }, lineHeight: 1.15 }}>{value}</Typography>
+        <Typography sx={{ fontWeight: 800, color, fontSize: { xs: "1.05rem", sm: "1.45rem" }, lineHeight: 1.15, overflowWrap: "anywhere" }}>{value}</Typography>
       </Box>
     </Box>
   );
@@ -244,7 +244,7 @@ export default function CommissionPayments({ inventories }: { inventories: Prici
   );
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box>
         <Typography variant="h5">Comisiones</Typography>
         <Typography variant="body2" color="text.secondary">
@@ -257,10 +257,12 @@ export default function CommissionPayments({ inventories }: { inventories: Prici
         </Box>
       ) : null}
 
-      <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", "@media (min-width: 768px)": "1fr 1fr 1fr" } }}>
+      <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr" } }}>
         <Metric icon={<ReceiptLongOutlinedIcon fontSize="small" />} label="Comisión generada" value={loading ? "—" : money(generated)} background="#F8F9FB" color="#44474E" />
         <Metric icon={<CheckCircleOutlinedIcon fontSize="small" />} label="Comisión pagada" value={loading ? "—" : money(paid)} background="#E8F0FE" color="#1A56DB" />
-        <Metric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Comisión pendiente" value={loading ? "—" : money(pending)} background="#F7F4FC" color="#6D4BA1" />
+        <Box sx={{ gridColumn: { xs: "1 / -1", md: "auto" } }}>
+          <Metric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Comisión pendiente" value={loading ? "—" : money(pending)} background="#F7F4FC" color="#6D4BA1" />
+        </Box>
       </Box>
       {roundingNote ? (
         <Box sx={{ px: 1.25, py: 1, borderRadius: "12px", bgcolor: "#FEF4D6" }}>
@@ -269,9 +271,9 @@ export default function CommissionPayments({ inventories }: { inventories: Prici
       ) : null}
 
       <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)" }}>
-        <CardContent sx={{ display: "grid", gap: 1.5 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-            <Box sx={{ width: 42, height: 42, borderRadius: "12px", bgcolor: "#1A56DB", color: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        <CardContent sx={{ display: "grid", gap: { xs: 1, md: 1.5 } }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Box sx={{ width: 36, height: 36, borderRadius: "10px", bgcolor: "#1A56DB", color: "#FFFFFF", display: { xs: "none", md: "flex" }, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <PaymentsOutlinedIcon fontSize="small" />
             </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -313,9 +315,9 @@ export default function CommissionPayments({ inventories }: { inventories: Prici
             clearWhenEmpty
             helperText={pending > 0 ? `Pendiente ${money(pending)}` : "No hay comisión pendiente."}
             disabled={!sellerUid || pending <= 0 || saving}
-            sx={{ "& .MuiInputBase-input": { fontSize: "1.55rem", fontWeight: 800 } }}
+            sx={{ "& .MuiInputBase-input": { fontSize: { xs: "1.25rem", md: "1.55rem" }, fontWeight: 800 } }}
           />
-          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+          <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
             <Box sx={{ px: 1.5, py: 1.15, borderRadius: "12px", bgcolor: "#F7F4FC" }}>
               <Typography variant="caption" sx={{ color: "#6D4BA1", display: "block" }}>Comisión pendiente</Typography>
               <Typography sx={{ fontWeight: 800, color: "#6D4BA1", fontSize: "1.15rem" }}>{money(pending)}</Typography>
@@ -332,7 +334,7 @@ export default function CommissionPayments({ inventories }: { inventories: Prici
             variant="contained"
             disabled={!plan || plan.status !== "planned" || saving}
             onClick={() => setConfirming(true)}
-            sx={{ minHeight: 48 }}
+            sx={{ minHeight: { xs: 40, md: 48 } }}
           >
             Revisar pago
           </Button>
@@ -466,7 +468,7 @@ export default function CommissionPayments({ inventories }: { inventories: Prici
         slotProps={{ paper: { sx: { borderRadius: narrow ? 0 : "20px" } } }}
       >
         {registered ? (
-          <DialogContent sx={{ display: "grid", justifyItems: "center", gap: 1, textAlign: "center", pt: narrow ? "calc(24px + env(safe-area-inset-top))" : 3 }}>
+          <DialogContent sx={{ display: "grid", alignContent: "start", gridAutoRows: "min-content", justifyItems: "center", gap: 1, textAlign: "center", pt: narrow ? "calc(16px + env(safe-area-inset-top))" : 3 }}>
             <Box sx={{ width: 56, height: 56, borderRadius: "16px", bgcolor: "#E6F4EA", color: "#0D652D", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <CheckCircleOutlinedIcon />
             </Box>

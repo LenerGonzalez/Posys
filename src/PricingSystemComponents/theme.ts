@@ -47,8 +47,36 @@ export const pricingTheme = createTheme({
     MuiOutlinedInput: {
       styleOverrides: { root: { borderRadius: 12 } },
     },
+    MuiFormHelperText: {
+      styleOverrides: {
+        root: { marginTop: 3, lineHeight: 1.35 },
+      },
+    },
+    MuiDialogContent: {
+      styleOverrides: {
+        root: {
+          alignContent: "start",
+          "@media (max-width: 899px)": {
+            flex: "0 1 auto",
+            minHeight: 0,
+          },
+        },
+      },
+    },
     MuiTab: {
-      styleOverrides: { root: { textTransform: "none", fontWeight: 600, minHeight: 48 } },
+      styleOverrides: {
+        root: {
+          textTransform: "none",
+          fontWeight: 600,
+          minHeight: 48,
+          "@media (max-width: 899px)": {
+            minHeight: 36,
+            paddingTop: 6,
+            paddingBottom: 6,
+            fontSize: "0.8125rem",
+          },
+        },
+      },
     },
   },
 });

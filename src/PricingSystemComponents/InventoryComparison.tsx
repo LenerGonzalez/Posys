@@ -85,7 +85,7 @@ function GroupedChart({
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
           {caption}
         </Typography>
-        <Box sx={{ display: "grid", gap: 2 }}>
+        <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
           {inventories.map((inventory, index) => (
             <Box key={`${inventory.name}-${index}`}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>{inventory.name}</Typography>
@@ -127,7 +127,7 @@ export default function InventoryComparison({
   };
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
         <Box>
           <Typography variant="h5">Comparación de inventarios</Typography>
@@ -154,7 +154,7 @@ export default function InventoryComparison({
             </Box>
           </Box>
           {options.length < 2 ? <Alert severity="info">Hacen falta al menos dos inventarios guardados para comparar.</Alert> : null}
-          <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
+          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
             {ids.map((selected, index) => {
               const item = options.find((option) => option.id === selected);
               const facts = item ? optionFacts(item) : null;
@@ -245,7 +245,7 @@ export default function InventoryComparison({
             </CardContent>
           </Card>
 
-          <Box sx={{ display: "grid", gap: 2 }}>
+          <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
             <GroupedChart
               title="Inversión frente a venta"
               caption="La venta más alta no significa mayor rentabilidad."

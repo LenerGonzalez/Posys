@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardContent,
+  Collapse,
   MenuItem,
   Table,
   TableBody,
@@ -19,6 +20,7 @@ import { money, percent } from "./format";
 import { computeInventory } from "./pricingEngine";
 import { portfolioRates, uniqueInventories } from "./profitability";
 import PricesList from "./PricesList";
+import { useNarrowScreen } from "./screen";
 import Settings from "./Settings";
 import type { ComputedTotals, PricingInventory, ProductInput } from "./types";
 
@@ -156,6 +158,8 @@ export default function PriceSimulator({
   const [inventoryId, setInventoryId] = useState("");
   const source = options.find((item) => item.id === inventoryId) ?? null;
   const [draft, setDraft] = useState<PricingInventory | null>(null);
+  const narrow = useNarrowScreen();
+  const [legendOpen, setLegendOpen] = useState(false);
 
   useEffect(() => {
     setDraft(source ? copyInventory(source) : null);
@@ -173,7 +177,7 @@ export default function PriceSimulator({
   };
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
         <Box>
           <Typography variant="h5">Simulador de precios</Typography>
@@ -187,13 +191,13 @@ export default function PriceSimulator({
       </Box>
 
       <Card>
-        <CardContent sx={{ display: "flex", gap: 1.5, flexWrap: "wrap", alignItems: "center" }}>
+        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "minmax(0, 1fr) auto", md: "minmax(260px, 1fr) auto" }, alignItems: "center" }}>
           <TextField
             select
             label="Inventario"
             value={inventoryId}
             onChange={(event) => setInventoryId(event.target.value)}
-            sx={{ minWidth: 260, flex: 1 }}
+            sx={{ minWidth: 0 }}
           >
             <MenuItem value="">Seleccionar</MenuItem>
             {options.map((item) => (
@@ -221,9 +225,22 @@ export default function PriceSimulator({
           <Card>
             <CardContent sx={{ overflowX: "auto" }}>
               <Typography variant="h6">Resultado simulado</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-                Verde indica una mejora y rojo un resultado desfavorable. En compras, logística, costo total y comisión, disminuir es favorable. En venta, utilidad, ganancia neta y ROI, aumentar es favorable. La base de comisión no se colorea: una base menor no siempre conviene.
-              </Typography>
+              {narrow ? (
+                <>
+                  <Button size="small" onClick={() => setLegendOpen((current) => !current)} sx={{ justifyContent: "flex-start", px: 0, minHeight: 32 }}>
+                    {legendOpen ? "Ocultar lectura de colores" : "Ver lectura de colores"}
+                  </Button>
+                  <Collapse in={legendOpen}>
+                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.4, mb: 1 }}>
+                      Verde indica una mejora y rojo un resultado desfavorable. En compras, logística, costo total y comisión, disminuir es favorable. En venta, utilidad, ganancia neta y ROI, aumentar es favorable. La base de comisión no se colorea: una base menor no siempre conviene.
+                    </Typography>
+                  </Collapse>
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5, lineHeight: 1.4 }}>
+                  Verde indica una mejora y rojo un resultado desfavorable. En compras, logística, costo total y comisión, disminuir es favorable. En venta, utilidad, ganancia neta y ROI, aumentar es favorable. La base de comisión no se colorea: una base menor no siempre conviene.
+                </Typography>
+              )}
               <Table size="small" sx={{ minWidth: 720 }}>
                 <TableHead>
                   <TableRow>

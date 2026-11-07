@@ -20,7 +20,9 @@ import {
   Typography,
 } from "@mui/material";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import TuneOutlinedIcon from "@mui/icons-material/TuneOutlined";
+import { downloadPriceCatalog } from "./excelExport";
 import { money, percent, qty } from "./format";
 import NumericField from "./NumericField";
 import { computeInventory } from "./pricingEngine";
@@ -35,7 +37,7 @@ import {
   type PriceFilters,
   type PriceRow,
 } from "./priceCatalog";
-import { dialogActionsSx, upDesktop, upTablet, useDesktopScreen, useNarrowScreen } from "./screen";
+import { dialogActionsSx, dialogFormSx, upDesktop, upTablet, useDesktopScreen, useNarrowScreen } from "./screen";
 import type { ComputedLine, PriceMethod, PricingInventory } from "./types";
 
 function entryLabel(method: PriceMethod, manual: number | null, margin: number | null, settingsMargin: number): string {
@@ -107,6 +109,8 @@ export default function PriceRanking({
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState("");
   const inventory = inventories.find((item) => item.id === editing?.inventoryId) ?? null;
   const preview = inventory && editing && draft ? previewProductPrice(inventory, editing.productId, draft) : null;
   const draftError = draft ? priceDraftError(draft) : null;
@@ -115,6 +119,34 @@ export default function PriceRanking({
       editing.manualPrice === draft.manualPrice &&
       editing.targetMarginPercent === draft.targetMarginPercent
     : true;
+
+  const filtersActive = filters.scope !== "" || filters.query.trim() !== "" || filters.minPrice != null || filters.maxPrice != null;
+
+  const exportCatalog = async () => {
+    if (exporting) return;
+    const missing = visible.some((row) => !lines.has(row.id));
+    if (missing) {
+      setExportNotice("No se pudo exportar porque falta el cálculo de algún producto.");
+      return;
+    }
+    setExporting(true);
+    setExportNotice("");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      const filename = downloadPriceCatalog(visible.map((row) => ({
+        inventoryName: names.get(row.inventoryId) || "Sin nombre",
+        line: lines.get(row.id)!,
+        manualPrice: row.manualPrice,
+        productMargin: row.targetMarginPercent,
+      })));
+      const scope = filtersActive ? " Se exportaron solo los productos que coinciden con los filtros." : "";
+      setExportNotice(`Se descargó ${filename}.${scope}`);
+    } catch (caught) {
+      setExportNotice(caught instanceof Error ? caught.message : "No se pudo generar el Excel.");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const openEdit = (row: PriceRow) => {
     setEditing(row);
@@ -161,12 +193,31 @@ export default function PriceRanking({
             Catálogo de precios de venta. Cada producto pertenece a un inventario y se edita sin modificar los demás.
           </Typography>
         </Box>
-        <Box sx={{ px: 1.25, py: 0.6, borderRadius: "999px", bgcolor: "#E8F0FE", flexShrink: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 800, color: "#1A56DB" }}>
-            {visible.length} {visible.length === 1 ? "producto" : "productos"}
-          </Typography>
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<FileDownloadOutlinedIcon />}
+            disabled={exporting || visible.length === 0}
+            onClick={() => void exportCatalog()}
+          >
+            {exporting ? "Generando…" : "Exportar Excel"}
+          </Button>
+          <Box sx={{ px: 1.25, py: 0.6, borderRadius: "999px", bgcolor: "#E8F0FE", flexShrink: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 800, color: "#1A56DB" }}>
+              {visible.length} {visible.length === 1 ? "producto" : "productos"}
+            </Typography>
+          </Box>
         </Box>
       </Box>
+      {exportNotice ? (
+        <Alert
+          severity={exportNotice.startsWith("Se descargó") ? "success" : "error"}
+          onClose={() => setExportNotice("")}
+        >
+          {exportNotice}
+        </Alert>
+      ) : null}
       <Card>
         <CardContent sx={{ display: "grid", gap: 1.25, p: { xs: 1.5, sm: 2 } }}>
           {desktop ? (
@@ -215,29 +266,30 @@ export default function PriceRanking({
             </Box>
           ) : (
             <>
-              <TextField
-                fullWidth
-                label="Producto"
-                value={filters.query}
-                placeholder="Buscar por nombre"
-                onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))}
-              />
-              <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+              <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center" }}>
+                <TextField
+                  fullWidth
+                  label="Producto"
+                  value={filters.query}
+                  placeholder="Buscar por nombre"
+                  onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))}
+                  sx={{ minWidth: 0 }}
+                />
                 <Button
                   variant={filtersOpen || extraFilters ? "contained" : "outlined"}
                   startIcon={<TuneOutlinedIcon />}
                   onClick={() => setFiltersOpen((current) => !current)}
                   aria-expanded={filtersOpen}
-                  sx={{ minHeight: 44 }}
+                  sx={{ minHeight: 40, px: 1.25, whiteSpace: "nowrap" }}
                 >
                   Filtros
                 </Button>
-                {extraFilters ? (
-                  <Typography variant="caption" color="text.secondary">Filtros activos</Typography>
-                ) : null}
               </Box>
+              {extraFilters ? (
+                <Typography variant="caption" color="text.secondary">Filtros activos</Typography>
+              ) : null}
               <Collapse in={filtersOpen}>
-                <Box sx={{ display: "grid", gap: 1.25, pt: 0.5 }}>
+                <Box sx={{ display: "grid", gap: 1, pt: 0.25, gridTemplateColumns: "1fr 1fr", "& > :first-of-type": { gridColumn: "1 / -1" } }}>
                   <TextField
                     select
                     fullWidth
@@ -288,29 +340,26 @@ export default function PriceRanking({
               const open = openDetail === row.id;
               return (
                 <Card key={row.id} variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)" }}>
-                  <CardContent sx={{ display: "grid", gap: 1.25, p: 1.75 }}>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography sx={{ fontWeight: 800, fontSize: "1.05rem", lineHeight: 1.25, overflowWrap: "anywhere" }}>{row.product}</Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
-                        {names.get(row.inventoryId) || "Inventario"} · {invoiceLabel(row.orderCode)}
-                      </Typography>
-                    </Box>
-                    <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "center", px: 1.25, py: 1, borderRadius: "12px", bgcolor: "#E8F0FE" }}>
+                  <CardContent sx={{ display: "grid", gap: 0.75, p: 1.25 }}>
+                    <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1 }}>
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="caption" sx={{ color: "#1A56DB", display: "block" }}>Precio de venta</Typography>
-                        <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "1.35rem", lineHeight: 1.1 }}>{money(row.price)}</Typography>
+                        <Typography sx={{ fontWeight: 800, fontSize: "0.95rem", lineHeight: 1.25, overflowWrap: "anywhere" }}>{row.product}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>
+                          {names.get(row.inventoryId) || "Inventario"} · {invoiceLabel(row.orderCode)}
+                        </Typography>
                       </Box>
-                      <Box sx={{ px: 1.1, py: 0.45, borderRadius: "999px", bgcolor: "#FFFFFF", flexShrink: 0 }}>
-                        <Typography variant="caption" sx={{ fontWeight: 800, color: "#0D652D" }}>Margen {percent(row.margin)}</Typography>
+                      <Box sx={{ textAlign: "right", flexShrink: 0 }}>
+                        <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "1.05rem", lineHeight: 1.15 }}>{money(row.price)}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 800, color: "#0D652D", display: "block" }}>Margen {percent(row.margin)}</Typography>
                       </Box>
                     </Box>
-                    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                      <Button variant="contained" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(row)} aria-label={`Editar ${row.product} de ${row.origin}`} sx={{ minHeight: 44, flex: "1 1 140px" }}>
+                    <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: line ? "1fr 1fr" : "1fr" }}>
+                      <Button size="small" variant="contained" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(row)} aria-label={`Editar ${row.product} de ${row.origin}`} sx={{ minHeight: 36 }}>
                         Editar
                       </Button>
                       {line ? (
-                        <Button variant="text" onClick={() => setOpenDetail(open ? null : row.id)} aria-expanded={open} sx={{ minHeight: 44 }}>
-                          {open ? "Ocultar detalle" : "Ver detalle"}
+                        <Button size="small" variant="outlined" onClick={() => setOpenDetail(open ? null : row.id)} aria-expanded={open} sx={{ minHeight: 36 }}>
+                          {open ? "Ocultar" : "Ver detalle"}
                         </Button>
                       ) : null}
                     </Box>
@@ -374,7 +423,7 @@ export default function PriceRanking({
 
       <Dialog open={Boolean(editing && draft)} onClose={closeEdit} fullScreen={narrow} fullWidth maxWidth="sm">
         <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Editar precio</DialogTitle>
-        <DialogContent sx={{ display: "grid", gap: 2, pt: 1 }}>
+        <DialogContent sx={dialogFormSx}>
           {editing && draft && preview ? (
             <>
               <Box>
@@ -443,7 +492,7 @@ export default function PriceRanking({
 
       <Dialog open={confirming} onClose={() => !saving && setConfirming(false)} fullScreen={narrow} fullWidth maxWidth="xs">
         <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Confirmar cambio de precio</DialogTitle>
-        <DialogContent sx={{ display: "grid", gap: 1 }}>
+        <DialogContent sx={{ ...dialogFormSx, gap: 0.75 }}>
           {editing && draft && preview ? (
             <>
               <Typography variant="body2">{editing.product}</Typography>

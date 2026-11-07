@@ -36,7 +36,7 @@ import {
 } from "./dashboardReport";
 import type { CommissionBalance, CommissionPayment } from "./commissionCommit";
 import type { PricingSale } from "./saleCommit";
-import { upDesktop, upTablet } from "./screen";
+import { upDesktop } from "./screen";
 import type { PricingInventory } from "./types";
 
 function axisMoney(value: number): string {
@@ -47,9 +47,9 @@ function axisMoney(value: number): string {
 
 function Metric({ label, value, caption, background, color }: { label: string; value: string; caption?: string; background: string; color: string }) {
   return (
-    <Box sx={{ minWidth: 0, px: 1.5, py: 1.35, borderRadius: "12px", bgcolor: background }}>
-      <Typography variant="caption" sx={{ color, display: "block" }}>{label}</Typography>
-      <Typography sx={{ fontWeight: 800, color, fontSize: { xs: "1.2rem", sm: "1.4rem" }, lineHeight: 1.15 }}>{value}</Typography>
+    <Box sx={{ minWidth: 0, px: { xs: 1, md: 1.5 }, py: { xs: 0.85, md: 1.35 }, borderRadius: "12px", bgcolor: background }}>
+      <Typography variant="caption" sx={{ color, display: "block", lineHeight: 1.2 }}>{label}</Typography>
+      <Typography sx={{ fontWeight: 800, color, fontSize: { xs: "1.05rem", sm: "1.4rem" }, lineHeight: 1.15, overflowWrap: "anywhere" }}>{value}</Typography>
       {caption ? <Typography variant="caption" sx={{ color, display: "block" }}>{caption}</Typography> : null}
     </Box>
   );
@@ -80,7 +80,7 @@ function Bars({
 }) {
   if (!data.length) return <Typography variant="body2" color="text.secondary">Sin datos en este filtro.</Typography>;
   return (
-    <Box sx={{ width: "100%", height: 220, minWidth: 0 }}>
+    <Box sx={{ width: "100%", height: { xs: 168, md: 220 }, minWidth: 0 }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 28, right: 4, left: 0, bottom: 0 }}>
           <CartesianGrid stroke="#E8EAED" vertical={false} />
@@ -172,7 +172,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
   const patch = (next: Partial<DashboardFilters>) => setFilters((current) => ({ ...current, ...next }));
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
+    <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box>
         <Typography variant="h5">Ventas y Comisiones</Typography>
         <Typography variant="body2" color="text.secondary">
@@ -186,7 +186,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
       ) : null}
 
       <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)" }}>
-        <CardContent sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", [upTablet]: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" } }}>
+        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" } }}>
           <TextField label="Desde" type="date" value={filters.from} onChange={(event) => patch({ from: event.target.value })} slotProps={{ inputLabel: { shrink: true } }} />
           <TextField label="Hasta" type="date" value={filters.to} onChange={(event) => patch({ to: event.target.value })} slotProps={{ inputLabel: { shrink: true } }} />
           <TextField select label="Inventario" value={filters.inventoryId} onChange={(event) => patch({ inventoryId: event.target.value, productId: "" })}>
@@ -202,25 +202,29 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
 
       <Box>
         <Typography sx={{ fontWeight: 800, mb: 1 }}>Actividad de ventas</Typography>
-        <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", [upTablet]: "1fr 1fr 1fr" } }}>
+        <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr" } }}>
           <Metric label="Paquetes vendidos" value={loading ? "—" : qty(report.packagesSold)} caption="Según la fecha de la venta" background="#E8F0FE" color="#1A56DB" />
-          <Metric label="Stock disponible actual" value={loading || report.packagesAvailable == null ? "—" : qty(report.packagesAvailable)} caption="Incluye productos sin ventas" background="#F8F9FB" color="#44474E" />
-          <Metric label="Total de ventas" value={loading ? "—" : money(report.salesTotal)} caption="Ventas dentro del período" background="#E6F4EA" color="#0D652D" />
+          <Metric label="Stock disponible actual" value={loading || report.packagesAvailable == null ? "—" : qty(report.packagesAvailable)} caption="Incluye productos sin ventas" background="#E7EDF4" color="#3A4654" />
+          <Box sx={{ gridColumn: { xs: "1 / -1", md: "auto" } }}>
+            <Metric label="Total de ventas" value={loading ? "—" : money(report.salesTotal)} caption="Ventas dentro del período" background="#E6F4EA" color="#0D652D" />
+          </Box>
         </Box>
       </Box>
       <Box>
         <Typography sx={{ fontWeight: 800, mb: 1 }}>Ganancias del inversionista</Typography>
-        <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", [upTablet]: "1fr 1fr" } }}>
+        <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
           <Metric label="Ganancia neta generada" value={loading ? "—" : money(report.investorNet)} caption="De las ventas del período" background="#FFF7F0" color="#C05A12" />
           <Metric label="Ganancia neta por paquete" value={loading || report.investorPerPackage == null ? "—" : money(report.investorPerPackage)} caption="Sobre los paquetes vendidos" background="#FFF7F0" color="#C05A12" />
         </Box>
       </Box>
       <Box>
         <Typography sx={{ fontWeight: 800, mb: 1 }}>Ganancias del vendedor</Typography>
-        <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", [upTablet]: "1fr 1fr 1fr" } }}>
-          <Metric label="Comisión generada" value={loading ? "—" : money(report.commissionGenerated)} caption="Según la fecha de la venta" background="#F8F9FB" color="#44474E" />
+        <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr" } }}>
+          <Metric label="Comisión generada" value={loading ? "—" : money(report.commissionGenerated)} caption="Según la fecha de la venta" background="#E7EDF4" color="#3A4654" />
           <Metric label="Comisión pagada" value={loading ? "—" : money(report.commissionPaid)} caption="Saldo actual de esas ventas" background="#E8F0FE" color="#1A56DB" />
-          <Metric label="Comisión pendiente" value={loading ? "—" : money(report.commissionPending)} caption="Saldo actual de esas ventas" background="#F7F4FC" color="#6D4BA1" />
+          <Box sx={{ gridColumn: { xs: "1 / -1", md: "auto" } }}>
+            <Metric label="Comisión pendiente" value={loading ? "—" : money(report.commissionPending)} caption="Saldo actual de esas ventas" background="#F7F4FC" color="#6D4BA1" />
+          </Box>
         </Box>
         {report.historicalRoundingCents === 1 ? (
           <Typography variant="body2" sx={{ mt: 1, color: "#8D4E00" }}>
@@ -273,7 +277,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
                 </Box>
                 <Box sx={{ px: 1.25, py: 1, borderRadius: "12px", bgcolor: "#E6F4EA" }}>
                   <Typography variant="caption" sx={{ color: "#0D652D", display: "block" }}>Ventas del período</Typography>
-                  <Typography sx={{ fontWeight: 800, color: "#0D652D", fontSize: "1.25rem", lineHeight: 1.1 }}>{money(row.salesTotal)}</Typography>
+                  <Typography sx={{ fontWeight: 800, color: "#0D652D", fontSize: { xs: "1.1rem", md: "1.25rem" }, lineHeight: 1.1 }}>{money(row.salesTotal)}</Typography>
                 </Box>
                 <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "1fr 1fr" }}>
                   {[

@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
+import { Box, ChartColumn, ShoppingCart, Tag } from "lucide-react";
 import {
   FaBook,
   FaBars,
@@ -31,6 +32,23 @@ type Rubro = "POLLO" | "DULCES";
 
 function cn(...cls: Array<string | false | null | undefined>) {
   return cls.filter(Boolean).join(" ");
+}
+
+const PRICING_BAR = [
+  { slug: "ranking", label: "Precios", icon: Tag },
+  { slug: "inventarios", label: "Inventarios", icon: Box },
+  { slug: "ventas", label: "Ventas", icon: ShoppingCart },
+  { slug: "rentabilidad", label: "Dashboard", icon: ChartColumn },
+] as const;
+
+function pricingBarActive(pathname: string, slug: string): boolean {
+  if (slug === "ventas") {
+    return pathname.includes("/pricingSystem/ventas") && !pathname.includes("/pricingSystem/ventas-comisiones");
+  }
+  if (slug === "inventarios") {
+    return pathname.includes("/pricingSystem/inventarios") || /\/pricingSystem\/?$/.test(pathname);
+  }
+  return pathname.includes(`/pricingSystem/${slug}`);
 }
 
 export default function MobileTabsLayout({
@@ -717,7 +735,8 @@ export default function MobileTabsLayout({
     };
 
   // ✅ Regla: si hay muchos tabs, ocultamos barra de abajo y usamos Drawer
-  const showBottomTabs = pricesOnly || tabs.length <= 2;
+  const onPricing = location.pathname.includes("/pricingSystem");
+  const showBottomTabs = !onPricing && (pricesOnly || tabs.length <= 2);
 
   const drawerLinkCls =
     (to: string) =>
@@ -837,7 +856,7 @@ export default function MobileTabsLayout({
     <div className="min-h-screen bg-[#f1f3f7] flex flex-col">
       {/* Top Bar */}
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
-        <div className="px-2 sm:px-3 py-2.5 sm:py-3 flex items-center gap-1.5 sm:gap-2 min-w-0">
+        <div className="px-2 sm:px-3 py-1.5 sm:py-3 flex items-center gap-1.5 sm:gap-2 min-w-0">
           {/* Rubro selector para admin o usuario con ambos rubros */}
           {isAdmin || hasBoth ? (
             <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
@@ -1141,15 +1160,58 @@ export default function MobileTabsLayout({
       <main
         className={cn(
           "flex-1 overflow-y-auto px-3 pt-3",
-          showBottomTabs
-            ? "pb-[calc(92px+env(safe-area-inset-bottom))]"
-            : "pb-[calc(16px+env(safe-area-inset-bottom))]",
+          onPricing
+            ? "pb-[calc(80px+env(safe-area-inset-bottom))]"
+            : showBottomTabs
+              ? "pb-[calc(58px+env(safe-area-inset-bottom))]"
+              : "pb-[calc(16px+env(safe-area-inset-bottom))]",
         )}
       >
         <Outlet />
       </main>
 
       {/* Bottom Tabs (solo si hay pocos tabs) */}
+      {onPricing && (
+        <nav className="fixed bottom-0 left-0 right-0 z-50 rounded-t-[22px] bg-white pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgba(26,28,30,0.06)]">
+          <div className="mx-auto grid h-[72px] w-full grid-cols-4">
+            {PRICING_BAR.map((item) => {
+              const Icon = item.icon;
+              const active = pricingBarActive(location.pathname, item.slug);
+              return (
+                <NavLink
+                  key={item.slug}
+                  to={pricingHref(base, item.slug)}
+                  className="relative flex min-w-0 flex-col items-center justify-center gap-1 px-0.5"
+                >
+                  <span
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-xl transition-colors duration-200",
+                      active ? "bg-[#E8F0FE] text-[#1A56DB]" : "bg-transparent text-[#8B95A7]",
+                    )}
+                  >
+                    <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  </span>
+                  <span
+                    className={cn(
+                      "whitespace-nowrap text-[11px] leading-none tracking-tight transition-colors duration-200 max-[340px]:text-[10px]",
+                      active ? "font-semibold text-[#1A56DB]" : "font-medium text-[#8B95A7]",
+                    )}
+                  >
+                    {item.label}
+                  </span>
+                  <span
+                    className={cn(
+                      "absolute bottom-1.5 h-[3px] rounded-full transition-all duration-200",
+                      active ? "w-6 bg-[#1A56DB]" : "w-0 bg-transparent",
+                    )}
+                  />
+                </NavLink>
+              );
+            })}
+          </div>
+        </nav>
+      )}
+
       {showBottomTabs && (
         <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-md pb-[env(safe-area-inset-bottom)]">
           <div className="max-w-5xl mx-auto px-2 py-1.5 flex gap-1.5 overflow-x-auto">
