@@ -99,6 +99,7 @@ function Metric({
   icon,
   label,
   value,
+  detail,
   background,
   color,
   valueColor,
@@ -106,6 +107,7 @@ function Metric({
   icon: ReactNode;
   label: string;
   value: string;
+  detail?: string;
   background: string;
   color: string;
   valueColor?: string;
@@ -116,6 +118,9 @@ function Metric({
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="caption" sx={{ color, display: "block", lineHeight: 1.15 }}>{label}</Typography>
         <Typography sx={{ fontWeight: 700, fontSize: { xs: "0.92rem", md: "1.05rem" }, lineHeight: 1.25, color: valueColor || "text.primary", overflowWrap: "anywhere" }}>{value}</Typography>
+        {detail ? (
+          <Typography variant="caption" sx={{ color, display: "block", fontWeight: 700, lineHeight: 1.15 }}>{detail}</Typography>
+        ) : null}
       </Box>
     </Box>
   );
@@ -199,24 +204,34 @@ function ProductCard({
           </Box>
         </Box>
         {line ? (
-          <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-            <Metric icon={<StorageOutlinedIcon fontSize="small" />} label="Subtotal" value={money(line.purchaseSubtotal)} background="#E8F0FE" color="#1A56DB" />
-            <Metric icon={<LocalShippingOutlinedIcon fontSize="small" />} label="Logística" value={money(line.logisticsAllocated)} background="#FEF4D6" color="#B06000" />
-            <Metric icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(line.salesTotal)} background="#E6F4EA" color="#0D652D" />
+          <Box sx={{ display: "grid", gap: 0.75 }}>
+            <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+              <Metric icon={<StorageOutlinedIcon fontSize="small" />} label="Subtotal" value={money(line.purchaseSubtotal)} background="#E8F0FE" color="#1A56DB" />
+              <Metric icon={<LocalShippingOutlinedIcon fontSize="small" />} label="Logística" value={money(line.logisticsAllocated)} background="#FEF4D6" color="#B06000" />
+              <Metric icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(line.salesTotal)} background="#E6F4EA" color="#0D652D" />
+            </Box>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+              <Box sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.6, px: 1.1, py: 0.4, borderRadius: "999px", bgcolor: "#FEF4D6", color: "#8D4E00" }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: "#8D4E00" }}>Precio Costo</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 800, color: "#8D4E00" }}>{money(line.costPlusLogisticsPerPack)}</Typography>
+              </Box>
+              <Box sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.6, px: 1.1, py: 0.4, borderRadius: "999px", bgcolor: "#E6F4EA", color: "#0D652D" }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: "#0D652D" }}>Precio Venta</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 800, color: "#0D652D" }}>{money(line.appliedPrice, 0)}</Typography>
+              </Box>
+            </Box>
+            <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr 1fr" }, p: 1.25, borderRadius: "12px", bgcolor: "#F8F9FB" }}>
+              <Metric icon={<ShowChartOutlinedIcon fontSize="small" />} label="Utilidad bruta" value={money(line.grossProfit)} detail={percent(line.systemGrossMarginPercent)} background="transparent" color="#1A1C1E" />
+              <Metric icon={<PercentOutlinedIcon fontSize="small" />} label="Margen real" value={percent(line.realMarginPercent)} background="transparent" color="#0D652D" valueColor="#0D652D" />
+              <Metric icon={<PersonOutlineOutlinedIcon fontSize="small" />} label="Ganancia vendedor" value={money(line.vendorProfit)} detail={percent(line.vendorSharePercent, 0)} background="transparent" color="#1A1C1E" />
+              <Metric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Ganancia neta inversionista" value={money(line.investorNet)} background="transparent" color="#1A1C1E" />
+            </Box>
           </Box>
         ) : (
           <Typography variant="caption" color="text.secondary">Completa el nombre para calcular esta línea.</Typography>
         )}
         <Collapse in={open}>
           <Box sx={{ display: "grid", gap: { xs: 1, md: 1.5 }, pt: 0.5 }}>
-            {line ? (
-              <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr 1fr" }, p: 1.25, borderRadius: 3, bgcolor: "#F8F9FB" }}>
-                <Metric icon={<ShowChartOutlinedIcon fontSize="small" />} label="Utilidad bruta" value={money(line.grossProfit)} background="transparent" color="#1A1C1E" />
-                <Metric icon={<PercentOutlinedIcon fontSize="small" />} label="Margen real" value={percent(line.realMarginPercent)} background="transparent" color="#0D652D" valueColor="#0D652D" />
-                <Metric icon={<PersonOutlineOutlinedIcon fontSize="small" />} label="Ganancia vendedor" value={money(line.vendorProfit)} background="transparent" color="#1A1C1E" />
-                <Metric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Ganancia neta inversionista" value={money(line.investorNet)} background="transparent" color="#1A1C1E" />
-              </Box>
-            ) : null}
             <Box sx={{ display: "grid", gap: { xs: 1, md: 1.5 }, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
               <FinanceSection title="Compra y precios" icon={<ShoppingCartOutlinedIcon fontSize="small" />} background="#F3F7FE" color="#1A56DB">
                 <Box sx={{ display: "grid", gap: 1, mb: 1.25, gridTemplateColumns: "1fr 1fr" }}>

@@ -31,16 +31,40 @@ import { readSellerName, readSoldPackages, registerSale } from "./firestoreSales
 import { dateTimeLabel, money, percent, qty } from "./format";
 import NumericField from "./NumericField";
 import {
+  availablePackages,
   reviewSale,
   saleProducts,
   stockKey,
   type DraftSaleLine,
   type PricingSale,
   type ReviewedSaleLine,
+  type SaleProduct,
 } from "./saleCommit";
 import { downloadSaleVoucher, printSaleVoucher, vendorCommissionNote, voucherAfterAttempt, voucherPrice } from "./saleVoucher";
 import { dialogActionsSx, useNarrowScreen } from "./screen";
 import { commissionMethodLabel, type PricingInventory } from "./types";
+
+function availabilityTone(count: number | null): { background: string; color: string } {
+  if (count == null) return { background: "#F4F6F8", color: "#5C6370" };
+  if (count > 0) return { background: "#E6F4EA", color: "#0D652D" };
+  return { background: "#FCE8E6", color: "#A50E0E" };
+}
+
+function availabilityLabel(count: number | null): string {
+  if (count == null) return "Consultando";
+  return `${qty(count)} ${count === 1 ? "paquete disponible" : "paquetes disponibles"}`;
+}
+
+function AvailabilityBadge({ count }: { count: number | null }) {
+  const tone = availabilityTone(count);
+  return (
+    <Box sx={{ flexShrink: 0, px: 1, py: 0.35, borderRadius: "999px", bgcolor: tone.background }}>
+      <Typography variant="caption" sx={{ fontWeight: 700, color: tone.color, whiteSpace: "nowrap" }}>
+        {availabilityLabel(count)}
+      </Typography>
+    </Box>
+  );
+}
 
 interface DraftLine extends DraftSaleLine {
   id: string;
@@ -204,7 +228,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [addId, setAddId] = useState("");
   const [sold, setSold] = useState<Record<string, number>>({});
-  const [stockReady, setStockReady] = useState(true);
+  const [stockReady, setStockReady] = useState(false);
   const [sellerName, setSellerName] = useState("");
   const [operationId, setOperationId] = useState(() => uuid());
   const [confirming, setConfirming] = useState(false);
@@ -216,11 +240,33 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
   const [voucher, setVoucher] = useState<PricingSale | null>(null);
   const narrow = useNarrowScreen();
 
-  const selected = useMemo(
-    () => inventories.filter((inventory) => inventoryIds.includes(inventory.id)),
-    [inventories, inventoryIds],
+  const catalog = useMemo(() => saleProducts(inventories), [inventories]);
+  const products = useMemo(
+    () => catalog.filter((product) => inventoryIds.includes(product.inventoryId)),
+    [catalog, inventoryIds],
   );
-  const products = useMemo(() => saleProducts(selected), [selected]);
+  const availableByKey = useMemo(() => {
+    const totals = new Map<string, number>();
+    if (!stockReady) return totals;
+    for (const product of catalog) {
+      const key = stockKey(product.inventoryId, product.productId);
+      if (totals.has(key)) continue;
+      totals.set(key, availablePackages(product.initialPackages, sold[key] || 0));
+    }
+    return totals;
+  }, [catalog, sold, stockReady]);
+  const availableByInventory = useMemo(() => {
+    const totals = new Map<string, number>();
+    if (!stockReady) return totals;
+    const seen = new Set<string>();
+    for (const product of catalog) {
+      const key = stockKey(product.inventoryId, product.productId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      totals.set(product.inventoryId, (totals.get(product.inventoryId) || 0) + (availableByKey.get(key) || 0));
+    }
+    return totals;
+  }, [availableByKey, catalog, stockReady]);
   const addedKeys = useMemo(
     () => new Set(lines.map((line) => stockKey(line.inventoryId, line.productId))),
     [lines],
@@ -247,37 +293,42 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
 
   useEffect(() => {
     let cancelled = false;
-    if (!products.length) {
+    if (!catalog.length) {
       setSold({});
       setStockReady(true);
       return;
     }
     setStockReady(false);
-    void readSoldPackages(products.map((product) => ({ inventoryId: product.inventoryId, productId: product.productId })))
+    void readSoldPackages(catalog.map((product) => ({ inventoryId: product.inventoryId, productId: product.productId })))
       .then((next) => {
         if (!cancelled) {
           setSold(next);
           setError("");
+          setStockReady(true);
         }
       })
       .catch((reason) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "No se pudo consultar los paquetes vendidos.");
-      })
-      .finally(() => {
-        if (!cancelled) setStockReady(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [products]);
+  }, [catalog]);
+
+  const productAvailable = (product: SaleProduct): number | null => {
+    if (!stockReady) return null;
+    return availableByKey.get(stockKey(product.inventoryId, product.productId)) ?? null;
+  };
+
+  const selectedToAdd = productsToAdd.find((product) => stockKey(product.inventoryId, product.productId) === addId) ?? null;
+  const selectedAvailable = selectedToAdd ? productAvailable(selectedToAdd) : null;
 
   const addLine = () => {
-    const product = productsToAdd.find((item) => stockKey(item.inventoryId, item.productId) === addId);
-    if (!product) return;
+    if (!selectedToAdd || selectedAvailable == null || selectedAvailable <= 0) return;
     setAddId("");
     setLines((current) => [
       ...current,
-      { id: uuid(), inventoryId: product.inventoryId, productId: product.productId, quantity: null },
+      { id: uuid(), inventoryId: selectedToAdd.inventoryId, productId: selectedToAdd.productId, quantity: null },
     ]);
   };
 
@@ -319,6 +370,14 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
     setConfirming(false);
     setRegisteredId(registered.operationId);
     setVoucher(registered);
+    setSold((current) => {
+      const next = { ...current };
+      for (const line of registered.lines) {
+        const key = stockKey(line.inventoryId, line.productId);
+        next[key] = (next[key] || 0) + line.quantity;
+      }
+      return next;
+    });
     void readSoldPackages(registered.lines.map((line) => ({
       inventoryId: line.inventoryId,
       productId: line.productId,
@@ -355,24 +414,86 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
                 renderValue: (selected) => {
                   const ids = selected as string[];
                   if (!ids.length) return "Selecciona uno o varios";
-                  return ids.map((id) => inventories.find((inventory) => inventory.id === id)?.name || id).join(", ");
+                  return ids.map((id) => {
+                    const inventory = inventories.find((item) => item.id === id);
+                    const name = inventory?.name || id;
+                    const available = availableByInventory.get(id);
+                    return stockReady && available != null ? `${name} — ${availabilityLabel(available)}` : name;
+                  }).join(", ");
                 },
               },
             }}
           >
             {inventories.map((inventory) => (
-              <MenuItem key={inventory.id} value={inventory.id}>{inventory.name}</MenuItem>
+              <MenuItem key={inventory.id} value={inventory.id} sx={{ alignItems: "center", gap: 1, whiteSpace: "normal", py: 1 }}>
+                <Typography sx={{ flex: "1 1 140px", minWidth: 0, fontWeight: 700, overflowWrap: "anywhere" }}>
+                  {inventory.name}
+                </Typography>
+                <AvailabilityBadge count={stockReady ? availableByInventory.get(inventory.id) ?? 0 : null} />
+              </MenuItem>
             ))}
           </TextField>
           <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center" }}>
-            <TextField select label="Producto" value={productsToAdd.some((product) => stockKey(product.inventoryId, product.productId) === addId) ? addId : ""} onChange={(event) => setAddId(event.target.value)} disabled={!productsToAdd.length}>
-              {productsToAdd.map((product) => (
-                <MenuItem key={stockKey(product.inventoryId, product.productId)} value={stockKey(product.inventoryId, product.productId)} sx={{ whiteSpace: "normal" }}>
-                  {product.productName} · {product.inventoryName} · {product.invoiceNumber || "Sin factura"}
-                </MenuItem>
-              ))}
+            <TextField
+              select
+              label="Producto"
+              value={productsToAdd.some((product) => stockKey(product.inventoryId, product.productId) === addId) ? addId : ""}
+              onChange={(event) => setAddId(event.target.value)}
+              disabled={!productsToAdd.length}
+              sx={{ "& .MuiSelect-select": { whiteSpace: "normal" } }}
+              slotProps={{
+                select: {
+                  renderValue: (selected) => {
+                    const key = String(selected || "");
+                    const product = productsToAdd.find((item) => stockKey(item.inventoryId, item.productId) === key);
+                    if (!product) return "";
+                    return (
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography noWrap sx={{ fontSize: "0.8125rem", fontWeight: 650, lineHeight: 1.2 }}>
+                          {product.productName}
+                        </Typography>
+                        <Typography noWrap variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.2 }}>
+                          {product.inventoryName} · {money(product.appliedPrice)} por paquete · {availabilityLabel(productAvailable(product))}
+                        </Typography>
+                      </Box>
+                    );
+                  },
+                },
+              }}
+            >
+              {productsToAdd.map((product) => {
+                const available = productAvailable(product);
+                const blocked = available != null && available <= 0;
+                return (
+                  <MenuItem
+                    key={stockKey(product.inventoryId, product.productId)}
+                    value={stockKey(product.inventoryId, product.productId)}
+                    disabled={blocked}
+                    sx={{ alignItems: "center", gap: 1, whiteSpace: "normal", py: 0.75 }}
+                  >
+                    <Box sx={{ flex: "1 1 140px", minWidth: 0 }}>
+                      <Typography sx={{ fontSize: "0.8125rem", fontWeight: 650, lineHeight: 1.25, overflowWrap: "anywhere" }}>
+                        {product.productName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.2, overflowWrap: "anywhere" }}>
+                        {product.inventoryName}
+                      </Typography>
+                      <Typography sx={{ fontSize: "0.8125rem", fontWeight: 700, lineHeight: 1.25, color: "#1A56DB", overflowWrap: "anywhere" }}>
+                        {money(product.appliedPrice)} por paquete
+                      </Typography>
+                    </Box>
+                    <AvailabilityBadge count={available} />
+                  </MenuItem>
+                );
+              })}
             </TextField>
-            <Button variant="outlined" startIcon={<AddIcon />} onClick={addLine} disabled={!addId} sx={{ minHeight: 40, whiteSpace: "nowrap", px: { xs: 1.25, md: 2 } }}>
+            <Button
+              variant="outlined"
+              startIcon={<AddIcon />}
+              onClick={addLine}
+              disabled={!selectedToAdd || selectedAvailable == null || selectedAvailable <= 0}
+              sx={{ minHeight: 40, whiteSpace: "nowrap", px: { xs: 1.25, md: 2 } }}
+            >
               Agregar
             </Button>
           </Box>

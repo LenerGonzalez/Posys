@@ -30,6 +30,7 @@ import {
   mergeImportedProducts,
   parseInvoiceWorkbook,
 } from "./excelPricing";
+import ImportPreviewDialog from "./ImportPreviewDialog";
 import InventoryWorkspace from "./InventoryWorkspace";
 import MainInventory from "./MainInventory";
 import ProfitabilityDashboard from "./ProfitabilityDashboard";
@@ -321,37 +322,12 @@ export default function PricingApp() {
           />
         ) : null}
       </Container>
-      <Dialog open={!!preview} onClose={() => setPreview(null)} fullScreen={narrow} fullWidth maxWidth="sm">
-        <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Vista previa de la factura</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ mb: 1 }}>
-            {preview?.products.length || 0} filas válidas. La configuración y los precios manuales existentes se conservan.
-          </Typography>
-          {preview?.issues.map((issue) => (
-            <Alert key={`${issue.row}-${issue.message}`} severity={issue.level === "error" ? "error" : "warning"} sx={{ mb: 1 }}>
-              Fila {issue.row || "—"}: {issue.message}
-            </Alert>
-          ))}
-          <Box sx={{ display: "grid", gap: 0.5, mt: 1 }}>
-            {preview?.products.slice(0, 8).map((product) => (
-              <Typography key={product.id} variant="body2">
-                {product.orderCode || "Sin orden"} · {product.name} · {product.packages} paq. · C$ {product.costPerPack}
-              </Typography>
-            ))}
-            {(preview?.products.length || 0) > 8 ? (
-              <Typography variant="caption" color="text.secondary">
-                y {(preview?.products.length || 0) - 8} más
-              </Typography>
-            ) : null}
-          </Box>
-        </DialogContent>
-        <DialogActions sx={dialogActionsSx}>
-          <Button onClick={() => setPreview(null)}>Cancelar</Button>
-          <Button variant="contained" onClick={() => void applyImport()} disabled={!preview?.products.length}>
-            Aplicar
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ImportPreviewDialog
+        preview={preview}
+        narrow={narrow}
+        onClose={() => setPreview(null)}
+        onApply={() => void applyImport()}
+      />
       <Dialog open={confirmLeave} onClose={() => setConfirmLeave(false)} fullScreen={narrow} fullWidth maxWidth="xs">
         <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Hay cambios sin guardar</DialogTitle>
         <DialogContent>
