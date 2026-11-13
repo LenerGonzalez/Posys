@@ -217,12 +217,43 @@ const entries: PriceCatalogEntry[] = filtered.map((row) => {
   };
 });
 const catalog = reopen(buildPriceCatalogWorkbook(entries));
+const catalogHeaders = headers(catalog.Sheets.Precios);
 check(catalog.SheetNames[0] === "Precios", "hoja de catálogo");
+check(catalogHeaders.join("|") === "Inventario|Factura|Producto|Paquetes|Costo por paquete|Logística por paquete|Precio de costo|Costo + logística total|Método de cálculo|Precio manual|Margen objetivo|Precio de venta|Margen real|Venta total|Utilidad bruta|Ganancia Vendedor|Ganancia inversionista", catalogHeaders.join("|"));
 check(catalog.Sheets.Precios.A2?.v === "Noviembre", "inventario del catálogo");
 check(catalog.Sheets.Precios.B2?.v === "0000101004", "factura del catálogo");
-check(catalog.Sheets.Precios.C2?.v === "p2", "id del catálogo");
-check(catalog.Sheets.Precios.D2?.v === "Frijol", "solo el filtrado");
+check(catalog.Sheets.Precios.C2?.v === "Frijol", "solo el filtrado");
 check(catalog.Sheets.Precios.A3 == null, "no exporta el resto");
+check(!catalogHeaders.includes("ID del producto") && !catalogHeaders.includes("Origen del margen"), "el catálogo no agrega columnas internas");
+const minimal = reopen(buildPriceCatalogWorkbook(entries, []));
+const minimalHeaders = headers(minimal.Sheets.Precios);
+check(minimalHeaders.join("|") === "Producto|Precio de venta", minimalHeaders.join("|"));
+check(minimal.Sheets.Precios.A2?.v === "Frijol", "producto obligatorio");
+check(
+  minimal.Sheets.Precios.B2?.t === "n" &&
+    minimal.Sheets.Precios.B2?.v === entries[0].line.appliedPrice &&
+    String(minimal.Sheets.Precios.B2?.w || "").startsWith("C$"),
+  `precio de venta conserva formato ${minimal.Sheets.Precios.B2?.w}`,
+);
+const partial = reopen(buildPriceCatalogWorkbook(entries, ["realMargin"]));
+const partialHeaders = headers(partial.Sheets.Precios);
+check(partialHeaders.join("|") === "Producto|Precio de venta|Margen real", partialHeaders.join("|"));
+check(
+  partial.Sheets.Precios.C2?.t === "n" &&
+    Math.abs(Number(partial.Sheets.Precios.C2?.v) - entries[0].line.realMarginPercent / 100) < 1e-9 &&
+    String(partial.Sheets.Precios.C2?.w || "").endsWith("%"),
+  `margen conserva porcentaje ${partial.Sheets.Precios.C2?.w}`,
+);
+const gains = reopen(buildPriceCatalogWorkbook(entries, ["salesTotal", "grossProfit", "vendorProfit", "investorNet"]));
+const gainHeaders = headers(gains.Sheets.Precios);
+const gainLine = entries[0].line;
+check(gainHeaders.join("|") === "Producto|Precio de venta|Venta total|Utilidad bruta|Ganancia Vendedor|Ganancia inversionista", gainHeaders.join("|"));
+check(gains.Sheets.Precios.B2?.v === gainLine.appliedPrice, "precio aplicado");
+check(gains.Sheets.Precios.C2?.v === gainLine.salesTotal, "venta total del motor");
+check(gains.Sheets.Precios.D2?.v === gainLine.grossProfit, "utilidad bruta del motor");
+check(gains.Sheets.Precios.E2?.v === gainLine.vendorProfit, "ganancia del vendedor");
+check(gains.Sheets.Precios.F2?.v === gainLine.investorNet, "ganancia del inversionista");
+check(String(gains.Sheets.Precios.C2?.w || "").startsWith("C$"), "venta total conserva formato");
 check(priceCatalogFileName(new Date(2026, 10, 7)) === "Precios_Gestion_Comercial_2026-11-07.xlsx", priceCatalogFileName(new Date(2026, 10, 7)));
 let emptyFailed = false;
 try {

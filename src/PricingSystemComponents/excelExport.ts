@@ -114,6 +114,84 @@ function methodLabel(method: PriceMethod): string {
   return method === "PRECIO" ? "Precio manual" : "Margen objetivo";
 }
 
+export type PriceExportColumnKey =
+  | "inventory"
+  | "invoice"
+  | "product"
+  | "packages"
+  | "costPerPack"
+  | "logisticsPerPack"
+  | "costPrice"
+  | "costLogisticsTotal"
+  | "method"
+  | "manualPrice"
+  | "targetMargin"
+  | "salePrice"
+  | "realMargin"
+  | "salesTotal"
+  | "grossProfit"
+  | "vendorProfit"
+  | "investorNet";
+
+interface CatalogColumn {
+  key: PriceExportColumnKey;
+  header: string;
+  width: number;
+  kind: CellKind;
+  optional: boolean;
+}
+
+export const PRICE_CATALOG_COLUMNS: CatalogColumn[] = [
+  { key: "inventory", header: "Inventario", width: 28, kind: "text", optional: true },
+  { key: "invoice", header: "Factura", width: 18, kind: "text", optional: true },
+  { key: "product", header: "Producto", width: 28, kind: "text", optional: false },
+  { key: "packages", header: "Paquetes", width: 12, kind: "qty", optional: true },
+  { key: "costPerPack", header: "Costo por paquete", width: 18, kind: "money", optional: true },
+  { key: "logisticsPerPack", header: "Logística por paquete", width: 22, kind: "money", optional: true },
+  { key: "costPrice", header: "Precio de costo", width: 16, kind: "money", optional: true },
+  { key: "costLogisticsTotal", header: "Costo + logística total", width: 24, kind: "money", optional: true },
+  { key: "method", header: "Método de cálculo", width: 20, kind: "text", optional: true },
+  { key: "manualPrice", header: "Precio manual", width: 16, kind: "money", optional: true },
+  { key: "targetMargin", header: "Margen objetivo", width: 16, kind: "percent", optional: true },
+  { key: "salePrice", header: "Precio de venta", width: 16, kind: "money", optional: false },
+  { key: "realMargin", header: "Margen real", width: 14, kind: "percent", optional: true },
+  { key: "salesTotal", header: "Venta total", width: 16, kind: "money", optional: true },
+  { key: "grossProfit", header: "Utilidad bruta", width: 16, kind: "money", optional: true },
+  { key: "vendorProfit", header: "Ganancia Vendedor", width: 20, kind: "money", optional: true },
+  { key: "investorNet", header: "Ganancia inversionista", width: 22, kind: "money", optional: true },
+];
+
+export const PRICE_EXPORT_OPTIONAL_KEYS: PriceExportColumnKey[] = PRICE_CATALOG_COLUMNS
+  .filter((column) => column.optional)
+  .map((column) => column.key);
+
+function catalogValue(entry: PriceCatalogEntry, key: PriceExportColumnKey): CellValue {
+  const line = entry.line;
+  const manual = entry.manualPrice != null && entry.manualPrice > 0 ? entry.manualPrice : null;
+  if (key === "inventory") return entry.inventoryName;
+  if (key === "invoice") return line.orderCode;
+  if (key === "product") return line.name;
+  if (key === "packages") return line.packages;
+  if (key === "costPerPack") return line.costPerPack;
+  if (key === "logisticsPerPack") return line.logisticsPerPack;
+  if (key === "costPrice") return line.costPlusLogisticsPerPack;
+  if (key === "costLogisticsTotal") return line.purchaseSubtotal + line.logisticsAllocated;
+  if (key === "method") return methodLabel(line.priceMethod);
+  if (key === "manualPrice") return manual;
+  if (key === "targetMargin") return line.targetMarginPercent;
+  if (key === "salePrice") return line.appliedPrice;
+  if (key === "realMargin") return line.realMarginPercent;
+  if (key === "salesTotal") return line.salesTotal;
+  if (key === "grossProfit") return line.grossProfit;
+  if (key === "vendorProfit") return line.vendorProfit;
+  return line.investorNet;
+}
+
+function selectedCatalogColumns(selected: readonly PriceExportColumnKey[]): CatalogColumn[] {
+  const chosen = new Set(selected);
+  return PRICE_CATALOG_COLUMNS.filter((column) => !column.optional || chosen.has(column.key));
+}
+
 function priceValues(entry: PriceCatalogEntry): CellValue[] {
   const line = entry.line;
   const manual = entry.manualPrice != null && entry.manualPrice > 0 ? entry.manualPrice : null;
@@ -167,30 +245,25 @@ export function priceCatalogFileName(date = new Date()): string {
   return `Precios_Gestion_Comercial_${date.getFullYear()}-${month}-${day}.xlsx`;
 }
 
-export function buildPriceCatalogWorkbook(entries: PriceCatalogEntry[]): XLSX.WorkBook {
+export function buildPriceCatalogWorkbook(
+  entries: PriceCatalogEntry[],
+  selected: readonly PriceExportColumnKey[] = PRICE_EXPORT_OPTIONAL_KEYS,
+): XLSX.WorkBook {
   if (!entries.length) throw new Error("No hay productos para exportar.");
-  const columns: TableColumn[] = [
-    { header: "Inventario", width: 28, kind: "text" },
-    { header: "Factura", width: 18, kind: "text" },
-    { header: "ID del producto", width: 28, kind: "text" },
-    ...PRICE_COLUMNS,
-    { header: "Origen del margen", width: 18, kind: "text" },
-  ];
-  const rows = entries.map((entry) => [
-    entry.inventoryName,
-    entry.line.orderCode,
-    entry.line.id,
-    ...priceValues(entry),
-    entry.productMargin == null ? "General" : "Producto",
-  ]);
+  const columns = selectedCatalogColumns(selected);
+  const rows = entries.map((entry) => columns.map((column) => catalogValue(entry, column.key)));
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, tableSheet(columns, rows), "Precios");
   return book;
 }
 
-export function downloadPriceCatalog(entries: PriceCatalogEntry[], date = new Date()): string {
+export function downloadPriceCatalog(
+  entries: PriceCatalogEntry[],
+  date = new Date(),
+  selected: readonly PriceExportColumnKey[] = PRICE_EXPORT_OPTIONAL_KEYS,
+): string {
   const filename = priceCatalogFileName(date);
-  downloadWorkbook(buildPriceCatalogWorkbook(entries), filename);
+  downloadWorkbook(buildPriceCatalogWorkbook(entries, selected), filename);
   return filename;
 }
 

@@ -19,6 +19,7 @@ export default function NumericField({
   adornmentPosition = "end",
   maximum,
   clearWhenEmpty,
+  size,
   sx,
 }: {
   label?: string;
@@ -32,6 +33,7 @@ export default function NumericField({
   adornmentPosition?: "start" | "end";
   maximum?: number;
   clearWhenEmpty?: boolean;
+  size?: "small" | "medium";
   sx?: SxProps;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -44,6 +46,7 @@ export default function NumericField({
   return (
     <TextField
       label={label}
+      size={size}
       sx={sx}
       value={shown}
       disabled={disabled}

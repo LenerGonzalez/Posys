@@ -15,11 +15,6 @@ import {
   Collapse,
   IconButton,
   MenuItem,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
   TextField,
   Typography,
 } from "@mui/material";
@@ -36,6 +31,7 @@ import {
 } from "./dashboardReport";
 import type { CommissionBalance, CommissionPayment } from "./commissionCommit";
 import type { PricingSale } from "./saleCommit";
+import DashboardProductSection from "./DashboardProductSection";
 import { upDesktop } from "./screen";
 import type { PricingInventory } from "./types";
 
@@ -264,72 +260,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
         {!loading && !report.products.length ? (
           <Typography variant="body2" color="text.secondary">No hay productos en este filtro.</Typography>
         ) : (
-        <>
-        <Box sx={{ display: "grid", gap: 1, [upDesktop]: { display: "none" } }}>
-          {report.products.map((row) => (
-            <Card key={row.key} variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)" }}>
-              <CardContent sx={{ display: "grid", gap: 1, p: 1.75 }}>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ fontWeight: 800, overflowWrap: "anywhere" }}>{row.productName}</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
-                    {row.inventoryName} · Factura {row.invoiceNumbers || "sin número"}
-                  </Typography>
-                </Box>
-                <Box sx={{ px: 1.25, py: 1, borderRadius: "12px", bgcolor: "#E6F4EA" }}>
-                  <Typography variant="caption" sx={{ color: "#0D652D", display: "block" }}>Ventas del período</Typography>
-                  <Typography sx={{ fontWeight: 800, color: "#0D652D", fontSize: { xs: "1.1rem", md: "1.25rem" }, lineHeight: 1.1 }}>{money(row.salesTotal)}</Typography>
-                </Box>
-                <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "1fr 1fr" }}>
-                  {[
-                    ["Iniciales", row.initialPackages == null ? "—" : qty(row.initialPackages)],
-                    ["En el período", qty(row.soldPackages)],
-                    ["Acumulados", qty(row.soldAllTime)],
-                    ["Disponibles ahora", row.availablePackages == null ? "—" : qty(row.availablePackages)],
-                    ["Inversionista", money(row.investorNet)],
-                    ["Vendedor", money(row.vendorProfit)],
-                    ["Pagada", money(row.commissionPaid)],
-                    ["Pendiente", money(row.commissionPending)],
-                  ].map(([label, value]) => (
-                    <Box key={label} sx={{ minWidth: 0 }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{label}</Typography>
-                      <Typography sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>{value}</Typography>
-                    </Box>
-                  ))}
-                </Box>
-              </CardContent>
-            </Card>
-          ))}
-        </Box>
-        <Box sx={{ display: "none", overflowX: "auto", [upDesktop]: { display: "block" } }}>
-        <Table size="small" sx={{ minWidth: 1080 }}>
-          <TableHead>
-            <TableRow>
-              {["Inventario", "Factura", "Producto", "Iniciales", "En el período", "Acumulados", "Disponibles ahora", "Ventas", "Inversionista", "Vendedor", "Pagada", "Pendiente"].map((label) => (
-                <TableCell key={label} sx={{ fontWeight: 700, whiteSpace: "nowrap" }} align={label === "Inventario" || label === "Factura" || label === "Producto" ? "left" : "right"}>{label}</TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {report.products.map((row) => (
-              <TableRow key={row.key}>
-                <TableCell>{row.inventoryName}</TableCell>
-                <TableCell>{row.invoiceNumbers || "sin número"}</TableCell>
-                <TableCell>{row.productName}</TableCell>
-                <TableCell align="right">{row.initialPackages == null ? "—" : qty(row.initialPackages)}</TableCell>
-                <TableCell align="right">{qty(row.soldPackages)}</TableCell>
-                <TableCell align="right">{qty(row.soldAllTime)}</TableCell>
-                <TableCell align="right">{row.availablePackages == null ? "—" : qty(row.availablePackages)}</TableCell>
-                <TableCell align="right">{money(row.salesTotal)}</TableCell>
-                <TableCell align="right">{money(row.investorNet)}</TableCell>
-                <TableCell align="right">{money(row.vendorProfit)}</TableCell>
-                <TableCell align="right">{money(row.commissionPaid)}</TableCell>
-                <TableCell align="right">{money(row.commissionPending)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        </Box>
-        </>
+          <DashboardProductSection rows={report.products} />
         )}
       </Box>
 

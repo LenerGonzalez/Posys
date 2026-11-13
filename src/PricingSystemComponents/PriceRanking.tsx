@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -22,9 +22,12 @@ import {
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import TuneOutlinedIcon from "@mui/icons-material/TuneOutlined";
-import { downloadPriceCatalog } from "./excelExport";
-import { money, percent, qty } from "./format";
+import { downloadPriceCatalog, type PriceExportColumnKey } from "./excelExport";
+import { money, percent } from "./format";
 import NumericField from "./NumericField";
+import PriceDetailDialog from "./PriceDetailDialog";
+import PriceEditDialog from "./PriceEditDialog";
+import PriceExportDialog from "./PriceExportDialog";
 import { computeInventory } from "./pricingEngine";
 import {
   buildPriceRows,
@@ -37,45 +40,13 @@ import {
   type PriceFilters,
   type PriceRow,
 } from "./priceCatalog";
-import { dialogActionsSx, dialogFormSx, upDesktop, upTablet, useDesktopScreen, useNarrowScreen } from "./screen";
-import type { ComputedLine, PriceMethod, PricingInventory } from "./types";
-
-function entryLabel(method: PriceMethod, manual: number | null, margin: number | null, settingsMargin: number): string {
-  if (method === "PRECIO") return manual != null && manual > 0 ? money(manual) : "Sin precio manual";
-  return margin == null ? `Margen general ${percent(settingsMargin, 0)}` : percent(margin);
-}
+import { dialogActionsSx, dialogFormSx, upDesktop, useDesktopScreen, useNarrowScreen } from "./screen";
+import type { ComputedLine, PricingInventory } from "./types";
 
 function invoiceLabel(orderCode: string): string {
   const code = orderCode.trim();
   if (!code) return "Sin factura";
   return /^factura\b/i.test(code) ? code : `Factura ${code}`;
-}
-
-function PriceFacts({ line, row }: { line: ComputedLine; row: PriceRow }) {
-  const facts = [
-    ["Producto", row.product],
-    ["Paquetes", qty(line.packages)],
-    ["Costo proveedor", money(line.costPerPack)],
-    ["Logística / paquete", money(line.logisticsPerPack)],
-    ["Precio costo", money(line.costPlusLogisticsPerPack)],
-    ["Costo + logística total", money(line.purchaseSubtotal + line.logisticsAllocated)],
-    ["Método", row.priceMethod],
-    ["Precio manual", row.manualPrice != null && row.manualPrice > 0 ? money(row.manualPrice) : "—"],
-    ["Margen objetivo", row.targetMarginPercent == null ? `General ${percent(row.settingsMarginPercent, 0)}` : percent(row.targetMarginPercent)],
-    ["Precio de venta", money(row.price)],
-    ["Margen real", percent(row.margin)],
-    ["Venta total", money(line.salesTotal)],
-  ];
-  return (
-    <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "1fr 1fr", [upTablet]: { gridTemplateColumns: "1fr 1fr 1fr" } }}>
-      {facts.map(([label, value]) => (
-        <Box key={label} sx={{ minWidth: 0 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.2 }}>{label}</Typography>
-          <Typography sx={{ fontWeight: 700, overflowWrap: "anywhere", fontSize: "0.9rem" }}>{value}</Typography>
-        </Box>
-      ))}
-    </Box>
-  );
 }
 
 export default function PriceRanking({
@@ -89,7 +60,8 @@ export default function PriceRanking({
   const options = useMemo(() => priceScopeOptions(inventories), [inventories]);
   const [filters, setFilters] = useState<PriceFilters>(EMPTY_PRICE_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [openDetail, setOpenDetail] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const visible = useMemo(() => filterPriceRows(rows, filters), [rows, filters]);
   const narrow = useNarrowScreen();
   const desktop = useDesktopScreen();
@@ -121,11 +93,17 @@ export default function PriceRanking({
     : true;
 
   const filtersActive = filters.scope !== "" || filters.query.trim() !== "" || filters.minPrice != null || filters.maxPrice != null;
+  const detailRow = rows.find((row) => row.id === detailId) ?? null;
+  const detailLine = detailRow ? lines.get(detailRow.id) ?? null : null;
+  const detailCommission = detailRow
+    ? inventories.find((item) => item.id === detailRow.inventoryId)?.products.find((product) => product.id === detailRow.productId)?.vendorSharePercent ?? null
+    : null;
 
-  const exportCatalog = async () => {
+  const exportCatalog = async (selected: PriceExportColumnKey[]) => {
     if (exporting) return;
     const missing = visible.some((row) => !lines.has(row.id));
     if (missing) {
+      setExportOpen(false);
       setExportNotice("No se pudo exportar porque falta el cálculo de algún producto.");
       return;
     }
@@ -138,9 +116,10 @@ export default function PriceRanking({
         line: lines.get(row.id)!,
         manualPrice: row.manualPrice,
         productMargin: row.targetMarginPercent,
-      })));
+      })), new Date(), selected);
       const scope = filtersActive ? " Se exportaron solo los productos que coinciden con los filtros." : "";
       setExportNotice(`Se descargó ${filename}.${scope}`);
+      setExportOpen(false);
     } catch (caught) {
       setExportNotice(caught instanceof Error ? caught.message : "No se pudo generar el Excel.");
     } finally {
@@ -199,7 +178,7 @@ export default function PriceRanking({
             size="small"
             startIcon={<FileDownloadOutlinedIcon />}
             disabled={exporting || visible.length === 0}
-            onClick={() => void exportCatalog()}
+            onClick={() => setExportOpen(true)}
           >
             {exporting ? "Generando…" : "Exportar Excel"}
           </Button>
@@ -337,16 +316,17 @@ export default function PriceRanking({
           <Box sx={{ display: "grid", gap: 1, [upDesktop]: { display: "none" } }}>
             {visible.map((row) => {
               const line = lines.get(row.id);
-              const open = openDetail === row.id;
               return (
                 <Card key={row.id} variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)" }}>
                   <CardContent sx={{ display: "grid", gap: 0.75, p: 1.25 }}>
                     <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1 }}>
                       <Box sx={{ minWidth: 0 }}>
                         <Typography sx={{ fontWeight: 800, fontSize: "0.95rem", lineHeight: 1.25, overflowWrap: "anywhere" }}>{row.product}</Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>
-                          {names.get(row.inventoryId) || "Inventario"} · {invoiceLabel(row.orderCode)}
-                        </Typography>
+                        {line ? (
+                          <Typography sx={{ display: "inline-flex", maxWidth: "100%", mt: 0.4, px: 0.9, py: 0.2, borderRadius: "999px", bgcolor: "#FEF4D6", color: "#8D4E00", fontWeight: 700, fontSize: "0.75rem", lineHeight: 1.35 }}>
+                            Costo {money(line.costPerPack)}
+                          </Typography>
+                        ) : null}
                       </Box>
                       <Box sx={{ textAlign: "right", flexShrink: 0 }}>
                         <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "1.05rem", lineHeight: 1.15 }}>{money(row.price)}</Typography>
@@ -358,16 +338,11 @@ export default function PriceRanking({
                         Editar
                       </Button>
                       {line ? (
-                        <Button size="small" variant="outlined" onClick={() => setOpenDetail(open ? null : row.id)} aria-expanded={open} sx={{ minHeight: 36 }}>
-                          {open ? "Ocultar" : "Ver detalle"}
+                        <Button size="small" variant="outlined" onClick={() => setDetailId(row.id)} sx={{ minHeight: 36 }}>
+                          Ver detalle
                         </Button>
                       ) : null}
                     </Box>
-                    {line ? (
-                      <Collapse in={open}>
-                        <PriceFacts line={line} row={row} />
-                      </Collapse>
-                    ) : null}
                   </CardContent>
                 </Card>
               );
@@ -385,34 +360,24 @@ export default function PriceRanking({
               <TableBody>
                 {visible.map((row) => {
                   const line = lines.get(row.id);
-                  const open = openDetail === row.id;
                   return (
-                    <Fragment key={row.id}>
-                      <TableRow hover>
-                        <TableCell sx={{ overflowWrap: "anywhere" }}>{names.get(row.inventoryId) || "Inventario"}</TableCell>
-                        <TableCell sx={{ whiteSpace: "nowrap" }}>{invoiceLabel(row.orderCode)}</TableCell>
-                        <TableCell sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>{row.product}</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 800, color: "#1A56DB", whiteSpace: "nowrap", fontSize: "1rem" }}>{money(row.price)}</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 700, color: "#0D652D", whiteSpace: "nowrap" }}>{percent(row.margin)}</TableCell>
-                        <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                          {line ? (
-                            <Button size="small" onClick={() => setOpenDetail(open ? null : row.id)} sx={{ minHeight: 40, mr: 0.5 }}>
-                              {open ? "Ocultar" : "Detalle"}
-                            </Button>
-                          ) : null}
-                          <Button size="small" variant="contained" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(row)} aria-label={`Editar ${row.product} de ${row.origin}`} sx={{ minHeight: 40 }}>
-                            Editar
+                    <TableRow key={row.id} hover>
+                      <TableCell sx={{ overflowWrap: "anywhere" }}>{names.get(row.inventoryId) || "Inventario"}</TableCell>
+                      <TableCell sx={{ whiteSpace: "nowrap" }}>{invoiceLabel(row.orderCode)}</TableCell>
+                      <TableCell sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>{row.product}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 800, color: "#1A56DB", whiteSpace: "nowrap", fontSize: "1rem" }}>{money(row.price)}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, color: "#0D652D", whiteSpace: "nowrap" }}>{percent(row.margin)}</TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                        {line ? (
+                          <Button size="small" onClick={() => setDetailId(row.id)} sx={{ minHeight: 40, mr: 0.5 }}>
+                            Detalle
                           </Button>
-                        </TableCell>
-                      </TableRow>
-                      {open && line ? (
-                        <TableRow key={`${row.id}-detalle`}>
-                          <TableCell colSpan={6} sx={{ bgcolor: "#F8F9FB" }}>
-                            <PriceFacts line={line} row={row} />
-                          </TableCell>
-                        </TableRow>
-                      ) : null}
-                    </Fragment>
+                        ) : null}
+                        <Button size="small" variant="contained" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(row)} aria-label={`Editar ${row.product} de ${row.origin}`} sx={{ minHeight: 40 }}>
+                          Editar
+                        </Button>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
               </TableBody>
@@ -421,74 +386,38 @@ export default function PriceRanking({
         </>
       )}
 
-      <Dialog open={Boolean(editing && draft)} onClose={closeEdit} fullScreen={narrow} fullWidth maxWidth="sm">
-        <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Editar precio</DialogTitle>
-        <DialogContent sx={dialogFormSx}>
-          {editing && draft && preview ? (
-            <>
-              <Box>
-                <Typography variant="subtitle1">{editing.product}</Typography>
-                <Typography variant="body2" color="text.secondary">{editing.origin}</Typography>
-              </Box>
-              <Box sx={{ display: "grid", gap: 0.5, p: 1.5, borderRadius: "12px", bgcolor: "#F8F9FA" }}>
-                <Typography variant="caption" color="text.secondary">Valores actuales</Typography>
-                <Typography variant="body2">Precio de venta {money(preview.before.appliedPrice)}</Typography>
-                <Typography variant="body2">Método {editing.priceMethod}</Typography>
-                <Typography variant="body2">
-                  {editing.priceMethod === "MARGEN"
-                    ? `Margen objetivo ${entryLabel("MARGEN", null, editing.targetMarginPercent, editing.settingsMarginPercent)}`
-                    : `Precio manual ${entryLabel("PRECIO", editing.manualPrice, null, editing.settingsMarginPercent)}`}
-                </Typography>
-                <Typography variant="body2">Margen real {percent(preview.before.realMarginPercent)}</Typography>
-              </Box>
-              <TextField
-                select
-                label="Método de cálculo"
-                value={draft.priceMethod}
-                onChange={(event) => setDraft({ ...draft, priceMethod: event.target.value as PriceMethod })}
-              >
-                <MenuItem value="MARGEN">MARGEN</MenuItem>
-                <MenuItem value="PRECIO">PRECIO</MenuItem>
-              </TextField>
-              {draft.priceMethod === "MARGEN" ? (
-                <NumericField
-                  label="Margen objetivo"
-                  kind="optionalMargin"
-                  value={draft.targetMarginPercent}
-                  adornment="%"
-                  placeholder="Usa el general"
-                  helperText={draft.targetMarginPercent == null ? `Margen general de Configuración: ${percent(editing.settingsMarginPercent, 0)}` : "Este margen reemplaza al general."}
-                  onCommit={(value) => setDraft((current) => current ? { ...current, targetMarginPercent: value } : current)}
-                />
-              ) : (
-                <NumericField
-                  label="Precio manual"
-                  kind="manualPrice"
-                  value={draft.manualPrice}
-                  adornment="C$"
-                  adornmentPosition="start"
-                  helperText="Debe ser mayor que cero."
-                  onCommit={(value) => setDraft((current) => current ? { ...current, manualPrice: value } : current)}
-                />
-              )}
-              {draftError ? <Alert severity="warning">{draftError}</Alert> : (
-                <Box sx={{ display: "grid", gap: 0.5, p: 1.5, borderRadius: "12px", bgcolor: "#E8F0FE" }}>
-                  <Typography variant="caption" color="text.secondary">Resultado con el motor actual</Typography>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>Nuevo precio {money(preview.after.appliedPrice)}</Typography>
-                  <Typography variant="body2">Margen real {percent(preview.after.realMarginPercent)}</Typography>
-                </Box>
-              )}
-              {error ? <Alert severity="error">{error}</Alert> : null}
-            </>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={dialogActionsSx}>
-          <Button onClick={closeEdit} disabled={saving}>Cancelar</Button>
-          <Button variant="contained" disabled={Boolean(draftError) || unchanged || saving} onClick={() => setConfirming(true)}>
-            Guardar
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <PriceExportDialog
+        open={exportOpen}
+        narrow={narrow}
+        exporting={exporting}
+        productCount={visible.length}
+        onClose={() => setExportOpen(false)}
+        onExport={(selected) => void exportCatalog(selected)}
+      />
+      <PriceDetailDialog
+        open={Boolean(detailRow && detailLine)}
+        narrow={narrow}
+        productName={detailRow?.product || ""}
+        inventoryName={detailRow ? names.get(detailRow.inventoryId) || "Inventario" : ""}
+        line={detailLine}
+        manualCommission={detailCommission}
+        onClose={() => setDetailId(null)}
+      />
+      <PriceEditDialog
+        open={Boolean(editing && draft)}
+        narrow={narrow}
+        inventoryName={editing ? names.get(editing.inventoryId) || "Inventario" : ""}
+        row={editing}
+        draft={draft}
+        preview={preview}
+        draftError={draftError}
+        error={error}
+        unchanged={unchanged}
+        saving={saving}
+        onClose={closeEdit}
+        onDraft={setDraft}
+        onSave={() => setConfirming(true)}
+      />
 
       <Dialog open={confirming} onClose={() => !saving && setConfirming(false)} fullScreen={narrow} fullWidth maxWidth="xs">
         <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Confirmar cambio de precio</DialogTitle>
