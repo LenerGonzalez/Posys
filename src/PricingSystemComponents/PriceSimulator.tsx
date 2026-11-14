@@ -22,7 +22,7 @@ import { portfolioRates, uniqueInventories } from "./profitability";
 import PricesList from "./PricesList";
 import { useNarrowScreen } from "./screen";
 import Settings from "./Settings";
-import type { ComputedTotals, PricingInventory, ProductInput } from "./types";
+import { patchProductKeepingUnit, type ComputedTotals, type PricingInventory, type ProductInput } from "./types";
 
 function copyInventory(item: PricingInventory): PricingInventory {
   return {
@@ -172,7 +172,7 @@ export default function PriceSimulator({
   const patchProduct = (id: string, patch: Partial<ProductInput>) => {
     setDraft((current) => current ? {
       ...current,
-      products: current.products.map((product) => product.id === id ? { ...product, ...patch } : product),
+      products: current.products.map((product) => product.id === id ? patchProductKeepingUnit(product, patch) : product),
     } : current);
   };
 

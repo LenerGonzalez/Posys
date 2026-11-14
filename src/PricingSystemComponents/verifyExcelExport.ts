@@ -1,5 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as XLSX from "xlsx";
+import { invoiceTemplateBytes, parseInvoiceWorkbook } from "./excelPricing";
+import { withStoredQuantity } from "./quantity";
 import { buildPriceRows, EMPTY_PRICE_FILTERS, filterPriceRows } from "./priceCatalog";
 import { computeInventory } from "./pricingEngine";
 import {
@@ -28,6 +30,7 @@ function product(partial: Partial<ProductInput>): ProductInput {
     manualPrice: partial.manualPrice === undefined ? 2000 : partial.manualPrice,
     targetMarginPercent: partial.targetMarginPercent ?? null,
     vendorSharePercent: partial.vendorSharePercent ?? null,
+    ...(partial.unit ? { unit: partial.unit } : {}),
   };
 }
 
@@ -119,29 +122,31 @@ check(String(config.get("Nombre del método")?.v).includes("Opción 2"), "nombre
 
 const om = book.Sheets["OM - Productos"];
 const omHeaders = headers(om);
-check(omHeaders.slice(0, 5).join("|") === "ID del producto|Orden o factura|Producto|Costo por paquete|Paquetes comprados", omHeaders.join("|"));
-check(om["D2"]?.v === 1000 && om["D2"]?.t === "n", "costo original");
-check(om["E2"]?.v === 4 && om["E2"]?.t === "n", "paquetes comprados");
-check(om["D3"]?.v === 800 && om["E3"]?.v === 2, "segunda compra");
+check(omHeaders.slice(0, 6).join("|") === "ID del producto|Orden o factura|Producto|Unidad de medida|Costo por paquete|Cantidad", omHeaders.join("|"));
+check(om["D2"]?.v === "Paquete", "unidad histórica");
+check(om["E2"]?.v === 1000 && om["E2"]?.t === "n", "costo original");
+check(om["F2"]?.v === 4 && om["F2"]?.t === "n", "cantidad comprada");
+check(om["E3"]?.v === 800 && om["F3"]?.v === 2, "segunda compra");
 check(om["!autofilter"] != null, "filtro OM");
 
 const priceHeaders = headers(book.Sheets.Precios);
 check(
-  priceHeaders.slice(0, 12).join("|") === "Producto|Paquetes|Costo por paquete|Logística por paquete|Precio de costo|Costo + logística total|Método de cálculo|Precio manual|Margen objetivo|Precio de venta|Margen real|Venta total",
+  priceHeaders.slice(0, 13).join("|") === "Producto|Unidad de medida|Cantidad|Costo por paquete|Logística por paquete|Precio de costo|Costo + logística total|Método de cálculo|Precio manual|Margen objetivo|Precio de venta|Margen real|Venta total",
   priceHeaders.join("|"),
 );
 const riceLine = computed.lines.find((line) => line.id === "p1");
 const beansLine = computed.lines.find((line) => line.id === "p2");
 check(!!riceLine && !!beansLine, "líneas calculadas");
 if (riceLine && beansLine) {
-  check(book.Sheets.Precios.B2?.v === riceLine.packages, "paquetes de precios");
-  check(book.Sheets.Precios.F2?.v === riceLine.purchaseSubtotal + riceLine.logisticsAllocated, "costo más logística");
-  check(book.Sheets.Precios.J2?.v === riceLine.appliedPrice, "precio de venta");
-  check(book.Sheets.Precios.L2?.v === riceLine.salesTotal, "venta total");
-  check(book.Sheets.Precios.H2?.v === 2000, "precio manual");
-  check(book.Sheets.Precios.H3 == null, "precio manual vacío");
-  check(book.Sheets.Precios.I3?.v === beansLine.targetMarginPercent / 100, "margen del producto");
-  check(book.Sheets.Precios.F2?.t === "n" && book.Sheets.Precios.K2?.t === "n", "tipos numéricos");
+  check(book.Sheets.Precios.B2?.v === "Paquete", "unidad de precios");
+  check(book.Sheets.Precios.C2?.v === riceLine.packages, "cantidad de precios");
+  check(book.Sheets.Precios.G2?.v === riceLine.purchaseSubtotal + riceLine.logisticsAllocated, "costo más logística");
+  check(book.Sheets.Precios.K2?.v === riceLine.appliedPrice, "precio de venta");
+  check(book.Sheets.Precios.M2?.v === riceLine.salesTotal, "venta total");
+  check(book.Sheets.Precios.I2?.v === 2000, "precio manual");
+  check(book.Sheets.Precios.I3 == null, "precio manual vacío");
+  check(book.Sheets.Precios.J3?.v === beansLine.targetMarginPercent / 100, "margen del producto");
+  check(book.Sheets.Precios.G2?.t === "n" && book.Sheets.Precios.L2?.t === "n", "tipos numéricos");
 }
 
 const summary = pairs(book.Sheets.Resumen);
@@ -157,10 +162,12 @@ check(summary.get("Comisión del vendedor")?.t === "n", "comisión numérica");
 
 const utilities = book.Sheets.Utilidades;
 check(String(utilities.A8?.v) === "Producto", "encabezado de utilidades");
-check(utilities.H9?.v === riceLine?.vendorProfit, "vendedor del producto");
-check(utilities.J9?.v === riceLine?.investorNet, "neta del producto");
-check(utilities.C9 == null, "comisión propia vacía");
-check(utilities.D9?.v === riceLine?.vendorSharePercent / 100, "comisión aplicada");
+check(utilities.B9?.v === "Paquete", "unidad en utilidades");
+check(utilities.C9?.v === riceLine?.packages, "cantidad en utilidades");
+check(utilities.I9?.v === riceLine?.vendorProfit, "vendedor del producto");
+check(utilities.K9?.v === riceLine?.investorNet, "neta del producto");
+check(utilities.D9 == null, "comisión propia vacía");
+check(riceLine != null && utilities.E9?.v === riceLine.vendorSharePercent / 100, "comisión aplicada");
 check(utilities["!autofilter"] != null, "filtro de utilidades");
 
 const method3Inventory = inventory({
@@ -219,7 +226,7 @@ const entries: PriceCatalogEntry[] = filtered.map((row) => {
 const catalog = reopen(buildPriceCatalogWorkbook(entries));
 const catalogHeaders = headers(catalog.Sheets.Precios);
 check(catalog.SheetNames[0] === "Precios", "hoja de catálogo");
-check(catalogHeaders.join("|") === "Inventario|Factura|Producto|Paquetes|Costo por paquete|Logística por paquete|Precio de costo|Costo + logística total|Método de cálculo|Precio manual|Margen objetivo|Precio de venta|Margen real|Venta total|Utilidad bruta|Ganancia Vendedor|Ganancia inversionista", catalogHeaders.join("|"));
+check(catalogHeaders.join("|") === "Inventario|Factura|Producto|Unidad de medida|Cantidad|Costo por paquete|Logística por paquete|Precio de costo|Costo + logística total|Método de cálculo|Precio manual|Margen objetivo|Precio de venta|Margen real|Venta total|Utilidad bruta|Ganancia Vendedor|Ganancia inversionista", catalogHeaders.join("|"));
 check(catalog.Sheets.Precios.A2?.v === "Noviembre", "inventario del catálogo");
 check(catalog.Sheets.Precios.B2?.v === "0000101004", "factura del catálogo");
 check(catalog.Sheets.Precios.C2?.v === "Frijol", "solo el filtrado");
@@ -278,6 +285,94 @@ const saved = XLSX.read(`${sampleDir}/${inventoryWorkbookName(november)}`, { typ
 check(saved.SheetNames.includes("Resumen") && saved.Sheets.Resumen.B2?.t === "n", "el archivo guardado abre y conserva números");
 const savedPrices = XLSX.read(`${sampleDir}/Precios_Gestion_Comercial_2026-11-07.xlsx`, { type: "file" });
 check(savedPrices.SheetNames[0] === "Precios" && savedPrices.Sheets.Precios.A2?.v === "Noviembre", "el catálogo guardado abre");
+
+const wholePounds = product({ id: "lb-whole", name: "Azúcar entera", packages: 20, unit: "lb" });
+const decimalPounds = withStoredQuantity(product({ id: "lb-decimal", name: "Azúcar decimal", unit: "lb" }), 1500);
+const precisePounds = withStoredQuantity(product({ id: "lb-precise", name: "Azúcar precisa", unit: "lb" }), 125500);
+const each = product({ id: "each", name: "Huevo", packages: 10, unit: "unit" });
+const historicalPack = product({ id: "hist", name: "Arroz histórico", packages: 20 });
+check(Boolean(decimalPounds && precisePounds), "no se prepararon las libras decimales");
+if (decimalPounds && precisePounds) {
+  const mixed = inventory({
+    products: [historicalPack, wholePounds, decimalPounds, precisePounds, each],
+  });
+  const mixedBook = reopen(buildInventoryWorkbook(mixed, computeInventory(mixed)));
+  const mixedOm = mixedBook.Sheets["OM - Productos"];
+  const mixedHeaders = headers(mixedOm);
+  const unitCol = mixedHeaders.indexOf("Unidad de medida");
+  const quantityCol = mixedHeaders.indexOf("Cantidad");
+  const read = (row: number, col: number) => mixedOm[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+  check(unitCol >= 0 && quantityCol >= 0, "faltan columnas de unidad o cantidad");
+  const exported = [1, 2, 3, 4, 5].map((row) => `${read(row, 0)}|${read(row, unitCol)}|${read(row, quantityCol)}`);
+  check(exported.join(" || ") === [
+    "hist|Paquete|20",
+    "lb-whole|Libra (lb)|20",
+    "lb-decimal|Libra (lb)|1.5",
+    "lb-precise|Libra (lb)|125.5",
+    "each|Unidad|10",
+  ].join(" || "), `exportación de cantidades ${exported.join(" || ")}`);
+  check(!JSON.stringify(exported).includes("1500") && !JSON.stringify(exported).includes("125500"), "se exportaron milésimas");
+}
+
+function invoiceFile(rows: (string | number)[][]): ArrayBuffer {
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  const file = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(file, sheet, "Factura");
+  const bytes = XLSX.write(file, { bookType: "xlsx", type: "buffer" }) as Buffer;
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+const historicalInvoice = parseInvoiceWorkbook(invoiceFile([
+  ["Orden", "Producto", "Precio costo / paquete (C$)", "Cantidad de paquetes"],
+  ["0000101004", "Arroz histórico", 67.5, 20],
+]));
+const historicalProduct = historicalInvoice.products[0];
+check(historicalInvoice.issues.length === 0, `la factura histórica tuvo observaciones: ${historicalInvoice.issues.map((issue) => issue.message).join("; ")}`);
+check(historicalProduct?.packages === 20 && historicalProduct.quantityMilli == null && historicalProduct.unit == null, "un archivo sin unidad no quedó como paquete");
+const decimalInvoice = parseInvoiceWorkbook(invoiceFile([
+  ["Orden", "Producto", "Precio costo / paquete (C$)", "Cantidad de paquetes", "Unidad de medida"],
+  ["0000101004", "Libra", 10, 1.5, "Libra (lb)"],
+  ["0000101004", "Docena", 10, 10, "Unidad"],
+  ["0000101004", "Caja", 10, 4, "Paquete"],
+]));
+check(decimalInvoice.issues.length === 0, `la factura con unidades tuvo observaciones: ${decimalInvoice.issues.map((issue) => issue.message).join("; ")}`);
+check(decimalInvoice.products[0]?.quantityMilli === 1500 && decimalInvoice.products[0]?.packages == null, "1.5 lb no se importó en milésimas");
+check(decimalInvoice.products[1]?.packages === 10 && decimalInvoice.products[1]?.unit === "unit", "las unidades no se importaron enteras");
+check(decimalInvoice.products[2]?.packages === 4 && decimalInvoice.products[2]?.unit === "package", "el paquete explícito no se importó");
+
+const template = invoiceTemplateBytes();
+writeFileSync(`${sampleDir}/plantilla-factura-inventario.xlsx`, template);
+const templateXml = new TextDecoder().decode(template);
+check(templateXml.includes('type="list"') && templateXml.includes('allowBlank="1"') && templateXml.includes('<formula1>"Paquete,Libra,Unidad"</formula1>'), "la plantilla no tiene la lista Paquete, Libra, Unidad");
+check(templateXml.includes("Si la celda queda vacía, se interpreta como Paquete."), "la plantilla no indica los valores permitidos");
+const templateBook = XLSX.read(template, { type: "array" });
+check(templateBook.SheetNames[0] === "Factura" && templateBook.SheetNames.includes("Ejemplos"), `hojas de la plantilla: ${templateBook.SheetNames.join(", ")}`);
+const templateRows = XLSX.utils.sheet_to_json<(string | number)[]>(templateBook.Sheets.Factura, { header: 1, defval: "" });
+const templateHeaders = templateRows.find((row) => row.some((cell) => String(cell).trim().toLowerCase() === "producto")) ?? [];
+check(templateHeaders.join(" | ") === "Orden | Producto | Costo unitario (C$) | Cantidad | Unidad de medida", `encabezados de la plantilla: ${templateHeaders.join(" | ")}`);
+const exampleRows = XLSX.utils.sheet_to_json<(string | number)[]>(templateBook.Sheets.Ejemplos, { header: 1, defval: "" });
+check(exampleRows.slice(1).map((row) => `${row[4]}:${row[3]}`).join(" | ") === "Paquete:20 | Libra:1.5 | Unidad:30", "la hoja de ejemplos no muestra las tres unidades");
+const blankTemplate = parseInvoiceWorkbook(template.buffer.slice(template.byteOffset, template.byteOffset + template.byteLength) as ArrayBuffer);
+check(blankTemplate.products.length === 0 && blankTemplate.issues.every((issue) => issue.message === "La factura no tiene productos."), `la indicación de la plantilla se importó como factura: ${blankTemplate.issues.map((issue) => issue.message).join("; ")}`);
+
+const currentInvoice = parseInvoiceWorkbook(invoiceFile([
+  ["Orden", "Producto", "Costo unitario (C$)", "Cantidad", "Unidad de medida"],
+  ["0000101004", "Caja", 10, 4, "Paquete"],
+  ["0000101004", "Azúcar", 10, 1.5, "Libra"],
+  ["0000101004", "Pieza", 10, 8, "Unidad"],
+  ["0000101004", "Sin unidad", 10, 5, ""],
+]));
+check(currentInvoice.issues.length === 0, `la factura nueva tuvo observaciones: ${currentInvoice.issues.map((issue) => issue.message).join("; ")}`);
+check(currentInvoice.products[0]?.packages === 4 && currentInvoice.products[0]?.unit === "package" && currentInvoice.products[0]?.quantityMilli == null, "Paquete nuevo no se importó entero");
+check(currentInvoice.products[1]?.quantityMilli === 1500 && currentInvoice.products[1]?.packages == null && currentInvoice.products[1]?.unit === "lb", "Libra decimal no se guardó en quantityMilli");
+check(currentInvoice.products[2]?.packages === 8 && currentInvoice.products[2]?.unit === "unit" && currentInvoice.products[2]?.quantityMilli == null, "Unidad nueva no se importó entera");
+check(currentInvoice.products[3]?.packages === 5 && currentInvoice.products[3]?.quantityMilli == null && currentInvoice.products[3]?.unit == null, "una unidad vacía no se interpretó como Paquete");
+const rejected = parseInvoiceWorkbook(invoiceFile([
+  ["Orden", "Producto", "Costo unitario (C$)", "Cantidad", "Unidad de medida"],
+  ["0000101004", "Caja decimal", 10, 1.5, "Paquete"],
+  ["0000101004", "Pieza decimal", 10, 1.5, "Unidad"],
+]));
+check(rejected.products.length === 0 && rejected.issues.length === 2, "Paquete y Unidad aceptaron decimales");
 
 if (failures.length) {
   console.error(failures.join("\n"));

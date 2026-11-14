@@ -17,6 +17,8 @@ import {
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { money, percent, qty } from "./format";
+import MeasureFilterField from "./MeasureFilterField";
+import { activeMeasureFilter } from "./measureFilter";
 import { invoiceOptions, scopeInventories, uniqueInventories } from "./profitability";
 import {
   buildProductRanking,
@@ -26,7 +28,7 @@ import {
   type ProductRankFilters,
   type ProductRankSort,
 } from "./productRanking";
-import type { PricingInventory } from "./types";
+import { eachLabel, quantityNoun, type PricingInventory } from "./types";
 
 const STATUS_STYLE: Record<ProductProfitStatus, { bg: string; color: string }> = {
   rentable: { bg: "#E6F4EA", color: "#0D652D" },
@@ -52,6 +54,7 @@ export default function ProductProfitability({
   const unique = useMemo(() => uniqueInventories(inventories), [inventories]);
   const invoices = useMemo(() => invoiceOptions(inventories, filters), [inventories, filters]);
   const invoice = invoices.includes(filters.invoice) ? filters.invoice : "";
+  const measure = activeMeasureFilter(filters.unit);
   const report = useMemo(
     () => buildProductRanking(inventories, { ...filters, invoice }),
     [inventories, filters, invoice],
@@ -74,7 +77,7 @@ export default function ProductProfitability({
       </Box>
 
       <Card>
-        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", lg: "repeat(3, 1fr)" } }}>
+        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", lg: "repeat(4, 1fr)" } }}>
           <TextField
             label="Desde"
             type="date"
@@ -102,6 +105,7 @@ export default function ProductProfitability({
               </MenuItem>
             ))}
           </TextField>
+          <MeasureFilterField value={measure} onChange={(unit) => patch({ unit, invoice: "" })} />
           <TextField select label="Factura" value={invoice} onChange={(event) => patch({ invoice: event.target.value })}>
             <MenuItem value="">Todas</MenuItem>
             {invoices.map((code) => (
@@ -161,7 +165,7 @@ export default function ProductProfitability({
               <MenuItem value="margin_desc">Mayor margen real</MenuItem>
               <MenuItem value="margin_asc">Menor margen real</MenuItem>
               <MenuItem value="sales_desc">Mayor venta</MenuItem>
-              <MenuItem value="packages_desc">Mayor cantidad de paquetes</MenuItem>
+              <MenuItem value="packages_desc">Mayor cantidad</MenuItem>
             </TextField>
           </Box>
           {!report.rows.length ? (
@@ -174,10 +178,10 @@ export default function ProductProfitability({
                     <TableCell>Producto</TableCell>
                     <TableCell>Inventario</TableCell>
                     <TableCell>Factura</TableCell>
-                    <TableCell align="right">Paquetes</TableCell>
+                    <TableCell align="right">Cantidad</TableCell>
                     <TableCell align="right">Costo total de compra</TableCell>
                     <TableCell align="right">Logística asignada</TableCell>
-                    <TableCell align="right">Precio de venta por paquete</TableCell>
+                    <TableCell align="right">{measure === "all" ? "Precio de venta" : `Precio de venta por ${eachLabel(measure)}`}</TableCell>
                     <TableCell align="right">Venta total</TableCell>
                     <TableCell align="right">Margen real</TableCell>
                     <TableCell align="right">Comisión vendedor</TableCell>
@@ -193,7 +197,7 @@ export default function ProductProfitability({
                         <TableCell>{row.productName}</TableCell>
                         <TableCell>{row.inventoryName}</TableCell>
                         <TableCell>{row.invoice || "Sin factura"}</TableCell>
-                        <TableCell align="right">{qty(row.packages)}</TableCell>
+                        <TableCell align="right">{qty(row.packages)} {quantityNoun(row.unit)}</TableCell>
                         <TableCell align="right">{money(row.purchaseSubtotal)}</TableCell>
                         <TableCell align="right">{money(row.logisticsAllocated)}</TableCell>
                         <TableCell align="right">{money(row.appliedPrice)}</TableCell>

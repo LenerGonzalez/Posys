@@ -23,6 +23,8 @@ import {
   YAxis,
 } from "recharts";
 import { money, percent, qty } from "./format";
+import MeasureFilterField from "./MeasureFilterField";
+import { activeMeasureFilter, measureQuantityLabel } from "./measureFilter";
 import { computeInventory } from "./pricingEngine";
 import {
   buildProfitability,
@@ -426,12 +428,12 @@ export default function ProfitabilityDashboard({
           sx={{ px: 1.5, py: 1, textAlign: "left", cursor: "pointer", borderRadius: "12px", bgcolor: "#E8F0FE", color: "#1A56DB", boxShadow: "none", width: { xs: "100%", sm: "auto" } }}
         >
           <Typography sx={{ fontWeight: 800, color: "#1A56DB" }}>Ventas y Comisiones</Typography>
-          <Typography variant="caption" sx={{ color: "#1A56DB" }}>Paquetes vendidos y ganancias reales</Typography>
+          <Typography variant="caption" sx={{ color: "#1A56DB" }}>Cantidades vendidas y ganancias reales</Typography>
         </Card>
       </Box>
 
       <Card>
-        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" } }}>
+        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", [upDesktop]: "repeat(5, 1fr)" } }}>
           <TextField
             label="Desde"
             type="date"
@@ -459,6 +461,7 @@ export default function ProfitabilityDashboard({
               </MenuItem>
             ))}
           </TextField>
+          <MeasureFilterField value={activeMeasureFilter(filters.unit)} onChange={(unit) => patch({ unit, invoice: "" })} />
           <TextField
             select
             label="Factura"
@@ -477,8 +480,8 @@ export default function ProfitabilityDashboard({
 
       <Alert severity="info">
         Los indicadores usan el cálculo actual del motor. La evolución usa los guardados del historial y puede diferir si el inventario cambió después de guardarse.
-        {filters.invoice
-          ? " Con una factura seleccionada, la logística es solo la parte ya asignada a sus productos."
+        {filters.invoice || report.quantityPartial
+          ? " Si el filtro deja fuera parte del inventario, la logística es solo la parte que el motor ya asignó a los productos visibles."
           : ""}
       </Alert>
 
@@ -488,12 +491,16 @@ export default function ProfitabilityDashboard({
 
       <KpiGroup
         title="Volumen de operación"
-        help="Cuánto se está moviendo: inventarios, productos, paquetes y el dinero invertido en compras."
+        help="Cuánto se está moviendo: inventarios, productos, cantidades de la unidad elegida y el dinero invertido en compras."
         columns={{ xs: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" }}
       >
         <Kpi label="Inventarios" value={qty(report.inventoryCount)} help="Cantidad de inventarios del filtro. Un mismo documento no se cuenta dos veces." />
         <Kpi label="Productos" value={qty(report.productCount)} help="Productos incluidos en el cálculo actual de esos inventarios." />
-        <Kpi label="Paquetes" value={qty(report.packages)} help="Suma de los paquetes de los productos incluidos." />
+        <Kpi
+          label={measureQuantityLabel(activeMeasureFilter(filters.unit))}
+          value={activeMeasureFilter(filters.unit) === "all" ? report.quantityLabel : qty(report.quantityAmount)}
+          help={activeMeasureFilter(filters.unit) === "all" ? "Cada unidad conserva su propio total. No se suman entre sí." : "Suma de las cantidades de la unidad seleccionada. Un producto sin unidad cuenta como paquete."}
+        />
         <Kpi label="Inversión en compras" value={money(report.purchaseSubtotal)} help="Suma del costo de compra de los productos incluidos." />
       </KpiGroup>
 
@@ -577,11 +584,16 @@ export default function ProfitabilityDashboard({
             help="Cada punto es un guardado real, con su fecha y hora. El último punto de cada inventario usa el mismo cálculo actual que la ganancia neta de los indicadores. Los puntos anteriores conservan el valor guardado en ese momento."
           />
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-            {report.historyAvailable
-              ? "El último punto usa la misma ganancia neta que los indicadores. Los puntos anteriores son el valor guardado en ese momento."
-              : "El historial se guardó por inventario completo. Elige todas las facturas para ver este gráfico."}
+            {!report.historyAvailable
+              ? "El historial se guardó por inventario completo. Elige todas las facturas para ver este gráfico."
+              : report.historyPartial && evolutionPoints === 0
+                ? "El historial se guardó por inventario completo y no separa la unidad. Elige Todos para ver este gráfico."
+                : "El último punto usa la misma ganancia neta que los indicadores. Los puntos anteriores son el valor guardado en ese momento."}
+            {report.historyAvailable && report.historyPartial && evolutionPoints > 0
+              ? " Los inventarios que mezclan otra unidad no entran en este gráfico."
+              : ""}
           </Typography>
-          {report.historyAvailable && evolutionPoints === 0 ? (
+          {report.historyAvailable && evolutionPoints === 0 && !report.historyPartial ? (
             <Alert severity="info">Todavía no hay guardados en este periodo.</Alert>
           ) : null}
           {report.historyAvailable && evolutionPoints === 1 ? (

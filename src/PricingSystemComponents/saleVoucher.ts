@@ -1,7 +1,9 @@
 import jsPDF from "jspdf";
 import { fromCents, toCents } from "./commissionCommit";
 import { dateTimeLabel, money, qty } from "./format";
-import type { PricingSale, SaleLineSnapshot } from "./saleCommit";
+import { formatQuantityTotals } from "./quantity";
+import { saleLineAmount, type PricingSale, type SaleLineSnapshot } from "./saleCommit";
+import { eachLabel, productMeasureUnit, quantityFieldLabel } from "./types";
 
 /** Explica la diferencia de redondeo sin cambiar el total guardado en la venta. */
 export function vendorCommissionNote(total: number, lineVendorProfits: number[]): string | null {
@@ -59,12 +61,12 @@ function drawLine(doc: jsPDF, line: SaleLineSnapshot, y: number): number {
   panel(doc, 18, next + 18, 84, 14, [255, 255, 255]);
   panel(doc, 106, next + 18, 86, 14, [255, 255, 255]);
   doc.setFontSize(8);
-  doc.text("Paquetes", 22, next + 23.5);
-  doc.text("Precio por paquete", 110, next + 23.5);
+  doc.text(quantityFieldLabel(productMeasureUnit(line)), 22, next + 23.5);
+  doc.text(`Precio por ${eachLabel(productMeasureUnit(line))}`, 110, next + 23.5);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(26, 28, 30);
-  doc.text(qty(line.quantity), 22, next + 29);
+  doc.text(qty(saleLineAmount(line)), 22, next + 29);
   doc.text(voucherPrice(line.appliedPrice), 110, next + 29);
   return next + 40;
 }
@@ -114,7 +116,7 @@ export function buildSaleVoucher(sale: PricingSale): jsPDF {
   doc.text(money(sale.salesTotal), 192, y + 12, { align: "right" });
 
   const metrics: Array<[string, string, [number, number, number], [number, number, number]]> = [
-    ["Total de paquetes", qty(sale.packageCount), [248, 249, 251], [26, 28, 30]],
+    ["Cantidad", formatQuantityTotals(sale.lines), [248, 249, 251], [26, 28, 30]],
     ["Utilidad bruta", money(sale.grossProfit), [248, 249, 251], [26, 28, 30]],
     ["Ganancia del vendedor", money(sale.vendorProfit), [247, 244, 252], [109, 75, 161]],
     ["Ganancia del inversionista", money(sale.investorNet), [255, 247, 240], [192, 90, 18]],

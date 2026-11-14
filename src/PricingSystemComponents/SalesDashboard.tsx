@@ -26,6 +26,9 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { listCommissionActivity } from "./firestorePayments";
 import { listPricingSales, voidSale } from "./firestoreSales";
 import { dateTimeLabel, money, qty } from "./format";
+import { formatQuantityTotals } from "./quantity";
+import MeasureFilterField from "./MeasureFilterField";
+import { activeMeasureFilter, matchesMeasureFilter } from "./measureFilter";
 import { saleProducts } from "./saleCommit";
 import {
   buildSalesDashboard,
@@ -38,7 +41,23 @@ import type { PricingSale } from "./saleCommit";
 import DashboardProductSection from "./DashboardProductSection";
 import { canVoidSale, rolesFromProfile } from "./saleVoid";
 import { upDesktop } from "./screen";
-import type { PricingInventory } from "./types";
+import { quantityNoun, type PricingInventory } from "./types";
+
+function soldQuantityLabel(report: SalesDashboardReport, filter: ReturnType<typeof activeMeasureFilter>): string {
+  if (report.soldByUnit.length) {
+    return formatQuantityTotals(report.soldByUnit.map((item) => ({ unit: item.unit, quantity: item.amount })));
+  }
+  if (filter !== "all") return `${qty(0)} ${quantityNoun(filter)}`;
+  if (!report.availableByUnit.length) return "0";
+  return report.availableByUnit.map((item) => `${qty(0)} ${quantityNoun(item.unit)}`).join(" · ");
+}
+
+function perPackageCaption(report: SalesDashboardReport, filter: ReturnType<typeof activeMeasureFilter>): string {
+  if (filter === "lb" || filter === "unit") return "Solo aplica cuando la unidad es Paquete";
+  if (report.soldByUnit.some((item) => item.unit !== "package")) return "Solo cuando el período tiene únicamente paquetes";
+  if (report.investorPerPackage == null) return "No hay paquetes vendidos en el período";
+  return "De las ventas en paquete del período";
+}
 
 function axisMoney(value: number): string {
   const abs = Math.abs(value);
@@ -152,6 +171,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
       productId: product.productId,
       productName: product.productName,
       invoiceNumber: product.invoiceNumber,
+      unit: product.unit,
       initialPackages: product.initialPackages,
     })),
     [inventories],
@@ -173,23 +193,25 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
     const options = new Map<string, string>();
     for (const product of catalog) {
       if (filters.inventoryId && product.inventoryId !== filters.inventoryId) continue;
+      if (!matchesMeasureFilter(product.unit, filters.unit)) continue;
       options.set(product.productId, product.productName);
     }
     for (const sale of sales) {
       if (sale.status === "ANULADA") continue;
       for (const line of sale.lines) {
         if (filters.inventoryId && line.inventoryId !== filters.inventoryId) continue;
+        if (!matchesMeasureFilter(line.unit, filters.unit)) continue;
         options.set(line.productId, line.productName);
       }
     }
     return [...options.entries()].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name, "es"));
-  }, [catalog, sales, filters.inventoryId]);
+  }, [catalog, sales, filters.inventoryId, filters.unit]);
 
   const patch = (next: Partial<DashboardFilters>) => setFilters((current) => ({ ...current, ...next }));
   const requestVoid = (operationId: string, sellerName: string, salesTotal: number) => {
     if (voiding) return;
     const accepted = window.confirm(
-      `¿Anular esta venta de ${sellerName} por ${money(salesTotal)}?\n\nSe devuelven los paquetes al inventario y la venta deja de aparecer en el historial y en los totales.`,
+      `¿Anular esta venta de ${sellerName} por ${money(salesTotal)}?\n\nSe devuelve la cantidad al inventario y la venta deja de aparecer en el historial y en los totales.`,
     );
     if (!accepted) return;
     setVoiding(true);
@@ -197,7 +219,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
     setNotice("");
     void voidSale(operationId)
       .then(() => loadReport())
-      .then(() => setNotice("La venta se anuló. Los paquetes volvieron al inventario."))
+      .then(() => setNotice("La venta se anuló. La cantidad volvió al inventario."))
       .catch((reason: unknown) => {
         setError(reason instanceof Error ? reason.message : "No se pudo anular la venta.");
       })
@@ -209,7 +231,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
       <Box>
         <Typography variant="h5">Ventas y Comisiones</Typography>
         <Typography variant="body2" color="text.secondary">
-          Resultados de los paquetes vendidos. Las ventas proyectadas del inventario no se cuentan como ventas realizadas.
+          Resultados de las cantidades vendidas. Las ventas proyectadas del inventario no se cuentan como ventas realizadas.
         </Typography>
       </Box>
       {notice ? <Alert severity="success" onClose={() => setNotice("")}>{notice}</Alert> : null}
@@ -218,9 +240,10 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
       ) : null}
 
       <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)" }}>
-        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", [upDesktop]: "repeat(4, 1fr)" } }}>
+        <CardContent sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", [upDesktop]: "repeat(5, 1fr)" } }}>
           <TextField label="Desde" type="date" value={filters.from} onChange={(event) => patch({ from: event.target.value })} slotProps={{ inputLabel: { shrink: true } }} />
           <TextField label="Hasta" type="date" value={filters.to} onChange={(event) => patch({ to: event.target.value })} slotProps={{ inputLabel: { shrink: true } }} />
+          <MeasureFilterField value={activeMeasureFilter(filters.unit)} onChange={(unit) => patch({ unit, productId: "" })} />
           <TextField select label="Inventario" value={filters.inventoryId} onChange={(event) => patch({ inventoryId: event.target.value, productId: "" })}>
             <MenuItem value="">Todos</MenuItem>
             {inventoryOptions.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
@@ -235,8 +258,8 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
       <Box>
         <Typography sx={{ fontWeight: 800, mb: 1 }}>Actividad de ventas</Typography>
         <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr" } }}>
-          <Metric label="Paquetes vendidos" value={loading ? "—" : qty(report.packagesSold)} caption="Según la fecha de la venta" background="#E8F0FE" color="#1A56DB" />
-          <Metric label="Stock disponible actual" value={loading || report.packagesAvailable == null ? "—" : qty(report.packagesAvailable)} caption="Incluye productos sin ventas" background="#E7EDF4" color="#3A4654" />
+          <Metric label="Cantidad vendida" value={loading ? "—" : soldQuantityLabel(report, activeMeasureFilter(filters.unit))} caption="Separada por unidad, según la fecha de la venta" background="#E8F0FE" color="#1A56DB" />
+          <Metric label="Stock disponible actual" value={loading || !report.availableByUnit.length ? "—" : formatQuantityTotals(report.availableByUnit.map((item) => ({ unit: item.unit, quantity: item.amount })))} caption="Separado por unidad. Incluye productos sin ventas" background="#E7EDF4" color="#3A4654" />
           <Box sx={{ gridColumn: { xs: "1 / -1", md: "auto" } }}>
             <Metric label="Total de ventas" value={loading ? "—" : money(report.salesTotal)} caption="Ventas dentro del período" background="#E6F4EA" color="#0D652D" />
           </Box>
@@ -246,7 +269,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
         <Typography sx={{ fontWeight: 800, mb: 1 }}>Ganancias del inversionista</Typography>
         <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
           <Metric label="Ganancia neta generada" value={loading ? "—" : money(report.investorNet)} caption="De las ventas del período" background="#FFF7F0" color="#C05A12" />
-          <Metric label="Ganancia neta por paquete" value={loading || report.investorPerPackage == null ? "—" : money(report.investorPerPackage)} caption="Sobre los paquetes vendidos" background="#FFF7F0" color="#C05A12" />
+          <Metric label="Ganancia neta por paquete" value={loading || activeMeasureFilter(filters.unit) === "lb" || activeMeasureFilter(filters.unit) === "unit" || report.soldByUnit.some((item) => item.unit !== "package") || report.investorPerPackage == null ? "—" : money(report.investorPerPackage)} caption={loading ? "Solo cuando el período tiene únicamente paquetes" : perPackageCaption(report, activeMeasureFilter(filters.unit))} background="#FFF7F0" color="#C05A12" />
         </Box>
       </Box>
       <Box>
@@ -306,7 +329,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
                   </Box>
                   <Box sx={{ textAlign: "right" }}>
                     <Typography sx={{ fontWeight: 800 }}>{money(sale.salesTotal)}</Typography>
-                    <Typography variant="caption" color="text.secondary">{qty(sale.packageCount)} {sale.packageCount === 1 ? "paquete" : "paquetes"}</Typography>
+                    <Typography variant="caption" color="text.secondary">{formatQuantityTotals(sale.lines)}</Typography>
                   </Box>
                   <IconButton aria-label={open ? "Ocultar líneas" : "Ver líneas"} aria-expanded={open} onClick={() => setOpenSales((current) => ({ ...current, [sale.operationId]: !open }))}>
                     <ExpandMoreIcon sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 160ms ease" }} />
@@ -332,7 +355,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
                           <Typography sx={{ fontWeight: 800 }}>{money(line.salesTotal)}</Typography>
                         </Box>
                         <Typography variant="body2" color="text.secondary">
-                          {line.inventoryName} · Factura {line.invoiceNumber || "sin número"} · {qty(line.quantity)} {line.quantity === 1 ? "paquete" : "paquetes"} · {line.status}
+                          {line.inventoryName} · Factura {line.invoiceNumber || "sin número"} · {formatQuantityTotals([line])} · {line.status}
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
                           Inversionista {money(line.investorNet)} · Comisión {money(line.vendorProfit)}
@@ -340,7 +363,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
                       </Box>
                     ))}
                     <Typography variant="body2" color="text.secondary">
-                      Total de la operación {money(sale.operationSalesTotal)} · {qty(sale.operationPackageCount)} {sale.operationPackageCount === 1 ? "paquete" : "paquetes"}
+                      Total de la operación {money(sale.operationSalesTotal)} · {sale.operationQuantityLabel}
                       {sale.linesOutsideFilter ? " · Hay líneas fuera de este filtro." : ""}
                     </Typography>
                   </Box>

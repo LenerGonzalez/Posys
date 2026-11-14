@@ -64,6 +64,7 @@ export default function NumericField({
       }}
       onChange={(event) => {
         const reviewed = reviewNumericChange(value, draft ?? storedText, event.target.value, kind);
+        if (event.target.value !== reviewed.draft) event.target.value = reviewed.draft;
         if (clearWhenEmpty && reviewed.draft.trim() === "") {
           setDraft("");
           setError(null);
@@ -71,7 +72,7 @@ export default function NumericField({
           return;
         }
         if (maximum != null && reviewed.commit && reviewed.value != null && reviewed.value > maximum) {
-          setError(maximum > 0 ? `Disponibles: ${maximum}.` : "No hay paquetes disponibles.");
+          setError(maximum > 0 ? `Disponibles: ${maximum}.` : kind === "pounds" ? "No hay libras disponibles." : kind === "units" ? "No hay unidades disponibles." : "No hay paquetes disponibles.");
           return;
         }
         setDraft(reviewed.draft);
@@ -87,7 +88,7 @@ export default function NumericField({
         }
         const reviewed = reviewNumericBlur(value, draft ?? storedText, kind);
         if (maximum != null && reviewed.commit && reviewed.value != null && reviewed.value > maximum) {
-          setError(maximum > 0 ? `Disponibles: ${maximum}.` : "No hay paquetes disponibles.");
+          setError(maximum > 0 ? `Disponibles: ${maximum}.` : kind === "pounds" ? "No hay libras disponibles." : kind === "units" ? "No hay unidades disponibles." : "No hay paquetes disponibles.");
           setDraft(null);
           return;
         }
@@ -98,7 +99,7 @@ export default function NumericField({
       slotProps={{
         inputLabel: labelShrink ? { shrink: true } : undefined,
         htmlInput: {
-          inputMode: kind === "packages" ? "numeric" : "decimal",
+          inputMode: kind === "packages" || kind === "units" ? "numeric" : "decimal",
           autoComplete: "off",
         },
         input: {

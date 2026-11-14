@@ -17,7 +17,8 @@ import {
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { dateTimeLabel, money, percent, qty } from "./format";
-import { computeInventory } from "./pricingEngine";
+import MeasureFilterField from "./MeasureFilterField";
+import { matchesMeasureFilter, DEFAULT_MEASURE_FILTER, type MeasureFilter } from "./measureFilter";
 import { uniqueInventories } from "./profitability";
 import {
   compareInventories,
@@ -25,7 +26,7 @@ import {
   type MetricKind,
   type ProductSide,
 } from "./compareInventories";
-import type { PricingInventory } from "./types";
+import { eachLabel, quantityNoun, type PricingInventory } from "./types";
 
 const MARK = {
   best_profit: { label: "Mejor rentabilidad", bg: "#E6F4EA", color: "#0D652D" },
@@ -48,7 +49,7 @@ function formatDelta(kind: MetricKind, cell: MetricCell): string {
   return `${amount} · ${percentSign}${percent(cell.deltaPercent)}`;
 }
 
-function optionFacts(item: PricingInventory) {
+function optionFacts(item: PricingInventory, measure: MeasureFilter) {
   const codes = [...new Set(item.products.map((product) => product.orderCode.trim()).filter(Boolean))];
   const saved = [...item.history].reduce<string | null>((best, entry) => {
     if (!entry.savedAt) return best;
@@ -57,7 +58,7 @@ function optionFacts(item: PricingInventory) {
   return {
     invoices: codes.sort((left, right) => left.localeCompare(right, "es")).join(" · ") || "Sin factura",
     savedAt: saved || item.updatedAt || item.createdAt,
-    productCount: computeInventory(item).totals.productCount,
+    productCount: item.products.filter((product) => matchesMeasureFilter(product.unit, measure)).length,
   };
 }
 
@@ -121,7 +122,8 @@ export default function InventoryComparison({
 }) {
   const options = useMemo(() => uniqueInventories(inventories), [inventories]);
   const [ids, setIds] = useState<string[]>(["", ""]);
-  const comparison = useMemo(() => compareInventories(options, ids), [options, ids]);
+  const [measure, setMeasure] = useState<MeasureFilter>(DEFAULT_MEASURE_FILTER);
+  const comparison = useMemo(() => compareInventories(options, ids, measure), [options, ids, measure]);
   const setAt = (index: number, value: string) => {
     setIds((current) => current.map((id, position) => (position === index ? value : id)));
   };
@@ -143,7 +145,12 @@ export default function InventoryComparison({
       <Card>
         <CardContent sx={{ display: "grid", gap: 1.5 }}>
           <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
-            <Typography variant="h6">Inventarios</Typography>
+            <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+              <Typography variant="h6">Inventarios</Typography>
+              <Box sx={{ width: { xs: "100%", sm: 220 } }}>
+                <MeasureFilterField value={measure} onChange={setMeasure} />
+              </Box>
+            </Box>
             <Box sx={{ display: "flex", gap: 1 }}>
               <Button variant="outlined" disabled={ids.length >= 5 || ids.length >= options.length} onClick={() => setIds((current) => [...current, ""])}>
                 Agregar
@@ -157,7 +164,7 @@ export default function InventoryComparison({
           <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
             {ids.map((selected, index) => {
               const item = options.find((option) => option.id === selected);
-              const facts = item ? optionFacts(item) : null;
+              const facts = item ? optionFacts(item, measure) : null;
               return (
                 <Box key={`slot-${index}`}>
                   <TextField
@@ -170,7 +177,7 @@ export default function InventoryComparison({
                     <MenuItem value="">Seleccionar</MenuItem>
                     {options.map((option) => {
                       const taken = ids.some((id, position) => position !== index && id === option.id);
-                      const info = optionFacts(option);
+                      const info = optionFacts(option, measure);
                       return (
                         <MenuItem key={option.id} value={option.id} disabled={taken}>
                           {option.name || "Sin nombre"} · {info.invoices} · {qty(info.productCount)} productos
@@ -346,11 +353,11 @@ function ProductCell({ side }: { side: ProductSide }) {
   return (
     <Box sx={{ display: "grid", gap: 0.25 }}>
       <Typography variant="caption" color="text.secondary">{side.inventoryName}</Typography>
-      <Typography variant="body2">Costo/paq {money(side.costPerPack ?? 0)}</Typography>
-      <Typography variant="body2">Precio/paq {money(side.appliedPrice ?? 0)}</Typography>
-      <Typography variant="body2">Paquetes {qty(side.packages ?? 0)}</Typography>
+      <Typography variant="body2">Costo/{eachLabel(side.unit ?? "package")} {money(side.costPerPack ?? 0)}</Typography>
+      <Typography variant="body2">Precio/{eachLabel(side.unit ?? "package")} {money(side.appliedPrice ?? 0)}</Typography>
+      <Typography variant="body2">{quantityNoun(side.unit ?? "package")} {qty(side.packages ?? 0)}</Typography>
       <Typography variant="body2">Margen {percent(side.realMarginPercent ?? 0)}</Typography>
-      <Typography variant="body2" sx={{ fontWeight: 700 }}>Neta/paq {money(side.investorNetPerPack ?? 0)}</Typography>
+      <Typography variant="body2" sx={{ fontWeight: 700 }}>Neta/{eachLabel(side.unit ?? "package")} {money(side.investorNetPerPack ?? 0)}</Typography>
     </Box>
   );
 }

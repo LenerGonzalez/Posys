@@ -19,7 +19,7 @@ import {
 import { money, percent, qty } from "./format";
 import NumericField from "./NumericField";
 import { upDesktop, useNarrowScreen } from "./screen";
-import { commissionMethodLabel, type CommissionMethod, type ComputedLine, type PriceMethod, type ProductInput } from "./types";
+import { commissionMethodLabel, costPerLabel, eachLabel, measureUnitLabel, productMeasureUnit, quantityFieldLabel, quantityNoun, type CommissionMethod, type ComputedLine, type PriceMethod, type ProductInput } from "./types";
 
 function PriceCard({
   line,
@@ -38,14 +38,17 @@ function PriceCard({
     <Card variant="outlined" sx={{ minWidth: 0 }}>
       <CardContent sx={{ display: "grid", gap: 1, p: 1.25 }}>
         <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "flex-start" }}>
-          <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", fontSize: "0.95rem" }}>{line.name}</Typography>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere", fontSize: "0.95rem" }}>{line.name}</Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{measureUnitLabel(productMeasureUnit(product))}</Typography>
+          </Box>
           <Chip size="small" label={line.priceMethod} />
         </Box>
         <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
           {[
-            ["Paquetes", qty(line.packages)],
-            ["Costo proveedor", money(line.costPerPack)],
-            ["Logística / paquete", money(line.logisticsPerPack)],
+            [quantityFieldLabel(productMeasureUnit(product)), qty(line.packages)],
+            [costPerLabel(productMeasureUnit(product)), money(line.costPerPack)],
+            [`Logística / ${eachLabel(productMeasureUnit(product))}`, money(line.logisticsPerPack)],
             ["Precio costo", money(line.costPlusLogisticsPerPack)],
             ["Costo + logística", money(line.purchaseSubtotal + line.logisticsAllocated)],
             ["Precio de venta", money(line.appliedPrice, 0)],
@@ -193,9 +196,9 @@ export default function PricesList({
             <TableRow>
               {[
                 ["Producto", 220],
-                ["Paquetes", 90],
-                ["Costo proveedor", 170],
-                ["Logística / paquete", 170],
+                ["Cantidad", 90],
+                ["Costo", 170],
+                ["Logística c/u", 170],
                 ["Precio Costo", 140],
                 ["Costo + logística total", 180],
                 ["Método", 140],
@@ -219,9 +222,10 @@ export default function PricesList({
                 <TableRow key={line.id} hover>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>{line.name}</Typography>
-                    <Typography variant="caption" color="text.secondary">{line.orderCode || "Sin orden"}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{line.orderCode || "Sin orden"}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{measureUnitLabel(productMeasureUnit(product))}</Typography>
                   </TableCell>
-                  <TableCell sx={{ whiteSpace: "nowrap" }}>{qty(line.packages)}</TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>{qty(line.packages)} {quantityNoun(productMeasureUnit(product))}</TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>{money(line.costPerPack)}</TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>{money(line.logisticsPerPack)}</TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>{money(line.costPlusLogisticsPerPack)}</TableCell>

@@ -2,11 +2,11 @@ import {
   usableCommission,
   usableManualPrice,
   usableMoney,
-  usablePackages,
   usableProductCommission,
   usableProductMargin,
   usableSettingsMargin,
 } from "./fieldValidation";
+import { readQuantityMilli } from "./quantity";
 import type {
   CommissionMethod,
   ComputedInventory,
@@ -151,14 +151,18 @@ export function computeInventory(inventory: PricingInventory): ComputedInventory
   };
   const products = inventory.products
     .filter((product) => product.name.trim())
-    .map((product) => ({
-      ...product,
-      costPerPack: usableMoney(product.costPerPack),
-      packages: usablePackages(product.packages),
-      manualPrice: usableManualPrice(product.manualPrice),
-      targetMarginPercent: usableProductMargin(product.targetMarginPercent),
-      vendorSharePercent: usableProductCommission(product.vendorSharePercent),
-    }));
+    .flatMap((product) => {
+      const quantity = readQuantityMilli(product);
+      if (!quantity.ok) return [];
+      return [{
+        ...product,
+        costPerPack: usableMoney(product.costPerPack),
+        packages: quantity.milli / 1000,
+        manualPrice: usableManualPrice(product.manualPrice),
+        targetMarginPercent: usableProductMargin(product.targetMarginPercent),
+        vendorSharePercent: usableProductCommission(product.vendorSharePercent),
+      }];
+    });
   const subtotals = products.map(
     (product) => num(product.costPerPack) * num(product.packages),
   );

@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, getDocsFromServer, query, runTransaction, where } from "firebase/firestore";
+import { collection, deleteField, doc, getDoc, getDocs, getDocsFromServer, query, runTransaction, where } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import {
   balanceDocumentId,
@@ -20,8 +20,9 @@ import {
   type SaleLineSnapshot,
   type StockBalance,
 } from "./saleCommit";
+import { QUANTITY_SCALE, readSaleMilli, readSoldMilli } from "./quantity";
 import { planSaleVoid, rolesFromProfile, saleStockDemand, type SaleVoidActor } from "./saleVoid";
-import type { CommissionMethod } from "./types";
+import { isMeasureUnit, type CommissionMethod } from "./types";
 
 export const SALES_COLLECTION = "pricing_sales";
 
@@ -34,13 +35,17 @@ function requireUser() {
 function asLine(value: unknown): SaleLineSnapshot {
   const row = (value || {}) as Partial<SaleLineSnapshot>;
   const method: CommissionMethod = row.commissionMethod === "3" ? "3" : "2";
+  const unit = isMeasureUnit(row.unit) ? row.unit : undefined;
+  const reading = readSaleMilli({ quantity: row.quantity, quantityMilli: row.quantityMilli, unit });
   return {
     inventoryId: String(row.inventoryId || ""),
     inventoryName: String(row.inventoryName || ""),
     productId: String(row.productId || ""),
     productName: String(row.productName || ""),
     invoiceNumber: String(row.invoiceNumber || ""),
-    quantity: Number(row.quantity || 0),
+    ...(unit ? { unit } : {}),
+    ...(reading.ok ? { quantity: reading.milli / QUANTITY_SCALE } : { quantity: Number(row.quantity || 0) }),
+    ...(reading.ok && row.quantityMilli != null ? { quantityMilli: reading.milli } : {}),
     appliedPrice: Number(row.appliedPrice || 0),
     costPerPack: Number(row.costPerPack || 0),
     logisticsPerPack: Number(row.logisticsPerPack || 0),
@@ -87,6 +92,27 @@ function salePayload(sale: PricingSale): Record<string, unknown> {
 
 function stockPayload(balance: StockBalance): Record<string, unknown> {
   return { type: "stock", ...balance };
+}
+
+function stockFromData(data: Partial<StockBalance> & { type?: unknown }): StockBalance {
+  const reading = readSoldMilli(data);
+  if (!reading.ok) throw new Error("El saldo vendido no es válido.");
+  return {
+    ownerUid: String(data.ownerUid || ""),
+    inventoryId: String(data.inventoryId || ""),
+    productId: String(data.productId || ""),
+    updatedAt: String(data.updatedAt || ""),
+    ...(reading.milli % QUANTITY_SCALE === 0
+      ? { soldPackages: reading.milli / QUANTITY_SCALE }
+      : { quantityMilli: reading.milli }),
+  };
+}
+
+function stockCounterUpdate(balance: StockBalance): Record<string, unknown> {
+  if (balance.quantityMilli != null && balance.soldPackages == null) {
+    return { quantityMilli: balance.quantityMilli, soldPackages: deleteField(), updatedAt: balance.updatedAt };
+  }
+  return { soldPackages: balance.soldPackages ?? 0, quantityMilli: deleteField(), updatedAt: balance.updatedAt };
 }
 
 function commissionBalancePayload(balance: ReturnType<typeof balancesFromSale>[number], updatedAt: string): Record<string, unknown> {
@@ -158,17 +184,15 @@ export async function readSoldPackages(
   if (wanted.size) {
     const snap = await readStockDocuments();
     for (const item of snap.docs) {
-      const data = item.data() as { inventoryId?: unknown; productId?: unknown; soldPackages?: unknown };
+      const data = item.data() as { inventoryId?: unknown; productId?: unknown; soldPackages?: unknown; quantityMilli?: unknown };
       const key = stockKey(String(data.inventoryId || ""), String(data.productId || ""));
       if (!wanted.has(key)) continue;
-      const sold = Number(data.soldPackages || 0);
-      if (!Number.isInteger(sold) || sold < 0) {
-        throw new Error("El saldo de paquetes vendidos no es válido.");
-      }
-      totals.set(key, (totals.get(key) || 0) + sold);
+      const sold = readSoldMilli(data);
+      if (!sold.ok) throw new Error("El saldo vendido no es válido.");
+      totals.set(key, (totals.get(key) || 0) + sold.milli);
     }
   }
-  return Object.fromEntries([...wanted].map((key) => [key, totals.get(key) || 0]));
+  return Object.fromEntries([...wanted].map((key) => [key, (totals.get(key) || 0) / QUANTITY_SCALE]));
 }
 
 export async function registerSale(
@@ -219,17 +243,7 @@ export async function registerSale(
       if (!snap.exists()) continue;
       const data = snap.data() as Partial<StockBalance> & { type?: unknown };
       if (data.type !== "stock") continue;
-      const soldPackages = Number(data.soldPackages || 0);
-      if (!Number.isInteger(soldPackages) || soldPackages < 0) {
-        throw new Error("El saldo de paquetes vendidos no es válido.");
-      }
-      stock.push({
-        ownerUid: String(data.ownerUid || ""),
-        inventoryId: String(data.inventoryId || ""),
-        productId: String(data.productId || ""),
-        soldPackages,
-        updatedAt: String(data.updatedAt || ""),
-      });
+      stock.push(stockFromData(data));
     }
     const queueRef = doc(db, PAYMENTS_COLLECTION, queueDocumentId(user.uid, user.uid));
     const queueSnap = await transaction.get(queueRef);
@@ -325,13 +339,7 @@ export async function voidSale(operationId: string): Promise<void> {
       if (!snap.exists()) continue;
       const data = snap.data() as Partial<StockBalance> & { type?: unknown };
       if (data.type !== "stock") continue;
-      stock.push({
-        ownerUid: String(data.ownerUid || ""),
-        inventoryId: String(data.inventoryId || ""),
-        productId: String(data.productId || ""),
-        soldPackages: Number(data.soldPackages || 0),
-        updatedAt: String(data.updatedAt || ""),
-      });
+      stock.push(stockFromData(data));
     }
     const queue = queueSnap.exists()
       ? queueFromDoc(sale.ownerUid, sale.sellerUid, queueSnap.data() as Record<string, unknown>)
@@ -347,10 +355,10 @@ export async function voidSale(operationId: string): Promise<void> {
       voidedByName: result.sale.voidedByName,
     });
     for (const balance of result.stock) {
-      transaction.update(doc(db, SALES_COLLECTION, stockDocumentId(balance.ownerUid, balance.inventoryId, balance.productId)), {
-        soldPackages: balance.soldPackages,
-        updatedAt: balance.updatedAt,
-      });
+      transaction.update(
+        doc(db, SALES_COLLECTION, stockDocumentId(balance.ownerUid, balance.inventoryId, balance.productId)),
+        stockCounterUpdate(balance),
+      );
     }
     for (const item of result.balances) {
       const ref = doc(db, PAYMENTS_COLLECTION, balanceDocumentId(item.balance.ownerUid, item.balance.saleId, item.balance.lineIndex));

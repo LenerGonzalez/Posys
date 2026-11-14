@@ -1,11 +1,13 @@
+import { activeMeasureFilter, matchesMeasureFilter, quantityCaption, type MeasureFilter } from "./measureFilter";
 import { computeInventory } from "./pricingEngine";
-import type { InventorySnapshot, PricingInventory } from "./types";
+import { productMeasureUnit, type InventorySnapshot, type PricingInventory } from "./types";
 
 export interface ProfitabilityFilters {
   from: string;
   to: string;
   inventoryId: string;
   invoice: string;
+  unit?: MeasureFilter;
 }
 
 export const EMPTY_PROFITABILITY_FILTERS: ProfitabilityFilters = {
@@ -13,6 +15,7 @@ export const EMPTY_PROFITABILITY_FILTERS: ProfitabilityFilters = {
   to: "",
   inventoryId: "",
   invoice: "",
+  unit: "package",
 };
 
 export interface ProfitabilityPoint {
@@ -33,6 +36,13 @@ export interface ProfitabilityReport {
   inventoryCount: number;
   productCount: number;
   packages: number;
+  /** Suma de la unidad seleccionada. Con Todos no se usa como total físico. */
+  quantityAmount: number;
+  quantityLabel: string;
+  /** Algún inventario aportó solo una parte de sus productos. */
+  quantityPartial: boolean;
+  /** Algún inventario quedó fuera de la evolución porque mezcla unidades. */
+  historyPartial: boolean;
   purchaseSubtotal: number;
   logisticsCost: number;
   projectedSales: number;
@@ -94,11 +104,13 @@ export function scopeInventories(
 
 export function invoiceOptions(
   items: PricingInventory[],
-  filters: Pick<ProfitabilityFilters, "from" | "to" | "inventoryId">,
+  filters: Pick<ProfitabilityFilters, "from" | "to" | "inventoryId" | "unit">,
 ): string[] {
   const codes = new Set<string>();
+  const measure = activeMeasureFilter(filters.unit);
   scopeInventories(items, filters).forEach((item) => {
     item.products.forEach((product) => {
+      if (!matchesMeasureFilter(product.unit, measure)) return;
       const code = product.orderCode.trim();
       if (code) codes.add(code);
     });
@@ -139,6 +151,10 @@ function emptyReport(historyAvailable: boolean): ProfitabilityReport {
     inventoryCount: 0,
     productCount: 0,
     packages: 0,
+    quantityAmount: 0,
+    quantityLabel: "0",
+    quantityPartial: false,
+    historyPartial: false,
     purchaseSubtotal: 0,
     logisticsCost: 0,
     projectedSales: 0,
@@ -171,22 +187,36 @@ export function buildProfitability(
   filters: ProfitabilityFilters,
 ): ProfitabilityReport {
   const invoice = filters.invoice.trim();
+  const measure = activeMeasureFilter(filters.unit);
   const historyAvailable = invoice === "";
   const report = emptyReport(historyAvailable);
   const evolution: ProfitabilityEvolution[] = [];
+  const quantityLines: Array<{ unit: ReturnType<typeof productMeasureUnit>; quantity: number }> = [];
 
   scopeInventories(items, filters).forEach((item) => {
     const computed = computeInventory(item);
-    const lines = invoice
-      ? computed.lines.filter((line) => line.orderCode.trim() === invoice)
-      : computed.lines;
-    if (invoice && lines.length === 0) return;
+    const units = new Map(item.products.map((product) => [product.id, product.unit]));
+    const lines = computed.lines.filter((line) => {
+      if (!matchesMeasureFilter(units.get(line.id), measure)) return false;
+      return !invoice || line.orderCode.trim() === invoice;
+    });
+    if (!lines.length) return;
 
+    const coversInventory = lines.length === computed.lines.length;
     report.inventoryCount += 1;
-    if (invoice) {
+    if (coversInventory) {
+      report.productCount += computed.totals.productCount;
+      report.purchaseSubtotal += computed.totals.purchaseSubtotal;
+      report.logisticsCost += computed.totals.logisticsCost;
+      report.projectedSales += computed.totals.projectedSales;
+      report.grossProfit += computed.totals.grossProfit;
+      report.vendorProfit += computed.totals.vendorProfit;
+      report.investorNet += computed.totals.investorNet;
+    } else {
+      report.quantityPartial = true;
+      if (historyAvailable) report.historyPartial = true;
       lines.forEach((line) => {
         report.productCount += 1;
-        report.packages += line.packages;
         report.purchaseSubtotal += line.purchaseSubtotal;
         report.logisticsCost += line.logisticsAllocated;
         report.projectedSales += line.salesTotal;
@@ -194,18 +224,15 @@ export function buildProfitability(
         report.vendorProfit += line.vendorProfit;
         report.investorNet += line.investorNet;
       });
-    } else {
-      report.productCount += computed.totals.productCount;
-      report.packages += computed.totals.packages;
-      report.purchaseSubtotal += computed.totals.purchaseSubtotal;
-      report.logisticsCost += computed.totals.logisticsCost;
-      report.projectedSales += computed.totals.projectedSales;
-      report.grossProfit += computed.totals.grossProfit;
-      report.vendorProfit += computed.totals.vendorProfit;
-      report.investorNet += computed.totals.investorNet;
     }
+    lines.forEach((line) => {
+      const unit = productMeasureUnit({ unit: units.get(line.id) });
+      quantityLines.push({ unit, quantity: line.packages });
+      if (unit === "package") report.packages += line.packages;
+      if (measure !== "all") report.quantityAmount += line.packages;
+    });
 
-    if (!historyAvailable) return;
+    if (!historyAvailable || !coversInventory) return;
     const snapshot = latestSnapshot(item.history, filters.from, filters.to);
     if (snapshot) {
       report.historicalGrossProfit += snapshot.grossProfit;
@@ -225,6 +252,7 @@ export function buildProfitability(
     });
   });
 
+  report.quantityLabel = quantityCaption(measure, quantityLines);
   const rates = portfolioRates(
     report.grossProfit,
     report.projectedSales,

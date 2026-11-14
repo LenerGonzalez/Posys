@@ -1,5 +1,13 @@
 import { computeInventory } from "./pricingEngine";
-import type { CommissionMethod, PricingInventory } from "./types";
+import {
+  milliFromAmount,
+  QUANTITY_SCALE,
+  readSaleMilli,
+  readSoldMilli,
+  storedSaleLine,
+  storedSoldCounter,
+} from "./quantity";
+import { productMeasureUnit, type CommissionMethod, type MeasureUnit, type PricingInventory } from "./types";
 
 export interface SaleProduct {
   inventoryId: string;
@@ -7,6 +15,7 @@ export interface SaleProduct {
   productId: string;
   productName: string;
   invoiceNumber: string;
+  unit: MeasureUnit;
   initialPackages: number;
   appliedPrice: number;
   costPerPack: number;
@@ -24,7 +33,9 @@ export interface SaleLineSnapshot {
   productId: string;
   productName: string;
   invoiceNumber: string;
-  quantity: number;
+  unit?: MeasureUnit;
+  quantity?: number;
+  quantityMilli?: number;
   appliedPrice: number;
   costPerPack: number;
   logisticsPerPack: number;
@@ -61,7 +72,8 @@ export interface StockBalance {
   ownerUid: string;
   inventoryId: string;
   productId: string;
-  soldPackages: number;
+  soldPackages?: number;
+  quantityMilli?: number;
   updatedAt: string;
 }
 
@@ -102,19 +114,31 @@ export function stockDocumentId(ownerUid: string, inventoryId: string, productId
   return `stock_${safe(ownerUid)}_${safe(inventoryId)}_${safe(productId)}`;
 }
 
-export function isSaleQuantity(value: number | null | undefined): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
+export function isSaleQuantity(value: number | null | undefined, unit: MeasureUnit | unknown = "package"): value is number {
+  if (typeof value !== "number") return false;
+  const milli = milliFromAmount(value);
+  if (milli == null || milli <= 0) return false;
+  return productMeasureUnit({ unit }) === "lb" || milli % QUANTITY_SCALE === 0;
+}
+
+export function saleLineAmount(line: { quantity?: unknown; quantityMilli?: unknown; unit?: unknown }): number {
+  const reading = readSaleMilli(line);
+  return reading.ok ? reading.milli / QUANTITY_SCALE : 0;
 }
 
 export function saleProducts(inventories: PricingInventory[]): SaleProduct[] {
   return inventories.flatMap((inventory) => {
     const computed = computeInventory(inventory);
-    return computed.lines.map((line) => ({
+    return computed.lines.flatMap((line) => {
+      const source = inventory.products.find((product) => product.id === line.id);
+      const unit = productMeasureUnit(source ?? {});
+      return [{
       inventoryId: inventory.id,
       inventoryName: inventory.name.trim() || "Inventario",
       productId: line.id,
       productName: line.name,
       invoiceNumber: line.orderCode,
+      unit,
       initialPackages: line.packages,
       appliedPrice: line.appliedPrice,
       costPerPack: line.costPerPack,
@@ -124,7 +148,8 @@ export function saleProducts(inventories: PricingInventory[]): SaleProduct[] {
       investorNetPerPack: line.investorNetPerPack,
       commissionMethod: computed.totals.commissionMethod,
       vendorSharePercent: line.vendorSharePercent,
-    }));
+    }];
+    });
   });
 }
 
@@ -140,10 +165,10 @@ export function lineFinancials(product: SaleProduct, quantity: number): Pick<
   };
 }
 
-export function sumSaleLines(lines: Array<Pick<SaleLineSnapshot, "quantity" | "salesTotal" | "grossProfit" | "vendorProfit" | "investorNet">>): SaleTotals {
+export function sumSaleLines(lines: Array<Pick<SaleLineSnapshot, "quantity" | "quantityMilli" | "unit" | "salesTotal" | "grossProfit" | "vendorProfit" | "investorNet">>): SaleTotals {
   return lines.reduce<SaleTotals>(
     (totals, line) => ({
-      packageCount: totals.packageCount + line.quantity,
+      packageCount: totals.packageCount + (productMeasureUnit(line) === "package" ? saleLineAmount(line) : 0),
       salesTotal: totals.salesTotal + line.salesTotal,
       grossProfit: totals.grossProfit + line.grossProfit,
       vendorProfit: totals.vendorProfit + line.vendorProfit,
@@ -157,33 +182,38 @@ function productMap(products: SaleProduct[]): Map<string, SaleProduct> {
   return new Map(products.map((product) => [stockKey(product.inventoryId, product.productId), product]));
 }
 
+function addSoldMilli(sold: Map<string, number>, balance: StockBalance) {
+  const reading = readSoldMilli(balance);
+  if (!reading.ok) throw new Error("El saldo vendido no es válido.");
+  const key = stockKey(balance.inventoryId, balance.productId);
+  sold.set(key, (sold.get(key) || 0) + reading.milli);
+}
+
 function soldMap(stock: StockBalance[], ownerUid: string): Map<string, number> {
   const sold = new Map<string, number>();
   for (const balance of stock) {
     if (balance.ownerUid !== ownerUid) continue;
-    if (!Number.isInteger(balance.soldPackages) || balance.soldPackages < 0) {
-      throw new Error("El saldo de paquetes vendidos no es válido.");
-    }
-    const key = stockKey(balance.inventoryId, balance.productId);
-    sold.set(key, (sold.get(key) || 0) + balance.soldPackages);
+    addSoldMilli(sold, balance);
   }
   return sold;
 }
 
 function soldTotals(stock: StockBalance[]): Map<string, number> {
   const sold = new Map<string, number>();
-  for (const balance of stock) {
-    if (!Number.isInteger(balance.soldPackages) || balance.soldPackages < 0) {
-      throw new Error("El saldo de paquetes vendidos no es válido.");
-    }
-    const key = stockKey(balance.inventoryId, balance.productId);
-    sold.set(key, (sold.get(key) || 0) + balance.soldPackages);
-  }
+  for (const balance of stock) addSoldMilli(sold, balance);
   return sold;
 }
 
+function amountMilli(value: number, unit: MeasureUnit): number | null {
+  if (!isSaleQuantity(value, unit)) return null;
+  return milliFromAmount(value);
+}
+
 export function availablePackages(initialPackages: number, soldPackages: number): number {
-  return initialPackages - soldPackages;
+  const initial = milliFromAmount(initialPackages);
+  const sold = milliFromAmount(soldPackages);
+  if (initial == null || sold == null) return initialPackages - soldPackages;
+  return (initial - sold) / QUANTITY_SCALE;
 }
 
 export interface DraftSaleLine {
@@ -212,15 +242,18 @@ export function reviewSale(
   const productsByKey = productMap(products);
   const demand = new Map<string, number>();
   for (const line of lines) {
-    if (!isSaleQuantity(line.quantity)) continue;
+    const product = productsByKey.get(stockKey(line.inventoryId, line.productId));
+    const milli = product && line.quantity != null ? amountMilli(line.quantity, product.unit) : null;
+    if (milli == null) continue;
     const key = stockKey(line.inventoryId, line.productId);
-    demand.set(key, (demand.get(key) || 0) + line.quantity);
+    demand.set(key, (demand.get(key) || 0) + milli);
   }
 
   const rows: ReviewedSaleLine[] = lines.map((line) => {
     const key = stockKey(line.inventoryId, line.productId);
     const product = productsByKey.get(key) || null;
-    const soldPackages = soldByKey[key] || 0;
+    const soldMilli = milliFromAmount(soldByKey[key] || 0) ?? 0;
+    const soldPackages = soldMilli / QUANTITY_SCALE;
     if (!product) {
       return {
         inventoryId: line.inventoryId,
@@ -234,8 +267,11 @@ export function reviewSale(
         message: "Este producto ya no está en el inventario.",
       };
     }
-    const available = availablePackages(product.initialPackages, soldPackages);
-    if (!isSaleQuantity(line.quantity)) {
+    const initialMilli = milliFromAmount(product.initialPackages);
+    const availableMilli = initialMilli == null ? null : initialMilli - soldMilli;
+    const available = availableMilli == null ? null : availableMilli / QUANTITY_SCALE;
+    const noun = product.unit === "lb" ? "libras" : product.unit === "unit" ? "unidades" : "paquetes";
+    if (line.quantity == null || !isSaleQuantity(line.quantity, product.unit)) {
       return {
         inventoryId: line.inventoryId,
         productId: line.productId,
@@ -243,13 +279,16 @@ export function reviewSale(
         quantity: line.quantity,
         soldPackages,
         available,
-        availableAfter: available - (demand.get(key) || 0),
+        availableAfter: available,
         financials: null,
-        message: "La cantidad debe ser un entero mayor que cero.",
+        message: product.unit === "lb"
+          ? "La cantidad de libras admite hasta tres decimales."
+          : "La cantidad debe ser un entero mayor que cero.",
       };
     }
     const requested = demand.get(key) || 0;
-    const over = requested > available;
+    const over = availableMilli == null || requested > availableMilli;
+    const availableAfter = availableMilli == null || over ? available : (availableMilli - requested) / QUANTITY_SCALE;
     return {
       inventoryId: line.inventoryId,
       productId: line.productId,
@@ -257,16 +296,16 @@ export function reviewSale(
       quantity: line.quantity,
       soldPackages,
       available,
-      availableAfter: over ? available : available - requested,
+      availableAfter,
       financials: over ? null : lineFinancials(product, line.quantity),
-      message: over ? `No hay paquetes suficientes. Disponibles: ${available}.` : "",
+      message: over ? `No hay ${noun} suficientes. Disponibles: ${available}.` : "",
     };
   });
 
   const ready = rows.filter((row) => row.financials && row.quantity != null);
   const totals = sumSaleLines(
     ready.map((row) => ({
-      quantity: row.quantity as number,
+      quantity: row.product && productMeasureUnit(row.product) === "package" ? row.quantity as number : 0,
       salesTotal: row.financials?.salesTotal || 0,
       grossProfit: row.financials?.grossProfit || 0,
       vendorProfit: row.financials?.vendorProfit || 0,
@@ -283,13 +322,15 @@ export function reviewSale(
 
 function snapshotLine(product: SaleProduct, quantity: number): SaleLineSnapshot {
   const financials = lineFinancials(product, quantity);
+  const milli = amountMilli(quantity, product.unit) ?? 0;
+  const stored = storedSaleLine(product.unit, milli);
   return {
     inventoryId: product.inventoryId,
     inventoryName: product.inventoryName,
     productId: product.productId,
     productName: product.productName,
     invoiceNumber: product.invoiceNumber,
-    quantity,
+    ...stored,
     appliedPrice: product.appliedPrice,
     costPerPack: product.costPerPack,
     logisticsPerPack: product.logisticsPerPack,
@@ -335,29 +376,36 @@ export function commitSale(request: SaleCommitRequest, state: SaleCommitState): 
   const products = productMap(saleProducts(state.inventories));
   const demand = new Map<string, number>();
   for (const line of request.lines) {
-    if (!isSaleQuantity(line.quantity)) {
-      return { status: "rejected", message: "La cantidad debe ser un entero mayor que cero. La venta no se registró." };
-    }
     const key = stockKey(line.inventoryId, line.productId);
-    if (!products.has(key)) {
+    const product = products.get(key);
+    if (!product) {
       return { status: "rejected", message: "Hay un producto que no pertenece a los inventarios seleccionados. La venta no se registró." };
     }
-    demand.set(key, (demand.get(key) || 0) + line.quantity);
+    if (!isSaleQuantity(line.quantity, product.unit)) {
+      return {
+        status: "rejected",
+        message: product.unit === "lb"
+          ? "La cantidad de libras admite hasta tres decimales. La venta no se registró."
+          : "La cantidad debe ser un entero mayor que cero. La venta no se registró.",
+      };
+    }
+    demand.set(key, (demand.get(key) || 0) + (amountMilli(line.quantity, product.unit) ?? 0));
   }
 
   const shortages: string[] = [];
   for (const [key, quantity] of demand) {
     const product = products.get(key);
     if (!product) continue;
-    const available = availablePackages(product.initialPackages, sold.get(key) || 0);
+    const initial = milliFromAmount(product.initialPackages);
+    const available = initial == null ? 0 : initial - (sold.get(key) || 0);
     if (quantity > available) {
-      shortages.push(`${product.productName} (${product.inventoryName}): disponibles ${available}`);
+      shortages.push(`${product.productName} (${product.inventoryName}): disponibles ${available / QUANTITY_SCALE}`);
     }
   }
   if (shortages.length) {
     return {
       status: "rejected",
-      message: `No hay paquetes suficientes. ${shortages.join(". ")}. La venta no se registró.`,
+      message: `No hay cantidad suficiente. ${shortages.join(". ")}. La venta no se registró.`,
     };
   }
 
@@ -378,11 +426,12 @@ export function commitSale(request: SaleCommitRequest, state: SaleCommitState): 
   };
   const stock = [...demand.entries()].map(([key, quantity]) => {
     const product = products.get(key) as SaleProduct;
+    const stored = storedSoldCounter((ownSold.get(key) || 0) + quantity);
     return {
       ownerUid: request.ownerUid,
       inventoryId: product.inventoryId,
       productId: product.productId,
-      soldPackages: (ownSold.get(key) || 0) + quantity,
+      ...stored,
       updatedAt: request.soldAt,
     };
   });

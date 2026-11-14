@@ -1,5 +1,6 @@
+import { activeMeasureFilter, matchesMeasureFilter, type MeasureFilter } from "./measureFilter";
 import { computeInventory, snapshotFromTotals } from "./pricingEngine";
-import type { PriceChangeRecord, PriceMethod, PricingInventory, ProductInput } from "./types";
+import { productMeasureUnit, type MeasureUnit, type PriceChangeRecord, type PriceMethod, type PricingInventory, type ProductInput } from "./types";
 
 export interface PriceRow {
   id: string;
@@ -14,6 +15,7 @@ export interface PriceRow {
   manualPrice: number | null;
   targetMarginPercent: number | null;
   settingsMarginPercent: number;
+  unit: MeasureUnit;
 }
 
 export interface PriceDraft {
@@ -27,6 +29,7 @@ export interface PriceFilters {
   query: string;
   minPrice: number | null;
   maxPrice: number | null;
+  unit?: MeasureFilter;
 }
 
 export const EMPTY_PRICE_FILTERS: PriceFilters = {
@@ -34,6 +37,7 @@ export const EMPTY_PRICE_FILTERS: PriceFilters = {
   query: "",
   minPrice: null,
   maxPrice: null,
+  unit: "package",
 };
 
 export function priceOrigin(inventoryName: string, orderCode: string): string {
@@ -66,6 +70,7 @@ export function buildPriceRows(inventories: PricingInventory[]): PriceRow[] {
         manualPrice: source?.manualPrice ?? null,
         targetMarginPercent: source?.targetMarginPercent ?? null,
         settingsMarginPercent: inventory.settings.targetMarginPercent,
+        unit: productMeasureUnit(source ?? {}),
       };
     });
   });
@@ -98,7 +103,7 @@ export function filterPriceRows(rows: PriceRow[], filters: PriceFilters): PriceR
     if (query && !row.product.toLocaleLowerCase("es").includes(query)) return false;
     if (filters.minPrice != null && row.price < filters.minPrice) return false;
     if (filters.maxPrice != null && row.price > filters.maxPrice) return false;
-    return true;
+    return matchesMeasureFilter(row.unit, activeMeasureFilter(filters.unit));
   });
 }
 

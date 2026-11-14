@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
-import type { ComputedInventory, ComputedLine, PriceMethod, PricingInventory, ProductInput } from "./types";
-import { commissionMethodLabel } from "./types";
+import { productQuantity } from "./quantity";
+import type { ComputedInventory, ComputedLine, MeasureUnit, PriceMethod, PricingInventory, ProductInput } from "./types";
+import { commissionMethodLabel, measureUnitLabel, productMeasureUnit } from "./types";
 import { resolveCommissionMethod } from "./pricingEngine";
 
 const MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -19,11 +20,13 @@ export interface PriceCatalogEntry {
   line: ComputedLine;
   manualPrice: number | null;
   productMargin: number | null;
+  unit?: MeasureUnit;
 }
 
 const PRICE_COLUMNS: TableColumn[] = [
   { header: "Producto", width: 28, kind: "text" },
-  { header: "Paquetes", width: 12, kind: "qty" },
+  { header: "Unidad de medida", width: 18, kind: "text" },
+  { header: "Cantidad", width: 12, kind: "qty" },
   { header: "Costo por paquete", width: 18, kind: "money" },
   { header: "Logística por paquete", width: 22, kind: "money" },
   { header: "Precio de costo", width: 16, kind: "money" },
@@ -118,6 +121,7 @@ export type PriceExportColumnKey =
   | "inventory"
   | "invoice"
   | "product"
+  | "unit"
   | "packages"
   | "costPerPack"
   | "logisticsPerPack"
@@ -145,7 +149,8 @@ export const PRICE_CATALOG_COLUMNS: CatalogColumn[] = [
   { key: "inventory", header: "Inventario", width: 28, kind: "text", optional: true },
   { key: "invoice", header: "Factura", width: 18, kind: "text", optional: true },
   { key: "product", header: "Producto", width: 28, kind: "text", optional: false },
-  { key: "packages", header: "Paquetes", width: 12, kind: "qty", optional: true },
+  { key: "unit", header: "Unidad de medida", width: 18, kind: "text", optional: true },
+  { key: "packages", header: "Cantidad", width: 12, kind: "qty", optional: true },
   { key: "costPerPack", header: "Costo por paquete", width: 18, kind: "money", optional: true },
   { key: "logisticsPerPack", header: "Logística por paquete", width: 22, kind: "money", optional: true },
   { key: "costPrice", header: "Precio de costo", width: 16, kind: "money", optional: true },
@@ -171,6 +176,7 @@ function catalogValue(entry: PriceCatalogEntry, key: PriceExportColumnKey): Cell
   if (key === "inventory") return entry.inventoryName;
   if (key === "invoice") return line.orderCode;
   if (key === "product") return line.name;
+  if (key === "unit") return measureUnitLabel(productMeasureUnit(entry));
   if (key === "packages") return line.packages;
   if (key === "costPerPack") return line.costPerPack;
   if (key === "logisticsPerPack") return line.logisticsPerPack;
@@ -197,6 +203,7 @@ function priceValues(entry: PriceCatalogEntry): CellValue[] {
   const manual = entry.manualPrice != null && entry.manualPrice > 0 ? entry.manualPrice : null;
   return [
     line.name,
+    measureUnitLabel(productMeasureUnit(entry)),
     line.packages,
     line.costPerPack,
     line.logisticsPerPack,
@@ -366,8 +373,9 @@ function productsSheet(products: ProductInput[]): XLSX.WorkSheet {
     { header: "ID del producto", width: 28, kind: "text" },
     { header: "Orden o factura", width: 20, kind: "text" },
     { header: "Producto", width: 28, kind: "text" },
+    { header: "Unidad de medida", width: 18, kind: "text" },
     { header: "Costo por paquete", width: 18, kind: "money" },
-    { header: "Paquetes comprados", width: 20, kind: "qty" },
+    { header: "Cantidad", width: 20, kind: "qty" },
     { header: "Método de cálculo", width: 20, kind: "text" },
     { header: "Precio manual", width: 16, kind: "money" },
     { header: "Margen objetivo", width: 18, kind: "percent" },
@@ -379,8 +387,9 @@ function productsSheet(products: ProductInput[]): XLSX.WorkSheet {
       product.id,
       product.orderCode,
       product.name,
+      measureUnitLabel(productMeasureUnit(product)),
       product.costPerPack,
-      product.packages,
+      productQuantity(product),
       methodLabel(product.priceMethod),
       product.manualPrice != null && product.manualPrice > 0 ? product.manualPrice : null,
       product.targetMarginPercent,
@@ -401,6 +410,7 @@ function pricesSheet(inventory: PricingInventory, computed: ComputedInventory): 
           line,
           manualPrice: product?.manualPrice ?? null,
           productMargin: product?.targetMarginPercent ?? null,
+          unit: product ? productMeasureUnit(product) : "package",
         }),
         line.id,
         line.orderCode,
@@ -418,7 +428,16 @@ function summarySheet(inventory: PricingInventory, computed: ComputedInventory):
   const latest = inventory.history[inventory.history.length - 1];
   const rows: Array<{ label: string; value: CellValue; kind: CellKind }> = [
     { label: "Productos", value: totals.productCount, kind: "qty" },
-    { label: "Paquetes", value: totals.packages, kind: "qty" },
+    ...(["package", "lb", "unit"] as const).flatMap((unit) => {
+      const amount = computed.lines.reduce((sum, line) => {
+        const product = inventory.products.find((item) => item.id === line.id);
+        if (!product || productMeasureUnit(product) !== unit) return sum;
+        return sum + line.packages;
+      }, 0);
+      if (!(amount > 0)) return [];
+      const label = unit === "lb" ? "Libras" : unit === "unit" ? "Unidades" : "Paquetes";
+      return [{ label, value: amount, kind: "qty" as const }];
+    }),
     { label: "Subtotal de compra", value: totals.purchaseSubtotal, kind: "money" },
     { label: "Gastos logísticos", value: totals.logisticsCost, kind: "money" },
     { label: "Costo con logística", value: totals.costWithLogistics, kind: "money" },
@@ -454,14 +473,15 @@ function utilitiesSheet(inventory: PricingInventory, computed: ComputedInventory
   ];
   const columns: TableColumn[] = [
     { header: "Producto", width: 28, kind: "text" },
-    { header: "Paquetes", width: 12, kind: "qty" },
+    { header: "Unidad de medida", width: 18, kind: "text" },
+    { header: "Cantidad", width: 12, kind: "qty" },
     { header: "Comisión", width: 14, kind: "percent" },
     { header: "Comisión aplicada", width: 18, kind: "percent" },
-    { header: "Base / paq.", width: 16, kind: "money" },
+    { header: "Base c/u", width: 16, kind: "money" },
     { header: "Base", width: 16, kind: "money" },
-    { header: "Vendedor / paq.", width: 18, kind: "money" },
+    { header: "Vendedor c/u", width: 18, kind: "money" },
     { header: "Vendedor total", width: 16, kind: "money" },
-    { header: "Inversionista neto / paq.", width: 26, kind: "money" },
+    { header: "Inversionista c/u", width: 26, kind: "money" },
     { header: "Inversionista neto", width: 20, kind: "money" },
   ];
   const sheet = detailSheet(["Campo", "Valor"], intro, columns.map((column) => column.width));
@@ -472,6 +492,7 @@ function utilitiesSheet(inventory: PricingInventory, computed: ComputedInventory
     const product = byId.get(line.id);
     const values: CellValue[] = [
       line.name,
+      measureUnitLabel(productMeasureUnit(product ?? {})),
       line.packages,
       product?.vendorSharePercent ?? null,
       line.vendorSharePercent,

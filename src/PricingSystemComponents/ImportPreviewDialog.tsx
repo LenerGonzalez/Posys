@@ -83,7 +83,7 @@ function ProductCells({ product }: { product: ProductInput }) {
     <>
       <TableCell sx={{ fontWeight: 700 }}>{product.name}</TableCell>
       <TableCell>{product.orderCode || "Sin factura"}</TableCell>
-      <TableCell align="right">{qty(product.packages)}</TableCell>
+      <TableCell align="right">{qty(product.packages ?? 0)}</TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>{money(product.costPerPack)}</TableCell>
       <TableCell><Status kind="ok" /></TableCell>
     </>
@@ -118,7 +118,7 @@ function ProductCard({ product }: { product: ProductInput }) {
       <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, mt: 0.6 }}>
         <Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Paquetes</Typography>
-          <Typography sx={{ fontWeight: 700 }}>{qty(product.packages)}</Typography>
+          <Typography sx={{ fontWeight: 700 }}>{qty(product.packages ?? 0)}</Typography>
         </Box>
         <Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Costo por paquete</Typography>

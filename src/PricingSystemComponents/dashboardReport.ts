@@ -1,4 +1,8 @@
 import { assessHistoricalRounding, balanceCents, fromCents, lineKey, toCents, type CommissionBalance, type CommissionPayment } from "./commissionCommit";
+import { activeMeasureFilter, matchesMeasureFilter, type MeasureFilter } from "./measureFilter";
+import { formatQuantityTotals } from "./quantity";
+import { saleLineAmount } from "./saleCommit";
+import { productMeasureUnit, type MeasureUnit } from "./types";
 import type { PricingSale, SaleLineSnapshot } from "./saleCommit";
 
 export interface DashboardFilters {
@@ -6,6 +10,7 @@ export interface DashboardFilters {
   to: string;
   inventoryId: string;
   productId: string;
+  unit?: MeasureFilter;
 }
 
 export const EMPTY_DASHBOARD_FILTERS: DashboardFilters = {
@@ -13,6 +18,7 @@ export const EMPTY_DASHBOARD_FILTERS: DashboardFilters = {
   to: "",
   inventoryId: "",
   productId: "",
+  unit: "package",
 };
 
 export interface CatalogProduct {
@@ -21,6 +27,7 @@ export interface CatalogProduct {
   productId: string;
   productName: string;
   invoiceNumber: string;
+  unit?: MeasureUnit;
   initialPackages: number;
 }
 
@@ -33,6 +40,7 @@ export interface ProductReportRow {
   invoiceNumbers: string;
   productId: string;
   productName: string;
+  unit?: MeasureUnit;
   initialPackages: number | null;
   soldPackages: number;
   soldAllTime: number;
@@ -48,6 +56,7 @@ export interface SaleHistoryLine {
   inventoryName: string;
   invoiceNumber: string;
   productName: string;
+  unit?: MeasureUnit;
   quantity: number;
   salesTotal: number;
   investorNet: number;
@@ -66,6 +75,7 @@ export interface SaleHistoryEntry {
   vendorProfit: number;
   status: CommissionStatus;
   operationPackageCount: number;
+  operationQuantityLabel: string;
   operationSalesTotal: number;
   linesOutsideFilter: boolean;
   lines: SaleHistoryLine[];
@@ -100,6 +110,8 @@ export interface DayPoint {
 export interface SalesDashboardReport {
   packagesSold: number;
   packagesAvailable: number | null;
+  soldByUnit: Array<{ unit: MeasureUnit; amount: number }>;
+  availableByUnit: Array<{ unit: MeasureUnit; amount: number }>;
   salesTotal: number;
   investorNet: number;
   investorPerPackage: number | null;
@@ -141,10 +153,10 @@ function inDateRange(day: string, filters: DashboardFilters): boolean {
   return true;
 }
 
-function matchesScope(line: { inventoryId: string; productId: string }, filters: DashboardFilters): boolean {
+function matchesScope(line: { inventoryId: string; productId: string; unit?: unknown }, filters: DashboardFilters): boolean {
   if (filters.inventoryId && line.inventoryId !== filters.inventoryId) return false;
   if (filters.productId && line.productId !== filters.productId) return false;
-  return true;
+  return matchesMeasureFilter(line.unit, filters.unit);
 }
 
 function commissionStatus(generated: number, paid: number): CommissionStatus {
@@ -203,7 +215,7 @@ export function buildSalesDashboard(
   for (const item of allLines) {
     if (!matchesScope(item.line, filters)) continue;
     const key = `${item.line.inventoryId}:${item.line.productId}`;
-    soldAllTime.set(key, (soldAllTime.get(key) || 0) + item.line.quantity);
+    soldAllTime.set(key, (soldAllTime.get(key) || 0) + saleLineAmount(item.line));
   }
 
   let salesCents = 0;
@@ -211,6 +223,7 @@ export function buildSalesDashboard(
   let generatedCents = 0;
   let paidCents = 0;
   let packagesSold = 0;
+  const soldByUnit = new Map<MeasureUnit, number>();
   const productMap = new Map<string, ProductReportRow & { salesCents: number; investorCents: number; vendorCents: number; paidCents: number; invoices: Set<string> }>();
   const dayMap = new Map<string, { packages: number; investorCents: number; generatedCents: number }>();
 
@@ -218,7 +231,10 @@ export function buildSalesDashboard(
     const moneyLine = centsOf(byLine.get(lineKey(item.sale.operationId, item.index)), item.line.vendorProfit);
     const saleCents = toCents(item.line.salesTotal);
     const investor = toCents(item.line.investorNet);
-    packagesSold += item.line.quantity;
+    const amount = saleLineAmount(item.line);
+    const unit = productMeasureUnit(item.line);
+    soldByUnit.set(unit, (soldByUnit.get(unit) || 0) + amount);
+    if (unit === "package") packagesSold += amount;
     salesCents += saleCents;
     investorCents += investor;
     generatedCents += moneyLine.generated;
@@ -231,6 +247,7 @@ export function buildSalesDashboard(
       invoiceNumbers: "",
       productId: item.line.productId,
       productName: item.line.productName,
+      unit: productMeasureUnit(item.line),
       initialPackages: null,
       soldPackages: 0,
       soldAllTime: 0,
@@ -246,7 +263,7 @@ export function buildSalesDashboard(
       paidCents: 0,
       invoices: new Set<string>(),
     };
-    current.soldPackages += item.line.quantity;
+    current.soldPackages += amount;
     current.salesCents += saleCents;
     current.investorCents += investor;
     current.vendorCents += moneyLine.generated;
@@ -256,7 +273,7 @@ export function buildSalesDashboard(
     current.productName = item.line.productName || current.productName;
     productMap.set(key, current);
     const day = dayMap.get(item.day) || { packages: 0, investorCents: 0, generatedCents: 0 };
-    day.packages += item.line.quantity;
+    if (unit === "package") day.packages += amount;
     day.investorCents += investor;
     day.generatedCents += moneyLine.generated;
     dayMap.set(item.day, day);
@@ -269,6 +286,7 @@ export function buildSalesDashboard(
     productId: string,
     productName: string,
     invoiceNumber: string,
+    unit?: MeasureUnit,
   ) => ({
     key,
     inventoryId,
@@ -276,6 +294,7 @@ export function buildSalesDashboard(
     invoiceNumbers: "",
     productId,
     productName,
+    unit,
     initialPackages: null,
     soldPackages: 0,
     soldAllTime: 0,
@@ -295,7 +314,7 @@ export function buildSalesDashboard(
     if (!matchesScope(product, filters)) continue;
     const key = `${product.inventoryId}:${product.productId}`;
     if (productMap.has(key)) continue;
-    productMap.set(key, blankRow(key, product.inventoryId, product.inventoryName, product.productId, product.productName, product.invoiceNumber));
+    productMap.set(key, blankRow(key, product.inventoryId, product.inventoryName, product.productId, product.productName, product.invoiceNumber, product.unit));
   }
   for (const item of allLines) {
     if (!matchesScope(item.line, filters)) continue;
@@ -308,15 +327,21 @@ export function buildSalesDashboard(
       item.line.productId,
       item.line.productName,
       item.line.invoiceNumber,
+      productMeasureUnit(item.line),
     ));
   }
 
   const catalogByKey = new Map(catalog.map((product) => [`${product.inventoryId}:${product.productId}`, product]));
   let availableKnown = 0;
   let availableCount = 0;
+  const availableByUnit = new Map<MeasureUnit, number>();
   for (const product of catalog) {
     if (!matchesScope(product, filters)) continue;
-    availableKnown += product.initialPackages - (soldAllTime.get(`${product.inventoryId}:${product.productId}`) || 0);
+    const unit = productMeasureUnit(product);
+    const available = product.initialPackages - (soldAllTime.get(`${product.inventoryId}:${product.productId}`) || 0);
+    availableByUnit.set(unit, (availableByUnit.get(unit) || 0) + available);
+    if (unit !== "package") continue;
+    availableKnown += available;
     availableCount += 1;
   }
 
@@ -332,6 +357,7 @@ export function buildSalesDashboard(
         invoiceNumbers: [...row.invoices].join(", "),
         productId: row.productId,
         productName: row.productName,
+        unit: source?.unit ?? row.unit,
         initialPackages: initial,
         soldPackages: row.soldPackages,
         soldAllTime: soldAllTime.get(row.key) || 0,
@@ -357,7 +383,8 @@ export function buildSalesDashboard(
           inventoryName: item.line.inventoryName.trim() || names.get(item.line.inventoryId) || "Inventario",
           invoiceNumber: item.line.invoiceNumber,
           productName: item.line.productName,
-          quantity: item.line.quantity,
+          unit: productMeasureUnit(item.line),
+          quantity: saleLineAmount(item.line),
           salesTotal: fromCents(toCents(item.line.salesTotal)),
           investorNet: fromCents(toCents(item.line.investorNet)),
           vendorProfit: fromCents(moneyLine.generated),
@@ -369,7 +396,8 @@ export function buildSalesDashboard(
         };
       });
       const operationLines = sale.lines.map((line) => ({
-        quantity: line.quantity,
+        quantity: saleLineAmount(line),
+        unit: line.unit,
         salesCents: toCents(line.salesTotal),
       }));
       return {
@@ -377,16 +405,17 @@ export function buildSalesDashboard(
         soldAt: sale.soldAt,
         sellerName: sale.sellerName || "Vendedor",
         sellerUid: sale.sellerUid,
-        packageCount: lineRows.reduce((sum, line) => sum + line.quantity, 0),
+        packageCount: lineRows.reduce((sum, line) => sum + (productMeasureUnit(line) === "package" ? line.quantity : 0), 0),
         salesTotal: fromCents(lineRows.reduce((sum, line) => sum + line.salesCents, 0)),
         investorNet: fromCents(lineRows.reduce((sum, line) => sum + line.investorCents, 0)),
         vendorProfit: fromCents(lineRows.reduce((sum, line) => sum + line.generated, 0)),
         status: combineStatus(lineRows.map((line) => line.status)),
-        operationPackageCount: operationLines.reduce((sum, line) => sum + line.quantity, 0),
+        operationPackageCount: operationLines.reduce((sum, line) => sum + (productMeasureUnit(line) === "package" ? line.quantity : 0), 0),
+        operationQuantityLabel: formatQuantityTotals(sale.lines),
         operationSalesTotal: fromCents(operationLines.reduce((sum, line) => sum + line.salesCents, 0)),
         linesOutsideFilter: visible.length !== sale.lines.length,
         lines: lineRows.map(({ generated: _generated, paid: _paid, salesCents: _sales, investorCents: _investor, ...line }) => line),
-      } satisfies SaleHistoryEntry;
+      } as SaleHistoryEntry;
     })
     .filter((sale): sale is SaleHistoryEntry => sale != null)
     .sort((left, right) => right.soldAt.localeCompare(left.soldAt));
@@ -394,8 +423,14 @@ export function buildSalesDashboard(
   const paymentHistory = payments
     .filter((payment) => inDateRange(dayKey(payment.paidAt), filters))
     .map((payment) => {
-      const visible = payment.applications.filter((application) => matchesScope(application, filters));
-      if ((filters.inventoryId || filters.productId) && !visible.length) return null;
+      const visible = payment.applications.filter((application) => {
+        const sale = activeSales.find((item) => item.operationId === application.saleId);
+        const line = sale?.lines[application.lineIndex];
+        const unit = line ? productMeasureUnit(line) : catalogByKey.get(`${application.inventoryId}:${application.productId}`)?.unit;
+        return matchesScope({ ...application, unit }, filters);
+      });
+      const narrowsUnit = activeMeasureFilter(filters.unit) !== "all";
+      if ((filters.inventoryId || filters.productId || narrowsUnit) && !visible.length) return null;
       return {
         operationId: payment.operationId,
         paidAt: payment.paidAt,
@@ -418,6 +453,8 @@ export function buildSalesDashboard(
   return {
     packagesSold,
     packagesAvailable: availableCount ? availableKnown : null,
+    soldByUnit: (["package", "lb", "unit"] as const).filter((unit) => soldByUnit.has(unit)).map((unit) => ({ unit, amount: soldByUnit.get(unit) || 0 })),
+    availableByUnit: (["package", "lb", "unit"] as const).filter((unit) => availableByUnit.has(unit)).map((unit) => ({ unit, amount: availableByUnit.get(unit) || 0 })),
     salesTotal: fromCents(salesCents),
     investorNet: fromCents(investorCents),
     investorPerPackage: packagesSold > 0 ? fromCents(investorCents) / packagesSold : null,

@@ -35,10 +35,12 @@ import ShoppingBagOutlinedIcon from "@mui/icons-material/ShoppingBagOutlined";
 import ShowChartOutlinedIcon from "@mui/icons-material/ShowChartOutlined";
 import { readSellerName, readSoldPackages, registerSale } from "./firestoreSales";
 import { dateTimeLabel, money, percent, qty } from "./format";
+import { formatQuantityTotals, totalsByUnit } from "./quantity";
 import NumericField from "./NumericField";
 import {
   availablePackages,
   reviewSale,
+  saleLineAmount,
   saleProducts,
   stockKey,
   type DraftSaleLine,
@@ -48,7 +50,7 @@ import {
 } from "./saleCommit";
 import { downloadSaleVoucher, printSaleVoucher, vendorCommissionNote, voucherAfterAttempt, voucherPrice } from "./saleVoucher";
 import { useNarrowScreen } from "./screen";
-import { commissionMethodLabel, type PricingInventory } from "./types";
+import { commissionMethodLabel, eachLabel, productMeasureUnit, quantityFieldLabel, quantityNoun, type MeasureUnit, type PricingInventory } from "./types";
 
 function availabilityTone(count: number | null): { background: string; color: string } {
   if (count == null) return { background: "#F4F6F8", color: "#5C6370" };
@@ -56,20 +58,27 @@ function availabilityTone(count: number | null): { background: string; color: st
   return { background: "#FCE8E6", color: "#A50E0E" };
 }
 
-function availabilityLabel(count: number | null): string {
+function availabilityLabel(count: number | null, unit: MeasureUnit = "package"): string {
   if (count == null) return "Consultando";
-  return `${qty(count)} ${count === 1 ? "paquete disponible" : "paquetes disponibles"}`;
+  const noun = count === 1 ? eachLabel(unit) : quantityNoun(unit);
+  return `${qty(count)} ${noun} ${count === 1 ? "disponible" : "disponibles"}`;
 }
 
-function AvailabilityBadge({ count, failed = false }: { count: number | null; failed?: boolean }) {
+function AvailabilityBadge({ count, unit = "package", label, failed = false }: { count: number | null; unit?: MeasureUnit; label?: string; failed?: boolean }) {
   const tone = failed ? { background: "#FCE8E6", color: "#A50E0E" } : availabilityTone(count);
   return (
     <Box sx={{ flexShrink: 0, px: 1, py: 0.35, borderRadius: "999px", bgcolor: tone.background }}>
       <Typography variant="caption" sx={{ fontWeight: 700, color: tone.color, whiteSpace: "nowrap" }}>
-        {failed ? "No disponible" : availabilityLabel(count)}
+        {failed ? "No disponible" : label || availabilityLabel(count, unit)}
       </Typography>
     </Box>
   );
+}
+
+function quantityKind(unit: MeasureUnit): "packages" | "units" | "pounds" {
+  if (unit === "lb") return "pounds";
+  if (unit === "unit") return "units";
+  return "packages";
 }
 
 interface DraftLine extends DraftSaleLine {
@@ -267,9 +276,9 @@ function ProductSheet({
                 {product.inventoryName}
               </Typography>
               <Typography sx={{ fontWeight: 700, fontSize: "0.9375rem", lineHeight: 1.3, color: "#1A56DB" }}>
-                {money(product.appliedPrice)} por paquete
+                {money(product.appliedPrice)} por {eachLabel(product.unit)}
               </Typography>
-              <AvailabilityBadge count={available} failed={stockFailed} />
+              <AvailabilityBadge count={available} unit={product.unit} failed={stockFailed} />
             </Box>
           );
         }) : (
@@ -322,6 +331,7 @@ function SummaryMetric({
   background,
   color,
   emphasis,
+  compact,
 }: {
   icon: ReactNode;
   label: string;
@@ -329,12 +339,13 @@ function SummaryMetric({
   background: string;
   color: string;
   emphasis?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.75, md: 1.25 }, minWidth: 0, px: { xs: 1, md: 1.5 }, py: emphasis ? { xs: 0.85, md: 1.5 } : { xs: 0.75, md: 1.25 }, borderRadius: { xs: "10px", md: 3 }, bgcolor: background }}>
-      <Box sx={{ color, display: "flex", flexShrink: 0 }}>{icon}</Box>
+    <Box sx={{ display: "flex", alignItems: compact ? { xs: "flex-start", md: "center" } : "center", gap: { xs: 0.75, md: 1.25 }, minWidth: 0, height: compact ? "100%" : undefined, px: { xs: compact ? 0.85 : 1, md: 1.5 }, py: emphasis ? { xs: compact ? 0.7 : 0.85, md: 1.5 } : { xs: compact ? 0.65 : 0.75, md: 1.25 }, borderRadius: { xs: "10px", md: 3 }, bgcolor: background }}>
+      <Box sx={{ color, display: "flex", flexShrink: 0, mt: compact ? { xs: "1px", md: 0 } : 0 }}>{icon}</Box>
       <Box sx={{ minWidth: 0 }}>
-        <Typography sx={{ color, display: "block", lineHeight: 1.25, fontSize: { xs: "0.8125rem", md: "0.875rem" }, fontWeight: 600 }}>{label}</Typography>
+        <Typography sx={{ color, display: "block", lineHeight: 1.25, fontSize: { xs: "0.8125rem", md: "0.875rem" }, fontWeight: 600, overflowWrap: compact ? "break-word" : undefined }}>{label}</Typography>
         <Typography sx={{ fontWeight: 800, fontSize: emphasis ? { xs: "1.25rem", md: "1.4rem" } : { xs: "1.125rem", md: "1.25rem" }, lineHeight: 1.2, overflowWrap: "anywhere" }}>{value}</Typography>
       </Box>
     </Box>
@@ -351,7 +362,8 @@ function LineCard({
   onRemove: () => void;
 }) {
   const product = row.product;
-  const availableLabel = row.available == null ? null : qty(row.available);
+  const unit = product?.unit ?? "package";
+  const availableLabel = row.available == null ? null : `${qty(row.available)} ${quantityNoun(unit)}`;
   const availableTone = row.available != null && row.available > 0 ? { background: "#E6F4EA", color: "#0D652D" } : { background: "#FEF4D6", color: "#8D4E00" };
   return (
     <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)", borderColor: "rgba(26, 28, 30, 0.08)" }}>
@@ -374,13 +386,13 @@ function LineCard({
         </Box>
         {product ? (
           <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr 1fr", sm: "1fr 1fr 1fr", md: "repeat(5, 1fr)" }, p: { xs: 1, md: 1.5 }, borderRadius: "12px", bgcolor: "#F8F9FB" }}>
-            <Fact label="Paquetes iniciales" value={qty(product.initialPackages)} />
+            <Fact label={`${quantityFieldLabel(unit)} iniciales`} value={qty(product.initialPackages)} />
             <Fact label="Vendidos antes" value={qty(row.soldPackages)} />
             <Fact label="Disponibles" value={availableLabel || "—"} />
             <Fact label="Precio de venta" value={priceLabel(product.appliedPrice)} />
             <Fact label="Método" value={product.commissionMethod === "3" ? "Opción 3" : "Opción 2"} />
-            <Fact label="Comisión / paquete" value={money(product.vendorProfitPerPack)} />
-            <Fact label="Inversionista / paquete" value={money(product.investorNetPerPack)} />
+            <Fact label={`Comisión / ${eachLabel(unit)}`} value={money(product.vendorProfitPerPack)} />
+            <Fact label={`Inversionista / ${eachLabel(unit)}`} value={money(product.investorNetPerPack)} />
           </Box>
         ) : null}
         {product ? (
@@ -408,12 +420,12 @@ function LineCard({
             </Box>
           ) : null}
           <Typography component="label" sx={{ display: "block", color: "#1A56DB", fontWeight: 700, fontSize: { xs: "1rem", md: "1.0625rem" }, lineHeight: 1.3 }}>
-            Cantidad de paquetes a vender
+            {unit === "lb" ? "Libras a vender" : unit === "unit" ? "Unidades a vender" : "Paquetes a vender"}
           </Typography>
           <NumericField
-            label="Cantidad de paquetes a vender"
+            label={unit === "lb" ? "Libras a vender" : unit === "unit" ? "Unidades a vender" : "Paquetes a vender"}
             placeholder="Introduce la cantidad"
-            kind="packages"
+            kind={quantityKind(unit)}
             size="medium"
             value={row.quantity}
             maximum={row.available == null ? undefined : Math.max(0, row.available)}
@@ -508,16 +520,24 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
     return totals;
   }, [catalog, sold, stockReady]);
   const availableByInventory = useMemo(() => {
-    const totals = new Map<string, number>();
-    if (!stockReady) return totals;
+    const groups = new Map<string, Array<{ unit: MeasureUnit; quantity: number }>>();
+    if (!stockReady) return new Map<string, { label: string; count: number }>();
     const seen = new Set<string>();
     for (const product of catalog) {
       const key = stockKey(product.inventoryId, product.productId);
       if (seen.has(key)) continue;
       seen.add(key);
-      totals.set(product.inventoryId, (totals.get(product.inventoryId) || 0) + (availableByKey.get(key) || 0));
+      const rows = groups.get(product.inventoryId) ?? [];
+      rows.push({ unit: product.unit, quantity: availableByKey.get(key) || 0 });
+      groups.set(product.inventoryId, rows);
     }
-    return totals;
+    return new Map([...groups.entries()].map(([id, rows]) => {
+      const totals = totalsByUnit(rows);
+      const label = totals.length === 1
+        ? availabilityLabel(totals[0].amount, totals[0].unit)
+        : formatQuantityTotals(rows);
+      return [id, { label, count: totals.some((item) => item.amount > 0) ? 1 : 0 }] as const;
+    }));
   }, [availableByKey, catalog, stockReady]);
   const addedKeys = useMemo(
     () => new Set(lines.map((line) => stockKey(line.inventoryId, line.productId))),
@@ -530,16 +550,14 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
   );
   const availableAfterSale = useMemo(() => {
     const seen = new Set<string>();
-    let total = 0;
-    let known = false;
+    const rows: Array<{ unit?: MeasureUnit; quantity: number }> = [];
     for (const row of review.rows) {
       const key = stockKey(row.inventoryId, row.productId);
       if (seen.has(key) || row.availableAfter == null) continue;
       seen.add(key);
-      known = true;
-      total += row.availableAfter;
+      rows.push({ unit: row.product?.unit, quantity: row.availableAfter });
     }
-    return known ? total : null;
+    return rows.length ? formatQuantityTotals(rows) : null;
   }, [review.rows]);
 
   useEffect(() => {
@@ -577,7 +595,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        setStockError(reason instanceof Error ? reason.message : "No se pudieron consultar los paquetes disponibles.");
+        setStockError(reason instanceof Error ? reason.message : "No se pudo consultar la cantidad disponible.");
         if (!background) setStockReady(false);
       });
     return () => {
@@ -685,7 +703,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
       const next = { ...current };
       for (const line of registered.lines) {
         const key = stockKey(line.inventoryId, line.productId);
-        next[key] = (next[key] || 0) + line.quantity;
+        next[key] = (next[key] || 0) + saleLineAmount(line);
       }
       return next;
     });
@@ -701,8 +719,9 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
     <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
       <Box>
         <Typography variant="h5">Ventas</Typography>
-        <Typography variant="body2" color="text.secondary">
-          {sellerName ? `Vendedor: ${sellerName}` : "El nombre se toma del perfil del usuario."} Una venta puede incluir productos de varios inventarios y facturas.
+        <Typography variant="body2" color="text.secondary" sx={{ display: "grid" }}>
+          <span>{sellerName ? `Vendedor: ${sellerName}` : "El nombre se toma del perfil del usuario."}</span>
+          <span>Una venta puede incluir productos de varios inventarios y facturas.</span>
         </Typography>
       </Box>
       {error && !confirming ? <Notice tone="error" action={<Button size="small" onClick={() => setError("")}>Cerrar</Button>}>{registrationError(error)}</Notice> : null}
@@ -739,7 +758,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
                     const inventory = inventories.find((item) => item.id === id);
                     const name = inventory?.name || id;
                     const available = availableByInventory.get(id);
-                    return stockReady && available != null ? `${name} — ${availabilityLabel(available)}` : name;
+                    return stockReady && available ? `${name} — ${available.label}` : name;
                   }).join(", ");
                 },
               },
@@ -750,7 +769,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
                 <Typography sx={{ flex: "1 1 140px", minWidth: 0, fontWeight: 700, overflowWrap: "anywhere" }}>
                   {inventory.name}
                 </Typography>
-                <AvailabilityBadge count={stockReady ? availableByInventory.get(inventory.id) ?? 0 : null} failed={stockFailed} />
+                <AvailabilityBadge count={stockReady ? availableByInventory.get(inventory.id)?.count ?? 0 : null} label={availableByInventory.get(inventory.id)?.label} failed={stockFailed} />
               </MenuItem>
             ))}
           </TextField>
@@ -868,10 +887,10 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
                           {product.inventoryName}
                         </Typography>
                         <Typography sx={{ fontSize: { xs: "0.9375rem", md: "0.875rem" }, fontWeight: 700, lineHeight: 1.3, color: "#1A56DB" }}>
-                          {money(product.appliedPrice)} por paquete
+                          {money(product.appliedPrice)} por {eachLabel(product.unit)}
                         </Typography>
                       </Box>
-                      <AvailabilityBadge count={available} failed={stockFailed} />
+                      <AvailabilityBadge count={available} unit={product.unit} failed={stockFailed} />
                     </Box>
                   );
                 }}
@@ -909,7 +928,7 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
               )}
               {showingSelectedProduct && selectedToAdd ? (
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.2, px: 0.5, pt: 0.5 }}>
-                  {selectedToAdd.inventoryName} · {money(selectedToAdd.appliedPrice)} por paquete · {stockFailed ? "No disponible" : availabilityLabel(productAvailable(selectedToAdd))}
+                  {selectedToAdd.inventoryName} · {money(selectedToAdd.appliedPrice)} por {eachLabel(selectedToAdd.unit)} · {stockFailed ? "No disponible" : availabilityLabel(productAvailable(selectedToAdd), selectedToAdd.unit)}
                 </Typography>
               ) : null}
             </Box>
@@ -953,16 +972,24 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
         <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)", borderColor: "rgba(26, 28, 30, 0.08)" }}>
           <CardContent sx={{ display: "grid", gap: 1 }}>
             <Typography sx={{ fontWeight: 700, fontSize: { xs: "1.05rem", md: "1.125rem" } }}>Resumen de la venta</Typography>
-            <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
-              <Box sx={{ display: "grid", gap: 0.75, alignContent: "start" }}>
-                <SummaryMetric icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(review.totals.salesTotal)} background="#E6F4EA" color="#0D652D" emphasis />
-                <SummaryMetric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Paquetes de la venta" value={qty(review.totals.packageCount)} background="#F8F9FB" color="#44474E" />
-                <SummaryMetric icon={<CheckCircleOutlinedIcon fontSize="small" />} label="Disponibles después" value={availableAfterSale == null ? "—" : qty(availableAfterSale)} background="#E7EDF4" color="#3A4654" />
+            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: { xs: 0.75, md: 1 }, alignItems: "stretch" }}>
+              <Box sx={{ height: "100%", gridColumn: { xs: 1, md: 1 }, gridRow: { xs: 1, md: 1 } }}>
+                <SummaryMetric compact icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(review.totals.salesTotal)} background="#E6F4EA" color="#0D652D" emphasis />
               </Box>
-              <Box sx={{ display: "grid", gap: 0.75, alignContent: "start" }}>
-                <SummaryMetric icon={<ShowChartOutlinedIcon fontSize="small" />} label="Utilidad bruta" value={money(review.totals.grossProfit)} background="#F8F9FB" color="#44474E" />
-                <SummaryMetric icon={<PersonOutlineOutlinedIcon fontSize="small" />} label="Ganancia del vendedor" value={money(review.totals.vendorProfit)} background="#F7F4FC" color="#6D4BA1" />
-                <SummaryMetric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Ganancia del inversionista" value={money(review.totals.investorNet)} background="#FFF7F0" color="#C05A12" emphasis />
+              <Box sx={{ height: "100%", gridColumn: { xs: 2, md: 1 }, gridRow: { xs: 1, md: 2 } }}>
+                <SummaryMetric compact icon={<Inventory2OutlinedIcon fontSize="small" />} label="Cantidad de la venta" value={formatQuantityTotals(review.rows.flatMap((row) => row.quantity != null && row.quantity > 0 ? [{ unit: row.product?.unit, quantity: row.quantity }] : []))} background="#F8F9FB" color="#44474E" />
+              </Box>
+              <Box sx={{ height: "100%", gridColumn: { xs: 1, md: 1 }, gridRow: { xs: 2, md: 3 } }}>
+                <SummaryMetric compact icon={<CheckCircleOutlinedIcon fontSize="small" />} label="Disponibles después" value={availableAfterSale ?? "—"} background="#E7EDF4" color="#3A4654" />
+              </Box>
+              <Box sx={{ height: "100%", gridColumn: { xs: 2, md: 2 }, gridRow: { xs: 2, md: 1 } }}>
+                <SummaryMetric compact icon={<ShowChartOutlinedIcon fontSize="small" />} label="Utilidad bruta" value={money(review.totals.grossProfit)} background="#F8F9FB" color="#44474E" />
+              </Box>
+              <Box sx={{ height: "100%", gridColumn: { xs: 1, md: 2 }, gridRow: { xs: 3, md: 2 } }}>
+                <SummaryMetric compact icon={<PersonOutlineOutlinedIcon fontSize="small" />} label="Ganancia del vendedor" value={money(review.totals.vendorProfit)} background="#F7F4FC" color="#6D4BA1" />
+              </Box>
+              <Box sx={{ height: "100%", gridColumn: { xs: 2, md: 2 }, gridRow: { xs: 3, md: 3 } }}>
+                <SummaryMetric compact icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Ganancia del inversionista" value={money(review.totals.investorNet)} background="#FFF7F0" color="#C05A12" emphasis />
               </Box>
             </Box>
           </CardContent>
@@ -1057,22 +1084,22 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
                     </IconButton>
                   </Box>
                   <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "baseline", minWidth: 0 }}>
-                    <Typography variant="body2" color="text.secondary" sx={{ minWidth: 0, overflowWrap: "break-word" }}>Precio por paquete {voucherPrice(row.product?.appliedPrice || 0)}</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ minWidth: 0, overflowWrap: "break-word" }}>Precio por {eachLabel(productMeasureUnit(row.product ?? {}))} {voucherPrice(row.product?.appliedPrice || 0)}</Typography>
                     <Typography sx={{ fontWeight: 800, fontSize: "1.05rem", flexShrink: 0 }}>{row.financials ? money(row.financials.salesTotal) : "—"}</Typography>
                   </Box>
                   <Box sx={{ display: "grid", gap: 0.75, p: 1.25, borderRadius: "16px", bgcolor: "#F3F7FE", border: "1.5px solid #1A56DB", minWidth: 0 }}>
                     {row.available != null ? (
                       <Typography sx={{ fontWeight: 700, fontSize: "0.875rem", lineHeight: 1.3, color: row.available > 0 ? "#0D652D" : "#8D4E00" }}>
-                        Máximo disponible: {qty(row.available)}
+                        Máximo disponible: {qty(row.available)} {quantityNoun(row.product?.unit ?? "package")}
                       </Typography>
                     ) : null}
                     <Typography component="label" sx={{ display: "block", color: "#1A56DB", fontWeight: 700, fontSize: "1rem", lineHeight: 1.3 }}>
-                      Cantidad de paquetes
+                      {quantityFieldLabel(row.product?.unit ?? "package")}
                     </Typography>
                     <NumericField
-                      label="Cantidad de paquetes"
+                      label={quantityFieldLabel(row.product?.unit ?? "package")}
                       placeholder="Introduce la cantidad"
-                      kind="packages"
+                      kind={quantityKind(row.product?.unit ?? "package")}
                       size="medium"
                       value={row.quantity}
                       maximum={row.available == null ? undefined : Math.max(0, row.available)}
@@ -1109,7 +1136,8 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
               <ShoppingBagOutlinedIcon sx={{ color: "#0D652D", fontSize: 28 }} />
             </Box>
             <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr 1fr", sm: "1fr 1fr" } }}>
-              <SummaryMetric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Total de paquetes" value={qty(review.totals.packageCount)} background="#F8F9FB" color="#44474E" />
+              <SummaryMetric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Cantidad de la venta" value={formatQuantityTotals(review.rows.flatMap((row) => row.quantity != null && row.quantity > 0 ? [{ unit: row.product?.unit, quantity: row.quantity }] : []))} background="#F8F9FB" color="#44474E" />
+              <SummaryMetric icon={<CheckCircleOutlinedIcon fontSize="small" />} label="Disponibles después" value={availableAfterSale ?? "—"} background="#E7EDF4" color="#3A4654" />
               <SummaryMetric icon={<ShowChartOutlinedIcon fontSize="small" />} label="Utilidad bruta" value={money(review.totals.grossProfit)} background="#F8F9FB" color="#44474E" />
               <SummaryMetric icon={<PersonOutlineOutlinedIcon fontSize="small" />} label="Ganancia del vendedor" value={money(review.totals.vendorProfit)} background="#F7F4FC" color="#6D4BA1" />
               <SummaryMetric icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} label="Ganancia del inversionista" value={money(review.totals.investorNet)} background="#FFF7F0" color="#C05A12" />
@@ -1174,8 +1202,8 @@ export default function SalesRegister({ inventories }: { inventories: PricingInv
                 <Typography sx={{ fontWeight: 800, color: "#0D652D", fontSize: "1.45rem", lineHeight: 1.15 }}>{money(voucher.salesTotal)}</Typography>
               </Box>
               <Box sx={{ px: 1.5, py: 1.1, borderRadius: "12px", bgcolor: "#F8F9FB" }}>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Total de paquetes vendidos</Typography>
-                <Typography sx={{ fontWeight: 700 }}>{qty(voucher.packageCount)}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Cantidad vendida</Typography>
+                <Typography sx={{ fontWeight: 700 }}>{formatQuantityTotals(voucher.lines)}</Typography>
               </Box>
               <Box sx={{ px: 1.5, py: 1.1, borderRadius: "12px", bgcolor: "#F8F9FB" }}>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Identificador de operación</Typography>

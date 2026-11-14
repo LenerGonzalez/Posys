@@ -1,5 +1,6 @@
 import { hasRole } from "../utils/roles";
 import { toCents, type CommissionBalance, type CommissionQueue } from "./commissionCommit";
+import { readSaleMilli, readSoldMilli, storedSoldCounter } from "./quantity";
 import { stockKey, type PricingSale, type SaleLineSnapshot, type StockBalance } from "./saleCommit";
 
 export interface SaleVoidActor {
@@ -11,7 +12,7 @@ export interface SaleVoidActor {
 export interface SaleStockDemand {
   inventoryId: string;
   productId: string;
-  quantity: number;
+  milli: number;
 }
 
 export interface SaleVoidState {
@@ -60,12 +61,13 @@ export function shouldRepairSaleBalances(sale: PricingSale): boolean {
 export function saleStockDemand(lines: SaleLineSnapshot[]): SaleStockDemand[] | string {
   const grouped = new Map<string, SaleStockDemand>();
   for (const line of lines) {
-    if (!line.inventoryId || !line.productId || !Number.isInteger(line.quantity) || line.quantity <= 0) {
+    const reading = readSaleMilli(line);
+    if (!line.inventoryId || !line.productId || !reading.ok || reading.milli <= 0) {
       return "La cantidad de la venta no es válida. La venta no se anuló.";
     }
     const key = stockKey(line.inventoryId, line.productId);
-    const current = grouped.get(key) ?? { inventoryId: line.inventoryId, productId: line.productId, quantity: 0 };
-    current.quantity += line.quantity;
+    const current = grouped.get(key) ?? { inventoryId: line.inventoryId, productId: line.productId, milli: 0 };
+    current.milli += reading.milli;
     grouped.set(key, current);
   }
   return [...grouped.values()];
@@ -93,10 +95,21 @@ export function planSaleVoid(actor: SaleVoidActor, voidedAt: string, state: Sale
       && row.inventoryId === item.inventoryId
       && row.productId === item.productId
     ));
-    if (!balance || !Number.isInteger(balance.soldPackages) || balance.soldPackages < item.quantity) {
-      return { status: "rejected", message: "No se encontró el contador de paquetes o quedaría por debajo de cero. La venta no se anuló." };
+    const counter = balance ? readSoldMilli(balance) : null;
+    if (!balance || !counter?.ok || counter.milli < item.milli) {
+      return { status: "rejected", message: "No se encontró el contador o no alcanza para devolver la cantidad. La venta no se anuló." };
     }
-    stock.push({ ...balance, soldPackages: balance.soldPackages - item.quantity, updatedAt: voidedAt });
+    const stored = storedSoldCounter(counter.milli - item.milli);
+    if (!stored) {
+      return { status: "rejected", message: "No se encontró el contador o no alcanza para devolver la cantidad. La venta no se anuló." };
+    }
+    stock.push({
+      ownerUid: balance.ownerUid,
+      inventoryId: balance.inventoryId,
+      productId: balance.productId,
+      updatedAt: voidedAt,
+      ...stored,
+    });
   }
 
   const balances: VoidBalanceWrite[] = sale.lines.map((line, lineIndex) => {

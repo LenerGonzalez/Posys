@@ -19,13 +19,15 @@ import HistoryIcon from "@mui/icons-material/History";
 import SaveIcon from "@mui/icons-material/Save";
 import Comissions from "./Comissions";
 import Dashboard from "./Dashboard";
+import MeasureFilterField from "./MeasureFilterField";
+import { DEFAULT_MEASURE_FILTER, linesForMeasure, quantityCaption, totalsForLines, type MeasureFilter } from "./measureFilter";
 import { dateTimeLabel, money } from "./format";
 import { resolveCommissionMethod } from "./pricingEngine";
 import { OrderProductsPanel } from "./MainInventory";
 import PricesList from "./PricesList";
 import Settings from "./Settings";
 import { useNarrowScreen } from "./screen";
-import type { ComputedInventory, PricingInventory, ProductInput } from "./types";
+import { patchProductKeepingUnit, type ComputedInventory, type PricingInventory, type ProductInput } from "./types";
 
 const TABS = ["Configuración", "OM - Productos", "Resumen", "Precios", "Utilidades"];
 
@@ -55,14 +57,20 @@ export default function InventoryWorkspace({
   initialTab?: number;
 }) {
   const [tab, setTab] = useState(initialTab);
+  const [measure, setMeasure] = useState<MeasureFilter>(DEFAULT_MEASURE_FILTER);
   const [historyOpen, setHistoryOpen] = useState(false);
   const narrow = useNarrowScreen();
   const [exporting, setExporting] = useState(false);
+  const visibleLines = linesForMeasure(computed.lines, inventory.products, measure);
+  const coversInventory = visibleLines.length === computed.lines.length;
+  const visibleTotals = totalsForLines(computed.totals, visibleLines, coversInventory);
+  const units = new Map(inventory.products.map((product) => [product.id, product.unit]));
+  const quantityLabel = quantityCaption(measure, visibleLines.map((line) => ({ unit: units.get(line.id), quantity: line.packages })));
   const patchProduct = (id: string, patch: Partial<ProductInput>) => {
     onChange({
       ...inventory,
       products: inventory.products.map((product) =>
-        product.id === id ? { ...product, ...patch } : product,
+        product.id === id ? patchProductKeepingUnit(product, patch) : product,
       ),
     });
   };
@@ -111,6 +119,9 @@ export default function InventoryWorkspace({
           </Box>
         </Toolbar>
       </AppBar>
+      <Box sx={{ maxWidth: { sm: 240 } }}>
+        <MeasureFilterField value={measure} onChange={setMeasure} />
+      </Box>
       <Tabs
         value={tab}
         onChange={(_event, value) => setTab(value)}
@@ -134,15 +145,16 @@ export default function InventoryWorkspace({
           <OrderProductsPanel
             inventory={inventory}
             lines={computed.lines}
+            measure={measure}
             onChange={(products) => onChange({ ...inventory, products })}
             onImportFile={onImportFile}
             onDownloadTemplate={onDownloadTemplate}
           />
         ) : null}
-        {tab === 2 ? <Dashboard totals={computed.totals} history={inventory.history} /> : null}
+        {tab === 2 ? <Dashboard totals={visibleTotals} history={coversInventory ? inventory.history : []} quantityLabel={quantityLabel} mixedHistory={!coversInventory} /> : null}
         {tab === 3 ? (
           <PricesList
-            lines={computed.lines}
+            lines={visibleLines}
             products={inventory.products}
             commissionMethod={resolveCommissionMethod(inventory.settings.commissionMethod)}
             onChangeProduct={patchProduct}
@@ -150,8 +162,8 @@ export default function InventoryWorkspace({
         ) : null}
         {tab === 4 ? (
           <Comissions
-            lines={computed.lines}
-            totals={computed.totals}
+            lines={visibleLines}
+            totals={visibleTotals}
             products={inventory.products}
             onChangeProduct={patchProduct}
           />

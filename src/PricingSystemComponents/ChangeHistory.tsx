@@ -16,9 +16,11 @@ import {
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { dateTimeLabel, money, percent, qty } from "./format";
+import MeasureFilterField from "./MeasureFilterField";
+import { DEFAULT_MEASURE_FILTER, matchesMeasureFilter, type MeasureFilter } from "./measureFilter";
 import { priceOrigin } from "./priceCatalog";
 import { uniqueInventories } from "./profitability";
-import type { PriceMethod, PricingInventory } from "./types";
+import { productMeasureUnit, type PriceMethod, type PricingInventory } from "./types";
 
 function priceInputLabel(method: PriceMethod, manual: number | null, margin: number | null): string {
   if (method === "PRECIO") return money(manual ?? 0);
@@ -34,6 +36,7 @@ export default function ChangeHistory({
 }) {
   const options = useMemo(() => uniqueInventories(inventories), [inventories]);
   const [inventoryId, setInventoryId] = useState("");
+  const [measure, setMeasure] = useState<MeasureFilter>(DEFAULT_MEASURE_FILTER);
   const rows = useMemo(() => {
     return options
       .filter((item) => !inventoryId || item.id === inventoryId)
@@ -50,13 +53,17 @@ export default function ChangeHistory({
     return options
       .filter((item) => !inventoryId || item.id === inventoryId)
       .flatMap((item) =>
-        (item.priceChanges ?? []).map((change) => ({
-          inventoryName: item.name || "Sin nombre",
-          change,
-        })),
+        (item.priceChanges ?? []).flatMap((change) => {
+          const product = item.products.find((entry) => entry.id === change.productId);
+          if (!matchesMeasureFilter(product ? product.unit : productMeasureUnit({}), measure)) return [];
+          return [{
+            inventoryName: item.name || "Sin nombre",
+            change,
+          }];
+        }),
       )
       .sort((left, right) => right.change.changedAt.localeCompare(left.change.changedAt));
-  }, [options, inventoryId]);
+  }, [options, inventoryId, measure]);
 
   return (
     <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
@@ -73,18 +80,23 @@ export default function ChangeHistory({
       </Box>
       <Card>
         <CardContent sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
+          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "minmax(0, 360px) minmax(180px, 220px)" } }}>
           <TextField
             select
             label="Inventario"
             value={inventoryId}
             onChange={(event) => setInventoryId(event.target.value)}
-            sx={{ maxWidth: 360 }}
           >
             <MenuItem value="">Todos</MenuItem>
             {options.map((item) => (
               <MenuItem key={item.id} value={item.id}>{item.name || "Sin nombre"}</MenuItem>
             ))}
           </TextField>
+          <MeasureFilterField value={measure} onChange={setMeasure} />
+          </Box>
+          {measure !== "package" ? (
+            <Alert severity="info">La cantidad guardada no se puede separar por unidad. Los importes siguen siendo los del inventario completo en ese momento.</Alert>
+          ) : null}
           {!rows.length ? (
             <Alert severity="info">Todavía no hay guardados en este criterio.</Alert>
           ) : (
@@ -103,7 +115,7 @@ export default function ChangeHistory({
                       <TableCell sx={{ whiteSpace: "nowrap" }}>{dateTimeLabel(row.snapshot.savedAt)}</TableCell>
                       <TableCell>{row.inventoryName}</TableCell>
                       <TableCell>{qty(row.snapshot.productCount)}</TableCell>
-                      <TableCell>{qty(row.snapshot.packages)}</TableCell>
+                      <TableCell>{measure === "package" ? qty(row.snapshot.packages) : "—"}</TableCell>
                       <TableCell sx={{ whiteSpace: "nowrap" }}>{money(row.snapshot.purchaseSubtotal)}</TableCell>
                       <TableCell sx={{ whiteSpace: "nowrap" }}>{money(row.snapshot.logisticsCost)}</TableCell>
                       <TableCell sx={{ whiteSpace: "nowrap" }}>{money(row.snapshot.projectedSales)}</TableCell>

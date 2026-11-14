@@ -32,9 +32,13 @@ function Kpi({
 export default function Dashboard({
   totals,
   history,
+  quantityLabel,
+  mixedHistory = false,
 }: {
   totals: ComputedTotals;
   history: InventorySnapshot[];
+  quantityLabel?: string;
+  mixedHistory?: boolean;
 }) {
   const latest = history[history.length - 1];
   const method3 = totals.commissionMethod === "3";
@@ -48,7 +52,7 @@ export default function Dashboard({
           gridTemplateColumns: { xs: "1fr 1fr", lg: "repeat(4, 1fr)" },
         }}
       >
-        <Kpi label="Productos" value={qty(totals.productCount)} hint={`${qty(totals.packages)} paquetes`} />
+        <Kpi label="Productos" value={qty(totals.productCount)} hint={quantityLabel ?? `${qty(totals.packages)} paquetes`} />
         <Kpi label="Subtotal de compra" value={money(totals.purchaseSubtotal)} />
         <Kpi label="Gastos logísticos" value={money(totals.logisticsCost)} hint={`Costo con logística ${money(totals.costWithLogistics)}`} />
         <Kpi label="Venta proyectada" value={money(totals.projectedSales)} />
@@ -85,7 +89,11 @@ export default function Dashboard({
               </Box>
             ))}
           </Box>
-          {latest ? (
+          {mixedHistory ? (
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2 }}>
+              El último guardado es del inventario completo y no se separa por unidad. Los importes de arriba son el cálculo actual de la unidad seleccionada.
+            </Typography>
+          ) : latest ? (
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2 }}>
               Último guardado: utilidad neta {money(latest.investorNet)}. El resumen en pantalla siempre usa los datos actuales de este inventario.
             </Typography>

@@ -26,6 +26,8 @@ import { downloadPriceCatalog, type PriceExportColumnKey } from "./excelExport";
 import { readSoldPackages } from "./firestoreSales";
 import { stockKey } from "./saleCommit";
 import { money, percent } from "./format";
+import MeasureFilterField from "./MeasureFilterField";
+import { activeMeasureFilter } from "./measureFilter";
 import NumericField from "./NumericField";
 import PriceDetailDialog from "./PriceDetailDialog";
 import PriceEditDialog from "./PriceEditDialog";
@@ -43,7 +45,8 @@ import {
   type PriceRow,
 } from "./priceCatalog";
 import { dialogActionsSx, dialogFormSx, upDesktop, useDesktopScreen, useNarrowScreen } from "./screen";
-import type { ComputedLine, PricingInventory } from "./types";
+import { productQuantity } from "./quantity";
+import { measureUnitLabel, type ComputedLine, type PricingInventory } from "./types";
 
 function invoiceLabel(orderCode: string): string {
   const code = orderCode.trim();
@@ -139,6 +142,7 @@ export default function PriceRanking({
         line: lines.get(row.id)!,
         manualPrice: row.manualPrice,
         productMargin: row.targetMarginPercent,
+        unit: row.unit,
       })), new Date(), selected);
       const scope = filtersActive ? " Se exportaron solo los productos que coinciden con los filtros." : "";
       setExportNotice(`Se descargó ${filename}.${scope}`);
@@ -222,6 +226,9 @@ export default function PriceRanking({
       ) : null}
       <Card>
         <CardContent sx={{ display: "grid", gap: 1.25, p: { xs: 1.5, sm: 2 } }}>
+          <Box sx={{ maxWidth: { sm: 240 } }}>
+            <MeasureFilterField value={activeMeasureFilter(filters.unit)} onChange={(unit) => setFilters((current) => ({ ...current, unit }))} />
+          </Box>
           {desktop ? (
             <Box sx={{ display: "grid", gap: 1, alignItems: "center", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr) auto" }}>
               <TextField
@@ -345,6 +352,7 @@ export default function PriceRanking({
                     <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1 }}>
                       <Box sx={{ minWidth: 0 }}>
                         <Typography sx={{ fontWeight: 800, fontSize: "0.95rem", lineHeight: 1.25, overflowWrap: "anywhere" }}>{row.product}</Typography>
+                        <Typography sx={{ display: "block", color: "text.secondary", fontSize: "0.75rem", lineHeight: 1.3 }}>{measureUnitLabel(row.unit)}</Typography>
                         {line ? (
                           <Typography sx={{ display: "inline-flex", maxWidth: "100%", mt: 0.4, px: 0.9, py: 0.2, borderRadius: "999px", bgcolor: "#FEF4D6", color: "#8D4E00", fontWeight: 700, fontSize: "0.75rem", lineHeight: 1.35 }}>
                             Costo {money(line.costPerPack)}
@@ -397,7 +405,10 @@ export default function PriceRanking({
                     <TableRow key={row.id} hover>
                       <TableCell sx={{ overflowWrap: "anywhere" }}>{names.get(row.inventoryId) || "Inventario"}</TableCell>
                       <TableCell sx={{ whiteSpace: "nowrap" }}>{invoiceLabel(row.orderCode)}</TableCell>
-                      <TableCell sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>{row.product}</TableCell>
+                      <TableCell sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>
+                        {row.product}
+                        <Typography sx={{ display: "block", color: "text.secondary", fontWeight: 600, fontSize: "0.75rem", lineHeight: 1.3 }}>{measureUnitLabel(row.unit)}</Typography>
+                      </TableCell>
                       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                         <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "1rem", lineHeight: 1.15 }}>{money(row.price)}</Typography>
                         {line ? (
@@ -452,8 +463,9 @@ export default function PriceRanking({
         productName={detailRow?.product || ""}
         inventoryName={detailRow ? names.get(detailRow.inventoryId) || "Inventario" : ""}
         line={detailLine}
-        initialPackages={detailProduct?.packages ?? 0}
+        initialPackages={detailProduct ? productQuantity(detailProduct) ?? 0 : 0}
         soldPackages={detailRow ? soldByProduct[stockKey(detailRow.inventoryId, detailRow.productId)] || 0 : 0}
+        unit={detailRow?.unit}
         manualCommission={detailCommission}
         onClose={() => setDetailId(null)}
       />

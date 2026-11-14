@@ -4,7 +4,7 @@ import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, 
 import { money, percent } from "./format";
 import NumericField from "./NumericField";
 import type { PriceDraft, PriceRow } from "./priceCatalog";
-import type { ComputedLine, PriceMethod } from "./types";
+import { measureUnitLabel, type ComputedLine, type PriceMethod } from "./types";
 
 function methodName(method: PriceMethod): string {
   return method === "PRECIO" ? "Precio manual" : "Margen objetivo";
@@ -109,6 +109,7 @@ export default function PriceEditDialog({
               <Typography sx={{ fontWeight: 700, fontSize: { xs: "21px", md: "22px" }, lineHeight: 1.2 }}>Editar precio</Typography>
               <Typography sx={{ fontWeight: 800, fontSize: { xs: "17px", md: "18px" }, lineHeight: 1.3, overflowWrap: "anywhere" }}>{row.product}</Typography>
               <Typography color="text.secondary" sx={{ display: "block", fontSize: { xs: "14px", md: "15px" }, lineHeight: 1.35, overflowWrap: "anywhere" }}>{inventoryName}</Typography>
+              <Typography sx={{ display: "block", mt: 0.4, fontWeight: 700, fontSize: { xs: "14px", md: "15px" }, lineHeight: 1.35 }}>Unidad de medida: {measureUnitLabel(row.unit)}</Typography>
             </Box>
             <IconButton aria-label="Cerrar" onClick={onClose} disabled={saving} sx={{ position: "absolute", right: 8, top: narrow ? "calc(8px + env(safe-area-inset-top))" : 12 }}>
               <CloseIcon sx={{ fontSize: 24 }} />

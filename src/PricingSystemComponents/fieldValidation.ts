@@ -4,6 +4,8 @@ export type NumericKind =
   | "margin"
   | "cost"
   | "packages"
+  | "units"
+  | "pounds"
   | "manualPrice"
   | "optionalCommission"
   | "optionalMargin";
@@ -19,8 +21,10 @@ const MESSAGES: Record<NumericKind, string> = {
   optionalCommission: "La comisión debe estar entre 0 % y 100 %.",
   margin: "El margen debe ser de 0 % o más, y menor que 100 %.",
   optionalMargin: "El margen debe ser de 0 % o más, y menor que 100 %.",
-  cost: "El costo por paquete no puede ser negativo.",
+  cost: "El costo no puede ser negativo.",
   packages: "La cantidad de paquetes debe ser un número entero mayor que cero.",
+  units: "La cantidad de unidades debe ser un número entero mayor que cero.",
+  pounds: "La cantidad de libras debe ser mayor que cero y tener hasta tres decimales.",
   manualPrice: "El precio manual no puede ser negativo.",
 };
 
@@ -99,6 +103,16 @@ function messageFor(kind: NumericKind): string {
   return MESSAGES[kind];
 }
 
+function integerQuantity(kind: NumericKind): boolean {
+  return kind === "packages" || kind === "units";
+}
+
+function clampPoundDecimals(text: string): string {
+  const dot = text.indexOf(".");
+  if (dot < 0) return text;
+  return `${text.slice(0, dot)}.${text.slice(dot + 1, dot + 4)}`;
+}
+
 function validateNumber(value: number, kind: NumericKind): DraftParse {
   if (!Number.isFinite(value)) return { state: "invalid", message: messageFor(kind) };
   if (kind === "logistics" || kind === "cost" || kind === "manualPrice") {
@@ -113,6 +127,10 @@ function validateNumber(value: number, kind: NumericKind): DraftParse {
     if (value < 0 || value >= 100) return { state: "invalid", message: messageFor(kind) };
     return { state: "valid", value };
   }
+  if (kind === "pounds") {
+    if (!(value > 0)) return { state: "invalid", message: messageFor(kind) };
+    return { state: "valid", value };
+  }
   if (!Number.isInteger(value) || value <= 0) {
     return { state: "invalid", message: messageFor(kind) };
   }
@@ -123,7 +141,16 @@ export function parseNumericDraft(raw: string, kind: NumericKind): DraftParse {
   const text = raw.trim();
   if (text === "" || text === ".") return { state: "empty" };
   if (text.startsWith("-")) return { state: "invalid", message: messageFor(kind) };
-  if (kind === "packages" && text.includes(".")) {
+  if (kind === "pounds") {
+    if (text.includes(",")) {
+      return { state: "invalid", message: "Usa un punto para separar decimales." };
+    }
+    const amount = text.endsWith(".") ? text.slice(0, -1) : text;
+    if (!/^\d+(\.\d{1,3})?$/.test(amount)) {
+      return { state: "invalid", message: messageFor(kind) };
+    }
+  }
+  if (integerQuantity(kind) && text.includes(".")) {
     return { state: "invalid", message: messageFor(kind) };
   }
   if (text.endsWith(".")) {
@@ -138,7 +165,16 @@ export function reviewNumericChange(
   typed: string,
   kind: NumericKind,
 ): { draft: string; value: number | null; error: string | null; commit: boolean } {
-  const draft = normalizeTyped(previousDraft, typed, kind === "packages");
+  if (kind === "pounds" && typed.includes(",")) {
+    return {
+      draft: typed,
+      value: current,
+      error: "Usa un punto para separar decimales.",
+      commit: false,
+    };
+  }
+  const normalized = normalizeTyped(previousDraft, typed, integerQuantity(kind));
+  const draft = kind === "pounds" ? clampPoundDecimals(normalized) : normalized;
   const parsed = parseNumericDraft(draft, kind);
   if (parsed.state === "valid") {
     return { draft, value: parsed.value, error: null, commit: true };

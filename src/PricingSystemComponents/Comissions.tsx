@@ -12,7 +12,7 @@ import {
 import { money, percent, qty } from "./format";
 import { metricCellSx, metricGridSx } from "./screen";
 import NumericField from "./NumericField";
-import { commissionMethodLabel, type ComputedLine, type ComputedTotals, type ProductInput } from "./types";
+import { commissionMethodLabel, productMeasureUnit, quantityNoun, type ComputedLine, type ComputedTotals, type ProductInput } from "./types";
 
 export default function Comissions({
   lines,
@@ -59,7 +59,7 @@ export default function Comissions({
               <CardContent sx={{ display: "grid", gap: 0.75 }}>
                 <Box>
                   <Typography variant="subtitle2" sx={{ fontSize: "0.95rem" }}>{line.name}</Typography>
-                  <Typography variant="caption" color="text.secondary">{qty(line.packages)} paquetes</Typography>
+                  <Typography variant="caption" color="text.secondary">{qty(line.packages)} {quantityNoun(productMeasureUnit(product ?? {}))}</Typography>
                 </Box>
                 <NumericField
                   label="Comisión del producto"
@@ -85,7 +85,7 @@ export default function Comissions({
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              {["Producto", "Paquetes", "Comisión", "Base / paq.", "Base", "Vendedor / paq.", "Vendedor total", "Inversionista neto / paq.", "Inversionista neto"].map((label) => (
+              {["Producto", "Cantidad", "Comisión", "Base c/u", "Base", "Vendedor c/u", "Vendedor total", "Inversionista c/u", "Inversionista neto"].map((label) => (
                 <TableCell key={label}>{label}</TableCell>
               ))}
             </TableRow>
@@ -96,7 +96,7 @@ export default function Comissions({
               return (
                 <TableRow key={line.id} hover>
                   <TableCell>{line.name}</TableCell>
-                  <TableCell>{qty(line.packages)}</TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>{qty(line.packages)} {quantityNoun(productMeasureUnit(product ?? {}))}</TableCell>
                   <TableCell sx={{ minWidth: 120 }}>
                     <NumericField
                       kind="optionalCommission"

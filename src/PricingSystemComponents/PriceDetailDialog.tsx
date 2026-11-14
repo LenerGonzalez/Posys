@@ -9,7 +9,7 @@ import { Box, Dialog, DialogContent, DialogTitle, IconButton, Typography } from 
 import { money, percent, qty } from "./format";
 import { availablePackages } from "./saleCommit";
 import { productProfitStatus, productStatusLabel } from "./productRanking";
-import type { ComputedLine } from "./types";
+import { costPerLabel, eachLabel, measureUnitLabel, productMeasureUnit, quantityFieldLabel, quantityNoun, type ComputedLine, type MeasureUnit } from "./types";
 
 function ChipFact({ label, value, background, color }: { label: string; value: string; background: string; color: string }) {
   return (
@@ -61,6 +61,7 @@ export default function PriceDetailDialog({
   line,
   initialPackages,
   soldPackages,
+  unit,
   manualCommission,
   onClose,
 }: {
@@ -71,6 +72,7 @@ export default function PriceDetailDialog({
   line: ComputedLine | null;
   initialPackages: number;
   soldPackages: number;
+  unit?: MeasureUnit;
   manualCommission: number | null;
   onClose: () => void;
 }) {
@@ -78,6 +80,8 @@ export default function PriceDetailDialog({
   const statusColor = status === "rentable" ? "#0D652D" : status === "perdida" || status === "margen_negativo" ? "#A50E0E" : "#8D4E00";
   const statusBackground = status === "rentable" ? "#E6F4EA" : status === "perdida" || status === "margen_negativo" ? "#FCE8E6" : "#FEF4D6";
   const invoice = line?.orderCode.trim() ? line.orderCode.trim() : "Sin factura";
+  const measure = productMeasureUnit({ unit });
+  const available = availablePackages(initialPackages, soldPackages);
 
   return (
     <Dialog
@@ -128,18 +132,19 @@ export default function PriceDetailDialog({
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.6 }}>
               <ChipFact label="Precio de costo" value={money(line.costPlusLogisticsPerPack)} background="#FEF4D6" color="#8D4E00" />
               <ChipFact label="Precio de venta" value={money(line.appliedPrice)} background="#E6F4EA" color="#0D652D" />
-              <ChipFact label="Costo por paquete" value={money(line.costPerPack)} background="#E8F0FE" color="#1A56DB" />
-              <ChipFact label="Logística por paquete" value={money(line.logisticsPerPack)} background="#FFF7F0" color="#C05A12" />
-              <ChipFact label="Paquetes iniciales" value={qty(initialPackages)} background="#E7EDF4" color="#3A4654" />
-              <ChipFact label="Vendidos" value={qty(soldPackages)} background="#F7F4FC" color="#6D4BA1" />
-              <ChipFact label="Disponibles" value={qty(availablePackages(initialPackages, soldPackages))} background="#E6F4EA" color="#0D652D" />
+              <ChipFact label={costPerLabel(measure)} value={money(line.costPerPack)} background="#E8F0FE" color="#1A56DB" />
+              <ChipFact label={`Logística por ${eachLabel(measure)}`} value={money(line.logisticsPerPack)} background="#FFF7F0" color="#C05A12" />
+              <ChipFact label={`${quantityFieldLabel(measure)} iniciales`} value={qty(initialPackages)} background="#E7EDF4" color="#3A4654" />
+              <ChipFact label="Vendidos" value={`${qty(soldPackages)} ${quantityNoun(measure)}`} background="#F7F4FC" color="#6D4BA1" />
+              <ChipFact label="Disponibles" value={available == null ? "—" : `${qty(available)} ${quantityNoun(measure)}`} background="#E6F4EA" color="#0D652D" />
             </Box>
             <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
               <Section title="Compra y precios" icon={<ShoppingCartOutlinedIcon fontSize="small" />} background="#F3F7FE" color="#1A56DB">
                 <Fact label="Orden o factura" value={invoice} />
                 <Fact label="Producto" value={line.name || productName} />
-                <Fact label="Costo por paquete" value={money(line.costPerPack)} />
-                <Fact label="Cantidad de paquetes" value={qty(line.packages)} />
+                <Fact label="Unidad de medida" value={measureUnitLabel(productMeasureUnit({ unit }))} />
+                <Fact label={costPerLabel(measure)} value={money(line.costPerPack)} />
+                <Fact label={`Cantidad de ${quantityFieldLabel(measure).toLowerCase()}`} value={qty(line.packages)} />
                 <Fact label="Subtotal" value={money(line.purchaseSubtotal)} />
                 <Fact label="Venta total" value={money(line.salesTotal)} color="#1A56DB" />
                 {line.manualPrice > 0 ? <Fact label="Precio manual" value={money(line.manualPrice)} /> : null}
@@ -147,23 +152,23 @@ export default function PriceDetailDialog({
               </Section>
               <Section title="Rentabilidad" icon={<ShowChartOutlinedIcon fontSize="small" />} background="#F2FAF5" color="#0D652D">
                 <Fact label="Utilidad bruta" value={money(line.grossProfit)} color="#0D652D" />
-                <Fact label="Utilidad bruta por paquete" value={money(line.grossProfitPerPack)} />
+                <Fact label={`Utilidad bruta por ${eachLabel(measure)}`} value={money(line.grossProfitPerPack)} />
                 <Fact label="Margen real" value={percent(line.realMarginPercent)} color="#0D652D" />
                 <Fact label="Margen bruto del sistema" value={percent(line.systemGrossMarginPercent)} />
                 <Fact label="Logística total" value={money(line.logisticsAllocated)} />
-                <Fact label="Logística por paquete" value={money(line.logisticsPerPack)} />
+                <Fact label={`Logística por ${eachLabel(measure)}`} value={money(line.logisticsPerPack)} />
               </Section>
               <Section title="Ganancias del vendedor" icon={<PersonOutlineOutlinedIcon fontSize="small" />} background="#F7F4FC" color="#6D4BA1">
                 {manualCommission != null ? <Fact label="Comisión manual" value={percent(manualCommission, 0)} /> : null}
                 <Fact label="Comisión aplicada" value={percent(line.vendorSharePercent, 0)} />
                 <Fact label="Ganancia total del vendedor" value={money(line.vendorProfit)} color="#6D4BA1" />
-                <Fact label="Ganancia del vendedor por paquete" value={money(line.vendorProfitPerPack)} />
+                <Fact label={`Ganancia del vendedor por ${eachLabel(measure)}`} value={money(line.vendorProfitPerPack)} />
               </Section>
               <Section title="Ganancias del inversionista" icon={<AccountBalanceWalletOutlinedIcon fontSize="small" />} background="#FFF7F0" color="#C05A12">
                 <Fact label="Ganancia antes de logística" value={money(line.investorBeforeLogistics)} />
-                <Fact label="Ganancia antes de logística por paquete" value={money(line.investorBeforeLogisticsPerPack)} />
+                <Fact label={`Ganancia antes de logística por ${eachLabel(measure)}`} value={money(line.investorBeforeLogisticsPerPack)} />
                 <Fact label="Ganancia neta total" value={money(line.investorNet)} color="#C05A12" />
-                <Fact label="Ganancia neta por paquete" value={money(line.investorNetPerPack)} />
+                <Fact label={`Ganancia neta por ${eachLabel(measure)}`} value={money(line.investorNetPerPack)} />
               </Section>
             </Box>
           </DialogContent>

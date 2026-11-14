@@ -23,6 +23,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { money, qty } from "./format";
 import type { ProductReportRow } from "./dashboardReport";
 import { upDesktop } from "./screen";
+import { eachLabel, productMeasureUnit, quantityFieldLabel, quantityNoun } from "./types";
 
 type SortKey = "productName" | "inventoryName" | "initialPackages" | "soldPackages" | "soldAllTime" | "availablePackages" | "salesTotal";
 
@@ -47,8 +48,15 @@ function sortValue(row: ProductReportRow, key: SortKey): string | number | null 
 function availableTotal(rows: ProductReportRow[]): string {
   const known = rows.filter((row) => row.availablePackages != null);
   if (!known.length) return "sin dato de disponibles";
-  const total = known.reduce((sum, row) => sum + (row.availablePackages ?? 0), 0);
-  return `${qty(total)} ${total === 1 ? "paquete disponible" : "paquetes disponibles"}`;
+  const totals = new Map<string, number>();
+  for (const row of known) {
+    const unit = productMeasureUnit(row);
+    totals.set(unit, (totals.get(unit) || 0) + (row.availablePackages ?? 0));
+  }
+  return [...totals.entries()].map(([unit, total]) => {
+    const noun = total === 1 ? eachLabel(productMeasureUnit({ unit })) : quantityNoun(productMeasureUnit({ unit }));
+    return `${qty(total)} ${noun}`;
+  }).join(" · ");
 }
 
 function productCount(count: number): string {
@@ -57,6 +65,11 @@ function productCount(count: number): string {
 
 function packageValue(value: number | null): string {
   return value == null ? "—" : qty(value);
+}
+
+function amountLabel(value: number | null, row: ProductReportRow): string {
+  if (value == null) return "—";
+  return `${qty(value)} ${quantityNoun(productMeasureUnit(row))}`;
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
@@ -82,8 +95,8 @@ function ProductCard({
       <CardContent sx={{ display: "grid", gap: 0.85, p: 1.25, "&:last-child": { pb: 1.25 } }}>
         <Typography sx={{ fontWeight: 800, fontSize: "0.95rem", lineHeight: 1.25, overflowWrap: "anywhere" }}>{row.productName}</Typography>
         <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
-          <Fact label="Paquetes iniciales" value={packageValue(row.initialPackages)} />
-          <Fact label="Vendidos en el período" value={qty(row.soldPackages)} />
+          <Fact label={`${quantityFieldLabel(productMeasureUnit(row))} iniciales`} value={packageValue(row.initialPackages)} />
+          <Fact label="Vendidos en el período" value={`${qty(row.soldPackages)} ${quantityNoun(productMeasureUnit(row))}`} />
           <Fact label="Vendidos acumulados" value={qty(row.soldAllTime)} />
           <Fact label="Disponibles ahora" value={packageValue(row.availablePackages)} />
         </Box>
@@ -315,10 +328,10 @@ function ProductTable({ rows }: { rows: ProductReportRow[] }) {
                       </TableCell>
                       <TableCell sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>{row.productName}</TableCell>
                       <TableCell sx={{ overflowWrap: "anywhere" }}>{row.inventoryName}</TableCell>
-                      <TableCell align="right">{packageValue(row.initialPackages)}</TableCell>
-                      <TableCell align="right">{qty(row.soldPackages)}</TableCell>
-                      <TableCell align="right">{qty(row.soldAllTime)}</TableCell>
-                      <TableCell align="right">{packageValue(row.availablePackages)}</TableCell>
+                      <TableCell align="right">{amountLabel(row.initialPackages, row)}</TableCell>
+                      <TableCell align="right">{amountLabel(row.soldPackages, row)}</TableCell>
+                      <TableCell align="right">{amountLabel(row.soldAllTime, row)}</TableCell>
+                      <TableCell align="right">{amountLabel(row.availablePackages, row)}</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 800, color: "#0D652D", bgcolor: "#F3FBF6", whiteSpace: "nowrap" }}>{money(row.salesTotal)}</TableCell>
                     </TableRow>
                     {open ? (

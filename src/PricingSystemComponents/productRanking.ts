@@ -1,6 +1,7 @@
+import { activeMeasureFilter, matchesMeasureFilter, type MeasureFilter } from "./measureFilter";
 import { computeInventory } from "./pricingEngine";
 import { scopeInventories } from "./profitability";
-import type { PricingInventory } from "./types";
+import { productMeasureUnit, type MeasureUnit, type PricingInventory } from "./types";
 
 const MONEY_EPS = 1e-9;
 
@@ -22,6 +23,7 @@ export interface ProductRankFilters {
   query: string;
   status: "" | ProductProfitStatus;
   sort: ProductRankSort;
+  unit?: MeasureFilter;
 }
 
 export const EMPTY_PRODUCT_RANK_FILTERS: ProductRankFilters = {
@@ -32,6 +34,7 @@ export const EMPTY_PRODUCT_RANK_FILTERS: ProductRankFilters = {
   query: "",
   status: "",
   sort: "net_desc",
+  unit: "package",
 };
 
 export interface ProductRankRow {
@@ -41,6 +44,7 @@ export interface ProductRankRow {
   productName: string;
   invoice: string;
   packages: number;
+  unit: MeasureUnit;
   purchaseSubtotal: number;
   logisticsAllocated: number;
   appliedPrice: number;
@@ -84,18 +88,23 @@ function compareRows(sort: ProductRankSort, left: ProductRankRow, right: Product
   if (sort === "margin_desc") return right.realMarginPercent - left.realMarginPercent || name;
   if (sort === "margin_asc") return left.realMarginPercent - right.realMarginPercent || name;
   if (sort === "sales_desc") return right.salesTotal - left.salesTotal || name;
-  return right.packages - left.packages || name;
+  const unitOrder = { package: 0, lb: 1, unit: 2 };
+  return unitOrder[left.unit] - unitOrder[right.unit] || right.packages - left.packages || name;
 }
 
 /** Una fila por producto de cada inventario. No mezcla el mismo nombre entre inventarios. */
 export function buildProductRanking(items: PricingInventory[], filters: ProductRankFilters): ProductRankReport {
   const invoice = filters.invoice.trim();
   const query = filters.query.trim().toLocaleLowerCase("es");
+  const measure = activeMeasureFilter(filters.unit);
   const rows: ProductRankRow[] = [];
 
   scopeInventories(items, filters).forEach((inventory) => {
     const computed = computeInventory(inventory);
+    const units = new Map(inventory.products.map((product) => [product.id, product.unit]));
     computed.lines.forEach((line) => {
+      const unit = productMeasureUnit({ unit: units.get(line.id) });
+      if (!matchesMeasureFilter(unit, measure)) return;
       if (invoice && line.orderCode.trim() !== invoice) return;
       if (query && !line.name.toLocaleLowerCase("es").includes(query)) return;
       const status = productProfitStatus(line.investorNet, line.realMarginPercent);
@@ -107,6 +116,7 @@ export function buildProductRanking(items: PricingInventory[], filters: ProductR
         productName: line.name || "Sin nombre",
         invoice: line.orderCode.trim(),
         packages: line.packages,
+        unit,
         purchaseSubtotal: line.purchaseSubtotal,
         logisticsAllocated: line.logisticsAllocated,
         appliedPrice: line.appliedPrice,

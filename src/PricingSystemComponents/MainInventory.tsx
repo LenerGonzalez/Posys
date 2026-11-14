@@ -13,6 +13,7 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  MenuItem,
   Paper,
   TextField,
   Typography,
@@ -34,14 +35,18 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
 import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
-import { parseNumericDraft, usableMoney, usablePackages } from "./fieldValidation";
+import { parseNumericDraft, usableMoney } from "./fieldValidation";
+import MeasureFilterField from "./MeasureFilterField";
+import { DEFAULT_MEASURE_FILTER, linesForMeasure, matchesMeasureFilter, measureFilterLabel, quantityCaption, totalsForLines, type MeasureFilter } from "./measureFilter";
+import { computeInventory } from "./pricingEngine";
+import { milliFromAmount, readQuantityMilli, storedQuantity, withStoredQuantity } from "./quantity";
 import { readSoldPackages } from "./firestoreSales";
 import { availablePackages, stockKey } from "./saleCommit";
 import { dateTimeLabel, money, percent, qty } from "./format";
 import { productProfitStatus, productStatusLabel } from "./productRanking";
 import NumericField from "./NumericField";
 import { dialogActionsSx, dialogFormSx, useNarrowScreen } from "./screen";
-import type { ComputedLine, PricingInventory, ProductInput } from "./types";
+import { costPerLabel, isMeasureUnit, measureUnitLabel, patchProductKeepingUnit, productMeasureUnit, quantityFieldLabel, quantityNoun, type MeasureUnit, type ComputedLine, type PricingInventory, type ProductInput } from "./types";
 
 function FileButton({
   label,
@@ -66,6 +71,12 @@ function FileButton({
     </Button>
   );
 }
+
+const modalFieldSlots = { inputLabel: { shrink: true } };
+const modalSelectSx = {
+  "& .MuiOutlinedInput-root": { alignItems: "center", minHeight: 56 },
+  "& .MuiSelect-select": { display: "flex", alignItems: "center", minHeight: "1.4375em" },
+};
 
 const sectionFieldSx = {
   "& .MuiInputBase-input": { fontSize: "1.125rem" },
@@ -160,16 +171,23 @@ function ProductCard({
   line,
   soldPackages,
   onPatch,
+  onQuantity,
   onRemove,
 }: {
   product: ProductInput;
   line: ComputedLine | undefined;
   soldPackages: number;
   onPatch: (patch: Partial<ProductInput>) => void;
+  onQuantity: (product: ProductInput) => void;
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [packageError, setPackageError] = useState("");
+  const unit = productMeasureUnit(product);
+  const reading = readQuantityMilli(product);
+  const quantity = reading.ok ? reading.milli / 1000 : null;
+  const quantityError = reading.ok ? "" : reading.error;
+  const available = quantity == null ? null : availablePackages(quantity, soldPackages);
   const status = line ? productProfitStatus(line.investorNet, line.realMarginPercent) : null;
   const statusColor = status === "rentable" ? "#0D652D" : status === "perdida" || status === "margen_negativo" ? "#A50E0E" : "#8D4E00";
   const statusBackground = status === "rentable" ? "#E6F4EA" : status === "perdida" || status === "margen_negativo" ? "#FCE8E6" : "#FEF4D6";
@@ -185,7 +203,7 @@ function ProductCard({
               {product.name || "Sin nombre"}
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-              Orden: {product.orderCode || "Sin orden"}
+              Orden: {product.orderCode || "Sin orden"} · {measureUnitLabel(productMeasureUnit(product))}
             </Typography>
           </Box>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: { sm: "auto" }, flexWrap: "wrap" }}>
@@ -214,9 +232,9 @@ function ProductCard({
               <Metric icon={<StorageOutlinedIcon fontSize="small" />} label="Subtotal" value={money(line.purchaseSubtotal)} background="#E8F0FE" color="#1A56DB" />
               <Metric icon={<LocalShippingOutlinedIcon fontSize="small" />} label="Logística" value={money(line.logisticsAllocated)} background="#FEF4D6" color="#B06000" />
               <Metric icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(line.salesTotal)} background="#E6F4EA" color="#0D652D" />
-              <Metric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Paquetes iniciales" value={qty(product.packages)} background="#E7EDF4" color="#3A4654" />
-              <Metric icon={<ShoppingCartOutlinedIcon fontSize="small" />} label="Vendidos" value={qty(soldPackages)} background="#F7F4FC" color="#6D4BA1" />
-              <Metric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Disponibles" value={qty(availablePackages(product.packages, soldPackages))} background="#E6F4EA" color="#0D652D" />
+              <Metric icon={<Inventory2OutlinedIcon fontSize="small" />} label={`${quantityFieldLabel(unit)} iniciales`} value={quantity == null ? "—" : qty(quantity)} background="#E7EDF4" color="#3A4654" />
+              <Metric icon={<ShoppingCartOutlinedIcon fontSize="small" />} label="Vendidos" value={`${qty(soldPackages)} ${quantityNoun(unit)}`} background="#F7F4FC" color="#6D4BA1" />
+              <Metric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Disponibles" value={available == null ? "—" : `${qty(available)} ${quantityNoun(unit)}`} background="#E6F4EA" color="#0D652D" />
             </Box>
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
               <Box sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.6, px: 1.1, py: 0.4, borderRadius: "999px", bgcolor: "#FEF4D6", color: "#8D4E00" }}>
@@ -236,7 +254,9 @@ function ProductCard({
             </Box>
           </Box>
         ) : (
-          <Typography variant="caption" color="text.secondary">Completa el nombre para calcular esta línea.</Typography>
+          <Typography variant="caption" color={quantityError ? "#A50E0E" : "text.secondary"}>
+            {quantityError || "Completa el nombre para calcular esta línea."}
+          </Typography>
         )}
         <Collapse in={open}>
           <Box sx={{ display: "grid", gap: { xs: 1, md: 1.5 }, pt: 0.5 }}>
@@ -245,8 +265,12 @@ function ProductCard({
                 <Box sx={{ display: "grid", gap: 1, mb: 1.25, gridTemplateColumns: "1fr 1fr" }}>
                   <TextField label="Orden" value={product.orderCode} onChange={(event) => onPatch({ orderCode: event.target.value })} sx={sectionFieldSx} />
                   <TextField label="Producto" value={product.name} onChange={(event) => onPatch({ name: event.target.value })} sx={sectionFieldSx} />
+                  <Box sx={{ gridColumn: "1 / -1" }}>
+                    <Typography color="text.secondary" sx={{ display: "block", fontSize: "0.875rem", lineHeight: 1.3 }}>Unidad de medida</Typography>
+                    <Typography sx={{ fontWeight: 700, fontSize: "1.125rem", lineHeight: 1.3 }}>{measureUnitLabel(productMeasureUnit(product))}</Typography>
+                  </Box>
                   <NumericField
-                    label="Costo / paquete"
+                    label={costPerLabel(unit)}
                     kind="cost"
                     value={product.costPerPack}
                     adornment="C$"
@@ -255,18 +279,28 @@ function ProductCard({
                     sx={sectionFieldSx}
                   />
                   <NumericField
-                    label="Paquetes"
-                    kind="packages"
-                    value={product.packages}
-                      sx={sectionFieldSx}
-                      onCommit={(value) => {
+                    label={quantityFieldLabel(unit)}
+                    kind={unit === "lb" ? "pounds" : unit === "unit" ? "units" : "packages"}
+                    value={quantity}
+                    sx={sectionFieldSx}
+                    onCommit={(value) => {
                       if (value == null || value <= 0) return;
-                      if (value < soldPackages) {
-                        setPackageError(`Ya se vendieron ${qty(soldPackages)} paquetes. La cantidad mínima es ${qty(soldPackages)}.`);
+                      const milli = milliFromAmount(value);
+                      if (milli == null || milli <= 0 || (unit !== "lb" && milli % 1000 !== 0)) {
+                        setPackageError(unit === "lb"
+                          ? "La cantidad de libras admite hasta tres decimales."
+                          : `La cantidad de ${quantityNoun(unit)} debe ser un número entero mayor que cero.`);
                         return;
                       }
+                      const soldMilli = milliFromAmount(soldPackages);
+                      if (soldMilli != null && milli < soldMilli) {
+                        setPackageError(`Ya se vendieron ${qty(soldPackages)} ${quantityNoun(unit)}. La cantidad mínima es ${qty(soldPackages)}.`);
+                        return;
+                      }
+                      const next = withStoredQuantity(product, milli);
+                      if (!next) return;
                       setPackageError("");
-                      onPatch({ packages: value });
+                      onQuantity(next);
                     }}
                   />
                   {packageError ? (
@@ -333,16 +367,18 @@ export function OrderProductsPanel({
   onChange,
   onImportFile,
   onDownloadTemplate,
+  measure = DEFAULT_MEASURE_FILTER,
 }: {
   inventory: PricingInventory;
   lines: ComputedLine[];
   onChange: (products: ProductInput[]) => void;
   onImportFile: (file: File) => void;
   onDownloadTemplate: () => void;
+  measure?: MeasureFilter;
 }) {
   const [search, setSearch] = useState("");
   const [draftOpen, setDraftOpen] = useState(false);
-  const [draft, setDraft] = useState({ orderCode: "", name: "", costPerPack: 0, packages: 1 });
+  const [draft, setDraft] = useState({ orderCode: "", name: "", costPerPack: 0, packages: 1, unit: "" as "" | MeasureUnit });
   const [draftError, setDraftError] = useState("");
   const [soldByProduct, setSoldByProduct] = useState<Record<string, number>>({});
   const narrow = useNarrowScreen();
@@ -366,7 +402,9 @@ export function OrderProductsPanel({
       cancelled = true;
     };
   }, [inventory.id, productIds]);
+  const visibleLines = linesForMeasure(lines, inventory.products, measure);
   const filtered = inventory.products.filter((product) => {
+    if (!matchesMeasureFilter(product.unit, measure)) return false;
     const query = search.trim().toLowerCase();
     if (!query) return true;
     return `${product.orderCode} ${product.name}`.toLowerCase().includes(query);
@@ -374,7 +412,7 @@ export function OrderProductsPanel({
 
   const patch = (id: string, partial: Partial<ProductInput>) => {
     onChange(
-      inventory.products.map((product) => (product.id === id ? { ...product, ...partial } : product)),
+      inventory.products.map((product) => (product.id === id ? patchProductKeepingUnit(product, partial) : product)),
     );
   };
 
@@ -414,9 +452,17 @@ export function OrderProductsPanel({
           Producto
         </Button>
         <Box sx={{ gridColumn: { xs: "1 / -1", md: "auto" }, display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center" }}>
-          <Chip size="small" label={`${qty(lines.length)} productos`} />
-          <Chip size="small" label={`${qty(lines.reduce((sum, line) => sum + line.packages, 0))} paquetes`} />
-          <Chip size="small" label={money(lines.reduce((sum, line) => sum + line.purchaseSubtotal, 0))} />
+          <Chip size="small" label={`${qty(filtered.length)} productos`} />
+          {(["package", "lb", "unit"] as const).map((unit) => {
+            if (measure !== "all" && unit !== measure) return null;
+            const total = visibleLines.reduce((sum, line) => {
+              const item = inventory.products.find((product) => product.id === line.id);
+              if (!item || productMeasureUnit(item) !== unit) return sum;
+              return sum + line.packages;
+            }, 0);
+            return total > 0 ? <Chip key={unit} size="small" label={`${qty(total)} ${quantityNoun(unit)}`} /> : null;
+          })}
+          <Chip size="small" label={money(visibleLines.reduce((sum, line) => sum + line.purchaseSubtotal, 0))} />
         </Box>
       </Box>
       <Box sx={{ display: "grid", gap: { xs: 0.75, md: 1.5 } }}>
@@ -427,19 +473,42 @@ export function OrderProductsPanel({
             line={lineById.get(product.id)}
             soldPackages={soldByProduct[stockKey(inventory.id, product.id)] || 0}
             onPatch={(partial) => patch(product.id, partial)}
+            onQuantity={(next) => onChange(inventory.products.map((item) => item.id === product.id ? next : item))}
             onRemove={() => onChange(inventory.products.filter((item) => item.id !== product.id))}
           />
         ))}
-        {!filtered.length ? <Alert severity="info">Este inventario todavía no tiene productos.</Alert> : null}
+        {!filtered.length ? <Alert severity="info">{inventory.products.length ? `No hay productos en ${measureFilterLabel(measure)}.` : "Este inventario todavía no tiene productos."}</Alert> : null}
       </Box>
       <Dialog open={draftOpen} onClose={() => setDraftOpen(false)} fullScreen={narrow} fullWidth maxWidth="xs">
         <DialogTitle sx={{ pt: narrow ? "calc(16px + env(safe-area-inset-top))" : undefined }}>Agregar producto</DialogTitle>
-        <DialogContent sx={dialogFormSx}>
-          <TextField label="Orden / factura" value={draft.orderCode} onChange={(event) => setDraft({ ...draft, orderCode: event.target.value })} />
-          <TextField label="Producto" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-          <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: "1fr 1fr" }}>
+        <DialogContent sx={{ ...dialogFormSx, gap: 2, pt: "16px !important" }}>
+          <TextField size="medium" label="Orden / factura" value={draft.orderCode} onChange={(event) => setDraft({ ...draft, orderCode: event.target.value })} slotProps={modalFieldSlots} />
+          <TextField size="medium" label="Producto" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} slotProps={modalFieldSlots} />
+          <TextField
+            select
+            required
+            size="medium"
+            label="Unidad de medida"
+            value={draft.unit}
+            onChange={(event) => setDraft({ ...draft, unit: event.target.value as MeasureUnit })}
+            slotProps={{
+              inputLabel: { shrink: true },
+              select: {
+                displayEmpty: true,
+                renderValue: (value) => isMeasureUnit(value) ? measureUnitLabel(value) : "Selecciona la unidad",
+              },
+            }}
+            sx={modalSelectSx}
+          >
+            <MenuItem value="package">Paquete</MenuItem>
+            <MenuItem value="lb">Libra (lb)</MenuItem>
+            <MenuItem value="unit">Unidad</MenuItem>
+          </TextField>
+          <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr 1fr" }}>
             <NumericField
-              label="Costo por paquete"
+              size="medium"
+              labelShrink
+              label={isMeasureUnit(draft.unit) ? costPerLabel(draft.unit) : "Costo"}
               kind="cost"
               value={draft.costPerPack}
               adornment="C$"
@@ -447,8 +516,10 @@ export function OrderProductsPanel({
               onCommit={(value) => setDraft({ ...draft, costPerPack: value ?? 0 })}
             />
             <NumericField
-              label="Paquetes"
-              kind="packages"
+              size="medium"
+              labelShrink
+              label={isMeasureUnit(draft.unit) ? quantityFieldLabel(draft.unit) : "Cantidad"}
+              kind={draft.unit === "lb" ? "pounds" : draft.unit === "unit" ? "units" : "packages"}
               value={draft.packages}
               onCommit={(value) => {
                 if (value != null && value > 0) setDraft({ ...draft, packages: value });
@@ -463,17 +534,24 @@ export function OrderProductsPanel({
             variant="contained"
             onClick={() => {
               const cost = usableMoney(draft.costPerPack);
-              const packages = usablePackages(draft.packages);
               if (!draft.name.trim()) {
                 setDraftError("Escribe el nombre del producto.");
                 return;
               }
-              if (parseNumericDraft(String(draft.costPerPack), "cost").state !== "valid" || cost < 0) {
-                setDraftError("El costo por paquete no puede ser negativo.");
+              if (!isMeasureUnit(draft.unit)) {
+                setDraftError("Selecciona la unidad de medida.");
                 return;
               }
-              if (packages <= 0) {
-                setDraftError("La cantidad de paquetes debe ser un número entero mayor que cero.");
+              if (parseNumericDraft(String(draft.costPerPack), "cost").state !== "valid" || cost < 0) {
+                setDraftError(`El ${costPerLabel(draft.unit).toLowerCase()} no puede ser negativo.`);
+                return;
+              }
+              const milli = milliFromAmount(draft.packages);
+              const stored = milli == null ? null : storedQuantity(draft.unit, milli);
+              if (!stored || milli == null || milli <= 0) {
+                setDraftError(draft.unit === "lb"
+                  ? "La cantidad de libras admite hasta tres decimales."
+                  : `La cantidad de ${quantityNoun(draft.unit)} debe ser un número entero mayor que cero.`);
                 return;
               }
               onChange([
@@ -483,14 +561,15 @@ export function OrderProductsPanel({
                   orderCode: draft.orderCode.trim(),
                   name: draft.name.trim(),
                   costPerPack: cost,
-                  packages,
+                  ...stored,
+                  unit: draft.unit,
                   priceMethod: "MARGEN",
                   manualPrice: null,
                   targetMarginPercent: null,
                   vendorSharePercent: null,
                 },
               ]);
-              setDraft({ orderCode: "", name: "", costPerPack: 0, packages: 1 });
+              setDraft({ orderCode: "", name: "", costPerPack: 0, packages: 1, unit: "" });
               setDraftError("");
               setDraftOpen(false);
             }}
@@ -525,6 +604,7 @@ export default function MainInventory({
   onDownloadTemplate: () => void;
 }) {
   const [name, setName] = useState("");
+  const [measure, setMeasure] = useState<MeasureFilter>(DEFAULT_MEASURE_FILTER);
   const [renameName, setRenameName] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<PricingInventory | null>(null);
@@ -542,13 +622,16 @@ export default function MainInventory({
         </Box>
         <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", width: { xs: "100%", md: "auto" }, "& .MuiButton-root": { minHeight: { xs: 36, md: 44 }, flex: { xs: "1 1 0", md: "0 0 auto" }, px: { xs: 1, md: 2 } } }}>
           <Button variant="outlined" startIcon={<DownloadIcon />} onClick={onDownloadTemplate}>
-            <Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>Descargar </Box>plantilla
+            <Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>{"Descargar\u00A0"}</Box>plantilla
           </Button>
           <FileButton label={<><Box component="span" sx={{ display: { md: "none" } }}>Importar</Box><Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>Importar factura</Box></>} onFile={onImportFile} />
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-            Nuevo<Box component="span" sx={{ display: { xs: "none", md: "inline" } }}> inventario</Box>
+            Nuevo<Box component="span" sx={{ display: { xs: "none", md: "inline" } }}>{"\u00A0inventario"}</Box>
           </Button>
         </Box>
+      </Box>
+      <Box sx={{ maxWidth: { sm: 240 } }}>
+        <MeasureFilterField value={measure} onChange={setMeasure} />
       </Box>
       {loading ? <Alert severity="info">Cargando inventarios…</Alert> : null}
       {!loading && !inventories.length ? (
@@ -561,7 +644,14 @@ export default function MainInventory({
       <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 }, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
         {inventories.map((inventory) => {
           const latest = inventory.history[inventory.history.length - 1];
-          const invoices = [...new Set(inventory.products.map((product) => product.orderCode).filter(Boolean))];
+          const invoices = [...new Set(inventory.products.filter((product) => matchesMeasureFilter(product.unit, measure)).map((product) => product.orderCode).filter(Boolean))];
+          const matching = inventory.products.filter((product) => matchesMeasureFilter(product.unit, measure));
+          const computed = computeInventory(inventory);
+          const lines = linesForMeasure(computed.lines, inventory.products, measure);
+          const complete = matching.length === inventory.products.length;
+          const view = totalsForLines(computed.totals, lines, complete);
+          const units = new Map(inventory.products.map((product) => [product.id, product.unit]));
+          const quantities = quantityCaption(measure, lines.map((line) => ({ unit: units.get(line.id), quantity: line.packages })));
           return (
             <Card key={inventory.id}>
               <CardContent sx={{ display: "grid", gap: { xs: 0.75, md: 1.25 } }}>
@@ -581,12 +671,17 @@ export default function MainInventory({
                       </IconButton>
                     </Box>
                     <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-                      {qty(inventory.products.length)} productos{invoices.length ? ` · ${invoices.slice(0, 2).join(", ")}` : ""} · {dateTimeLabel(inventory.updatedAt)}
+                      {!inventory.products.length
+                        ? "Sin productos"
+                        : matching.length
+                          ? `${qty(matching.length)} productos · ${quantities}`
+                          : `Sin productos en ${measureFilterLabel(measure)}`}
+                      {invoices.length ? ` · ${invoices.slice(0, 2).join(", ")}` : ""} · {dateTimeLabel(inventory.updatedAt)}
                     </Typography>
                   </Box>
                   <Button variant="contained" onClick={() => onOpen(inventory)} sx={{ minHeight: 36, flexShrink: 0, alignSelf: "center" }}>Abrir</Button>
                 </Box>
-                {latest ? (
+                {!matching.length ? null : complete && latest ? (
                   <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
                     <Box sx={{ minWidth: 0, px: 1, py: 0.6, borderRadius: "10px", bgcolor: "#E8F0FE" }}>
                       <Typography variant="caption" sx={{ color: "#1A56DB", display: "block", lineHeight: 1.15 }}>Venta</Typography>
@@ -595,6 +690,17 @@ export default function MainInventory({
                     <Box sx={{ minWidth: 0, px: 1, py: 0.6, borderRadius: "10px", bgcolor: "#E6F4EA" }}>
                       <Typography variant="caption" sx={{ color: "#0D652D", display: "block", lineHeight: 1.15 }}>Neta</Typography>
                       <Typography sx={{ fontWeight: 800, color: "#0D652D", fontSize: "0.95rem", overflowWrap: "anywhere" }}>{money(latest.investorNet)}</Typography>
+                    </Box>
+                  </Box>
+                ) : !complete ? (
+                  <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: "1fr 1fr" }}>
+                    <Box sx={{ minWidth: 0, px: 1, py: 0.6, borderRadius: "10px", bgcolor: "#E8F0FE" }}>
+                      <Typography variant="caption" sx={{ color: "#1A56DB", display: "block", lineHeight: 1.15 }}>Venta actual</Typography>
+                      <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "0.95rem", overflowWrap: "anywhere" }}>{money(view.projectedSales)}</Typography>
+                    </Box>
+                    <Box sx={{ minWidth: 0, px: 1, py: 0.6, borderRadius: "10px", bgcolor: "#E6F4EA" }}>
+                      <Typography variant="caption" sx={{ color: "#0D652D", display: "block", lineHeight: 1.15 }}>Neta actual</Typography>
+                      <Typography sx={{ fontWeight: 800, color: "#0D652D", fontSize: "0.95rem", overflowWrap: "anywhere" }}>{money(view.investorNet)}</Typography>
                     </Box>
                   </Box>
                 ) : (

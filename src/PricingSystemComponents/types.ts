@@ -1,5 +1,61 @@
 export type PriceMethod = "MARGEN" | "PRECIO";
 
+/** Unidad propia del producto. Si el documento no la trae, se muestra como paquete. */
+export type MeasureUnit = "package" | "lb" | "unit";
+
+export function isMeasureUnit(value: unknown): value is MeasureUnit {
+  return value === "package" || value === "lb" || value === "unit";
+}
+
+export function productMeasureUnit(product: { unit?: unknown }): MeasureUnit {
+  return isMeasureUnit(product.unit) ? product.unit : "package";
+}
+
+export function measureUnitLabel(unit: MeasureUnit): string {
+  if (unit === "lb") return "Libra (lb)";
+  if (unit === "unit") return "Unidad";
+  return "Paquete";
+}
+
+export function quantityFieldLabel(unit: MeasureUnit): string {
+  if (unit === "lb") return "Libras";
+  if (unit === "unit") return "Unidades";
+  return "Paquetes";
+}
+
+export function quantityNoun(unit: MeasureUnit): string {
+  return quantityFieldLabel(unit).toLowerCase();
+}
+
+export function costPerLabel(unit: MeasureUnit): string {
+  if (unit === "lb") return "Costo por libra";
+  if (unit === "unit") return "Costo por unidad";
+  return "Costo por paquete";
+}
+
+export function eachLabel(unit: MeasureUnit): string {
+  if (unit === "lb") return "libra";
+  if (unit === "unit") return "unidad";
+  return "paquete";
+}
+
+/** Conserva `unit` solo cuando el documento ya trae una unidad válida. */
+export function withStoredMeasureUnit(product: ProductInput, stored: unknown): ProductInput {
+  if (!isMeasureUnit(stored)) {
+    const historical = { ...product };
+    delete historical.unit;
+    return historical;
+  }
+  return { ...product, unit: stored };
+}
+
+/** La edición puede cambiar otros datos, pero nunca la unidad elegida al crear. */
+export function patchProductKeepingUnit(product: ProductInput, partial: Partial<ProductInput>): ProductInput {
+  const editable = { ...partial };
+  delete editable.unit;
+  return { ...product, ...editable };
+}
+
 /** 2: comisión sobre utilidad bruta. 3: comisión sobre utilidad después de logística. */
 export type CommissionMethod = "2" | "3";
 
@@ -22,7 +78,12 @@ export interface ProductInput {
   orderCode: string;
   name: string;
   costPerPack: number;
-  packages: number;
+  /** Cantidad entera. Ausente cuando la cantidad decimal vive solo en `quantityMilli`. */
+  packages?: number;
+  /** Milésimas de la cantidad completa. Solo se guarda si la cantidad no es entera. */
+  quantityMilli?: number;
+  /** Presente solo si se eligió al crear el producto. Los documentos viejos no lo tienen. */
+  unit?: MeasureUnit;
   priceMethod: PriceMethod;
   manualPrice: number | null;
   targetMarginPercent: number | null;

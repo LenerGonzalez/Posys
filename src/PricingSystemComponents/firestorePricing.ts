@@ -10,6 +10,7 @@ import {
   type Timestamp,
 } from "firebase/firestore";
 import { auth, db } from "../firebase";
+import { takeStoredQuantity } from "./quantity";
 import { applyProductPriceEdit, normalizePriceChanges, type PriceDraft } from "./priceCatalog";
 import { computeInventory, resolveCommissionMethod, snapshotFromTotals } from "./pricingEngine";
 import {
@@ -17,6 +18,7 @@ import {
   type InventorySettings,
   type InventorySnapshot,
   type PricingInventory,
+  withStoredMeasureUnit,
   type ProductInput,
 } from "./types";
 
@@ -35,12 +37,12 @@ function asProducts(value: unknown): ProductInput[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
     const row = item as Partial<ProductInput>;
-    return {
+    const product: ProductInput = {
       id: String(row.id || ""),
       orderCode: String(row.orderCode || ""),
       name: String(row.name || ""),
       costPerPack: Number(row.costPerPack || 0),
-      packages: Number(row.packages || 0),
+      ...takeStoredQuantity(row),
       priceMethod: row.priceMethod === "PRECIO" ? "PRECIO" : "MARGEN",
       manualPrice:
         row.manualPrice == null || row.manualPrice === ("" as unknown)
@@ -51,6 +53,7 @@ function asProducts(value: unknown): ProductInput[] {
       vendorSharePercent:
         row.vendorSharePercent == null ? null : Number(row.vendorSharePercent),
     };
+    return withStoredMeasureUnit(product, row.unit);
   });
 }
 
