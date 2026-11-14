@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { InputAdornment, TextField, type SxProps } from "@mui/material";
 import {
   parseNumericDraft,
@@ -21,6 +21,7 @@ export default function NumericField({
   clearWhenEmpty,
   size,
   sx,
+  labelShrink,
 }: {
   label?: string;
   value: number | null;
@@ -29,12 +30,13 @@ export default function NumericField({
   helperText?: string;
   disabled?: boolean;
   placeholder?: string;
-  adornment?: string;
+  adornment?: ReactNode;
   adornmentPosition?: "start" | "end";
   maximum?: number;
   clearWhenEmpty?: boolean;
   size?: "small" | "medium";
   sx?: SxProps;
+  labelShrink?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +96,7 @@ export default function NumericField({
         setDraft(null);
       }}
       slotProps={{
+        inputLabel: labelShrink ? { shrink: true } : undefined,
         htmlInput: {
           inputMode: kind === "packages" ? "numeric" : "decimal",
           autoComplete: "off",

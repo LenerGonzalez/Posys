@@ -36,7 +36,7 @@ import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import { parseNumericDraft, usableMoney, usablePackages } from "./fieldValidation";
 import { readSoldPackages } from "./firestoreSales";
-import { stockKey } from "./saleCommit";
+import { availablePackages, stockKey } from "./saleCommit";
 import { dateTimeLabel, money, percent, qty } from "./format";
 import { productProfitStatus, productStatusLabel } from "./productRanking";
 import NumericField from "./NumericField";
@@ -67,11 +67,16 @@ function FileButton({
   );
 }
 
+const sectionFieldSx = {
+  "& .MuiInputBase-input": { fontSize: "1.125rem" },
+  "& .MuiInputLabel-root": { fontSize: { xs: "1.125rem", md: "1.1875rem" } },
+};
+
 function Fact({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.3 }}>{label}</Typography>
-      <Typography variant="body2" sx={{ fontWeight: 700, color: color || "text.primary", fontSize: "0.95rem" }}>{value}</Typography>
+      <Typography color="text.secondary" sx={{ display: "block", lineHeight: 1.3, fontSize: { xs: "0.875rem", md: "0.9375rem" } }}>{label}</Typography>
+      <Typography sx={{ fontWeight: 700, color: color || "text.primary", fontSize: "1.125rem", lineHeight: 1.3, overflowWrap: "anywhere" }}>{value}</Typography>
     </Box>
   );
 }
@@ -79,9 +84,9 @@ function Fact({ label, value, color }: { label: string; value: string; color?: s
 function HighlightValue({ label, value, color, background }: { label: string; value: string; color: string; background: string }) {
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>{label}</Typography>
+      <Typography color="text.secondary" sx={{ display: "block", mb: 0.5, lineHeight: 1.3, fontSize: { xs: "0.875rem", md: "0.9375rem" } }}>{label}</Typography>
       <Box sx={{ display: "inline-flex", maxWidth: "100%", px: 1.25, py: 0.75, borderRadius: 999, bgcolor: background }}>
-        <Typography sx={{ fontWeight: 700, color, fontSize: "1rem", lineHeight: 1.2, overflowWrap: "anywhere" }}>{value}</Typography>
+        <Typography sx={{ fontWeight: 700, color, fontSize: "1.1875rem", lineHeight: 1.2, overflowWrap: "anywhere" }}>{value}</Typography>
       </Box>
     </Box>
   );
@@ -143,7 +148,7 @@ function FinanceSection({
     <Box sx={{ minWidth: 0, p: { xs: 1.25, md: 1.75 }, borderRadius: { xs: "12px", md: 3 }, bgcolor: background }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: { xs: 1, md: 1.5 }, color }}>
         {icon}
-        <Typography variant="subtitle2" sx={{ color }}>{title}</Typography>
+        <Typography variant="subtitle2" sx={{ color, fontSize: "1.0625rem", lineHeight: 1.3 }}>{title}</Typography>
       </Box>
       {children}
     </Box>
@@ -209,6 +214,9 @@ function ProductCard({
               <Metric icon={<StorageOutlinedIcon fontSize="small" />} label="Subtotal" value={money(line.purchaseSubtotal)} background="#E8F0FE" color="#1A56DB" />
               <Metric icon={<LocalShippingOutlinedIcon fontSize="small" />} label="Logística" value={money(line.logisticsAllocated)} background="#FEF4D6" color="#B06000" />
               <Metric icon={<ShoppingBagOutlinedIcon fontSize="small" />} label="Venta total" value={money(line.salesTotal)} background="#E6F4EA" color="#0D652D" />
+              <Metric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Paquetes iniciales" value={qty(product.packages)} background="#E7EDF4" color="#3A4654" />
+              <Metric icon={<ShoppingCartOutlinedIcon fontSize="small" />} label="Vendidos" value={qty(soldPackages)} background="#F7F4FC" color="#6D4BA1" />
+              <Metric icon={<Inventory2OutlinedIcon fontSize="small" />} label="Disponibles" value={qty(availablePackages(product.packages, soldPackages))} background="#E6F4EA" color="#0D652D" />
             </Box>
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
               <Box sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.6, px: 1.1, py: 0.4, borderRadius: "999px", bgcolor: "#FEF4D6", color: "#8D4E00" }}>
@@ -235,8 +243,8 @@ function ProductCard({
             <Box sx={{ display: "grid", gap: { xs: 1, md: 1.5 }, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
               <FinanceSection title="Compra y precios" icon={<ShoppingCartOutlinedIcon fontSize="small" />} background="#F3F7FE" color="#1A56DB">
                 <Box sx={{ display: "grid", gap: 1, mb: 1.25, gridTemplateColumns: "1fr 1fr" }}>
-                  <TextField label="Orden" value={product.orderCode} onChange={(event) => onPatch({ orderCode: event.target.value })} />
-                  <TextField label="Producto" value={product.name} onChange={(event) => onPatch({ name: event.target.value })} />
+                  <TextField label="Orden" value={product.orderCode} onChange={(event) => onPatch({ orderCode: event.target.value })} sx={sectionFieldSx} />
+                  <TextField label="Producto" value={product.name} onChange={(event) => onPatch({ name: event.target.value })} sx={sectionFieldSx} />
                   <NumericField
                     label="Costo / paquete"
                     kind="cost"
@@ -244,12 +252,14 @@ function ProductCard({
                     adornment="C$"
                     adornmentPosition="start"
                     onCommit={(value) => onPatch({ costPerPack: value ?? 0 })}
+                    sx={sectionFieldSx}
                   />
                   <NumericField
                     label="Paquetes"
                     kind="packages"
                     value={product.packages}
-                    onCommit={(value) => {
+                      sx={sectionFieldSx}
+                      onCommit={(value) => {
                       if (value == null || value <= 0) return;
                       if (value < soldPackages) {
                         setPackageError(`Ya se vendieron ${qty(soldPackages)} paquetes. La cantidad mínima es ${qty(soldPackages)}.`);
@@ -260,9 +270,9 @@ function ProductCard({
                     }}
                   />
                   {packageError ? (
-                    <Typography sx={{ gridColumn: "1 / -1", color: "#A50E0E", fontSize: "0.875rem" }}>{packageError}</Typography>
+                    <Typography sx={{ gridColumn: "1 / -1", color: "#A50E0E", fontSize: "1rem", lineHeight: 1.35 }}>{packageError}</Typography>
                   ) : soldPackages > 0 ? (
-                    <Typography sx={{ gridColumn: "1 / -1", color: "text.secondary", fontSize: "0.75rem" }}>
+                    <Typography sx={{ gridColumn: "1 / -1", color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.35 }}>
                       Vendidos: {qty(soldPackages)}. La cantidad no puede ser menor.
                     </Typography>
                   ) : null}

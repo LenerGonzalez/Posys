@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -23,6 +23,8 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import TuneOutlinedIcon from "@mui/icons-material/TuneOutlined";
 import { downloadPriceCatalog, type PriceExportColumnKey } from "./excelExport";
+import { readSoldPackages } from "./firestoreSales";
+import { stockKey } from "./saleCommit";
 import { money, percent } from "./format";
 import NumericField from "./NumericField";
 import PriceDetailDialog from "./PriceDetailDialog";
@@ -83,6 +85,26 @@ export default function PriceRanking({
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState("");
+  const [soldByProduct, setSoldByProduct] = useState<Record<string, number>>({});
+  const soldKey = inventories.map((inventory) => `${inventory.id}:${inventory.products.map((product) => product.id).join("|")}`).join(";");
+  useEffect(() => {
+    const keys = inventories.flatMap((inventory) => inventory.products.map((product) => ({ inventoryId: inventory.id, productId: product.id })));
+    if (!keys.length) {
+      setSoldByProduct({});
+      return;
+    }
+    let cancelled = false;
+    void readSoldPackages(keys)
+      .then((sold) => {
+        if (!cancelled) setSoldByProduct(sold);
+      })
+      .catch(() => {
+        if (!cancelled) setSoldByProduct({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [soldKey]);
   const inventory = inventories.find((item) => item.id === editing?.inventoryId) ?? null;
   const preview = inventory && editing && draft ? previewProductPrice(inventory, editing.productId, draft) : null;
   const draftError = draft ? priceDraftError(draft) : null;
@@ -95,9 +117,10 @@ export default function PriceRanking({
   const filtersActive = filters.scope !== "" || filters.query.trim() !== "" || filters.minPrice != null || filters.maxPrice != null;
   const detailRow = rows.find((row) => row.id === detailId) ?? null;
   const detailLine = detailRow ? lines.get(detailRow.id) ?? null : null;
-  const detailCommission = detailRow
-    ? inventories.find((item) => item.id === detailRow.inventoryId)?.products.find((product) => product.id === detailRow.productId)?.vendorSharePercent ?? null
+  const detailProduct = detailRow
+    ? inventories.find((item) => item.id === detailRow.inventoryId)?.products.find((product) => product.id === detailRow.productId) ?? null
     : null;
+  const detailCommission = detailProduct?.vendorSharePercent ?? null;
 
   const exportCatalog = async (selected: PriceExportColumnKey[]) => {
     if (exporting) return;
@@ -327,10 +350,20 @@ export default function PriceRanking({
                             Costo {money(line.costPerPack)}
                           </Typography>
                         ) : null}
+                        {line ? (
+                          <Typography sx={{ display: "block", mt: 0.4, color: "#6D4BA1", fontSize: "0.75rem", lineHeight: 1.25 }}>
+                            U. Vendedor <Box component="span" sx={{ fontWeight: 800 }}>{money(line.vendorProfit)}</Box>
+                          </Typography>
+                        ) : null}
                       </Box>
                       <Box sx={{ textAlign: "right", flexShrink: 0 }}>
                         <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "1.05rem", lineHeight: 1.15 }}>{money(row.price)}</Typography>
                         <Typography variant="caption" sx={{ fontWeight: 800, color: "#0D652D", display: "block" }}>Margen {percent(row.margin)}</Typography>
+                        {line ? (
+                          <Typography sx={{ display: "block", mt: 0.4, color: "#C05A12", fontSize: "0.75rem", lineHeight: 1.25 }}>
+                            U. Inversor <Box component="span" sx={{ fontWeight: 800 }}>{money(line.investorNet)}</Box>
+                          </Typography>
+                        ) : null}
                       </Box>
                     </Box>
                     <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: line ? "1fr 1fr" : "1fr" }}>
@@ -365,8 +398,27 @@ export default function PriceRanking({
                       <TableCell sx={{ overflowWrap: "anywhere" }}>{names.get(row.inventoryId) || "Inventario"}</TableCell>
                       <TableCell sx={{ whiteSpace: "nowrap" }}>{invoiceLabel(row.orderCode)}</TableCell>
                       <TableCell sx={{ fontWeight: 700, overflowWrap: "anywhere" }}>{row.product}</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 800, color: "#1A56DB", whiteSpace: "nowrap", fontSize: "1rem" }}>{money(row.price)}</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700, color: "#0D652D", whiteSpace: "nowrap" }}>{percent(row.margin)}</TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                        <Typography sx={{ fontWeight: 800, color: "#1A56DB", fontSize: "1rem", lineHeight: 1.15 }}>{money(row.price)}</Typography>
+                        {line ? (
+                          <Typography sx={{ display: "inline-flex", mt: 0.35, px: 0.9, py: 0.2, borderRadius: "999px", bgcolor: "#FEF4D6", color: "#8D4E00", fontWeight: 700, fontSize: "0.75rem", lineHeight: 1.35 }}>
+                            Costo {money(line.costPerPack)}
+                          </Typography>
+                        ) : null}
+                        {line ? (
+                          <Typography sx={{ display: "block", mt: 0.35, color: "#6D4BA1", fontSize: "0.75rem", lineHeight: 1.25 }}>
+                            U. Vendedor <Box component="span" sx={{ fontWeight: 800 }}>{money(line.vendorProfit)}</Box>
+                          </Typography>
+                        ) : null}
+                      </TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                        <Typography sx={{ fontWeight: 700, color: "#0D652D", lineHeight: 1.15 }}>{percent(row.margin)}</Typography>
+                        {line ? (
+                          <Typography sx={{ display: "block", mt: 0.35, color: "#C05A12", fontSize: "0.75rem", lineHeight: 1.25 }}>
+                            U. Inversor <Box component="span" sx={{ fontWeight: 800 }}>{money(line.investorNet)}</Box>
+                          </Typography>
+                        ) : null}
+                      </TableCell>
                       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                         {line ? (
                           <Button size="small" onClick={() => setDetailId(row.id)} sx={{ minHeight: 40, mr: 0.5 }}>
@@ -400,6 +452,8 @@ export default function PriceRanking({
         productName={detailRow?.product || ""}
         inventoryName={detailRow ? names.get(detailRow.inventoryId) || "Inventario" : ""}
         line={detailLine}
+        initialPackages={detailProduct?.packages ?? 0}
+        soldPackages={detailRow ? soldByProduct[stockKey(detailRow.inventoryId, detailRow.productId)] || 0 : 0}
         manualCommission={detailCommission}
         onClose={() => setDetailId(null)}
       />

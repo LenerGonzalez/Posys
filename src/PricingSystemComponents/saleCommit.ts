@@ -51,6 +51,10 @@ export interface PricingSale {
   vendorProfit: number;
   investorNet: number;
   lines: SaleLineSnapshot[];
+  status?: "ANULADA";
+  voidedAt?: string;
+  voidedByUid?: string;
+  voidedByName?: string;
 }
 
 export interface StockBalance {

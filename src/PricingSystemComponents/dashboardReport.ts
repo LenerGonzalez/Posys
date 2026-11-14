@@ -59,6 +59,7 @@ export interface SaleHistoryEntry {
   operationId: string;
   soldAt: string;
   sellerName: string;
+  sellerUid: string;
   packageCount: number;
   salesTotal: number;
   investorNet: number;
@@ -190,10 +191,11 @@ export function buildSalesDashboard(
   catalog: CatalogProduct[],
   filters: DashboardFilters,
 ): SalesDashboardReport {
+  const activeSales = sales.filter((sale) => sale.status !== "ANULADA");
   const rounding = assessHistoricalRounding(payments, balances);
   const byLine = new Map(rounding.balances.map((balance) => [lineKey(balance.saleId, balance.lineIndex), balance]));
-  const names = inventoryNames(sales, catalog);
-  const allLines: ScopedLine[] = sales.flatMap((sale) =>
+  const names = inventoryNames(activeSales, catalog);
+  const allLines: ScopedLine[] = activeSales.flatMap((sale) =>
     sale.lines.map((line, index) => ({ sale, line, index, day: dayKey(sale.soldAt) })),
   );
   const period = allLines.filter((item) => inDateRange(item.day, filters) && matchesScope(item.line, filters));
@@ -343,7 +345,7 @@ export function buildSalesDashboard(
     })
     .sort((left, right) => left.inventoryName.localeCompare(right.inventoryName, "es") || left.productName.localeCompare(right.productName, "es"));
 
-  const salesHistory = sales
+  const salesHistory = activeSales
     .map((sale) => {
       const visible = sale.lines
         .map((line, index) => ({ line, index }))
@@ -374,6 +376,7 @@ export function buildSalesDashboard(
         operationId: sale.operationId,
         soldAt: sale.soldAt,
         sellerName: sale.sellerName || "Vendedor",
+        sellerUid: sale.sellerUid,
         packageCount: lineRows.reduce((sum, line) => sum + line.quantity, 0),
         salesTotal: fromCents(lineRows.reduce((sum, line) => sum + line.salesCents, 0)),
         investorNet: fromCents(lineRows.reduce((sum, line) => sum + line.investorCents, 0)),

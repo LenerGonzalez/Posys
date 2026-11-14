@@ -7,6 +7,7 @@ import ShoppingCartOutlinedIcon from "@mui/icons-material/ShoppingCartOutlined";
 import ShowChartOutlinedIcon from "@mui/icons-material/ShowChartOutlined";
 import { Box, Dialog, DialogContent, DialogTitle, IconButton, Typography } from "@mui/material";
 import { money, percent, qty } from "./format";
+import { availablePackages } from "./saleCommit";
 import { productProfitStatus, productStatusLabel } from "./productRanking";
 import type { ComputedLine } from "./types";
 
@@ -58,6 +59,8 @@ export default function PriceDetailDialog({
   productName,
   inventoryName,
   line,
+  initialPackages,
+  soldPackages,
   manualCommission,
   onClose,
 }: {
@@ -66,6 +69,8 @@ export default function PriceDetailDialog({
   productName: string;
   inventoryName: string;
   line: ComputedLine | null;
+  initialPackages: number;
+  soldPackages: number;
   manualCommission: number | null;
   onClose: () => void;
 }) {
@@ -125,7 +130,9 @@ export default function PriceDetailDialog({
               <ChipFact label="Precio de venta" value={money(line.appliedPrice)} background="#E6F4EA" color="#0D652D" />
               <ChipFact label="Costo por paquete" value={money(line.costPerPack)} background="#E8F0FE" color="#1A56DB" />
               <ChipFact label="Logística por paquete" value={money(line.logisticsPerPack)} background="#FFF7F0" color="#C05A12" />
-              <ChipFact label="Paquetes" value={qty(line.packages)} background="#E7EDF4" color="#3A4654" />
+              <ChipFact label="Paquetes iniciales" value={qty(initialPackages)} background="#E7EDF4" color="#3A4654" />
+              <ChipFact label="Vendidos" value={qty(soldPackages)} background="#F7F4FC" color="#6D4BA1" />
+              <ChipFact label="Disponibles" value={qty(availablePackages(initialPackages, soldPackages))} background="#E6F4EA" color="#0D652D" />
             </Box>
             <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
               <Section title="Compra y precios" icon={<ShoppingCartOutlinedIcon fontSize="small" />} background="#F3F7FE" color="#1A56DB">

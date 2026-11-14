@@ -16,6 +16,7 @@ import {
   type PaymentApplication,
 } from "./commissionCommit";
 import { listPricingSales, SALES_COLLECTION, saleFromDoc } from "./firestoreSales";
+import { isVoidedSale, shouldRepairSaleBalances } from "./saleVoid";
 import type { PricingSale } from "./saleCommit";
 
 function requireUser() {
@@ -91,7 +92,7 @@ export async function ensureCommissionBalances(): Promise<void> {
   const user = requireUser();
   const sales = await salesForOwner(user.uid);
   for (const sale of sales) {
-    if (!sale.sellerUid || !sale.lines.length) continue;
+    if (!shouldRepairSaleBalances(sale)) continue;
     const missing = await Promise.all(sale.lines.map(async (_line, index) => {
       const snap = await getDoc(doc(db, PAYMENTS_COLLECTION, balanceDocumentId(sale.ownerUid, sale.operationId, index)));
       return !snap.exists();
@@ -101,7 +102,7 @@ export async function ensureCommissionBalances(): Promise<void> {
       const saleSnap = await transaction.get(doc(db, SALES_COLLECTION, sale.operationId));
       if (!saleSnap.exists()) return;
       const stored = saleFromDoc(saleSnap.id, saleSnap.data() as Record<string, unknown>);
-      if (stored.ownerUid !== user.uid) return;
+      if (stored.ownerUid !== user.uid || isVoidedSale(stored)) return;
       const queueRef = doc(db, PAYMENTS_COLLECTION, queueDocumentId(stored.ownerUid, stored.sellerUid));
       const queueSnap = await transaction.get(queueRef);
       const queue = queueFromDoc(

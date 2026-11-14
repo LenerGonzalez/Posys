@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "../firebase";
 import {
   Bar,
   BarChart,
@@ -9,7 +11,9 @@ import {
   YAxis,
 } from "recharts";
 import {
+  Alert,
   Box,
+  Button,
   Card,
   CardContent,
   Collapse,
@@ -20,7 +24,7 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { listCommissionActivity } from "./firestorePayments";
-import { listPricingSales } from "./firestoreSales";
+import { listPricingSales, voidSale } from "./firestoreSales";
 import { dateTimeLabel, money, qty } from "./format";
 import { saleProducts } from "./saleCommit";
 import {
@@ -32,6 +36,7 @@ import {
 import type { CommissionBalance, CommissionPayment } from "./commissionCommit";
 import type { PricingSale } from "./saleCommit";
 import DashboardProductSection from "./DashboardProductSection";
+import { canVoidSale, rolesFromProfile } from "./saleVoid";
 import { upDesktop } from "./screen";
 import type { PricingInventory } from "./types";
 
@@ -105,17 +110,30 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
   const [error, setError] = useState("");
   const [openSales, setOpenSales] = useState<Record<string, boolean>>({});
   const [openPayments, setOpenPayments] = useState<Record<string, boolean>>({});
+  const [actorUid, setActorUid] = useState("");
+  const [actorRoles, setActorRoles] = useState<string[]>([]);
+  const [voiding, setVoiding] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  const loadReport = () => {
+    const user = auth.currentUser;
+    setActorUid(user?.uid || "");
+    return Promise.all([
+      listPricingSales(),
+      listCommissionActivity(),
+      user ? getDoc(doc(db, "users", user.uid)) : Promise.resolve(null),
+    ]).then(([listedSales, activity, profile]) => {
+      setSales(listedSales);
+      setBalances(activity.balances);
+      setPayments(activity.payments);
+      setActorRoles(profile?.exists() ? rolesFromProfile(profile.data() as Record<string, unknown>) : []);
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void Promise.all([listPricingSales(), listCommissionActivity()])
-      .then(([listedSales, activity]) => {
-        if (cancelled) return;
-        setSales(listedSales);
-        setBalances(activity.balances);
-        setPayments(activity.payments);
-      })
+    void loadReport()
       .catch((reason: unknown) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "No se pudo consultar el dashboard.");
       })
@@ -146,6 +164,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
     const options = new Map<string, string>();
     for (const product of catalog) options.set(product.inventoryId, product.inventoryName);
     for (const sale of sales) {
+      if (sale.status === "ANULADA") continue;
       for (const line of sale.lines) options.set(line.inventoryId, line.inventoryName.trim() || options.get(line.inventoryId) || "Inventario");
     }
     return [...options.entries()].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name, "es"));
@@ -157,6 +176,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
       options.set(product.productId, product.productName);
     }
     for (const sale of sales) {
+      if (sale.status === "ANULADA") continue;
       for (const line of sale.lines) {
         if (filters.inventoryId && line.inventoryId !== filters.inventoryId) continue;
         options.set(line.productId, line.productName);
@@ -166,6 +186,23 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
   }, [catalog, sales, filters.inventoryId]);
 
   const patch = (next: Partial<DashboardFilters>) => setFilters((current) => ({ ...current, ...next }));
+  const requestVoid = (operationId: string, sellerName: string, salesTotal: number) => {
+    if (voiding) return;
+    const accepted = window.confirm(
+      `¿Anular esta venta de ${sellerName} por ${money(salesTotal)}?\n\nSe devuelven los paquetes al inventario y la venta deja de aparecer en el historial y en los totales.`,
+    );
+    if (!accepted) return;
+    setVoiding(true);
+    setError("");
+    setNotice("");
+    void voidSale(operationId)
+      .then(() => loadReport())
+      .then(() => setNotice("La venta se anuló. Los paquetes volvieron al inventario."))
+      .catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : "No se pudo anular la venta.");
+      })
+      .finally(() => setVoiding(false));
+  };
 
   return (
     <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 } }}>
@@ -175,10 +212,9 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
           Resultados de los paquetes vendidos. Las ventas proyectadas del inventario no se cuentan como ventas realizadas.
         </Typography>
       </Box>
+      {notice ? <Alert severity="success" onClose={() => setNotice("")}>{notice}</Alert> : null}
       {error ? (
-        <Box sx={{ px: 1.25, py: 1, borderRadius: "12px", bgcolor: "#FCE8E6" }}>
-          <Typography sx={{ color: "#A50E0E", fontSize: "0.875rem" }}>{error}</Typography>
-        </Box>
+        <Alert severity="error">{error}</Alert>
       ) : null}
 
       <Card variant="outlined" sx={{ boxShadow: "0 1px 2px rgba(26, 28, 30, 0.04)" }}>
@@ -229,16 +265,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
         ) : null}
       </Box>
 
-      <Box sx={{ display: "grid", gap: 1.5, gridTemplateColumns: { xs: "1fr", [upDesktop]: "1fr 1fr" } }}>
-        <ChartCard title="Paquetes vendidos" summary={loading ? "Consultando…" : `${qty(report.packagesSold)} paquetes`}>
-          <Bars data={report.byDay.map((point) => ({ label: point.label, packages: point.packages }))} dataKey="packages" color="#1A56DB" asMoney={false} />
-        </ChartCard>
-        <ChartCard title="Ganancias del inversionista" summary={loading ? "Consultando…" : money(report.investorNet)}>
-          <Bars data={report.byDay.map((point) => ({ label: point.label, investorNet: point.investorNet }))} dataKey="investorNet" color="#C05A12" asMoney />
-        </ChartCard>
-        <ChartCard title="Comisiones generadas" summary={loading ? "Consultando…" : money(report.commissionGenerated)}>
-          <Bars data={report.byDay.map((point) => ({ label: point.label, generated: point.generated }))} dataKey="generated" color="#6D4BA1" asMoney />
-        </ChartCard>
+      <Box>
         <ChartCard title="Comisiones pagadas y pendientes" summary={loading ? "Consultando…" : `${money(report.commissionPaid)} pagadas · ${money(report.commissionPending)} pendientes`}>
           <Bars
             data={[
@@ -285,6 +312,17 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
                     <ExpandMoreIcon sx={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 160ms ease" }} />
                   </IconButton>
                 </Box>
+                {canVoidSale(actorUid, actorRoles, sale.sellerUid) ? (
+                  <Button
+                    variant="text"
+                    color="error"
+                    disabled={voiding}
+                    onClick={() => requestVoid(sale.operationId, sale.sellerName, sale.salesTotal)}
+                    sx={{ justifyContent: "flex-start", px: 0, minHeight: 36, fontWeight: 700 }}
+                  >
+                    Anular venta
+                  </Button>
+                ) : null}
                 <Collapse in={open}>
                   <Box sx={{ display: "grid", gap: 1 }}>
                     {sale.lines.map((line, index) => (
@@ -356,6 +394,7 @@ export default function SalesDashboard({ inventories }: { inventories: PricingIn
         })}
         {!loading && !report.payments.length ? <Typography variant="body2" color="text.secondary">No hay pagos en este filtro.</Typography> : null}
       </Box>
+
     </Box>
   );
 }

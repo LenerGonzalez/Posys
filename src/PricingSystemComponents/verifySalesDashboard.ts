@@ -216,6 +216,22 @@ check("period sold stays apart from cumulative stock", novemberRow?.soldPackages
 check("sales follow the sale date", novemberEighth.packagesSold === 1 && novemberEighth.salesTotal === 10 && novemberEighth.commissionGenerated === 2 && novemberEighth.commissionPaid === 0);
 check("payment history follows the payment date", novemberEighth.payments.length === 1 && novemberEighth.payments[0]?.amount === 4);
 
+const voidedSale: PricingSale = {
+  ...sale("voided", "2026-11-08T18:00:00.000Z", [line({ inventoryId: "inv-1", productId: "p1", quantity: 5, salesTotal: 50, vendorProfit: 9, investorNet: 11 })]),
+  status: "ANULADA",
+};
+const withoutVoid = buildSalesDashboard(
+  [early, voidedSale],
+  periodBalances,
+  [],
+  [{ inventoryId: "inv-1", inventoryName: "Inventario", productId: "p1", productName: "Producto", invoiceNumber: "F-1", initialPackages: 10 }],
+  { from: "", to: "", inventoryId: "", productId: "" },
+);
+const visibleProduct = withoutVoid.products.find((row) => row.productId === "p1");
+check("voided sale leaves the history", withoutVoid.sales.length === 1 && withoutVoid.sales[0]?.operationId === "s-early");
+check("voided sale leaves the kpis", withoutVoid.packagesSold === 2 && withoutVoid.salesTotal === 20 && withoutVoid.byDay.every((point) => point.packages !== 5));
+check("voided sale leaves period and cumulative sold", visibleProduct?.soldPackages === 2 && visibleProduct.soldAllTime === 2 && visibleProduct.availablePackages === 8);
+
 if (failures.length) {
   console.error(failures.join("\n"));
   process.exit(1);

@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, query, runTransaction, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, getDocsFromServer, query, runTransaction, where } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import {
   balanceDocumentId,
@@ -8,6 +8,7 @@ import {
   PAYMENTS_COLLECTION,
   queueDocumentId,
   queueFromDoc,
+  type CommissionBalance,
 } from "./commissionCommit";
 import { inventoryFromDoc, PRICING_COLLECTION } from "./firestorePricing";
 import {
@@ -19,6 +20,7 @@ import {
   type SaleLineSnapshot,
   type StockBalance,
 } from "./saleCommit";
+import { planSaleVoid, rolesFromProfile, saleStockDemand, type SaleVoidActor } from "./saleVoid";
 import type { CommissionMethod } from "./types";
 
 export const SALES_COLLECTION = "pricing_sales";
@@ -68,6 +70,14 @@ export function saleFromDoc(id: string, data: Record<string, unknown>): PricingS
     vendorProfit: Number(data.vendorProfit || 0),
     investorNet: Number(data.investorNet || 0),
     lines,
+    ...(data.status === "ANULADA"
+      ? {
+        status: "ANULADA" as const,
+        voidedAt: String(data.voidedAt || ""),
+        voidedByUid: String(data.voidedByUid || ""),
+        voidedByName: String(data.voidedByName || ""),
+      }
+      : {}),
   };
 }
 
@@ -102,6 +112,43 @@ export async function readSellerName(): Promise<string> {
   return String((snap.data() as { name?: unknown }).name || "").trim();
 }
 
+const STOCK_READ_MS = 4000;
+
+function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("STOCK_READ_TIMEOUT")), milliseconds);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+// Safari en iOS, con la persistencia IndexedDB de Firestore, puede dejar getDocs
+// pendiente para siempre en una consulta filtrada: el índice local no responde
+// y la promesa ni se resuelve ni se rechaza. Si la lectura local no termina,
+// se consulta el servidor para no dejar las cantidades en «Consultando».
+async function readStockDocuments() {
+  const stockQuery = query(collection(db, SALES_COLLECTION), where("type", "==", "stock"));
+  try {
+    return await withTimeout(getDocs(stockQuery), STOCK_READ_MS);
+  } catch (cacheError) {
+    try {
+      return await withTimeout(getDocsFromServer(stockQuery), STOCK_READ_MS);
+    } catch (serverError) {
+      const readable = (error: unknown) =>
+        error instanceof Error && error.message && error.message !== "STOCK_READ_TIMEOUT" ? error.message : "";
+      throw new Error(readable(serverError) || readable(cacheError) || "No se pudieron consultar los paquetes disponibles.");
+    }
+  }
+}
+
 export async function readSoldPackages(
   keys: Array<{ inventoryId: string; productId: string }>,
 ): Promise<Record<string, number>> {
@@ -109,7 +156,7 @@ export async function readSoldPackages(
   const wanted = new Set(keys.map((key) => stockKey(key.inventoryId, key.productId)));
   const totals = new Map<string, number>();
   if (wanted.size) {
-    const snap = await getDocs(query(collection(db, SALES_COLLECTION), where("type", "==", "stock")));
+    const snap = await readStockDocuments();
     for (const item of snap.docs) {
       const data = item.data() as { inventoryId?: unknown; productId?: unknown; soldPackages?: unknown };
       const key = stockKey(String(data.inventoryId || ""), String(data.productId || ""));
@@ -215,5 +262,101 @@ export async function registerSale(
     }
     transaction.set(queueRef, commissionQueuePayload(enqueueOpenLines(queue, commissions), result.sale.soldAt));
     return result.sale;
+  });
+}
+
+function storedBalance(data: Record<string, unknown>): CommissionBalance {
+  return {
+    ownerUid: String(data.ownerUid || ""),
+    sellerUid: String(data.sellerUid || ""),
+    saleId: String(data.saleId || ""),
+    soldAt: String(data.soldAt || ""),
+    lineIndex: Number(data.lineIndex || 0),
+    inventoryId: String(data.inventoryId || ""),
+    invoiceNumber: String(data.invoiceNumber || ""),
+    productId: String(data.productId || ""),
+    productName: String(data.productName || ""),
+    generated: Number(data.generated || 0),
+    paid: Number(data.paid || 0),
+  };
+}
+
+export async function voidSale(operationId: string): Promise<void> {
+  const user = requireUser();
+  const saleRef = doc(db, SALES_COLLECTION, operationId);
+  await runTransaction(db, async (transaction) => {
+    const saleSnap = await transaction.get(saleRef);
+    if (!saleSnap.exists() || saleSnap.data().type !== "sale") {
+      throw new Error("La venta no existe. La venta no se anuló.");
+    }
+    const sale = saleFromDoc(saleSnap.id, saleSnap.data() as Record<string, unknown>);
+    if (sale.status === "ANULADA") return;
+
+    const profileSnap = await transaction.get(doc(db, "users", user.uid));
+    const profile = profileSnap.exists() ? profileSnap.data() as Record<string, unknown> : undefined;
+    const actor: SaleVoidActor = {
+      uid: user.uid,
+      roles: rolesFromProfile(profile),
+      name: String(profile?.name || "").trim(),
+    };
+    const demand = saleStockDemand(sale.lines);
+    if (typeof demand === "string") throw new Error(demand);
+
+    const balanceSnaps = [];
+    for (const [index] of sale.lines.entries()) {
+      balanceSnaps.push(await transaction.get(doc(db, PAYMENTS_COLLECTION, balanceDocumentId(sale.ownerUid, sale.operationId, index))));
+    }
+    const stockSnaps = [];
+    for (const item of demand) {
+      stockSnaps.push(await transaction.get(doc(db, SALES_COLLECTION, stockDocumentId(sale.sellerUid, item.inventoryId, item.productId))));
+    }
+    const queueRef = doc(db, PAYMENTS_COLLECTION, queueDocumentId(sale.ownerUid, sale.sellerUid));
+    const queueSnap = await transaction.get(queueRef);
+
+    const balances: CommissionBalance[] = [];
+    for (const snap of balanceSnaps) {
+      if (!snap.exists()) continue;
+      const data = snap.data() as Record<string, unknown>;
+      if (data.type !== "balance") continue;
+      balances.push(storedBalance(data));
+    }
+    const stock: StockBalance[] = [];
+    for (const snap of stockSnaps) {
+      if (!snap.exists()) continue;
+      const data = snap.data() as Partial<StockBalance> & { type?: unknown };
+      if (data.type !== "stock") continue;
+      stock.push({
+        ownerUid: String(data.ownerUid || ""),
+        inventoryId: String(data.inventoryId || ""),
+        productId: String(data.productId || ""),
+        soldPackages: Number(data.soldPackages || 0),
+        updatedAt: String(data.updatedAt || ""),
+      });
+    }
+    const queue = queueSnap.exists()
+      ? queueFromDoc(sale.ownerUid, sale.sellerUid, queueSnap.data() as Record<string, unknown>)
+      : null;
+    const result = planSaleVoid(actor, new Date().toISOString(), { sale, balances, stock, queue });
+    if (result.status === "rejected") throw new Error(result.message);
+    if (result.status === "already") return;
+
+    transaction.update(saleRef, {
+      status: "ANULADA",
+      voidedAt: result.sale.voidedAt,
+      voidedByUid: result.sale.voidedByUid,
+      voidedByName: result.sale.voidedByName,
+    });
+    for (const balance of result.stock) {
+      transaction.update(doc(db, SALES_COLLECTION, stockDocumentId(balance.ownerUid, balance.inventoryId, balance.productId)), {
+        soldPackages: balance.soldPackages,
+        updatedAt: balance.updatedAt,
+      });
+    }
+    for (const item of result.balances) {
+      const ref = doc(db, PAYMENTS_COLLECTION, balanceDocumentId(item.balance.ownerUid, item.balance.saleId, item.balance.lineIndex));
+      if (item.create) transaction.set(ref, commissionBalancePayload(item.balance, result.sale.voidedAt || ""));
+      else transaction.update(ref, { generated: 0, paid: 0, updatedAt: result.sale.voidedAt });
+    }
+    if (result.queue) transaction.set(queueRef, commissionQueuePayload(result.queue, result.sale.voidedAt || ""));
   });
 }
