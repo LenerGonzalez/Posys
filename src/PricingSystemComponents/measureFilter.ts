@@ -40,6 +40,20 @@ export function matchesMeasureFilter(unit: unknown, filter: unknown): boolean {
   return productMeasureUnit({ unit }) === selected;
 }
 
+/** La medida del inventario: la única de sus productos. Vacío cuenta como paquete. Mezclado queda en Todos. */
+export function inventoryMeasure(inventory: { products: Array<{ unit?: unknown }> }): MeasureFilter {
+  const units = new Set(inventory.products.map((product) => productMeasureUnit(product)));
+  if (units.size === 1) return [...units][0];
+  if (units.size === 0) return DEFAULT_MEASURE_FILTER;
+  return "all";
+}
+
+export function inventoryMatchesMeasure(inventory: { products: Array<{ unit?: unknown }> }, filter: unknown): boolean {
+  const selected = activeMeasureFilter(filter);
+  if (selected === "all") return true;
+  return inventoryMeasure(inventory) === selected;
+}
+
 export function quantityCaption(filter: MeasureFilter, lines: Array<{ unit?: unknown; quantity?: unknown; quantityMilli?: unknown }>): string {
   const selected = filter === "all" ? lines : lines.filter((line) => matchesMeasureFilter(line.unit, filter));
   const label = formatQuantityTotals(selected);

@@ -284,6 +284,7 @@ export default function PricingApp() {
         ) : null}
         {user && section === "inventarios" && open && computed ? (
           <InventoryWorkspace
+            key={open.id}
             initialTab={new URLSearchParams(location.search).get("producto") ? 3 : 0}
             inventory={open}
             computed={computed}

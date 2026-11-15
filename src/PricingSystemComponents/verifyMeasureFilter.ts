@@ -1,6 +1,6 @@
 import { compareInventories } from "./compareInventories";
 import { buildSalesDashboard, EMPTY_DASHBOARD_FILTERS } from "./dashboardReport";
-import { activeMeasureFilter, matchesMeasureFilter, quantityCaption } from "./measureFilter";
+import { activeMeasureFilter, inventoryMatchesMeasure, inventoryMeasure, matchesMeasureFilter, quantityCaption } from "./measureFilter";
 import { buildPriceRows, EMPTY_PRICE_FILTERS, filterPriceRows } from "./priceCatalog";
 import { computeInventory } from "./pricingEngine";
 import { buildProfitability, EMPTY_PROFITABILITY_FILTERS } from "./profitability";
@@ -138,6 +138,11 @@ const salesReport = buildSalesDashboard([sale], [], [], [{
 }], { ...EMPTY_DASHBOARD_FILTERS, unit: "lb" });
 check("ventas y comisiones en libra no arrastra el paquete histórico", salesReport.salesTotal === 15 && salesReport.soldByUnit.length === 1 && salesReport.soldByUnit[0]?.unit === "lb" && salesReport.packagesSold === 0);
 check("la cantidad en cero de una unidad lleva su nombre", quantityCaption("lb", []) === "0 libras");
+check("un inventario de paquetes se reconoce como paquete", inventoryMeasure(other) === "package" && inventoryMeasure(inventory([])) === "package");
+check("un inventario de libras se reconoce como libra", inventoryMeasure(inventory([pounds])) === "lb");
+check("un inventario mezclado queda en todos", inventoryMeasure(mixed) === "all");
+check("libra solo incluye inventarios de libra", inventoryMatchesMeasure(inventory([pounds]), "lb") && !inventoryMatchesMeasure(other, "lb") && !inventoryMatchesMeasure(mixed, "lb"));
+check("todos incluye el inventario mezclado", inventoryMatchesMeasure(mixed, "all") && inventoryMatchesMeasure(other, "all"));
 
 if (failures.length) {
   console.error(failures.join("\n"));

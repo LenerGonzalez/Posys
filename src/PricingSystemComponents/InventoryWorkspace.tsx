@@ -20,7 +20,7 @@ import SaveIcon from "@mui/icons-material/Save";
 import Comissions from "./Comissions";
 import Dashboard from "./Dashboard";
 import MeasureFilterField from "./MeasureFilterField";
-import { DEFAULT_MEASURE_FILTER, linesForMeasure, quantityCaption, totalsForLines, type MeasureFilter } from "./measureFilter";
+import { inventoryMeasure, linesForMeasure, quantityCaption, totalsForLines, type MeasureFilter } from "./measureFilter";
 import { dateTimeLabel, money } from "./format";
 import { resolveCommissionMethod } from "./pricingEngine";
 import { OrderProductsPanel } from "./MainInventory";
@@ -57,7 +57,7 @@ export default function InventoryWorkspace({
   initialTab?: number;
 }) {
   const [tab, setTab] = useState(initialTab);
-  const [measure, setMeasure] = useState<MeasureFilter>(DEFAULT_MEASURE_FILTER);
+  const [measure, setMeasure] = useState<MeasureFilter>(() => inventoryMeasure(inventory));
   const [historyOpen, setHistoryOpen] = useState(false);
   const narrow = useNarrowScreen();
   const [exporting, setExporting] = useState(false);
@@ -119,9 +119,7 @@ export default function InventoryWorkspace({
           </Box>
         </Toolbar>
       </AppBar>
-      <Box sx={{ maxWidth: { sm: 240 } }}>
-        <MeasureFilterField value={measure} onChange={setMeasure} />
-      </Box>
+      <MeasureFilterField variant="chips" value={measure} onChange={setMeasure} />
       <Tabs
         value={tab}
         onChange={(_event, value) => setTab(value)}

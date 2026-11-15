@@ -37,7 +37,7 @@ import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import { parseNumericDraft, usableMoney } from "./fieldValidation";
 import MeasureFilterField from "./MeasureFilterField";
-import { DEFAULT_MEASURE_FILTER, linesForMeasure, matchesMeasureFilter, measureFilterLabel, quantityCaption, totalsForLines, type MeasureFilter } from "./measureFilter";
+import { DEFAULT_MEASURE_FILTER, inventoryMatchesMeasure, linesForMeasure, matchesMeasureFilter, measureFilterLabel, quantityCaption, totalsForLines, type MeasureFilter } from "./measureFilter";
 import { computeInventory } from "./pricingEngine";
 import { milliFromAmount, readQuantityMilli, storedQuantity, withStoredQuantity } from "./quantity";
 import { readSoldPackages } from "./firestoreSales";
@@ -630,9 +630,7 @@ export default function MainInventory({
           </Button>
         </Box>
       </Box>
-      <Box sx={{ maxWidth: { sm: 240 } }}>
-        <MeasureFilterField value={measure} onChange={setMeasure} />
-      </Box>
+      <MeasureFilterField variant="chips" value={measure} onChange={setMeasure} />
       {loading ? <Alert severity="info">Cargando inventarios…</Alert> : null}
       {!loading && !inventories.length ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: "center" }}>
@@ -641,8 +639,13 @@ export default function MainInventory({
           <Typography variant="body2" color="text.secondary">Crea uno o importa una factura Excel.</Typography>
         </Paper>
       ) : null}
+      {!loading && inventories.length > 0 && !inventories.some((inventory) => inventoryMatchesMeasure(inventory, measure)) ? (
+        <Paper variant="outlined" sx={{ p: 4, textAlign: "center" }}>
+          <Typography variant="h6">No hay inventarios en {measureFilterLabel(measure)}</Typography>
+        </Paper>
+      ) : null}
       <Box sx={{ display: "grid", gap: { xs: 1.25, md: 2 }, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
-        {inventories.map((inventory) => {
+        {inventories.filter((inventory) => inventoryMatchesMeasure(inventory, measure)).map((inventory) => {
           const latest = inventory.history[inventory.history.length - 1];
           const invoices = [...new Set(inventory.products.filter((product) => matchesMeasureFilter(product.unit, measure)).map((product) => product.orderCode).filter(Boolean))];
           const matching = inventory.products.filter((product) => matchesMeasureFilter(product.unit, measure));
